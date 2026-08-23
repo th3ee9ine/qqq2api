@@ -34,7 +34,7 @@ func (r *thresholdSelectionAccountRepoStub) ListSchedulableUngroupedByPlatform(c
 	return r.ListSchedulableByPlatform(ctx, platform)
 }
 
-func TestGatewayService_ListSchedulableAccounts_DoesNotFilterUnsupportedThresholdPlatforms(t *testing.T) {
+func TestGatewayService_ListSchedulableAccounts_RejectsUnsupportedPlatforms(t *testing.T) {
 	accountSchedulingThresholdsSF.Forget(SettingKeyAccountSchedulingThresholds)
 	accountSchedulingThresholdsCache.Store(&cachedAccountSchedulingThresholds{})
 
@@ -79,11 +79,9 @@ func TestGatewayService_ListSchedulableAccounts_DoesNotFilterUnsupportedThreshol
 
 	accounts, useMixed, err := svc.listSchedulableAccounts(context.Background(), nil, PlatformKiro, false)
 
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrPlatformUnsupported)
 	require.False(t, useMixed)
-	require.Len(t, accounts, 2)
-	require.Equal(t, int64(3101), accounts[0].ID)
-	require.Equal(t, int64(3102), accounts[1].ID)
+	require.Nil(t, accounts)
 	require.Equal(t, 0, accountRepo.tempCalls)
 }
 

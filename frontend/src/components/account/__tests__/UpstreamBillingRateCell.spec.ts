@@ -268,10 +268,10 @@ describe('UpstreamBillingRateCell', () => {
     await wrapper.get('[data-testid="upstream-billing-probe"]').trigger('click')
     expect(wrapper.emitted('probe')).toHaveLength(1)
 
-    // 探测已放宽到全部 API-key 平台：grok API-key 账号同样可探测。
+    // 已退役平台不得暴露探测操作。
     await wrapper.setProps({ account: makeAccount({ platform: 'grok' }) })
-    await wrapper.get('[data-testid="upstream-billing-probe"]').trigger('click')
-    expect(wrapper.emitted('probe')).toHaveLength(2)
+    expect(wrapper.find('[data-testid="upstream-billing-probe"]').exists()).toBe(false)
+    expect(wrapper.emitted('probe')).toHaveLength(1)
 
     await wrapper.setProps({ account: makeAccount({ type: 'oauth' }) })
     expect(wrapper.findAll('button')).toHaveLength(0)

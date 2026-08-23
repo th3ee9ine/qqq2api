@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -207,14 +206,12 @@ func resetGatewayHotpathStatsForTest() {
 	modelsListCacheStoreTotal.Store(0)
 }
 
-func TestGetUserGroupRateMultiplier_UsesCacheAndSingleflight(t *testing.T) {
+func TestGetUserGroupRateMultiplier_UsesGlobalGroupDefault(t *testing.T) {
 	resetGatewayHotpathStatsForTest()
 
 	rate := 1.7
-	unblock := make(chan struct{})
 	repo := &userGroupRateRepoHotpathStub{
 		rate: &rate,
-		wait: unblock,
 	}
 	svc := &GatewayService{
 		userGroupRateRepo:  repo,
@@ -226,51 +223,19 @@ func TestGetUserGroupRateMultiplier_UsesCacheAndSingleflight(t *testing.T) {
 		},
 	}
 
-	const concurrent = 12
-	results := make([]float64, concurrent)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(concurrent)
-	for i := 0; i < concurrent; i++ {
-		go func(idx int) {
-			defer wg.Done()
-			<-start
-			results[idx] = svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.2)
-		}(i)
-	}
-
-	close(start)
-	// Wait for every caller to have recorded its cache miss before releasing the
-	// loader. A fixed sleep raced here: a goroutine that reached the cache after
-	// the singleflight load had already finished got a hit instead of a miss, and
-	// the miss assertion below saw 11 of 12. The miss counter is the observable
-	// that says "all callers are now inside the singleflight group".
-	require.Eventually(t, func() bool {
-		_, miss, _, _, _ := GatewayUserGroupRateCacheStats()
-		return miss == int64(concurrent)
-	}, 5*time.Second, time.Millisecond, "all callers must miss the cache before the loader is released")
-	close(unblock)
-	wg.Wait()
-
-	for _, got := range results {
-		require.Equal(t, rate, got)
-	}
-	require.Equal(t, int64(1), repo.calls.Load())
-
-	// 再次读取应命中缓存，不再回源。
 	got := svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.2)
-	require.Equal(t, rate, got)
-	require.Equal(t, int64(1), repo.calls.Load())
+	require.Equal(t, 1.2, got)
+	require.Equal(t, int64(0), repo.calls.Load(), "global API keys must not resolve user-specific rates")
 
 	hit, miss, load, sfShared, fallback := GatewayUserGroupRateCacheStats()
-	require.GreaterOrEqual(t, hit, int64(1))
-	require.Equal(t, int64(12), miss)
-	require.Equal(t, int64(1), load)
-	require.GreaterOrEqual(t, sfShared, int64(1))
+	require.Equal(t, int64(0), hit)
+	require.Equal(t, int64(0), miss)
+	require.Equal(t, int64(0), load)
+	require.Equal(t, int64(0), sfShared)
 	require.Equal(t, int64(0), fallback)
 }
 
-func TestGetUserGroupRateMultiplier_FallbackOnRepoError(t *testing.T) {
+func TestGetUserGroupRateMultiplier_IgnoresLegacyRepoErrors(t *testing.T) {
 	resetGatewayHotpathStatsForTest()
 
 	repo := &userGroupRateRepoHotpathStub{
@@ -288,13 +253,13 @@ func TestGetUserGroupRateMultiplier_FallbackOnRepoError(t *testing.T) {
 
 	got := svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.25)
 	require.Equal(t, 1.25, got)
-	require.Equal(t, int64(1), repo.calls.Load())
+	require.Equal(t, int64(0), repo.calls.Load())
 
 	_, _, _, _, fallback := GatewayUserGroupRateCacheStats()
-	require.Equal(t, int64(1), fallback)
+	require.Equal(t, int64(0), fallback)
 }
 
-func TestGetUserGroupRateMultiplier_CacheHitAndNilRepo(t *testing.T) {
+func TestGetUserGroupRateMultiplier_IgnoresLegacyCache(t *testing.T) {
 	resetGatewayHotpathStatsForTest()
 
 	repo := &userGroupRateRepoHotpathStub{
@@ -308,10 +273,10 @@ func TestGetUserGroupRateMultiplier_CacheHitAndNilRepo(t *testing.T) {
 	svc.userGroupRateCache.Set(key, 2.3, time.Minute)
 
 	got := svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.1)
-	require.Equal(t, 2.3, got)
+	require.Equal(t, 1.1, got)
 
 	hit, miss, load, _, fallback := GatewayUserGroupRateCacheStats()
-	require.Equal(t, int64(1), hit)
+	require.Equal(t, int64(0), hit)
 	require.Equal(t, int64(0), miss)
 	require.Equal(t, int64(0), load)
 	require.Equal(t, int64(0), fallback)
@@ -322,7 +287,7 @@ func TestGetUserGroupRateMultiplier_CacheHitAndNilRepo(t *testing.T) {
 		userGroupRateCache: gocache.New(time.Minute, time.Minute),
 	}
 	svc2.userGroupRateCache.Set(key, 1.9, time.Minute)
-	require.Equal(t, 1.9, svc2.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.4))
+	require.Equal(t, 1.4, svc2.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.4))
 	require.Equal(t, 1.4, svc2.getUserGroupRateMultiplier(context.Background(), 0, 202, 1.4))
 	svc2.userGroupRateCache.Delete(key)
 	require.Equal(t, 1.4, svc2.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.4))

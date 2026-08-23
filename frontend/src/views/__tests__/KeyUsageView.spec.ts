@@ -37,16 +37,14 @@ const messages: Record<string, string> = {
   'keyUsage.cacheWriteTokens': 'Cache Write',
   'keyUsage.cost': 'Cost',
   'keyUsage.quotaMode': 'Key Quota Mode',
-  'keyUsage.walletBalance': 'Wallet Balance',
+  'keyUsage.unrestrictedMode': 'Global API Key',
   'keyUsage.totalQuota': 'Total Quota',
   'keyUsage.limit5h': '5-Hour Limit',
   'keyUsage.limitDaily': 'Daily Limit',
   'keyUsage.limit7d': '7-Day Limit',
-  'keyUsage.limitWeekly': 'Weekly Limit',
-  'keyUsage.limitMonthly': 'Monthly Limit',
   'keyUsage.remainingQuota': 'Remaining Quota',
   'keyUsage.usedQuota': 'Used Quota',
-  'keyUsage.subscriptionType': 'Subscription Type',
+  'keyUsage.group': 'Group',
   'keyUsage.todayRequests': 'Today Requests',
   'keyUsage.todayInputTokens': 'Today Input',
   'keyUsage.todayOutputTokens': 'Today Output',
@@ -203,6 +201,41 @@ describe('KeyUsageView daily detail', () => {
     expect(text).toContain('30')
     expect(text).toContain('10')
     expect(text).toContain('$0.12')
+
+    wrapper.unmount()
+  })
+
+  it('renders unrestricted keys without user wallet or subscription details', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        mode: 'unrestricted',
+        isValid: true,
+        status: 'active',
+        group_name: 'Global group',
+        usage: { today: {}, total: {} },
+      }),
+    } as Response)
+
+    const wrapper = mount(KeyUsageView, {
+      global: {
+        stubs: {
+          RouterLink: { template: '<a><slot /></a>' },
+          LocaleSwitcher: true,
+          Icon: true,
+        },
+      },
+    })
+
+    await wrapper.find('input').setValue('sk-global-key')
+    await wrapper.find('input').trigger('keydown.enter')
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('Global API Key')
+    expect(text).toContain('Global group')
+    expect(text).not.toContain('Wallet Balance')
+    expect(text).not.toContain('Subscription Type')
 
     wrapper.unmount()
   })

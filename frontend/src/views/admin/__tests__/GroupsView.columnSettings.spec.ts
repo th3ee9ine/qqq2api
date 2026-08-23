@@ -35,7 +35,6 @@ const messages: Record<string, string> = {
   'admin.groups.columns.name': 'Name',
   'admin.groups.columns.id': 'ID',
   'admin.groups.columns.platform': 'Platform',
-  'admin.groups.columns.billingType': 'Billing Type',
   'admin.groups.columns.rateMultiplier': 'Rate Multiplier',
   'admin.groups.columns.type': 'Type',
   'admin.groups.columns.accounts': 'Accounts',
@@ -268,7 +267,6 @@ describe('admin GroupsView column settings', () => {
     expect(columnKeys(wrapper)).toEqual([
       'name',
       'platform',
-      'billing_type',
       'rate_multiplier',
       'is_exclusive',
       'account_count',
@@ -294,7 +292,6 @@ describe('admin GroupsView column settings', () => {
       'name',
       'id',
       'platform',
-      'billing_type',
       'rate_multiplier',
       'is_exclusive',
       'account_count',
@@ -312,7 +309,6 @@ describe('admin GroupsView column settings', () => {
     expect(columnKeys(wrapper)).toEqual([
       'name',
       'platform',
-      'billing_type',
       'rate_multiplier',
       'is_exclusive',
       'account_count',
@@ -335,7 +331,6 @@ describe('admin GroupsView column settings', () => {
     expect(columnKeys(wrapper)).toEqual([
       'name',
       'platform',
-      'billing_type',
       'rate_multiplier',
       'is_exclusive',
       'account_count',
@@ -358,7 +353,6 @@ describe('admin GroupsView column settings', () => {
       'name',
       'id',
       'platform',
-      'billing_type',
       'rate_multiplier',
       'is_exclusive',
       'account_count',
@@ -373,7 +367,7 @@ describe('admin GroupsView column settings', () => {
   it('skips usage and capacity fetches until consuming columns are shown', async () => {
     localStorage.setItem(
       'group-hidden-columns',
-      JSON.stringify(['billing_type', 'usage', 'capacity']),
+      JSON.stringify(['usage', 'capacity']),
     )
 
     const wrapper = await mountView()

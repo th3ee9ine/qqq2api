@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,16 +18,18 @@ type opsSystemLogCleanupRequest struct {
 	EndTime   string `json:"end_time"`
 	Host      string `json:"host"`
 
-	Level           string `json:"level"`
-	Component       string `json:"component"`
-	RequestID       string `json:"request_id"`
-	ClientRequestID string `json:"client_request_id"`
-	UserID          *int64 `json:"user_id"`
-	APIKeyID        *int64 `json:"api_key_id"`
-	AccountID       *int64 `json:"account_id"`
-	Platform        string `json:"platform"`
-	Model           string `json:"model"`
-	Query           string `json:"q"`
+	Level                string          `json:"level"`
+	Component            string          `json:"component"`
+	RequestID            string          `json:"request_id"`
+	ClientRequestID      string          `json:"client_request_id"`
+	UnsupportedUserID    json.RawMessage `json:"user_id"`
+	UnsupportedUserEmail json.RawMessage `json:"user_email"`
+	UnsupportedUserQuery json.RawMessage `json:"user_query"`
+	APIKeyID             *int64          `json:"api_key_id"`
+	AccountID            *int64          `json:"account_id"`
+	Platform             string          `json:"platform"`
+	Model                string          `json:"model"`
+	Query                string          `json:"q"`
 }
 
 // ListSystemLogs returns indexed system logs.
@@ -38,6 +41,9 @@ func (h *OpsHandler) ListSystemLogs(c *gin.Context) {
 	}
 	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+	if rejectOpsUserIdentityFilters(c) {
 		return
 	}
 
@@ -65,14 +71,6 @@ func (h *OpsHandler) ListSystemLogs(c *gin.Context) {
 		Platform:        strings.TrimSpace(c.Query("platform")),
 		Model:           strings.TrimSpace(c.Query("model")),
 		Query:           strings.TrimSpace(c.Query("q")),
-	}
-	if v := strings.TrimSpace(c.Query("user_id")); v != "" {
-		id, parseErr := strconv.ParseInt(v, 10, 64)
-		if parseErr != nil || id <= 0 {
-			response.BadRequest(c, "Invalid user_id")
-			return
-		}
-		filter.UserID = &id
 	}
 	if v := strings.TrimSpace(c.Query("api_key_id")); v != "" {
 		id, parseErr := strconv.ParseInt(v, 10, 64)
@@ -122,6 +120,10 @@ func (h *OpsHandler) CleanupSystemLogs(c *gin.Context) {
 		response.BadRequest(c, "Invalid request body")
 		return
 	}
+	if len(req.UnsupportedUserID) > 0 || len(req.UnsupportedUserEmail) > 0 || len(req.UnsupportedUserQuery) > 0 {
+		response.BadRequest(c, "User identity filters are not supported")
+		return
+	}
 
 	parseTS := func(raw string) (*time.Time, error) {
 		raw = strings.TrimSpace(raw)
@@ -160,7 +162,6 @@ func (h *OpsHandler) CleanupSystemLogs(c *gin.Context) {
 		Component:       strings.TrimSpace(req.Component),
 		RequestID:       strings.TrimSpace(req.RequestID),
 		ClientRequestID: strings.TrimSpace(req.ClientRequestID),
-		UserID:          req.UserID,
 		APIKeyID:        req.APIKeyID,
 		AccountID:       req.AccountID,
 		Platform:        strings.TrimSpace(req.Platform),

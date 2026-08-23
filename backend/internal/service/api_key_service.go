@@ -125,6 +125,19 @@ type apiKeyAllByUserIDLister interface {
 	ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error)
 }
 
+// apiKeyGlobalLister is implemented by the production repository for the
+// single-admin API Key manager.  The legacy user-scoped methods remain on the
+// repository interface so old background jobs and rolling upgrades continue
+// to compile, while the panel itself always sees the global key set.
+type apiKeyGlobalLister interface {
+	ListAll(ctx context.Context, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error)
+	ListAllUnpaginated(ctx context.Context, filters APIKeyListFilters) ([]APIKey, error)
+}
+
+type apiKeyGlobalIDVerifier interface {
+	VerifyGlobalIDs(ctx context.Context, apiKeyIDs []int64) ([]int64, error)
+}
+
 // APIKeyRateLimitData holds rate limit usage and window state for an API key.
 type APIKeyRateLimitData struct {
 	Usage5h       float64
@@ -448,8 +461,21 @@ func (s *APIKeyService) incrementAPIKeyErrorCount(ctx context.Context, userID in
 // 对于订阅类型分组：检查用户是否有有效订阅
 // 对于标准类型分组：使用原有的 AllowedGroups 和 IsExclusive 逻辑
 func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group *Group) bool {
+	// API Keys are system-wide resources.  The administrator is the technical
+	// owner used for compatibility with the existing foreign key, so group
+	// selection must not depend on that account's historical subscriptions or
+	// allowed-groups list.
+	if user != nil && user.IsAdmin() {
+		return group != nil && group.IsActive()
+	}
+	if user == nil || group == nil {
+		return false
+	}
 	// 订阅类型分组：需要有效订阅
 	if group.IsSubscriptionType() {
+		if s.userSubRepo == nil {
+			return false
+		}
 		_, err := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, user.ID, group.ID)
 		return err == nil // 有有效订阅则允许
 	}
@@ -459,14 +485,20 @@ func (s *APIKeyService) canUserBindGroup(ctx context.Context, user *User, group 
 
 // Create 创建API Key
 func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIKeyRequest) (*APIKey, error) {
+	_ = userID // retained for source compatibility; the owner is the administrator below
 	if err := validateCreateAPIKeyRequest(req); err != nil {
 		return nil, err
 	}
-	// 验证用户存在
-	user, err := s.userRepo.GetByID(ctx, userID)
+	// Resolve the one technical administrator owner. The caller's identity is
+	// not persisted because API Keys are system-wide resources.
+	user, err := s.userRepo.GetFirstAdmin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return nil, fmt.Errorf("get global api key administrator: %w", err)
 	}
+	if user == nil || !user.IsAdmin() || !user.IsActive() {
+		return nil, ErrUserNotActive
+	}
+	ownerID := user.ID
 
 	// 验证 IP 白名单格式
 	if len(req.IPWhitelist) > 0 {
@@ -482,16 +514,18 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		}
 	}
 
-	// 验证分组权限（如果指定了分组）
+	// 验证分组存在且处于可用状态（API Key 不再按用户区分权限）。
 	if req.GroupID != nil {
 		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
 		if err != nil {
 			return nil, fmt.Errorf("get group: %w", err)
 		}
 
-		// 检查用户是否可以绑定该分组
-		if !s.canUserBindGroup(ctx, user, group) {
+		if group == nil || !group.IsActive() {
 			return nil, ErrGroupNotAllowed
+		}
+		if err := requireActiveGroupPlatform(group.Platform); err != nil {
+			return nil, err
 		}
 	}
 
@@ -500,7 +534,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 	// 判断是否使用自定义Key
 	if req.CustomKey != nil && *req.CustomKey != "" {
 		// 检查限流（仅对自定义key进行限流）
-		if err := s.checkAPIKeyRateLimit(ctx, userID); err != nil {
+		if err := s.checkAPIKeyRateLimit(ctx, ownerID); err != nil {
 			return nil, err
 		}
 
@@ -516,7 +550,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		}
 		if exists {
 			// Key已存在，增加错误计数
-			s.incrementAPIKeyErrorCount(ctx, userID)
+			s.incrementAPIKeyErrorCount(ctx, ownerID)
 			return nil, ErrAPIKeyExists
 		}
 
@@ -532,7 +566,8 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 	// 创建API Key记录
 	apiKey := &APIKey{
-		UserID:      userID,
+		UserID:      ownerID,
+		User:        user,
 		Key:         key,
 		Name:        html.EscapeString(req.Name),
 		GroupID:     req.GroupID,
@@ -564,6 +599,31 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 
 // List 获取用户的API Key列表
 func (s *APIKeyService) List(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
+	if globalRepo, ok := s.apiKeyRepo.(apiKeyGlobalLister); ok {
+		if normalizedAPIKeySortBy(params.SortBy) == apiKeySortCurrentConcurrency {
+			keys, err := globalRepo.ListAllUnpaginated(ctx, filters)
+			if err != nil {
+				return nil, nil, fmt.Errorf("list api keys: %w", err)
+			}
+			if err := s.normalizeGlobalAPIKeyOwners(ctx, keys); err != nil {
+				return nil, nil, fmt.Errorf("resolve global api key owners: %w", err)
+			}
+			s.fillCurrentConcurrency(ctx, keys)
+			sortAPIKeysByCurrentConcurrency(keys, params.NormalizedSortOrder(pagination.SortOrderDesc))
+			return paginateAPIKeys(keys, params), apiKeyPaginationResult(int64(len(keys)), params), nil
+		}
+
+		keys, result, err := globalRepo.ListAll(ctx, params, filters)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list api keys: %w", err)
+		}
+		if err := s.normalizeGlobalAPIKeyOwners(ctx, keys); err != nil {
+			return nil, nil, fmt.Errorf("resolve global api key owners: %w", err)
+		}
+		s.fillCurrentConcurrency(ctx, keys)
+		return keys, result, nil
+	}
+
 	if normalizedAPIKeySortBy(params.SortBy) == apiKeySortCurrentConcurrency {
 		return s.listByCurrentConcurrency(ctx, userID, params, filters)
 	}
@@ -577,6 +637,18 @@ func (s *APIKeyService) List(ctx context.Context, userID int64, params paginatio
 }
 
 func (s *APIKeyService) listByCurrentConcurrency(ctx context.Context, userID int64, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
+	if globalRepo, ok := s.apiKeyRepo.(apiKeyGlobalLister); ok {
+		keys, err := globalRepo.ListAllUnpaginated(ctx, filters)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list api keys: %w", err)
+		}
+		if err := s.normalizeGlobalAPIKeyOwners(ctx, keys); err != nil {
+			return nil, nil, fmt.Errorf("resolve global api key owners: %w", err)
+		}
+		s.fillCurrentConcurrency(ctx, keys)
+		sortAPIKeysByCurrentConcurrency(keys, params.NormalizedSortOrder(pagination.SortOrderDesc))
+		return paginateAPIKeys(keys, params), apiKeyPaginationResult(int64(len(keys)), params), nil
+	}
 	repo, ok := s.apiKeyRepo.(apiKeyAllByUserIDLister)
 	if !ok {
 		return nil, nil, fmt.Errorf("list api keys by current concurrency: repository does not support unpaginated API key listing")
@@ -679,7 +751,16 @@ func (s *APIKeyService) VerifyOwnership(ctx context.Context, userID int64, apiKe
 	if len(apiKeyIDs) == 0 {
 		return []int64{}, nil
 	}
+	if globalRepo, ok := s.apiKeyRepo.(apiKeyGlobalIDVerifier); ok {
+		validIDs, err := globalRepo.VerifyGlobalIDs(ctx, apiKeyIDs)
+		if err != nil {
+			return nil, fmt.Errorf("verify global api keys: %w", err)
+		}
+		return validIDs, nil
+	}
 
+	// Compatibility fallback for repository implementations compiled before
+	// the global-key query was introduced.
 	validIDs, err := s.apiKeyRepo.VerifyOwnership(ctx, userID, apiKeyIDs)
 	if err != nil {
 		return nil, fmt.Errorf("verify api key ownership: %w", err)
@@ -692,6 +773,9 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
+	}
+	if err := s.normalizeGlobalAPIKeyOwner(ctx, apiKey); err != nil {
+		return nil, fmt.Errorf("resolve global api key owner: %w", err)
 	}
 	s.compileAPIKeyIPRules(apiKey)
 	if apiKey != nil {
@@ -750,9 +834,68 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
 	}
+	if err := s.normalizeGlobalAPIKeyOwner(ctx, apiKey); err != nil {
+		return nil, fmt.Errorf("resolve global api key owner: %w", err)
+	}
 	apiKey.Key = key
 	s.compileAPIKeyIPRules(apiKey)
 	return apiKey, nil
+}
+
+// normalizeGlobalAPIKeyOwner maps legacy per-user keys to the active
+// administrator account.  The api_keys.user_id column is intentionally kept
+// for schema/rolling-upgrade compatibility, but it is no longer an access
+// boundary.  New auth-cache snapshots therefore carry the same administrator
+// subject for every key.
+func (s *APIKeyService) normalizeGlobalAPIKeyOwner(ctx context.Context, apiKey *APIKey) error {
+	if apiKey == nil || s == nil || s.userRepo == nil {
+		return nil
+	}
+	if apiKey.User != nil && apiKey.User.IsAdmin() {
+		apiKey.UserID = apiKey.User.ID
+		return nil
+	}
+	admin, err := s.userRepo.GetFirstAdmin(ctx)
+	if err != nil {
+		return err
+	}
+	if admin == nil || !admin.IsActive() || !admin.IsAdmin() {
+		return ErrUserNotActive
+	}
+	apiKey.UserID = admin.ID
+	apiKey.User = admin
+	return nil
+}
+
+// normalizeGlobalAPIKeyOwners applies the same technical administrator subject
+// to a complete global listing.  The repository intentionally does not join
+// users for this read path; resolving the administrator once avoids an
+// N+1 query while still making legacy rows indistinguishable from migrated
+// rows in API responses and cache snapshots.
+func (s *APIKeyService) normalizeGlobalAPIKeyOwners(ctx context.Context, keys []APIKey) error {
+	if len(keys) == 0 || s == nil || s.userRepo == nil {
+		return nil
+	}
+	var admin *User
+	for i := range keys {
+		if keys[i].User != nil && keys[i].User.IsAdmin() {
+			keys[i].UserID = keys[i].User.ID
+			continue
+		}
+		if admin == nil {
+			var err error
+			admin, err = s.userRepo.GetFirstAdmin(ctx)
+			if err != nil {
+				return err
+			}
+			if admin == nil || !admin.IsActive() || !admin.IsAdmin() {
+				return ErrUserNotActive
+			}
+		}
+		keys[i].UserID = admin.ID
+		keys[i].User = admin
+	}
+	return nil
 }
 
 // Update 更新API Key
@@ -763,11 +906,6 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	apiKey, err := s.apiKeyRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("get api key: %w", err)
-	}
-
-	// 验证所有权
-	if apiKey.UserID != userID {
-		return nil, ErrInsufficientPerms
 	}
 
 	// 验证 IP 白名单格式
@@ -798,19 +936,16 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 
 	if req.GroupID != nil {
-		// 验证分组权限
-		user, err := s.userRepo.GetByID(ctx, userID)
-		if err != nil {
-			return nil, fmt.Errorf("get user: %w", err)
-		}
-
 		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
 		if err != nil {
 			return nil, fmt.Errorf("get group: %w", err)
 		}
 
-		if !s.canUserBindGroup(ctx, user, group) {
+		if group == nil || !group.IsActive() {
 			return nil, ErrGroupNotAllowed
+		}
+		if err := requireActiveGroupPlatform(group.Platform); err != nil {
+			return nil, err
 		}
 
 		apiKey.GroupID = req.GroupID
@@ -920,10 +1055,9 @@ func (s *APIKeyService) Delete(ctx context.Context, id int64, userID int64) erro
 		return fmt.Errorf("get api key: %w", err)
 	}
 
-	// 验证当前用户是否为该 API Key 的所有者
-	if ownerID != userID {
-		return ErrInsufficientPerms
-	}
+	// userID is retained in the method signature for rolling-compatibility with
+	// callers, but ownership is deliberately not checked: API Keys are global.
+	_ = ownerID
 
 	// 事务内:写审计 + 软删除(tombstone)。
 	if err := s.apiKeyRepo.DeleteWithAudit(ctx, id); err != nil {
@@ -1013,44 +1147,23 @@ func (s *APIKeyService) IncrementUsage(ctx context.Context, keyID int64) error {
 	return nil
 }
 
-// GetAvailableGroups 获取用户有权限绑定的分组列表
-// 返回用户可以选择的分组：
-// - 标准类型分组：公开的（非专属）或用户被明确允许的
-// - 订阅类型分组：用户有有效订阅的
+// GetAvailableGroups 获取系统 API Key 可以绑定的分组列表。
+// API Key 已改为全系统通用，因此只过滤掉停用分组，不再读取用户订阅
+// 或 user_allowed_groups。
 func (s *APIKeyService) GetAvailableGroups(ctx context.Context, userID int64) ([]Group, error) {
-	// 获取用户信息
-	user, err := s.userRepo.GetByID(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
-	}
-
+	_ = userID // retained for source compatibility; availability is global
 	// 获取所有活跃分组
 	allGroups, err := s.groupRepo.ListActive(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list active groups: %w", err)
 	}
-
-	// 获取用户的所有有效订阅
-	activeSubscriptions, err := s.userSubRepo.ListActiveByUserID(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list active subscriptions: %w", err)
-	}
-
-	// 构建订阅分组 ID 集合
-	subscribedGroupIDs := make(map[int64]bool)
-	for _, sub := range activeSubscriptions {
-		subscribedGroupIDs[sub.GroupID] = true
-	}
-
-	// 过滤出用户有权限的分组
-	availableGroups := make([]Group, 0)
+	activeGroups := make([]Group, 0, len(allGroups))
 	for _, group := range allGroups {
-		if s.canUserBindGroupInternal(user, &group, subscribedGroupIDs) {
-			availableGroups = append(availableGroups, group)
+		if IsActiveGroupPlatform(group.Platform) {
+			activeGroups = append(activeGroups, group)
 		}
 	}
-
-	return availableGroups, nil
+	return activeGroups, nil
 }
 
 // canUserBindGroupInternal 内部方法，检查用户是否可以绑定分组（使用预加载的订阅数据）

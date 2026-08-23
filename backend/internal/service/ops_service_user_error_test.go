@@ -23,7 +23,7 @@ func (s *stubOpsRepoForUserErr) ListErrorLogs(ctx context.Context, f *OpsErrorLo
 		Errors: []*OpsErrorLog{{
 			Phase: "request", Type: "rate_limit_error",
 			Model: "m", RequestedModel: "rm", StatusCode: 429,
-			Message: "secret", UserEmail: "a@b.c",
+			Message: "secret",
 		}},
 		Total: 1, Page: 1, PageSize: 20,
 	}, nil

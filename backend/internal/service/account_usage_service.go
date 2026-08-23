@@ -347,7 +347,10 @@ func batchUsageErrorMessage(err error) string {
 
 func (s *AccountUsageService) getUsageForAccount(ctx context.Context, account *Account, forceProbe bool) (*UsageInfo, error) {
 	if account == nil {
-		return nil, fmt.Errorf("account is required")
+		return nil, ErrAccountNotFound
+	}
+	if err := requireActiveAccountPlatform(account.Platform); err != nil {
+		return nil, err
 	}
 	accountID := account.ID
 

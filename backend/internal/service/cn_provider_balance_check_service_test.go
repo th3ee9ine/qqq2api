@@ -37,7 +37,7 @@ func (r *fakeCNCheckRepo) ListByPlatform(ctx context.Context, platform string) (
 	return r.byPlatform[platform], nil
 }
 
-func TestCNProviderBalanceCheckRunOnceProbesCodingPlanQuota(t *testing.T) {
+func TestCNProviderBalanceCheckRunOnceNeverProbesRetiredProviders(t *testing.T) {
 	kimiActive := Account{ID: 1, Platform: PlatformKimi, Type: AccountTypeAPIKey, Status: StatusActive,
 		Credentials: map[string]any{"account_mode": "coding"}}
 	// 已被阈值停调的 coding 账号也要刷新快照（决定是否续停）。
@@ -62,7 +62,7 @@ func TestCNProviderBalanceCheckRunOnceProbesCodingPlanQuota(t *testing.T) {
 
 	svc.runOnce()
 
-	require.ElementsMatch(t, []int64{1, 2, 4}, prober.probed)
+	require.Empty(t, prober.probed)
 }
 
 // runOnceZhipuQuota 在 quotaService 缺失时安全跳过（Start 门控不启动的老部署路径）。

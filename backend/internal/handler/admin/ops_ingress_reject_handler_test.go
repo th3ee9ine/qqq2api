@@ -19,7 +19,7 @@ func TestListIngressRejectsValidatesFilters(t *testing.T) {
 	for _, path := range []string{
 		"/api/v1/admin/ops/ingress-rejections?reason=not-valid",
 		"/api/v1/admin/ops/ingress-rejections?client_ip=not-an-ip",
-		"/api/v1/admin/ops/ingress-rejections?user_id=0",
+		"/api/v1/admin/ops/ingress-rejections?user_id=7",
 		"/api/v1/admin/ops/ingress-rejections?api_key_id=-1",
 	} {
 		t.Run(path, func(t *testing.T) {

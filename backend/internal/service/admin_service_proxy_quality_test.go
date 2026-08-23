@@ -94,19 +94,12 @@ func TestRunProxyQualityTarget_AllowedStatusPassForUnauthorized(t *testing.T) {
 	require.Contains(t, item.Message, "目标可达")
 }
 
-func TestProxyQualityTargets_IncludesGrok(t *testing.T) {
-	var grokTarget *proxyQualityTarget
+func TestProxyQualityTargets_OnlyIncludesActiveProviders(t *testing.T) {
+	targets := make([]string, 0, len(proxyQualityTargets))
 	for i := range proxyQualityTargets {
-		if proxyQualityTargets[i].Target == "grok" {
-			grokTarget = &proxyQualityTargets[i]
-			break
-		}
+		targets = append(targets, proxyQualityTargets[i].Target)
 	}
-
-	require.NotNil(t, grokTarget)
-	require.Equal(t, "https://api.x.ai/v1/models", grokTarget.URL)
-	require.Equal(t, http.MethodGet, grokTarget.Method)
-	require.Contains(t, grokTarget.AllowedStatuses, http.StatusUnauthorized)
+	require.ElementsMatch(t, []string{PlatformAnthropic, PlatformOpenAI}, targets)
 }
 
 func TestRunProxyQualityTarget_GrokUnauthorizedPasses(t *testing.T) {

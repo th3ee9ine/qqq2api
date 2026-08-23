@@ -56,12 +56,6 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: 'Usage Statistics' }
   },
   {
-    path: '/redeem',
-    name: 'Redeem',
-    component: () => import('@/views/RedeemView.vue'),
-    meta: { requiresAuth: true, title: 'Redeem Code' }
-  },
-  {
     path: '/profile',
     name: 'Profile',
     component: () => import('@/views/ProfileView.vue'),
@@ -100,9 +94,9 @@ const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, requiresAdmin: true, title: 'Proxies' }
   },
   {
-    path: '/admin/redeem-codes',
-    name: 'AdminRedeemCodes',
-    component: () => import('@/views/admin/RedeemCodesView.vue'),
+    path: '/admin/redeem',
+    name: 'AdminRedeem',
+    component: () => import('@/views/admin/RedeemView.vue'),
     meta: { requiresAuth: true, requiresAdmin: true, title: 'Redeem Codes' }
   },
 

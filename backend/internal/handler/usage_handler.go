@@ -85,13 +85,9 @@ func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) 
 			response.InternalError(c, "API key service not available")
 			return nil, false
 		}
-		apiKey, err := h.apiKeyService.GetByID(c.Request.Context(), id)
+		_, err = h.apiKeyService.GetByID(c.Request.Context(), id)
 		if err != nil {
 			response.ErrorFrom(c, err)
-			return nil, false
-		}
-		if apiKey.UserID != subject.UserID {
-			response.Forbidden(c, "Not authorized to access this API key's usage records")
 			return nil, false
 		}
 		apiKeyID = id
@@ -660,10 +656,10 @@ func (h *UsageHandler) DashboardAPIKeysUsage(c *gin.Context) {
 	response.Success(c, gin.H{"stats": stats})
 }
 
-// GetMyAPIKeyDailyUsage handles getting daily usage details for the current user's API key.
+// GetMyAPIKeyDailyUsage handles daily usage details for a global API key.
 // GET /api/v1/user/api-keys/:id/usage/daily?days=30
 func (h *UsageHandler) GetMyAPIKeyDailyUsage(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	_, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
 		response.Unauthorized(c, "User not authenticated")
 		return
@@ -686,19 +682,14 @@ func (h *UsageHandler) GetMyAPIKeyDailyUsage(c *gin.Context) {
 		return
 	}
 
-	apiKey, err := h.apiKeyService.GetByID(c.Request.Context(), apiKeyID)
+	_, err = h.apiKeyService.GetByID(c.Request.Context(), apiKeyID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if apiKey.UserID != subject.UserID {
-		response.Forbidden(c, "Not authorized to access this API key's usage")
-		return
-	}
-
 	userTZ := c.Query("timezone")
 	startTime, endTime := apiKeyDailyUsageRange(days, userTZ)
-	items, err := h.usageService.GetAPIKeyDailyUsage(c.Request.Context(), subject.UserID, apiKeyID, startTime, endTime)
+	items, err := h.usageService.GetAPIKeyDailyUsage(c.Request.Context(), 0, apiKeyID, startTime, endTime)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

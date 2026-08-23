@@ -22,6 +22,7 @@ func newOptionalJWTTestEnv(users map[int64]*service.User) (*gin.Engine, *service
 	cfg := &config.Config{}
 	cfg.JWT.Secret = "test-jwt-secret-32bytes-long!!!"
 	cfg.JWT.AccessTokenExpireMinutes = 60
+	cfg.Default.AdminEmail = "admin@example.com"
 
 	userRepo := &stubJWTUserRepo{users: users}
 	authSvc := service.NewAuthService(nil, userRepo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -51,8 +52,8 @@ func TestOptionalJWTAuth_NoHeaderPassesAnonymously(t *testing.T) {
 func TestOptionalJWTAuth_ValidTokenSetsSubject(t *testing.T) {
 	user := &service.User{
 		ID:           7,
-		Email:        "plaza@example.com",
-		Role:         "user",
+		Email:        "admin@example.com",
+		Role:         service.RoleAdmin,
 		Status:       service.StatusActive,
 		Concurrency:  5,
 		TokenVersion: 1,

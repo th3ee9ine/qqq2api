@@ -41,7 +41,6 @@ export default {
       metricTokens: '按 Token',
       metricActualCost: '按实际消费',
       tokenUsageTrend: 'Token 使用趋势',
-      userUsageTrend: '用户使用趋势（Top 12）',
       noDataAvailable: '暂无数据',
       model: '模型',
       group: '分组',
@@ -50,15 +49,6 @@ export default {
       tokens: 'Token',
       cache: '缓存',
       recentUsage: '最近使用',
-      viewModelDistribution: '模型分布',
-      viewSpendingRanking: '用户消费榜',
-      spendingRankingTitle: '用户消费榜',
-      spendingRankingUser: '用户',
-      spendingRankingRequests: '请求',
-      spendingRankingTokens: 'Token',
-      spendingRankingSpend: '消费',
-      spendingRankingOther: '其他',
-      spendingRankingUsage: '用量',
       spendShort: '消费',
       requestsShort: '请求',
       tokensShort: 'Token',
@@ -785,8 +775,6 @@ export default {
       sortOrderUpdated: '排序已更新',
       failedToUpdateSortOrder: '更新排序失败',
       deleteConfirm: "确定要删除分组 '{name}' 吗？所有关联的 API 密钥将不再属于任何分组。",
-      deleteConfirmSubscription:
-        "确定要删除订阅分组 '{name}' 吗？此操作会让所有绑定此订阅的用户的 API Key 失效，并删除所有相关的订阅记录。此操作无法撤销。",
       columns: {
         name: '名称',
         id: 'ID',
@@ -805,7 +793,6 @@ export default {
         usage: '用量',
         status: '状态',
         actions: '操作',
-        billingType: '计费类型',
         userName: '用户名',
         userEmail: '邮箱',
         userNotes: '备注',
@@ -920,9 +907,6 @@ export default {
       createFirstGroup: '创建您的第一个分组来组织 API 密钥。',
       creating: '创建中...',
       updating: '更新中...',
-      limitDay: '日',
-      limitWeek: '周',
-      limitMonth: '月',
       groupCreated: '分组创建成功',
       groupUpdated: '分组更新成功',
       groupDeleted: '分组删除成功',
@@ -955,54 +939,15 @@ export default {
       unsavedChanges: '有未保存的修改',
       revertChanges: '撤销修改',
       userInfo: '用户信息',
-      subscription: {
-        title: '订阅设置',
-        type: '计费类型',
-        typeHint: '标准计费从用户余额扣除。订阅模式使用配额限制。',
-        typeNotEditable: '分组创建后无法修改计费类型。',
-        standard: '标准（余额）',
-        subscription: '订阅（配额）',
-        dailyLimit: '每日限额（USD）',
-        weeklyLimit: '每周限额（USD）',
-        monthlyLimit: '每月限额（USD）',
-        defaultValidityDays: '默认有效期（天）',
-        validityHint: '分配给用户时订阅的有效天数',
-        noLimit: '无限制'
-      },
       imagePricing: {
         title: '图片生成计费',
         description: '配置图片生成能力和图片基础单价，留空则使用默认价格',
         allowImageGeneration: '允许当前分组生图',
-        allowBatchImageGeneration: '允许当前分组批量生图',
         independentMultiplier: '生图倍率独立',
         imageMultiplier: '生图独立倍率',
-        batchDiscountMultiplier: '批量生图折扣倍率',
-        batchHoldMultiplier: '批量冻结价格比例',
-        batchSectionHint: '批量生图仅影响批量任务：结算价格会叠加批量折扣倍率，提交时冻结金额按普通生图原价 × 批量冻结价格比例计算。参考图也会产生上游输入 token 消耗，建议批量生图折扣倍率设置大于 0.5。',
-        batchDisabledHint: '请先开启当前分组生图，才能开启批量生图。',
-        batchGeminiOnlyHint: '批量生图当前仅支持 Gemini 分组。',
         modeHint: '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
         finalPricePreview: '最终单张价格预览',
         notConfigured: '未配置'
-      },
-      videoPricing: {
-        title: '视频生成计费',
-        description:
-          '配置 Grok 视频生成的每秒单价（USD/秒），留空则使用默认每秒价（grok-imagine-video：480p $0.05/s、720p $0.07/s；video-1.5：480p $0.08/s、720p $0.14/s、1080p $0.25/s）',
-        modelOverridesTitle: '按模型覆盖视频价格',
-        modelOverridesDescription: '已填写的单元格会覆盖该模型族的平面分辨率价格。video-1.5 的 preview 与 legacy 别名共用同一模型族；留空则回退到平面分辨率价格。',
-        independentMultiplier: '视频倍率独立',
-        videoMultiplier: '视频独立倍率',
-        modeHint:
-          '视频按秒计费：费用 = 每秒价格 × 时长（1-15 秒，未指定默认 8 秒）。默认叠加当前分组有效倍率；开启独立倍率后改用视频独立倍率。',
-        finalPricePreview: '最终每秒价格预览',
-        notConfigured: '未配置'
-      },
-      explicitPricing: {
-        title: 'Grok 搜索与 Voice 定价',
-        description: '分组级 web_search（每千次）与 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
-        searchPricePer1k: '搜索每千次价格（USD）',
-        pricePlaceholder: '可选'
       },
       modelPricing: {
         title: '分组逐模型定价',
@@ -1011,27 +956,12 @@ export default {
         longContextHint: '勾选后按渠道区间或官方预设阶梯计费；关闭后默认按第一档，账号显式开启时除外。',
         add: '添加模型价格'
       },
-      voicePricing: {
-        title: 'Grok Voice 定价',
-        description: '分组级 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
-        audioRealtimePerMin: 'Realtime 每分钟价格（USD）',
-        audioTtsPerMillionChars: 'TTS 每百万字符价格（USD）',
-        audioSttPerHour: 'STT 每小时价格（USD）',
-        pricePlaceholder: '可选'
-      },
       webSearchPricing: {
         title: 'Codex 网页搜索计费',
         pricePerCall: '搜索单次价格（USD/次）',
         pricePerCallHint:
           '留空使用默认价 $0.01/次（官方定价 $10/1000 次）；填 0 表示免费。实际扣费会叠加分组费率倍数。',
         finalPricePreview: '应用当前倍率后的单次价格：{price}'
-      },
-      peakRate: {
-        enable: '启用高峰倍率',
-        peakStart: '高峰开始',
-        peakEnd: '高峰结束',
-        peakMultiplier: '高峰倍率',
-        multiplierHint: '作用于 token 计费倍率；token 计费的图片 token 同样适用，0 表示高峰 token 请求按 0 倍计费'
       },
       profitControl: {
         enable: '启用利润控制',
@@ -1070,7 +1000,7 @@ export default {
         endpoint: '端点',
         targetPlatform: '目标平台',
         upstreamModel: '上游模型',
-        upstreamModelHint: '留空表示透传原始请求模型：前缀匹配下每个命中模型各自原样转发（如 deepseek-v4-flash、deepseek-v4-pro 分别转发）；填写则所有命中请求都固定转发该模型。',
+        upstreamModelHint: '留空表示透传原始请求模型；填写则所有命中请求都固定转发该模型。',
         notes: '备注',
         enabled: '启用',
         preview: '预览',
@@ -1092,8 +1022,7 @@ export default {
           responses: 'Responses',
           chatCompletions: 'Chat Completions',
           embeddings: 'Embeddings',
-          images: 'Images',
-          gemini: 'Gemini 原生'
+          images: 'Images'
         },
         match: {
           exact: '精确',
@@ -1185,20 +1114,6 @@ export default {
         noRulesHint: '添加路由规则以将特定模型请求优先路由到指定账号',
         searchAccountPlaceholder: '搜索账号...',
         accountsHint: '选择此模型模式优先使用的账号'
-      },
-      mcpXml: {
-        title: 'MCP XML 协议注入',
-        tooltip: '启用后，当请求包含 MCP 工具时，会在 system prompt 中注入 XML 格式调用协议提示词。关闭此选项可避免对某些客户端造成干扰。',
-        enabled: '已启用',
-        disabled: '已禁用'
-      },
-      supportedScopes: {
-        title: '支持的模型系列',
-        tooltip: '选择此分组支持的模型系列。未勾选的系列将不会被路由到此分组。',
-        claude: 'Claude',
-        geminiText: 'Gemini Text',
-        geminiImage: 'Gemini Image',
-        hint: '至少选择一个模型系列'
       }
     },
 

@@ -640,7 +640,6 @@ func (s *OpsService) ListUserErrorRequests(ctx context.Context, userID int64, fi
 	filter.ExcludeCountTokens = true
 	filter.ModelFuzzy = true // 用户端模型过滤走 ILIKE 模糊；管理端不设此字段，保持精确
 	// 防御：用户端不接受这些 admin-only / 特殊维度
-	filter.UserQuery = ""
 	filter.Owner = ""
 	filter.Source = ""
 	// 清空 Phase 是防御:用户端一律改走 category→ErrorPhasesAny/ErrorTypesAny

@@ -44,9 +44,6 @@ func (r *opsRepository) ListRequestDetails(ctx context.Context, filter *service.
 			addCondition(fmt.Sprintf("group_id = $%d", len(args)+1), *filter.GroupID)
 		}
 
-		if filter.UserID != nil && *filter.UserID > 0 {
-			addCondition(fmt.Sprintf("user_id = $%d", len(args)+1), *filter.UserID)
-		}
 		if filter.APIKeyID != nil && *filter.APIKeyID > 0 {
 			addCondition(fmt.Sprintf("api_key_id = $%d", len(args)+1), *filter.APIKeyID)
 		}

@@ -1,8 +1,4 @@
 export default {
-  batchImageGuide: {
-    title: '图片批量生成',
-    description: '一次提交多条提示词，任务完成后可统一下载图片结果'
-  },
   // Home Page
   home: {
     viewOnGithub: '在 GitHub 上查看',
@@ -16,7 +12,7 @@ export default {
     goToDashboard: '进入控制台',
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
-    heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',
+    heroDescription: '使用一个全局 API 密钥接入 Claude 与 GPT',
     tags: {
       subscriptionToApi: '订阅转 API',
       stickySession: '会话保持',
@@ -99,8 +95,6 @@ export default {
       supported: '已支持',
       soon: '即将推出',
       claude: 'Claude',
-      gemini: 'Gemini',
-      antigravity: 'Antigravity',
       more: '更多'
     },
     // CTA 区块
@@ -147,14 +141,12 @@ export default {
     cost: '费用',
     // Status
     quotaMode: 'Key 限额模式',
-    walletBalance: '钱包余额',
+    unrestrictedMode: '全局 API Key',
     // Ring card titles
     totalQuota: '总额度',
     limit5h: '5 小时限额',
     limitDaily: '日限额',
     limit7d: '7 天限额',
-    limitWeekly: '周限额',
-    limitMonthly: '月限额',
     // Detail rows
     remainingQuota: '剩余额度',
     expiresAt: '过期时间',
@@ -162,8 +154,7 @@ export default {
     daysLeft: '({days} 天)',
     usedQuota: '已用额度',
     resetNow: '即将重置',
-    subscriptionType: '订阅类型',
-    subscriptionExpires: '订阅到期',
+    group: '分组',
     // Usage stat cells
     todayRequests: '今日请求',
     todayInputTokens: '今日输入',

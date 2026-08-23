@@ -189,7 +189,7 @@ func TestUpdateAccountPreservesManagedUpstreamBillingProbeStateForUnrelatedEdit(
 	require.Equal(t, "value", updated.Extra["custom"])
 }
 
-func TestUpdateAccountPreservesGrokBillingSnapshotForUnrelatedEdit(t *testing.T) {
+func TestUpdateAccountRejectsRetiredGrokAccount(t *testing.T) {
 	accountID := int64(112)
 	billing := &xai.BillingSummary{
 		StatusCode:       http.StatusForbidden,
@@ -205,16 +205,11 @@ func TestUpdateAccountPreservesGrokBillingSnapshotForUnrelatedEdit(t *testing.T)
 		},
 	}}
 
-	updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+	_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
 		Extra: map[string]any{"custom": "value"},
 	})
 
-	require.NoError(t, err)
-	require.Equal(t, billing, updated.Extra[grokBillingExtraKey])
-	require.Equal(t, "value", updated.Extra["custom"])
-	eligible, reason := updated.GrokMediaGenerationEligibility()
-	require.False(t, eligible)
-	require.Equal(t, "billing_forbidden", reason)
+	require.ErrorIs(t, err, ErrPlatformRetired)
 }
 
 func TestUpdateAccountPreservesProbeSnapshotWhenIdentityValuesAreUnchanged(t *testing.T) {
@@ -402,7 +397,7 @@ func TestUpdateAccountAcceptsProbeEnabledAndRejectsInjectedSnapshot(t *testing.T
 	require.NotContains(t, updated.Extra, UpstreamBillingProbeExtraKey)
 }
 
-func TestUpdateAccountRateSyncControlsProbeAndManualMode(t *testing.T) {
+func TestUpdateAccountRateSyncRejectsRetiredGeminiAccount(t *testing.T) {
 	accountID := int64(151)
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{
 		accountID: {
@@ -416,20 +411,10 @@ func TestUpdateAccountRateSyncControlsProbeAndManualMode(t *testing.T) {
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	syncEnabled := true
-	updated, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+	_, err := svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
 		RateSyncEnabled: &syncEnabled,
 	})
-	require.NoError(t, err)
-	require.Equal(t, true, updated.Extra[UpstreamBillingProbeEnabledExtraKey])
-	require.Equal(t, true, updated.Extra[UpstreamBillingRateSyncEnabledExtraKey])
-
-	syncEnabled = false
-	updated, err = svc.UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
-		RateSyncEnabled: &syncEnabled,
-	})
-	require.NoError(t, err)
-	require.Equal(t, true, updated.Extra[UpstreamBillingProbeEnabledExtraKey])
-	require.Equal(t, false, updated.Extra[UpstreamBillingRateSyncEnabledExtraKey])
+	require.ErrorIs(t, err, ErrPlatformRetired)
 }
 
 // 单账号编辑必须和批量路径语义一致：同步开启时倍率归上游所有，手工值会在下一次

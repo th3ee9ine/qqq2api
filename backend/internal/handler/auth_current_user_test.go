@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -18,32 +18,20 @@ import (
 func TestAuthHandlerGetCurrentUserReturnsProfileCompatibilityFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	verifiedAt := time.Date(2026, 4, 20, 8, 30, 0, 0, time.UTC)
 	repo := &userHandlerRepoStub{
 		user: &service.User{
-			ID:           31,
-			Email:        "me@example.com",
-			Username:     "linuxdo-handle",
-			Role:         service.RoleUser,
-			Status:       service.StatusActive,
-			AvatarURL:    "https://cdn.example.com/linuxdo.png",
-			AvatarSource: "remote_url",
+			ID:       31,
+			Email:    "admin@example.com",
+			Username: "admin",
+			Role:     service.RoleAdmin,
+			Status:   service.StatusActive,
 		},
-			identities: []service.UserAuthIdentityRecord{
-				{
-					ProviderType:    "linuxdo",
-					ProviderKey:     "linuxdo",
-					ProviderSubject: "linuxdo-subject-31",
-					VerifiedAt:      &verifiedAt,
-					Metadata: map[string]any{
-						"username":   "linuxdo-handle",
-						"avatar_url": "https://cdn.example.com/linuxdo.png",
-					},
-				},
-			},
-		}
+	}
 
+	cfg := &config.Config{}
+	cfg.Default.AdminEmail = "admin@example.com"
 	handler := &AuthHandler{
+		authService: service.NewAuthService(nil, repo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil),
 		userService: service.NewUserService(repo, nil, nil, nil),
 	}
 
@@ -63,24 +51,28 @@ func TestAuthHandlerGetCurrentUserReturnsProfileCompatibilityFields(t *testing.T
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
 	require.Equal(t, true, resp.Data["email_bound"])
-	require.Equal(t, true, resp.Data["linuxdo_bound"])
-	require.Equal(t, "https://cdn.example.com/linuxdo.png", resp.Data["avatar_url"])
+	require.Equal(t, false, resp.Data["linuxdo_bound"])
+	require.Equal(t, "admin", resp.Data["role"])
+}
 
-	authBindings, ok := resp.Data["auth_bindings"].(map[string]any)
-	require.True(t, ok)
-	linuxdoBinding, ok := authBindings["linuxdo"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, true, linuxdoBinding["bound"])
+func TestAuthHandlerGetCurrentUserRejectsOtherDatabaseAdministrator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &userHandlerRepoStub{user: &service.User{
+		ID: 2, Email: "other-admin@example.com", Role: service.RoleAdmin, Status: service.StatusActive,
+	}}
+	cfg := &config.Config{}
+	cfg.Default.AdminEmail = "admin@example.com"
+	handler := &AuthHandler{
+		authService: service.NewAuthService(nil, repo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil),
+		userService: service.NewUserService(repo, nil, nil, nil),
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 2})
 
-	avatarSource, ok := resp.Data["avatar_source"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "linuxdo", avatarSource["provider"])
-	require.Equal(t, "linuxdo", avatarSource["source"])
+	handler.GetCurrentUser(c)
 
-	profileSources, ok := resp.Data["profile_sources"].(map[string]any)
-	require.True(t, ok)
-	usernameSource, ok := profileSources["username"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "linuxdo", usernameSource["provider"])
-	require.Equal(t, "linuxdo", usernameSource["source"])
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "ADMIN_ONLY_MODE")
 }

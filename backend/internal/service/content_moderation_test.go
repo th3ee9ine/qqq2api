@@ -1,11 +1,9 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1527,42 +1525,74 @@ func TestContentModerationCheck_HashBlockLogsDoNotIncreaseNextViolationCount(t *
 	require.Equal(t, 1, logs[1].ViolationCount)
 }
 
-func TestContentModerationAutoBanSkipsAdminAccount(t *testing.T) {
-	var slogOutput bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&slogOutput, nil)))
-	t.Cleanup(func() {
-		slog.SetDefault(previousLogger)
+func TestContentModerationLegacyAutoBanConfigAndUpdatesStayDisabled(t *testing.T) {
+	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: `{"auto_ban_enabled":true,"ban_threshold":3,"violation_window_hours":12,"cyber_policy_exclude_from_ban_count":true}`,
+	}}
+	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil, nil)
+
+	view, err := svc.GetConfig(context.Background())
+	require.NoError(t, err)
+	require.False(t, view.AutoBanEnabled)
+	require.Equal(t, 3, view.BanThreshold)
+	require.Equal(t, 12, view.ViolationWindowHours)
+	require.True(t, view.CyberPolicyExcludeFromBanCount)
+
+	enabled := true
+	threshold := 1
+	windowHours := 1
+	excludeCyber := false
+	view, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		AutoBanEnabled:                 &enabled,
+		BanThreshold:                   &threshold,
+		ViolationWindowHours:           &windowHours,
+		CyberPolicyExcludeFromBanCount: &excludeCyber,
 	})
+	require.NoError(t, err)
+	require.False(t, view.AutoBanEnabled)
+	require.Equal(t, 3, view.BanThreshold, "legacy ban threshold update must be ignored")
+	require.Equal(t, 12, view.ViolationWindowHours, "legacy violation window update must be ignored")
+	require.True(t, view.CyberPolicyExcludeFromBanCount, "legacy ban-count update must be ignored")
 
-	cfg := defaultContentModerationConfig()
-	cfg.BanThreshold = 2
-	cfg.ViolationWindowHours = 24
-
-	userID := int64(1001)
-	repo := &contentModerationTestRepo{}
-	require.NoError(t, repo.CreateLog(context.Background(), newContentModerationFlaggedLog(userID)))
-	userRepo := &contentModerationTestUserRepo{user: &User{ID: userID, Role: RoleAdmin, Status: StatusActive}}
-	invalidator := &contentModerationTestAuthCacheInvalidator{}
-	svc := NewContentModerationService(nil, repo, nil, nil, userRepo, nil, invalidator, nil)
-
-	svc.persistContentModerationLog(context.Background(), cfg, newContentModerationFlaggedLog(userID), "", false, true)
-
-	logs := requireContentModerationLogCount(t, repo, 2)
-	require.Equal(t, 2, logs[1].ViolationCount)
-	require.False(t, logs[1].AutoBanned)
-	require.Equal(t, StatusActive, userRepo.user.Status)
-	require.Empty(t, userRepo.updated)
-	require.Empty(t, invalidator.userIDs)
-	require.Contains(t, slogOutput.String(), "content_moderation.autoban_skipped_admin")
-	require.Contains(t, slogOutput.String(), "user_id=1001")
-	require.Contains(t, slogOutput.String(), "role=admin")
-	require.Contains(t, slogOutput.String(), "count=2")
-	require.Contains(t, slogOutput.String(), "threshold=2")
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(settingRepo.values[SettingKeyContentModerationConfig]), &saved))
+	require.False(t, saved.AutoBanEnabled)
 }
 
-func TestContentModerationAutoBanDisablesRegularUserAtThreshold(t *testing.T) {
+func TestContentModerationListLogsJSONOmitsUserFieldsAndKeepsAuditDimensions(t *testing.T) {
+	userID := int64(7)
+	apiKeyID := int64(11)
+	groupID := int64(13)
+	raw, err := json.Marshal(ContentModerationLog{
+		ID:         17,
+		UserID:     &userID,
+		UserEmail:  "legacy-user@example.com",
+		UserStatus: StatusDisabled,
+		AutoBanned: true,
+		APIKeyID:   &apiKeyID,
+		APIKeyName: "global-key",
+		GroupID:    &groupID,
+		GroupName:  "audit-group",
+		Action:     ContentModerationActionBlock,
+		Flagged:    true,
+		CreatedAt:  time.Now(),
+	})
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(raw, &payload))
+	for _, field := range []string{"user_id", "user_email", "user_status", "auto_banned"} {
+		require.NotContains(t, payload, field)
+	}
+	require.Equal(t, float64(apiKeyID), payload["api_key_id"])
+	require.Equal(t, "global-key", payload["api_key_name"])
+	require.Equal(t, float64(groupID), payload["group_id"])
+	require.Equal(t, "audit-group", payload["group_name"])
+}
+
+func TestContentModerationFlaggedThresholdNeverDisablesUser(t *testing.T) {
 	cfg := defaultContentModerationConfig()
+	cfg.AutoBanEnabled = true // Even an unnormalized legacy caller cannot enable user mutation.
 	cfg.BanThreshold = 2
 	cfg.ViolationWindowHours = 24
 
@@ -1577,10 +1607,10 @@ func TestContentModerationAutoBanDisablesRegularUserAtThreshold(t *testing.T) {
 
 	logs := requireContentModerationLogCount(t, repo, 2)
 	require.Equal(t, 2, logs[1].ViolationCount)
-	require.True(t, logs[1].AutoBanned)
-	require.Len(t, userRepo.updated, 1)
-	require.Equal(t, StatusDisabled, userRepo.user.Status)
-	require.Equal(t, []int64{userID}, invalidator.userIDs)
+	require.False(t, logs[1].AutoBanned)
+	require.Empty(t, userRepo.updated)
+	require.Equal(t, StatusActive, userRepo.user.Status)
+	require.Empty(t, invalidator.userIDs)
 }
 
 func TestContentModerationAdminBelowBanThresholdRecordsViolationOnly(t *testing.T) {
@@ -1831,45 +1861,4 @@ func TestContentModerationUnbanUser_ActiveUserOnlyInvalidatesAuthCache(t *testin
 
 func contentModerationIntPtr(v int) *int {
 	return &v
-}
-
-func TestContentModerationUpdateConfig_CyberPolicyExcludeFromBanCount(t *testing.T) {
-	settingRepo := &contentModerationTestSettingRepo{values: map[string]string{}}
-	svc := NewContentModerationService(settingRepo, nil, nil, nil, nil, nil, nil, nil)
-
-	// 默认值必须是 false（计入，保持现状）
-	view, err := svc.GetConfig(context.Background())
-	require.NoError(t, err)
-	require.False(t, view.CyberPolicyExcludeFromBanCount, "默认必须计入封号计数")
-
-	// 指针式部分更新为 true
-	exclude := true
-	view, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-		CyberPolicyExcludeFromBanCount: &exclude,
-	})
-	require.NoError(t, err)
-	require.True(t, view.CyberPolicyExcludeFromBanCount)
-
-	// 持久化 JSON 含字段
-	var saved ContentModerationConfig
-	require.NoError(t, json.Unmarshal([]byte(settingRepo.values[SettingKeyContentModerationConfig]), &saved))
-	require.True(t, saved.CyberPolicyExcludeFromBanCount)
-
-	// 二次读取（从持久化 JSON 反序列化）roundtrip
-	view, err = svc.GetConfig(context.Background())
-	require.NoError(t, err)
-	require.True(t, view.CyberPolicyExcludeFromBanCount)
-
-	// 不传该字段的更新不得改动它（指针 nil = 保留）
-	view, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{})
-	require.NoError(t, err)
-	require.True(t, view.CyberPolicyExcludeFromBanCount)
-
-	// 主动回拨 false 必须生效（防止未来误加 if val 保护逻辑）
-	revert := false
-	view, err = svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
-		CyberPolicyExcludeFromBanCount: &revert,
-	})
-	require.NoError(t, err)
-	require.False(t, view.CyberPolicyExcludeFromBanCount)
 }

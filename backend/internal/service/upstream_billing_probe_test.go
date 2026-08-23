@@ -340,7 +340,7 @@ func TestUpstreamBillingProbeSuccessPersistsSanitizedSnapshot(t *testing.T) {
 	require.Equal(t, snapshot.Status, persisted.Status)
 }
 
-func TestUpstreamBillingProbeAdaptiveCNUsesChatProtocolBaseURL(t *testing.T) {
+func TestUpstreamBillingProbeRejectsRetiredCNPlatform(t *testing.T) {
 	account := &Account{
 		ID:          18,
 		Platform:    PlatformKimi,
@@ -367,18 +367,15 @@ func TestUpstreamBillingProbeAdaptiveCNUsesChatProtocolBaseURL(t *testing.T) {
 
 	snapshot, err := svc.ProbeAccount(context.Background(), account.ID)
 
-	require.NoError(t, err)
-	require.Equal(t, UpstreamBillingProbeStatusOK, snapshot.Status)
-	require.Equal(t, "https://chat-relay.example/v1/sub2api/billing", upstream.lastReq.URL.String())
+	require.Nil(t, snapshot)
+	require.ErrorIs(t, err, ErrUpstreamBillingProbeAccountInvalid)
+	require.Nil(t, upstream.lastReq)
 }
 
-func TestUpstreamBillingProbeSyncsResolvedRateForAllAPIKeyPlatforms(t *testing.T) {
+func TestUpstreamBillingProbeSyncsResolvedRateForActiveAPIKeyPlatforms(t *testing.T) {
 	for _, platform := range []string{
 		PlatformOpenAI,
 		PlatformAnthropic,
-		PlatformGemini,
-		PlatformAntigravity,
-		PlatformGrok,
 	} {
 		t.Run(platform, func(t *testing.T) {
 			initialRate := 0.25
@@ -415,7 +412,7 @@ func TestUpstreamBillingProbeOnlyDoesNotChangeAccountRate(t *testing.T) {
 	initialRate := 0.25
 	account := &Account{
 		ID:             18,
-		Platform:       PlatformGrok,
+		Platform:       PlatformOpenAI,
 		Type:           AccountTypeAPIKey,
 		Status:         StatusActive,
 		Concurrency:    1,

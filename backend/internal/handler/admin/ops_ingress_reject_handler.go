@@ -34,6 +34,9 @@ func (h *OpsHandler) ListIngressRejects(c *gin.Context) {
 		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
 		return
 	}
+	if rejectOpsUserIdentityFilters(c) {
+		return
+	}
 	page, pageSize := response.ParsePagination(c)
 	if pageSize > 200 {
 		pageSize = 200
@@ -73,10 +76,6 @@ func (h *OpsHandler) ListIngressRejects(c *gin.Context) {
 			addr = netip.PrefixFrom(addr, 64).Masked().Addr()
 		}
 		filter.ClientIP = addr.String()
-	}
-	if filter.UserID, err = parseOptionalPositiveID(c, "user_id"); err != nil {
-		response.BadRequest(c, err.Error())
-		return
 	}
 	if filter.APIKeyID, err = parseOptionalPositiveID(c, "api_key_id"); err != nil {
 		response.BadRequest(c, err.Error())

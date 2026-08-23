@@ -342,7 +342,7 @@ func TestFetchUpstreamSupportedModelsParsesOpenAIResponse(t *testing.T) {
 	require.Equal(t, "Bearer openai-key", upstream.lastReq.Header.Get("Authorization"))
 }
 
-func TestFetchUpstreamSupportedModelsParsesGrokAPIKeyResponse(t *testing.T) {
+func TestFetchUpstreamSupportedModelsRejectsRetiredGrokAPIKey(t *testing.T) {
 	t.Parallel()
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -364,13 +364,12 @@ func TestFetchUpstreamSupportedModelsParsesGrokAPIKeyResponse(t *testing.T) {
 			"base_url": "https://xai.example.com/v1",
 		},
 	})
-	require.NoError(t, err)
-	require.Equal(t, []string{"grok-4.5", "grok-imagine"}, models)
-	require.Equal(t, "https://xai.example.com/v1/models", upstream.lastReq.URL.String())
-	require.Equal(t, "Bearer xai-key", upstream.lastReq.Header.Get("Authorization"))
+	require.Nil(t, models)
+	require.Error(t, err)
+	require.Nil(t, upstream.lastReq)
 }
 
-func TestFetchUpstreamSupportedModelsParsesGrokOAuthResponse(t *testing.T) {
+func TestFetchUpstreamSupportedModelsRejectsRetiredGrokOAuth(t *testing.T) {
 	t.Parallel()
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -385,14 +384,9 @@ func TestFetchUpstreamSupportedModelsParsesGrokOAuthResponse(t *testing.T) {
 	}
 
 	models, err := svc.FetchUpstreamSupportedModels(context.Background(), grokOAuthModelSyncTestAccount(""))
-	require.NoError(t, err)
-	require.Equal(t, []string{"grok-4.5", "grok-build-0.1"}, models)
-	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/models", upstream.lastReq.URL.String())
-	require.Equal(t, "Bearer oauth-access-token", upstream.lastReq.Header.Get("Authorization"))
-	require.Equal(t, grokCLIVersion, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
-	require.Equal(t, "interactive", upstream.lastReq.Header.Get("X-Grok-Client-Mode"))
-	require.Equal(t, "grok-user-id", upstream.lastReq.Header.Get("X-UserID"))
-	require.Equal(t, "grok-user@example.com", upstream.lastReq.Header.Get("X-Email"))
+	require.Nil(t, models)
+	require.Error(t, err)
+	require.Nil(t, upstream.lastReq)
 }
 
 func TestBuildUpstreamModelsRequestGrokOAuthDoesNotSendIdentityToCustomBase(t *testing.T) {

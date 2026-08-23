@@ -614,22 +614,6 @@ var proxyQualityTargets = []proxyQualityTarget{
 			http.StatusBadRequest:       {},
 		},
 	},
-	{
-		Target: "gemini",
-		URL:    "https://generativelanguage.googleapis.com/$discovery/rest?version=v1beta",
-		Method: http.MethodGet,
-		AllowedStatuses: map[int]struct{}{
-			http.StatusOK: {},
-		},
-	},
-	{
-		Target: "grok",
-		URL:    "https://api.x.ai/v1/models",
-		Method: http.MethodGet,
-		AllowedStatuses: map[int]struct{}{
-			http.StatusUnauthorized: {},
-		},
-	},
 }
 
 const (

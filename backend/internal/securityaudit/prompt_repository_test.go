@@ -1,6 +1,11 @@
 package securityaudit
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestShouldStorePromptAuditEvent(t *testing.T) {
 	tests := []struct {
@@ -21,5 +26,17 @@ func TestShouldStorePromptAuditEvent(t *testing.T) {
 				t.Fatalf("shouldStorePromptAuditEvent(%q, %t) = %t, want %t", tt.decision, tt.storePassEvents, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildEventWhereSearchUsesGlobalKeyAndGroupIdentityOnly(t *testing.T) {
+	where, args := buildEventWhere(EventFilter{Keyword: " global identity "}, 1)
+
+	require.Len(t, args, 1)
+	require.Equal(t, "%global identity%", args[0])
+	require.Contains(t, where, "e.api_key_name_snapshot ILIKE $1")
+	require.Contains(t, where, "e.group_name ILIKE $1")
+	for _, legacyColumn := range []string{"e.user_id", "e.username_snapshot", "e.user_email_snapshot"} {
+		require.False(t, strings.Contains(where, legacyColumn), "search must not use legacy user identity column %s", legacyColumn)
 	}
 }

@@ -964,6 +964,11 @@ func (s *SettingService) GetOpenAIFastPolicySettings(ctx context.Context) (*Open
 			"key", SettingKeyOpenAIFastPolicySettings)
 		return DefaultOpenAIFastPolicySettings(), nil
 	}
+	// API Keys are global resources. Legacy user_ids are intentionally ignored
+	// so policy evaluation can no longer vary by the row that once owned a key.
+	for i := range settings.Rules {
+		settings.Rules[i].UserIDs = nil
+	}
 
 	return &settings, nil
 }
@@ -1000,16 +1005,9 @@ func (s *SettingService) SetOpenAIFastPolicySettings(ctx context.Context, settin
 		if !validScopes[rule.Scope] {
 			return fmt.Errorf("rule[%d]: invalid scope %q", i, rule.Scope)
 		}
-		seenUserIDs := make(map[int64]struct{}, len(rule.UserIDs))
-		for j, userID := range rule.UserIDs {
-			if userID <= 0 {
-				return fmt.Errorf("rule[%d]: user_ids[%d] must be positive", i, j)
-			}
-			if _, exists := seenUserIDs[userID]; exists {
-				return fmt.Errorf("rule[%d]: user_ids[%d] duplicates user_id %d", i, j, userID)
-			}
-			seenUserIDs[userID] = struct{}{}
-		}
+		// Keep the JSON field for rolling compatibility, but never persist a
+		// user-specific selector in the single-administrator/global-key model.
+		settings.Rules[i].UserIDs = nil
 		for j, pattern := range rule.ModelWhitelist {
 			trimmed := strings.TrimSpace(pattern)
 			if trimmed == "" {

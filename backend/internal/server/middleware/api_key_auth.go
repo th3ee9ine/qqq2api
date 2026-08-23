@@ -25,7 +25,7 @@ func NewAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, subscriptionS
 // apiKeyAuthWithSubscription API Key认证中间件（支持订阅验证）
 //
 // 中间件职责分为两层：
-//   - 鉴权（Authentication）：验证 Key 有效性、用户状态、IP 限制 —— 始终执行
+//   - 鉴权（Authentication）：验证 Key 有效性、技术归属、IP 限制 —— 始终执行
 //   - 计费执行（Billing Enforcement）：过期/配额/订阅/余额检查 —— skipBilling 时整块跳过
 //
 // /v1/usage、/v1/sub2api/billing 端点与异步生图任务查询只需鉴权，不需要计费执行。
@@ -78,11 +78,6 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
-		// 如果x-api-key header中没有，尝试从x-goog-api-key header中提取（Gemini CLI兼容）
-		if apiKeyString == "" {
-			apiKeyString = c.GetHeader("x-goog-api-key")
-		}
-
 		// 如果所有header都没有API key
 		if apiKeyString == "" {
 			recordInvalidAuthFailure(c, apiKeyService)
@@ -91,7 +86,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			} else {
 				MarkIngressRejected(c, IngressRejectAPIKeyRequired)
 			}
-			AbortWithError(c, 401, "API_KEY_REQUIRED", "API key is required in Authorization header (Bearer scheme), x-api-key header, or x-goog-api-key header")
+			AbortWithError(c, 401, "API_KEY_REQUIRED", "API key is required in Authorization header (Bearer scheme) or x-api-key header")
 			return
 		}
 
@@ -114,7 +109,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
-		// apiKey 已加载（含 User/Group）。即便后续因分组停用/Key 停用/用户停用/
+		// apiKey 已加载（含 User/Group）。即便后续因分组停用/Key 停用/
 		// IP 限制等早退中断，也让 Ops 错误日志能回退取到 user/group/platform。
 		SetOpsFallbackAPIKey(c, apiKey)
 
@@ -151,16 +146,15 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
-		// 检查用户状态
-		if !apiKey.User.IsActive() {
-			MarkIngressRejected(c, IngressRejectUserInactive)
-			AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
-			return
-		}
 		if abortIfAPIKeyGroupUnavailable(c, apiKey) {
 			return
 		}
 		if abortIfAPIKeyGroupNotAllowed(c, apiKey) {
+			return
+		}
+		if apiKey.Group != nil && !service.IsActiveGroupPlatform(apiKey.Group.Platform) {
+			service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+			AbortWithError(c, http.StatusNotFound, "PLATFORM_RETIRED", "This platform is no longer supported")
 			return
 		}
 		ctx := context.WithValue(c.Request.Context(), ctxkey.UserID, apiKey.User.ID)
@@ -188,13 +182,19 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			return
 		}
 
+		// API Keys are system-wide resources. User/owner is retained on the
+		// object only as a technical subject for audit and context compatibility;
+		// subscription entitlement is never looked up per API-key caller.
+		globalAPIKey := isGlobalAPIKey(apiKey)
+
 		// ── 5. 按端点需要加载订阅 ───────────────────────────────────
 
 		var subscription *service.UserSubscription
 		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
 
-		// 倍率自省不需要订阅数据；/v1/usage 仍保留原有订阅读取行为。
-		if isSubscriptionType && subscriptionService != nil && !billingInfoRequest {
+		// Billing introspection and all gateway endpoints use the global key
+		// subject; no endpoint performs a per-user subscription lookup here.
+		if isSubscriptionType && subscriptionService != nil && !billingInfoRequest && !globalAPIKey {
 			sub, subErr := subscriptionService.GetActiveSubscription(
 				c.Request.Context(),
 				apiKey.User.ID,
@@ -260,7 +260,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 				}
 			} else {
 				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查
-				if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
+				if !globalAPIKey && apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
 					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")
 					return
 				}
@@ -424,14 +424,19 @@ func abortIfAPIKeyGroupNotAllowed(c *gin.Context, apiKey *service.APIKey) bool {
 }
 
 func validateAPIKeyGroupAllowed(apiKey *service.APIKey) bool {
-	if apiKey == nil || apiKey.GroupID == nil || apiKey.User == nil || apiKey.Group == nil {
-		return true
-	}
-	group := apiKey.Group
-	if group.IsSubscriptionType() {
-		return true
-	}
-	return apiKey.User.CanBindGroup(group.ID, group.IsExclusive)
+	// API Keys are global resources.  The legacy user/group entitlement check
+	// is intentionally a no-op; group availability (active/deleted) is still
+	// enforced by validateAPIKeyGroupAvailable immediately before this call.
+	_ = apiKey
+	return true
+}
+
+// isGlobalAPIKey reports whether the key participates in the system-wide API
+// key surface.  All keys are global after the migration.  Keeping this helper
+// instead of sprinkling literal true values makes the bypass explicit and
+// leaves a nil-safe seam for rolling upgrades/tests that may return no key.
+func isGlobalAPIKey(apiKey *service.APIKey) bool {
+	return apiKey != nil
 }
 
 func validateAPIKeyGroupAvailable(apiKey *service.APIKey) (string, string, bool) {

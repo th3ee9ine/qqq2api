@@ -142,13 +142,7 @@ security:
     upstream_hosts:
       - "api.openai.com"
       - "api.anthropic.com"
-      - "api.kimi.com"
-      - "api.moonshot.ai"
-      - "api.moonshot.cn"
-      - "open.bigmodel.cn"
       - "api.minimaxi.com"
-      - "generativelanguage.googleapis.com"
-      - "cloudcode-pa.googleapis.com"
       - "*.openai.azure.com"
     # Allowed hosts for pricing data download
     # 允许下载定价数据的主机列表
@@ -214,9 +208,6 @@ gateway:
   # OpenAI/Codex upstream response header timeout (seconds, 0=disabled)
   # OpenAI/Codex 等待上游响应头超时时间（秒，0=禁用本地响应头超时）
   openai_response_header_timeout: 0
-  # Grok text Responses first-byte timeout (seconds, 0=disabled; default 120)
-  # Grok 文本 Responses 首字节超时时间（秒，0=禁用；默认 120）
-  grok_response_header_timeout: 120
   # Native OpenAI HTTP Responses first semantic output timeout (seconds, 0=disabled)
   # Includes response-header wait; does not apply to passthrough or WebSocket transports.
   # A timed-out request may already have incurred upstream usage; account failover can therefore duplicate upstream billing.
@@ -238,9 +229,6 @@ gateway:
   # Max bytes to read for proxy probe responses (default: 1MB)
   # 代理探测响应体读取上限（默认 1MB）
   proxy_probe_response_read_max_bytes: 1048576
-  # Enable Gemini upstream response header debug logs (default: false)
-  # 是否开启 Gemini 上游响应头调试日志（默认 false）
-  gemini_debug_response_headers: false
   # Connection pool isolation strategy:
   # 连接池隔离策略：
   # - proxy: Isolate by proxy, same proxy shares connection pool (suitable for few proxies, many accounts)
@@ -426,21 +414,6 @@ gateway:
     failure_threshold: 2
     window_seconds: 60
     ttl_seconds: 600
-  # Grok free-tier local soft gate (scheduler filter only; admin QueryQuota/import probe bypasses it).
-  # Enabled by default because free detection requires an explicit subscription_tier/plan_type of "free".
-  # Stats/query failures fail open so DB issues do not block all Grok traffic.
-  grok:
-    # Email/password OAuth is off by default and hidden in the admin UI.
-    # Setting true enables POST /admin/grok/oauth/password (password → SSO → Build OAuth).
-    # Prefer SSO cookie, browser OAuth, or refresh_token re-auth in production.
-    password_auth_enabled: false
-    free_quota_soft_gate_enabled: true
-    free_quota_token_limit: 500000
-    free_quota_soft_gate_percent: 95
-    free_quota_window_hours: 24
-    # Stats cache for free-tier soft gate. Hot path never waits on DB: misses
-    # fail open and refresh in the background. Prefer >= 60s in production.
-    free_quota_stats_cache_seconds: 60
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts
@@ -1083,75 +1056,6 @@ turnstile:
   # Require Turnstile in release mode (when enabled, login/register will fail if not configured)
   # 在 release 模式下要求 Turnstile 验证（启用后，若未配置则登录/注册会失败）
   required: false
-
-# =============================================================================
-# Gemini OAuth (Required for Gemini accounts)
-# Gemini OAuth 配置（Gemini 账户必需）
-# =============================================================================
-# Sub2API supports TWO Gemini OAuth modes:
-# Sub2API 支持两种 Gemini OAuth 模式：
-#
-# 1. Code Assist OAuth (requires GCP project_id)
-# 1. Code Assist OAuth（需要 GCP project_id）
-#    - Uses: cloudcode-pa.googleapis.com (Code Assist API)
-#    - 使用：cloudcode-pa.googleapis.com（Code Assist API）
-#
-# 2. AI Studio OAuth (no project_id needed)
-# 2. AI Studio OAuth（不需要 project_id）
-#    - Uses: generativelanguage.googleapis.com (AI Studio API)
-#    - 使用：generativelanguage.googleapis.com（AI Studio API）
-#
-# Default: Uses Gemini CLI's public OAuth credentials (same as Google's official CLI tool)
-# 默认：使用 Gemini CLI 的公开 OAuth 凭证（与 Google 官方 CLI 工具相同）
-gemini:
-  oauth:
-    # OAuth 客户端配置说明：
-    # 1) 留空 client_id/client_secret：使用 Gemini CLI 内置 OAuth Client（其 client_secret 需通过环境变量注入）
-    #    - GEMINI_CLI_OAUTH_CLIENT_SECRET
-    # 2) 同时设置 client_id/client_secret：使用你自建的 OAuth Client（推荐，权限更完整）
-    #
-    # 注意：client_id 与 client_secret 必须同时为空或同时非空。
-    client_id: ""
-    client_secret: ""
-    # Optional scopes (space-separated). Leave empty to auto-select based on oauth_type.
-    # 可选的权限范围（空格分隔）。留空则根据 oauth_type 自动选择。
-    scopes: ""
-  quota:
-    # Optional: local quota simulation for Gemini Code Assist (local billing).
-    # 可选：Gemini Code Assist 本地配额模拟（本地计费）。
-    # These values are used for UI progress + precheck scheduling, not official Google quotas.
-    # 这些值用于 UI 进度显示和预检调度，并非 Google 官方配额。
-    tiers:
-      LEGACY:
-        # Pro model requests per day
-        # Pro 模型每日请求数
-        pro_rpd: 50
-        # Flash model requests per day
-        # Flash 模型每日请求数
-        flash_rpd: 1500
-        # Cooldown time (minutes) after hitting quota
-        # 达到配额后的冷却时间（分钟）
-        cooldown_minutes: 30
-      PRO:
-        # Pro model requests per day
-        # Pro 模型每日请求数
-        pro_rpd: 1500
-        # Flash model requests per day
-        # Flash 模型每日请求数
-        flash_rpd: 4000
-        # Cooldown time (minutes) after hitting quota
-        # 达到配额后的冷却时间（分钟）
-        cooldown_minutes: 5
-      ULTRA:
-        # Pro model requests per day
-        # Pro 模型每日请求数
-        pro_rpd: 2000
-        # Flash model requests per day (0 = unlimited)
-        # Flash 模型每日请求数（0 = 无限制）
-        flash_rpd: 0
-        # Cooldown time (minutes) after hitting quota
-        # 达到配额后的冷却时间（分钟）
-        cooldown_minutes: 5
 
 # =============================================================================
 # Update Configuration (在线更新配置)

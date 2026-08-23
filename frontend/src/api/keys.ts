@@ -1,13 +1,13 @@
 /**
  * API Keys management endpoints
- * Handles CRUD operations for user API keys
+ * Handles CRUD operations for system-wide API keys
  */
 
 import { apiClient } from './client'
 import type { ApiKey, CreateApiKeyRequest, UpdateApiKeyRequest, PaginatedResponse } from '@/types'
 
 /**
- * List all API keys for current user
+ * List all API keys in the system
  * @param page - Page number (default: 1)
  * @param pageSize - Items per page (default: 10)
  * @param filters - Optional filter parameters

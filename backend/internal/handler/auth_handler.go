@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -123,6 +124,10 @@ func respondWithTokenPair(c *gin.Context, authService *service.AuthService, user
 
 	tokenPair, err := authService.GenerateTokenPair(c.Request.Context(), user, "")
 	if err != nil {
+		if errors.Is(err, service.ErrAdminOnlyMode) {
+			response.ErrorFrom(c, err)
+			return
+		}
 		slog.Error("failed to generate token pair", "error", err, "user_id", user.ID)
 		// 回退到只返回Access Token
 		token, tokenErr := authService.GenerateToken(c.Request.Context(), user)
@@ -150,17 +155,17 @@ func (h *AuthHandler) ensureBackendModeAllowsUser(ctx context.Context, user *ser
 	if user == nil {
 		return infraerrors.Unauthorized("INVALID_USER", "user not found")
 	}
-	if h == nil || !h.isBackendModeEnabled(ctx) || user.IsAdmin() {
+	// This deployment is intentionally single-admin.  The administrator row
+	// created from ADMIN_EMAIL/ADMIN_PASSWORD remains the only interactive
+	// login identity; regular user accounts are no longer a supported surface.
+	if h != nil && h.authService != nil && h.authService.IsConfiguredAdmin(ctx, user) {
 		return nil
 	}
-	return infraerrors.Forbidden("BACKEND_MODE_ADMIN_ONLY", "Backend mode is active. Only admin login is allowed.")
+	return service.ErrAdminOnlyMode
 }
 
 func (h *AuthHandler) ensureBackendModeAllowsNewUserLogin(ctx context.Context) error {
-	if h == nil || !h.isBackendModeEnabled(ctx) {
-		return nil
-	}
-	return infraerrors.Forbidden("BACKEND_MODE_ADMIN_ONLY", "Backend mode is active. Only admin login is allowed.")
+	return infraerrors.Forbidden("ADMIN_ONLY_MODE", "User registration and self-service authentication are disabled.")
 }
 
 func (h *AuthHandler) isBackendModeEnabled(ctx context.Context) bool {
@@ -352,69 +357,10 @@ func (h *AuthHandler) Login2FA(c *gin.Context) {
 		return
 	}
 
-	if session.PendingOAuthBind != nil {
-		pendingSvc, err := h.pendingIdentityService()
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-
-		pendingSession, err := pendingSvc.GetBrowserSession(
-			c.Request.Context(),
-			session.PendingOAuthBind.PendingSessionToken,
-			session.PendingOAuthBind.BrowserSessionKey,
-		)
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-
-		decision, err := h.ensurePendingOAuthAdoptionDecision(c, pendingSession.ID, oauthAdoptionDecisionRequest{})
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-		if err := applyPendingOAuthBinding(
-			c.Request.Context(),
-			h.entClient(),
-			h.authService,
-			h.userService,
-			pendingSession,
-			decision,
-			&user.ID,
-			true,
-			true,
-		); err != nil {
-			response.ErrorFrom(c, infraerrors.InternalServer("PENDING_AUTH_BIND_APPLY_FAILED", "failed to bind pending oauth identity").WithCause(err))
-			return
-		}
-		if _, err := pendingSvc.ConsumeBrowserSession(
-			c.Request.Context(),
-			pendingSession.SessionToken,
-			pendingSession.BrowserSessionKey,
-		); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-
-		secureCookie := isRequestHTTPS(c)
-		clearOAuthPendingSessionCookie(c, secureCookie)
-		clearOAuthPendingBrowserCookie(c, secureCookie)
-		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
-
-		user, err = h.userService.GetByID(c.Request.Context(), session.UserID)
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-	}
-
-	// Delete the login session (only after all checks pass)
+	// OAuth/passkey binding is deliberately not part of the administrator-only
+	// login flow. Delete the one-time 2FA session only after all checks pass.
 	_ = h.totpService.DeleteLoginSession(c.Request.Context(), req.TempToken)
-
-	if session.PendingOAuthBind == nil {
-		h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
-	}
+	h.authService.RecordSuccessfulLogin(c.Request.Context(), user.ID)
 
 	h.respondWithTokenPair(c, user)
 }
@@ -430,6 +376,10 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 
 	user, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
 	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -695,9 +645,10 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Backend mode: block non-admin token refresh
-	if h.settingSvc.IsBackendModeEnabled(c.Request.Context()) && result.UserRole != "admin" {
-		response.Forbidden(c, "Backend mode is active. Only admin login is allowed.")
+	// Refresh tokens are interactive authentication as well.  Keep the
+	// administrator session working, but do not revive a legacy user session.
+	if result.UserRole != service.RoleAdmin {
+		response.Forbidden(c, "Only the administrator account can sign in.")
 		return
 	}
 
@@ -733,9 +684,6 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 			// 不影响登出流程
 		}
 	}
-	h.consumePendingOAuthSessionOnLogout(c)
-	clearOAuthLogoutCookies(c)
-
 	response.Success(c, LogoutResponse{
 		Message: "Logged out successfully",
 	})
@@ -752,6 +700,15 @@ func (h *AuthHandler) RevokeAllSessions(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
 		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+	user, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := h.ensureBackendModeAllowsUser(c.Request.Context(), user); err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 

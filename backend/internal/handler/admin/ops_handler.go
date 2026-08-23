@@ -68,6 +68,20 @@ func parseOpsViewParam(c *gin.Context) string {
 	}
 }
 
+func rejectOpsUserIdentityFilters(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	query := c.Request.URL.Query()
+	for _, name := range []string{"user_id", "user_email", "user_query"} {
+		if query.Has(name) {
+			response.BadRequest(c, "User identity filters are not supported")
+			return true
+		}
+	}
+	return false
+}
+
 func NewOpsHandler(opsService *service.OpsService) *OpsHandler {
 	return &OpsHandler{opsService: opsService}
 }
@@ -88,6 +102,9 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 	}
 	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+	if rejectOpsUserIdentityFilters(c) {
 		return
 	}
 
@@ -116,7 +133,6 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 	filter.Owner = strings.TrimSpace(c.Query("error_owner"))
 	filter.Source = strings.TrimSpace(c.Query("error_source"))
 	filter.Query = strings.TrimSpace(c.Query("q"))
-	filter.UserQuery = strings.TrimSpace(c.Query("user_query"))
 	// Model 过滤：admin 走精确匹配（ModelFuzzy 默认 false，保持管理端语义）。
 	// buildOpsErrorLogsWhere 以 COALESCE(requested_model, model) 比对。
 	filter.Model = strings.TrimSpace(c.Query("model"))
@@ -154,14 +170,6 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		filter.AccountID = &id
 	}
 
-	if v := strings.TrimSpace(c.Query("user_id")); v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || id <= 0 {
-			response.BadRequest(c, "Invalid user_id")
-			return
-		}
-		filter.UserID = &id
-	}
 	if v := strings.TrimSpace(c.Query("api_key_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || id <= 0 {
@@ -222,6 +230,9 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if rejectOpsUserIdentityFilters(c) {
+		return
+	}
 
 	page, pageSize := response.ParsePagination(c)
 	if pageSize > 500 {
@@ -245,7 +256,6 @@ func (h *OpsHandler) ListRequestErrors(c *gin.Context) {
 	filter.Owner = strings.TrimSpace(c.Query("error_owner"))
 	filter.Source = strings.TrimSpace(c.Query("error_source"))
 	filter.Query = strings.TrimSpace(c.Query("q"))
-	filter.UserQuery = strings.TrimSpace(c.Query("user_query"))
 	// Model 过滤：admin 走精确匹配（ModelFuzzy 默认 false，保持管理端语义）。
 	// buildOpsErrorLogsWhere 以 COALESCE(requested_model, model) 比对。
 	filter.Model = strings.TrimSpace(c.Query("model"))
@@ -340,6 +350,9 @@ func (h *OpsHandler) ListRequestErrorUpstreamErrors(c *gin.Context) {
 	}
 	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+	if rejectOpsUserIdentityFilters(c) {
 		return
 	}
 
@@ -448,6 +461,9 @@ func (h *OpsHandler) ListUpstreamErrors(c *gin.Context) {
 	}
 	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+	if rejectOpsUserIdentityFilters(c) {
 		return
 	}
 
@@ -563,6 +579,9 @@ func (h *OpsHandler) ListRequestDetails(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if rejectOpsUserIdentityFilters(c) {
+		return
+	}
 
 	page, pageSize := response.ParsePagination(c)
 	if pageSize > 100 {
@@ -589,14 +608,6 @@ func (h *OpsHandler) ListRequestDetails(c *gin.Context) {
 	filter.Query = strings.TrimSpace(c.Query("q"))
 	filter.Sort = strings.TrimSpace(c.Query("sort"))
 
-	if v := strings.TrimSpace(c.Query("user_id")); v != "" {
-		id, err := strconv.ParseInt(v, 10, 64)
-		if err != nil || id <= 0 {
-			response.BadRequest(c, "Invalid user_id")
-			return
-		}
-		filter.UserID = &id
-	}
 	if v := strings.TrimSpace(c.Query("api_key_id")); v != "" {
 		id, err := strconv.ParseInt(v, 10, 64)
 		if err != nil || id <= 0 {

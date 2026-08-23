@@ -69,7 +69,7 @@ vi.mock('vue-i18n', async () => {
 const makeAccounts = (count: number) => Array.from({ length: count }, (_, index) => ({
   id: index + 1,
   name: `account-${index + 1}`,
-  platform: 'grok',
+  platform: 'openai',
   type: 'oauth',
   status: 'active',
   schedulable: true,
@@ -93,8 +93,13 @@ const AccountBulkActionsBarStub = {
 }
 
 const AccountTableFiltersStub = {
-  emits: ['change'],
-  template: '<button data-test="change-filter" @click="$emit(\'change\')">change filter</button>'
+  emits: ['update:filters', 'change'],
+  template: `
+    <div>
+      <button data-test="supported-platform-filter" @click="$emit('update:filters', { platform: 'openai' })">filter OpenAI</button>
+      <button data-test="change-filter" @click="$emit('change')">change filter</button>
+    </div>
+  `
 }
 
 const mountView = () => mount(AccountsView, {
@@ -180,6 +185,7 @@ describe('admin AccountsView select all filtered results', () => {
     const wrapper = mountView()
     await flushPromises()
 
+    await wrapper.get('[data-test="supported-platform-filter"]').trigger('click')
     await wrapper.get('[data-test="select-all-results"]').trigger('click')
     await flushPromises()
 
@@ -215,6 +221,7 @@ describe('admin AccountsView select all filtered results', () => {
     const wrapper = mountView()
     await flushPromises()
 
+    await wrapper.get('[data-test="supported-platform-filter"]').trigger('click')
     await wrapper.get('[data-test="select-page"]').trigger('click')
     expect(wrapper.get('[data-test="selected-count"]').text()).toBe('20')
 

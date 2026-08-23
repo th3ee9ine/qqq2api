@@ -144,7 +144,7 @@ func TestQuotaFetcher_OverseasAccountUsesUsageService(t *testing.T) {
 	require.Equal(t, 0, cnQuota.calls)
 }
 
-func TestQuotaFetcher_CodingPlanAccountUsesCNQuota(t *testing.T) {
+func TestQuotaFetcher_CodingPlanAccountIsRejectedAfterProviderRetirement(t *testing.T) {
 	fetcher, _, cnQuota, cnBalance, accounts := newQuotaFetcherTestSetup(t)
 	accounts.accounts[9] = &Account{
 		ID:          9,
@@ -163,17 +163,13 @@ func TestQuotaFetcher_CodingPlanAccountUsesCNQuota(t *testing.T) {
 
 	snapshot := fetcher.Fetch(context.Background(), 9)
 
-	require.True(t, snapshot.Success)
-	require.Equal(t, "cn_quota", snapshot.Source)
-	require.Len(t, snapshot.Tiers, 2)
-	require.Equal(t, "5h", snapshot.Tiers[0].Window)
-	require.InDelta(t, 33.3, snapshot.Tiers[0].UsedPercent, 0.001)
-	require.Equal(t, "weekly", snapshot.Tiers[1].Window)
-	require.Equal(t, 1, cnQuota.calls)
+	require.False(t, snapshot.Success)
+	require.Empty(t, snapshot.Tiers)
+	require.Equal(t, 0, cnQuota.calls)
 	require.Equal(t, 0, cnBalance.calls)
 }
 
-func TestQuotaFetcher_PayGAccountUsesCNBalance(t *testing.T) {
+func TestQuotaFetcher_PayGAccountIsRejectedAfterProviderRetirement(t *testing.T) {
 	fetcher, _, _, cnBalance, accounts := newQuotaFetcherTestSetup(t)
 	accounts.accounts[11] = &Account{
 		ID:          11,
@@ -193,15 +189,9 @@ func TestQuotaFetcher_PayGAccountUsesCNBalance(t *testing.T) {
 
 	snapshot := fetcher.Fetch(context.Background(), 11)
 
-	require.True(t, snapshot.Success)
-	require.Equal(t, "cn_balance", snapshot.Source)
-	require.NotNil(t, snapshot.Balance)
-	require.InDelta(t, 12.34, *snapshot.Balance, 0.001)
-	require.Equal(t, "CNY", snapshot.Currency)
-	require.Len(t, snapshot.Balances, 2)
-	require.Equal(t, "USD", snapshot.Balances[1].Currency)
-	require.False(t, snapshot.BalanceLow)
-	require.Empty(t, snapshot.Error)
+	require.False(t, snapshot.Success)
+	require.Nil(t, snapshot.Balance)
+	require.Equal(t, 0, cnBalance.calls)
 }
 
 // P2-6：fetchUncached 只 GetByID 一次，已加载的 account 指针直传数据源，
@@ -229,8 +219,8 @@ func TestQuotaFetcher_LoadsAccountOnceAndPassesItThrough(t *testing.T) {
 		fetcher.Fetch(context.Background(), 22)
 
 		require.Equal(t, 1, accounts.calls)
-		require.Same(t, acc, cnQuota.lastAccount)
-		require.Equal(t, 1, cnQuota.calls)
+		require.Nil(t, cnQuota.lastAccount)
+		require.Equal(t, 0, cnQuota.calls)
 	})
 
 	t.Run("cn payg", func(t *testing.T) {
@@ -242,8 +232,8 @@ func TestQuotaFetcher_LoadsAccountOnceAndPassesItThrough(t *testing.T) {
 		fetcher.Fetch(context.Background(), 23)
 
 		require.Equal(t, 1, accounts.calls)
-		require.Same(t, acc, cnBalance.lastAccount)
-		require.Equal(t, 1, cnBalance.calls)
+		require.Nil(t, cnBalance.lastAccount)
+		require.Equal(t, 0, cnBalance.calls)
 	})
 }
 
@@ -368,7 +358,7 @@ func TestQuotaFetcher_CNQuotaCredentialInvalidByStatusCode(t *testing.T) {
 				Error:      "api key expired",
 			}
 
-			snapshot := fetcher.Fetch(context.Background(), tc.accountID)
+			snapshot := fetcher.fetchCNQuota(context.Background(), accounts.accounts[tc.accountID], time.Now())
 
 			require.False(t, snapshot.Success)
 			require.Equal(t, tc.credentialBad, snapshot.CredentialInvalid)
@@ -382,7 +372,7 @@ func TestQuotaFetcher_CNBalanceHTTP403MarksCredentialInvalid(t *testing.T) {
 	accounts.accounts[6] = &Account{ID: 6, Platform: domain.PlatformKimi}
 	cnBalance.result = &CNProviderBalanceResult{Success: false, StatusCode: 403, Error: "forbidden"}
 
-	snapshot := fetcher.Fetch(context.Background(), 6)
+	snapshot := fetcher.fetchCNBalance(context.Background(), accounts.accounts[6], time.Now())
 
 	require.False(t, snapshot.Success)
 	require.True(t, snapshot.CredentialInvalid)
@@ -442,7 +432,7 @@ func TestQuotaFetcher_CNBalanceLowMarksDegraded(t *testing.T) {
 			}
 			cnBalance.result = tc.result
 
-			snapshot := fetcher.Fetch(context.Background(), tc.accountID)
+			snapshot := fetcher.fetchCNBalance(context.Background(), accounts.accounts[tc.accountID], time.Now())
 
 			require.True(t, snapshot.Success)
 			require.Equal(t, tc.balanceLow, snapshot.BalanceLow)

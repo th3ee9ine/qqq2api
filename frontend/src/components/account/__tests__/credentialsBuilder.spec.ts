@@ -1,17 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
-  ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
-  applyAntigravityProjectID,
   applyHeaderOverride,
   applyInterceptWarmup,
   applyPlanType,
   buildHeaderOverridesObject,
   buildPlanTypeOptions,
-  isCustomGrokBaseUrl,
   isHeaderOverrideCapable,
-  GROK_BASE_URL_PRESETS,
   parseHeaderOverridesJson,
   planTypeDisplayLabel,
   readPlanType,
@@ -64,40 +60,6 @@ describe('applyInterceptWarmup', () => {
   })
 })
 
-describe('applyAntigravityProjectID', () => {
-  it('create + project id: trims and stores configured project fallback', () => {
-    const creds: Record<string, unknown> = { access_token: 'tok' }
-    applyAntigravityProjectID(creds, '  configured-project  ', 'create')
-    expect(creds[ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY]).toBe('configured-project')
-  })
-
-  it('create + empty project id: should not add the field', () => {
-    const creds: Record<string, unknown> = { access_token: 'tok' }
-    applyAntigravityProjectID(creds, '   ', 'create')
-    expect(ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY in creds).toBe(false)
-  })
-
-  it('edit + empty project id: deletes existing fallback', () => {
-    const creds: Record<string, unknown> = {
-      access_token: 'tok',
-      [ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY]: 'old-project'
-    }
-    applyAntigravityProjectID(creds, '', 'edit')
-    expect(ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY in creds).toBe(false)
-  })
-
-  it('does not affect onboard project_id or other credentials', () => {
-    const creds: Record<string, unknown> = {
-      project_id: 'onboard-project',
-      model_mapping: { 'gemini-*': 'gemini-2.5-flash' }
-    }
-    applyAntigravityProjectID(creds, 'configured-project', 'edit')
-    expect(creds.project_id).toBe('onboard-project')
-    expect(creds.model_mapping).toEqual({ 'gemini-*': 'gemini-2.5-flash' })
-    expect(creds[ANTIGRAVITY_PROJECT_ID_CREDENTIAL_KEY]).toBe('configured-project')
-  })
-})
-
 describe('isHeaderOverrideCapable', () => {
   it('anthropic/openai only support apikey accounts', () => {
     expect(isHeaderOverrideCapable('anthropic', 'apikey')).toBe(true)
@@ -106,22 +68,8 @@ describe('isHeaderOverrideCapable', () => {
     expect(isHeaderOverrideCapable('openai', 'oauth')).toBe(false)
   })
 
-  it('kimi/zhipu/deepseek only support apikey accounts', () => {
-    for (const platform of ['kimi', 'zhipu', 'deepseek']) {
-      expect(isHeaderOverrideCapable(platform, 'apikey')).toBe(true)
-      expect(isHeaderOverrideCapable(platform, 'oauth')).toBe(false)
-    }
-  })
-
-  it('grok supports both apikey and oauth accounts', () => {
-    expect(isHeaderOverrideCapable('grok', 'apikey')).toBe(true)
-    expect(isHeaderOverrideCapable('grok', 'oauth')).toBe(true)
-    expect(isHeaderOverrideCapable('grok', 'bedrock')).toBe(false)
-  })
-
   it('other platforms are not supported', () => {
-    expect(isHeaderOverrideCapable('gemini', 'apikey')).toBe(false)
-    expect(isHeaderOverrideCapable('antigravity', 'apikey')).toBe(false)
+    expect(isHeaderOverrideCapable('unknown', 'apikey')).toBe(false)
     expect(isHeaderOverrideCapable('', 'apikey')).toBe(false)
   })
 })
@@ -173,57 +121,6 @@ describe('serializeHeaderOverrideRows', () => {
       { name: 'b-header', value: '2' }
     ]
     expect(parseHeaderOverridesJson(serializeHeaderOverrideRows(rows))).toEqual(rows)
-  })
-})
-
-describe('isCustomGrokBaseUrl', () => {
-  it('treats only the default CLI gateway host as not customized', () => {
-    expect(isCustomGrokBaseUrl('https://cli-chat-proxy.grok.com/v1')).toBe(false)
-    expect(isCustomGrokBaseUrl('HTTPS://CLI-CHAT-PROXY.GROK.COM:443/')).toBe(false)
-  })
-
-  it('treats manually switched official/regional endpoints as customized (must echo back)', () => {
-    expect(isCustomGrokBaseUrl('https://api.x.ai/v1')).toBe(true)
-    expect(isCustomGrokBaseUrl('https://us-west-2.api.x.ai/v1')).toBe(true)
-    expect(isCustomGrokBaseUrl('https://eu-west-1.api.x.ai/v1')).toBe(true)
-  })
-
-  it('treats empty, non-string and unparseable values as not customized', () => {
-    expect(isCustomGrokBaseUrl('')).toBe(false)
-    expect(isCustomGrokBaseUrl('   ')).toBe(false)
-    expect(isCustomGrokBaseUrl(undefined)).toBe(false)
-    expect(isCustomGrokBaseUrl(42)).toBe(false)
-    expect(isCustomGrokBaseUrl('not a url')).toBe(false)
-  })
-
-  it('treats third-party hosts as customized', () => {
-    expect(isCustomGrokBaseUrl('https://relay.example.com/v1')).toBe(true)
-    expect(isCustomGrokBaseUrl('https://relay.example.com/xai/v1')).toBe(true)
-    expect(isCustomGrokBaseUrl('http://relay.example.com/v1')).toBe(true)
-  })
-})
-
-describe('GROK_BASE_URL_PRESETS', () => {
-  it('covers the CLI gateway, official API and regional endpoints', () => {
-    const urls = GROK_BASE_URL_PRESETS.map((p) => p.url)
-    expect(urls).toEqual([
-      'https://cli-chat-proxy.grok.com/v1',
-      'https://api.x.ai/v1',
-      'https://us-east-1.api.x.ai/v1',
-      'https://us-west-2.api.x.ai/v1',
-      'https://eu-west-1.api.x.ai/v1'
-    ])
-    for (const preset of GROK_BASE_URL_PRESETS) {
-      // 每个预设要么有 i18n 标签键，要么有区域标识等字面标签
-      expect(Boolean(preset.labelKey) || Boolean(preset.label)).toBe(true)
-      if (preset.labelKey) {
-        expect(['cli', 'official']).toContain(preset.labelKey)
-      }
-    }
-    // 区域端点用区域标识作字面标签（us-east-1 这样的专有名词不做 i18n）
-    expect(GROK_BASE_URL_PRESETS[2].label).toBe('us-east-1')
-    expect(GROK_BASE_URL_PRESETS[3].label).toBe('us-west-2')
-    expect(GROK_BASE_URL_PRESETS[4].label).toBe('eu-west-1')
   })
 })
 

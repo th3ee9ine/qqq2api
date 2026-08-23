@@ -168,14 +168,13 @@ func TestReconcileCRSUpstreamBillingProbeExtra(t *testing.T) {
 		require.NotContains(t, extra, UpstreamBillingProbeExtraKey)
 	})
 
-	// API-key 平台间切换：探测资格保留（放宽后不再限 OpenAI），开关沿用本地值，
+	// 活跃 API-key 平台间切换：探测资格保留，开关沿用本地值，
 	// 但平台属于探测身份，快照必须作废。
 	for _, target := range []struct {
 		name     string
 		platform string
 	}{
 		{name: "anthropic api key", platform: PlatformAnthropic},
-		{name: "gemini api key", platform: PlatformGemini},
 	} {
 		t.Run(target.name+" keeps enabled and clears snapshot", func(t *testing.T) {
 			extra := mergeMap(existing.Extra, remote)

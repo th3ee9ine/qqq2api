@@ -545,38 +545,4 @@ describe('admin AccountsView — 账号行展示', () => {
     wrapper.unmount()
   })
 
-  it('replaces a Grok row when auto refresh returns a changed canonical usage snapshot', async () => {
-    vi.useFakeTimers()
-    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
-    localStorage.setItem('account-auto-refresh', JSON.stringify({ enabled: true, interval_seconds: 5 }))
-
-    const initialAccount = {
-      id: 213,
-      name: 'refresh-tier',
-      platform: 'grok',
-      type: 'oauth',
-      extra: { grok_usage_snapshot: { subscription_tier: 'Free', status_code: 200 } },
-    }
-    const refreshedAccount = {
-      ...initialAccount,
-      extra: { grok_usage_snapshot: { subscription_tier: 'SuperGrok', status_code: 200 } },
-    }
-    listAccounts.mockResolvedValue({ items: [initialAccount], total: 1, page: 1, page_size: 20, pages: 1 })
-    listWithEtag.mockResolvedValueOnce({
-      notModified: false,
-      etag: 'grok-snapshot-2',
-      data: { items: [refreshedAccount], total: 1, page: 1, page_size: 20, pages: 1 },
-    })
-
-    const wrapper = mountViewWithRow()
-    await flushPromises()
-    expect(wrapper.findComponent(PlatformTypeBadge).props('planType')).toBe('Free')
-
-    await vi.advanceTimersByTimeAsync(6000)
-    await flushPromises()
-
-    expect(listWithEtag).toHaveBeenCalledTimes(1)
-    expect(wrapper.findComponent(PlatformTypeBadge).props('planType')).toBe('SuperGrok')
-    wrapper.unmount()
-  })
 })

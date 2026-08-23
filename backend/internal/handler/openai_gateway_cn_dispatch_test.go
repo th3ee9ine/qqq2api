@@ -1,11 +1,5 @@
 package handler
 
-// CN 分组 /v1/messages 调度闸门回归（修复:正常途径创建的 CN 分组曾恒 403）：
-// sanitizeGroupMessagesDispatchFields 对非 openai/composite 平台强制 AllowMessagesDispatch
-// =false，故 CN 分组必须与 grok 一样在闸门处豁免，否则原生 Anthropic 直通
-//（Claude Code 主用例）永远不可达。composite 分组解析到 grok/CN 目标时按
-// 目标平台豁免，解析到 openai 目标仍受其可配置开关控制。
-
 import (
 	"net/http/httptest"
 	"testing"
@@ -15,13 +9,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAllowOpenAICompatibleMessagesDispatch_CNProvidersExempt(t *testing.T) {
+func TestAllowOpenAICompatibleMessagesDispatch_RetiredProvidersRejected(t *testing.T) {
 	require.True(t, allowOpenAICompatibleMessagesDispatch(nil, nil), "无 key 保持放行")
 
 	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformGrok} {
 		apiKey := &service.APIKey{Group: &service.Group{Platform: platform, AllowMessagesDispatch: false}}
-		require.True(t, allowOpenAICompatibleMessagesDispatch(nil, apiKey),
-			"%s 分组必须豁免 allow_messages_dispatch 闸门", platform)
+		require.False(t, allowOpenAICompatibleMessagesDispatch(nil, apiKey), "platform=%s", platform)
 	}
 
 	// 非回归：openai 分组仍受开关控制。
@@ -42,10 +35,12 @@ func TestAllowOpenAICompatibleMessagesDispatch_CompositeResolvedTargets(t *testi
 		return c, apiKey
 	}
 
-	// 解析到 grok/CN 目标：与对应独立分组同语义豁免。
+	// 退役目标不再解析，且必须 fail-closed。
 	for _, model := range []string{"grok-4.3", "kimi-k2-thinking", "glm-5.2", "deepseek-v3.2"} {
 		c, apiKey := newCompositeCtx(model, false)
-		require.True(t, allowOpenAICompatibleMessagesDispatch(c, apiKey), "model=%s", model)
+		_, resolved := service.ResolvedTargetPlatformFromContext(c.Request.Context())
+		require.False(t, resolved, "model=%s", model)
+		require.False(t, allowOpenAICompatibleMessagesDispatch(c, apiKey), "model=%s", model)
 	}
 
 	// 解析到 openai 目标：受 composite 分组自身开关控制。
@@ -61,9 +56,7 @@ func TestAllowOpenAICompatibleMessagesDispatch_CompositeResolvedTargets(t *testi
 		&service.APIKey{Group: &service.Group{Platform: service.PlatformComposite, AllowMessagesDispatch: false}}))
 }
 
-// composite 解析到 grok/CN 目标时，Group 级调度映射（gpt-5.x 默认值为 openai
-// 专属）不得注入，模型改写完全交给账号级 model_mapping。
-func TestResolveOpenAIMessagesDispatchMappedModel_CompositeCNTargetsSkipGroupMapping(t *testing.T) {
+func TestResolveOpenAIMessagesDispatchMappedModel_CompositeRetiredTargetsFailClosed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	for _, model := range []string{"kimi-k2-thinking", "glm-5.2", "deepseek-v3.2", "grok-4.3"} {

@@ -311,8 +311,8 @@ func TestPromptAuditRepositoryForeignKeysFiltersAndStableIdentitySnapshots(t *te
 	start, end := time.Now().Add(-time.Hour), time.Now().Add(time.Hour)
 	page, err := repo.ListEvents(ctx, EventFilter{
 		Decision: string(EventCritical), RiskLevel: string(RiskCritical), Endpoint: snapshot.Endpoint,
-		GroupID: &groupID, UserID: &userID, APIKeyID: &apiKeyID, RequestID: snapshot.RequestID,
-		PromptHash: snapshot.PromptHash, Keyword: snapshot.UsernameSnapshot, StartAt: &start, EndAt: &end,
+		GroupID: &groupID, APIKeyID: &apiKeyID, RequestID: snapshot.RequestID,
+		PromptHash: snapshot.PromptHash, Keyword: snapshot.APIKeyNameSnapshot, StartAt: &start, EndAt: &end,
 	}, 1, 10)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), page.Total)

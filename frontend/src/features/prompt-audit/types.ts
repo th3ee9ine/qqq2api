@@ -136,9 +136,6 @@ export interface PromptAuditRuntime {
 
 export interface PromptSnapshot {
   request_id: string
-  user_id: number
-  username: string
-  user_email: string
   api_key_id: number
   api_key_name: string
   group_id?: number
@@ -200,7 +197,6 @@ export interface PromptEventFilters {
   risk_level: string
   endpoint: string
   group_id: string
-  user_id: string
   api_key_id: string
   request_id: string
   prompt_hash: string

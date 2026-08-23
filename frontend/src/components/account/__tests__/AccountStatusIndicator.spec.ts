@@ -51,6 +51,27 @@ function makeAccount(overrides: Partial<Account>): Account {
 }
 
 describe('AccountStatusIndicator', () => {
+  it('renders temporary-unschedulable history without an action when interaction is disabled', async () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          platform: 'anthropic',
+          temp_unschedulable_until: '2099-07-11T12:30:00Z'
+        }),
+        tempUnschedActionEnabled: false
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.tempUnschedulable')
+    expect(wrapper.find('button').exists()).toBe(false)
+    expect(wrapper.emitted('show-temp-unsched')).toBeUndefined()
+  })
+
   it('Claude 5 模型限流时显示 Opus 和 Sonnet 的短别名', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {

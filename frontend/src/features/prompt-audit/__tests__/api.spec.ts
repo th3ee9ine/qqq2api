@@ -5,6 +5,7 @@ const client = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn(), de
 vi.mock('@/api/client', () => ({ apiClient: client }))
 
 import promptAuditAPI from '../api'
+import type { PromptEventFilters } from '../types'
 
 describe('Prompt Audit API', () => {
   beforeEach(() => Object.values(client).forEach((mock) => mock.mockReset()))
@@ -40,5 +41,14 @@ describe('Prompt Audit API', () => {
     expect(client.post).toHaveBeenCalledWith('/admin/prompt-audit/events/delete-by-filter', expect.objectContaining({
       snapshot_max_id: 10, filter_hash: 'a'.repeat(64), confirmation_token: 'opaque-token', confirm: true,
     }))
+  })
+
+  it('never sends a legacy user ID filter to event APIs', async () => {
+    client.get.mockResolvedValue({ data: { items: [], total: 0, page: 1, page_size: 20, pages: 0 } })
+    const filters = { ...emptyEventFilters(), user_id: '42', api_key_id: '7' } as PromptEventFilters & { user_id: string }
+    await promptAuditAPI.listEvents(filters, 1, 20)
+    expect(client.get).toHaveBeenCalledWith('/admin/prompt-audit/events', {
+      params: { page: 1, page_size: 20, api_key_id: 7 },
+    })
   })
 })

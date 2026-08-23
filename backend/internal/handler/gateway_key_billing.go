@@ -14,10 +14,12 @@ import (
 const keyBillingInfoSchemaVersion = 1
 
 type keyBillingInfoResponse struct {
-	Object                  string    `json:"object"`
-	SchemaVersion           int       `json:"schema_version"`
-	BillingScope            string    `json:"billing_scope"`
-	GroupRateMultiplier     float64   `json:"group_rate_multiplier"`
+	Object              string  `json:"object"`
+	SchemaVersion       int     `json:"schema_version"`
+	BillingScope        string  `json:"billing_scope"`
+	GroupRateMultiplier float64 `json:"group_rate_multiplier"`
+	// UserRateMultiplier is retained as an omitted compatibility field.  Global
+	// keys never populate a user-specific override.
 	UserRateMultiplier      *float64  `json:"user_rate_multiplier,omitempty"`
 	ResolvedRateMultiplier  float64   `json:"resolved_rate_multiplier"`
 	PeakRateEnabled         bool      `json:"peak_rate_enabled"`
@@ -61,28 +63,21 @@ func (h *GatewayHandler) KeyBillingInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, buildKeyBillingInfo(apiKey, resolvedRate, timezone.Now()))
 }
 
-func (h *GatewayHandler) resolveKeyBillingRate(c *gin.Context, apiKey *service.APIKey) (float64, bool) {
-	groupRate := apiKey.Group.RateMultiplier
-	switch apiKey.Group.Platform {
-	case service.PlatformOpenAI, service.PlatformGrok:
-		if h.openAIGatewayService == nil {
-			return 0, false
-		}
-		return h.openAIGatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), apiKey.UserID, *apiKey.GroupID, groupRate), true
-	default:
-		if h.gatewayService == nil {
-			return 0, false
-		}
-		return h.gatewayService.ResolveUserGroupRateMultiplier(c.Request.Context(), apiKey.UserID, *apiKey.GroupID, groupRate), true
+func (h *GatewayHandler) resolveKeyBillingRate(_ *gin.Context, apiKey *service.APIKey) (float64, bool) {
+	// API Keys are global resources.  The group multiplier is the sole rate
+	// source; legacy user×group overrides must not affect this introspection
+	// endpoint (or make it depend on a gateway service being configured).
+	if apiKey == nil || apiKey.Group == nil {
+		return 0, false
 	}
+	return apiKey.Group.RateMultiplier, true
 }
 
-func buildKeyBillingInfo(apiKey *service.APIKey, resolvedRate float64, now time.Time) keyBillingInfoResponse {
+func buildKeyBillingInfo(apiKey *service.APIKey, _ float64, now time.Time) keyBillingInfoResponse {
 	groupRate := apiKey.Group.RateMultiplier
-	var userRate *float64
-	if resolvedRate != groupRate {
-		userRate = &resolvedRate
-	}
+	// Keep the parameter for source compatibility with callers compiled against
+	// the previous helper signature, but always resolve to the group rate.
+	resolvedRate := groupRate
 	appliedPeak := apiKey.Group.PeakMultiplierAt(now)
 
 	response := keyBillingInfoResponse{
@@ -90,7 +85,6 @@ func buildKeyBillingInfo(apiKey *service.APIKey, resolvedRate float64, now time.
 		SchemaVersion:           keyBillingInfoSchemaVersion,
 		BillingScope:            "token",
 		GroupRateMultiplier:     groupRate,
-		UserRateMultiplier:      userRate,
 		ResolvedRateMultiplier:  resolvedRate,
 		PeakRateEnabled:         apiKey.Group.PeakRateEnabled,
 		EffectiveRateMultiplier: resolvedRate * appliedPeak,

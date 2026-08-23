@@ -2,6 +2,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
@@ -46,17 +47,12 @@ const (
 	PlatformDeepseek    = domain.PlatformDeepseek
 )
 
-// AllPlatforms 返回所有支持的平台列表
+// AllPlatforms returns only platforms that can receive production traffic.
+// Retired constants remain above solely for persisted-rule compatibility.
 func AllPlatforms() []string {
 	return []string{
 		PlatformAnthropic,
 		PlatformOpenAI,
-		PlatformGemini,
-		PlatformAntigravity,
-		PlatformGrok,
-		PlatformKimi,
-		PlatformZhipu,
-		PlatformDeepseek,
 	}
 }
 
@@ -71,6 +67,12 @@ func (r *ErrorPassthroughRule) Validate() error {
 	// 至少需要配置一个匹配条件（错误码或关键词）
 	if len(r.ErrorCodes) == 0 && len(r.Keywords) == 0 {
 		return &ValidationError{Field: "conditions", Message: "at least one error_code or keyword is required"}
+	}
+	for _, platform := range r.Platforms {
+		platform = strings.ToLower(strings.TrimSpace(platform))
+		if !domain.IsActiveAccountPlatform(platform) {
+			return &ValidationError{Field: "platforms", Message: "platform is not supported"}
+		}
 	}
 	if !r.PassthroughCode && (r.ResponseCode == nil || *r.ResponseCode <= 0) {
 		return &ValidationError{Field: "response_code", Message: "response_code is required when passthrough_code is false"}

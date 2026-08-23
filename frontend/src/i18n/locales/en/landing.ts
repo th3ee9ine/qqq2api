@@ -1,8 +1,4 @@
 export default {
-  batchImageGuide: {
-    title: 'Batch Image Generation',
-    description: 'Submit multiple prompts in one job and download the generated images when complete'
-  },
   // Home Page
   home: {
     viewOnGithub: 'View on GitHub',
@@ -16,7 +12,7 @@ export default {
     goToDashboard: 'Go to Dashboard',
     // User-focused value proposition
     heroSubtitle: 'One Key, All AI Models',
-    heroDescription: 'No need to manage multiple subscriptions. Access Claude, GPT, Gemini and more with a single API key',
+    heroDescription: 'Access Claude and GPT through one shared API key',
     tags: {
       subscriptionToApi: 'Subscription to API',
       stickySession: 'Session Persistence',
@@ -99,8 +95,6 @@ export default {
       supported: 'Supported',
       soon: 'Soon',
       claude: 'Claude',
-      gemini: 'Gemini',
-      antigravity: 'Antigravity',
       more: 'More'
     },
     // CTA section
@@ -147,14 +141,12 @@ export default {
     cost: 'Cost',
     // Status
     quotaMode: 'Key Quota Mode',
-    walletBalance: 'Wallet Balance',
+    unrestrictedMode: 'Global API Key',
     // Ring card titles
     totalQuota: 'Total Quota',
     limit5h: '5-Hour Limit',
     limitDaily: 'Daily Limit',
     limit7d: '7-Day Limit',
-    limitWeekly: 'Weekly Limit',
-    limitMonthly: 'Monthly Limit',
     // Detail rows
     remainingQuota: 'Remaining Quota',
     expiresAt: 'Expires At',
@@ -162,8 +154,7 @@ export default {
     daysLeft: '({days} days)',
     usedQuota: 'Used Quota',
     resetNow: 'Resetting soon',
-    subscriptionType: 'Subscription Type',
-    subscriptionExpires: 'Subscription Expires',
+    group: 'Group',
     // Usage stat cells
     todayRequests: 'Today Requests',
     todayInputTokens: 'Today Input',

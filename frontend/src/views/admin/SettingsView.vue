@@ -1230,22 +1230,6 @@
                   </div>
                 </div>
 
-                <!-- User Scope -->
-                <div class="mt-3">
-                  <label
-                    class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                  >
-                    {{ t("admin.settings.openaiFastPolicy.userIds") }}
-                  </label>
-                  <p class="mb-2 text-xs text-gray-400 dark:text-gray-500">
-                    {{ t("admin.settings.openaiFastPolicy.userIdsHint") }}
-                  </p>
-                  <OpenAIFastPolicyUserSelector
-                    :model-value="rule.user_ids || []"
-                    @update:model-value="rule.user_ids = $event"
-                  />
-                </div>
-
                 <!-- Error Message (only when action=block) -->
                 <div v-if="rule.action === 'block'" class="mt-3">
                   <label
@@ -1420,8 +1404,13 @@
         </div>
         <!-- /Tab: Gateway -->
 
-        <!-- Tab: Security — Registration, Turnstile, LinuxDo -->
-        <div v-show="activeTab === 'security'" class="space-y-6">
+        <!--
+          The deployment has one administrator login. Registration, captcha,
+          OAuth/SSO and passkey controls are intentionally retired together
+          with the user surface; keep the legacy form state below only for
+          rolling settings payload compatibility.
+        -->
+        <div v-if="false" class="space-y-6" aria-hidden="true">
           <!-- Registration Settings -->
           <div class="card">
             <div
@@ -1754,6 +1743,10 @@
             </div>
           </div>
 
+        </div>
+
+        <!-- Tab: Security — API Key ACL and panel protection -->
+        <div v-show="activeTab === 'security'" class="space-y-6">
           <!-- API Key IP ACL Settings -->
           <div class="card">
             <div
@@ -2032,6 +2025,10 @@
             </div>
           </div>
 
+        </div>
+
+        <!-- Retired user-login controls remain in a non-rendered compatibility block. -->
+        <div v-if="false" class="space-y-6" aria-hidden="true">
           <!-- 人机验证 Settings -->
           <div class="card">
             <div
@@ -3821,8 +3818,8 @@
         </div>
         <!-- /Tab: Security — Registration, Turnstile, LinuxDo, OIDC -->
 
-        <!-- Tab: Users -->
-        <div v-show="activeTab === 'users'" class="space-y-6">
+        <!-- Retained only as a non-rendered compatibility block for old saved settings. -->
+        <div v-if="false" class="space-y-6" aria-hidden="true">
           <!-- Default Settings -->
           <div class="card">
             <div
@@ -4054,7 +4051,7 @@
                       </tr>
                     </thead>
                     <tbody class="space-y-2">
-                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok'] as const)" :key="p" class="align-top">
+                      <tr v-for="p in (['anthropic', 'openai'] as const)" :key="p" class="align-top">
                         <td class="pr-4 py-1">
                           <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                         </td>
@@ -4389,7 +4386,7 @@
                             </tr>
                           </thead>
                           <tbody>
-                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
+                            <tr v-for="p in (['anthropic', 'openai'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
                               <td class="pr-4 py-1">
                                 <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                               </td>
@@ -5203,71 +5200,6 @@
               </p>
             </div>
             <div class="space-y-5 p-6">
-              <div class="grid gap-5 border-b border-gray-100 pb-5 dark:border-dark-700 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-                <div>
-                  <label
-                    for="grok-default-text-model"
-                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.grokDefaultTextModel") }}
-                  </label>
-                  <input
-                    id="grok-default-text-model"
-                    v-model.trim="form.grok_default_text_model"
-                    type="text"
-                    class="input mt-2 w-full"
-                    list="grok-default-text-model-options"
-                    data-testid="grok-default-text-model"
-                    placeholder="grok-4.5"
-                  />
-                  <datalist id="grok-default-text-model-options">
-                    <option value="grok-4.5" />
-                    <option value="grok-4.1-fast" />
-                    <option value="grok-4" />
-                  </datalist>
-                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.grokDefaultTextModelHint") }}
-                  </p>
-                </div>
-                <div class="flex items-center justify-between gap-5 md:min-w-72">
-                  <div>
-                    <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      {{ t("admin.settings.gatewayForwarding.grokCrossClientMap") }}
-                    </label>
-                    <p class="mt-0.5 max-w-sm text-xs text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.gatewayForwarding.grokCrossClientMapHint") }}
-                    </p>
-                  </div>
-                  <Toggle
-                    v-model="form.grok_cross_client_model_map_enabled"
-                    data-testid="grok-cross-client-model-map-toggle"
-                  />
-                </div>
-                </div>
-                <div class="md:col-span-2">
-                  <label
-                    for="grok-default-base-url-mode"
-                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.grokDefaultBaseURLMode") }}
-                  </label>
-                  <select
-                    id="grok-default-base-url-mode"
-                    v-model="form.grok_default_base_url_mode"
-                    class="input mt-2 w-full"
-                    data-testid="grok-default-base-url-mode"
-                  >
-                    <option value="cli">{{ t("admin.settings.gatewayForwarding.grokBaseURLModeCLI") }}</option>
-                    <option value="api">{{ t("admin.settings.gatewayForwarding.grokBaseURLModeAPI") }}</option>
-                    <option value="us-east-1">{{ t("admin.settings.gatewayForwarding.grokBaseURLModeUSEast1") }}</option>
-                    <option value="us-west-2">{{ t("admin.settings.gatewayForwarding.grokBaseURLModeUSWest2") }}</option>
-                    <option value="eu-west-1">{{ t("admin.settings.gatewayForwarding.grokBaseURLModeEUWest1") }}</option>
-                  </select>
-                  <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.grokDefaultBaseURLModeHint") }}
-                  </p>
-                </div>
-
               <!-- Fingerprint Unification -->
               <div class="flex items-center justify-between">
                 <div>
@@ -5629,36 +5561,6 @@
                 <Toggle
                   v-model="form.enable_client_dateline_normalization"
                 />
-              </div>
-
-              <!-- Antigravity UA 版本 -->
-              <div>
-                <label
-                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  {{
-                    t(
-                      "admin.settings.gatewayForwarding.antigravityUserAgentVersion",
-                    )
-                  }}
-                </label>
-                <input
-                  v-model="form.antigravity_user_agent_version"
-                  type="text"
-                  class="input max-w-xs font-mono text-sm"
-                  :placeholder="
-                    t(
-                      'admin.settings.gatewayForwarding.antigravityUserAgentVersionPlaceholder',
-                    )
-                  "
-                />
-                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{
-                    t(
-                      "admin.settings.gatewayForwarding.antigravityUserAgentVersionHint",
-                    )
-                  }}
-                </p>
               </div>
 
               <!-- OpenAI Codex UA -->
@@ -6189,8 +6091,8 @@
             </div>
           </div>
 
-        <!-- Usage Records Settings -->
-        <div class="card">
+        <!-- Legacy per-user usage visibility setting is no longer exposed. -->
+        <div v-if="false" class="card" aria-hidden="true">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.usageRecords.title') }}
@@ -6589,8 +6491,8 @@
             </div>
           </div>
 
-          <!-- Custom Menu Items -->
-          <div class="card">
+          <!-- Custom user menu items were removed with the user portal. -->
+          <div v-if="false" class="card" aria-hidden="true">
             <div
               class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
             >
@@ -6783,7 +6685,7 @@
 	        <!-- /Tab: General -->
 
 	        <!-- Tab: Login Agreement -->
-	        <div v-show="activeTab === 'agreement'" class="space-y-6">
+        <div v-if="false" class="space-y-6" aria-hidden="true">
 	          <div class="card">
 	            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
 	              <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -6987,7 +6889,7 @@
 	        <!-- Tab: Features (功能开关) -->
         <div v-show="activeTab === 'features'" class="space-y-6">
 
-        <div class="card">
+        <div v-if="false" class="card" aria-hidden="true">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.channelMonitor.title') }}
@@ -7105,22 +7007,13 @@
           </div>
         </div>
 
-        <div class="card">
+        <div v-if="false" class="card" aria-hidden="true">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.availableChannels.title') }}
             </h2>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
               {{ t('admin.settings.features.availableChannels.description') }}
-            </p>
-            <p class="mt-1.5 text-xs">
-              <router-link
-                to="/admin/channels/pricing"
-                class="inline-flex items-center gap-1 text-primary-600 hover:underline dark:text-primary-400"
-              >
-                {{ t('admin.settings.features.availableChannels.configureLink') }}
-                <span aria-hidden="true">→</span>
-              </router-link>
             </p>
           </div>
           <div class="space-y-5 p-6">
@@ -7138,7 +7031,7 @@
           </div>
         </div>
 
-        <div class="card">
+        <div v-if="false" class="card" aria-hidden="true">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.modelPlaza.title') }}
@@ -7246,8 +7139,8 @@
           </div>
         </div>
 
-        <!-- Affiliate (邀请返利) feature card -->
-        <div class="card">
+        <!-- Affiliate (邀请返利) was removed with per-user management. -->
+        <div v-if="false" class="card" aria-hidden="true">
           <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
               {{ t('admin.settings.features.affiliate.title') }}
@@ -7662,7 +7555,7 @@
 
         <!-- Tab: Email -->
         <!-- Tab: Payment -->
-        <div v-show="activeTab === 'payment'" class="space-y-6">
+        <div v-if="false" class="space-y-6" aria-hidden="true">
           <!-- Payment System Settings -->
           <div class="card">
             <div
@@ -8213,7 +8106,7 @@
           />
         </div>
 
-        <div v-show="activeTab === 'email'" class="space-y-6">
+        <div v-if="false" class="space-y-6" aria-hidden="true">
           <!-- Email disabled hint - show when email_verify_enabled is off -->
           <div v-if="!form.email_verify_enabled" class="card">
             <div class="p-6">
@@ -8677,6 +8570,7 @@
 
       <!-- Provider dialogs placed outside the settings form to prevent form submission bubbling -->
       <PaymentProviderDialog
+        v-if="false"
         ref="providerDialogRef"
         :show="showProviderDialog"
         :saving="providerSaving"
@@ -8689,6 +8583,7 @@
         @save="handleSaveProvider"
       />
       <ConfirmDialog
+        v-if="false"
         :show="showDeleteProviderDialog"
         :title="t('admin.settings.payment.deleteProvider')"
         :message="t('admin.settings.payment.deleteProviderConfirm')"
@@ -8698,6 +8593,7 @@
         @cancel="showDeleteProviderDialog = false"
       />
       <ConfirmDialog
+        v-if="false"
         :show="affiliateConfirmDialog.show"
         :title="affiliateConfirmDialog.title"
         :message="affiliateConfirmDialog.message"
@@ -8717,12 +8613,10 @@ import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api";
 import {
-  appendAuthSourceDefaultsToUpdateRequest,
   buildAuthSourceDefaultsState,
   normalizeAccountSchedulingThresholdsMap,
   normalizePlatformQuotasMap,
   sanitizeAccountSchedulingThresholdsMap,
-  sanitizePlatformQuotasMap,
   SCHEDULING_THRESHOLD_PLATFORMS,
   defaultWeChatConnectScopesForMode,
   deriveWeChatConnectStoredMode,
@@ -8734,7 +8628,6 @@ import type {
   AuthSourceType,
   SystemSettings,
   UpdateSettingsRequest,
-  DefaultSubscriptionSetting,
   DefaultPlatformQuotasMap,
   OpenAIFastPolicyRule,
   WeChatConnectMode,
@@ -8762,7 +8655,6 @@ import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
-import OpenAIFastPolicyUserSelector from "@/views/admin/settings/OpenAIFastPolicyUserSelector.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
   useStepUp,
@@ -8814,24 +8706,16 @@ const paymentMethodsHref = computed(() =>
 
 type SettingsTab =
   | "general"
-  | "agreement"
   | "features"
   | "security"
-  | "users"
   | "gateway"
-  | "payment"
-  | "email"
   | "backup";
 const activeTab = ref<SettingsTab>("general");
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
-  { key: "agreement" as SettingsTab, icon: "document" as const },
   { key: "features" as SettingsTab, icon: "bolt" as const },
   { key: "security" as SettingsTab, icon: "shield" as const },
-  { key: "users" as SettingsTab, icon: "user" as const },
   { key: "gateway" as SettingsTab, icon: "server" as const },
-  { key: "payment" as SettingsTab, icon: "creditCard" as const },
-  { key: "email" as SettingsTab, icon: "mail" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
 ];
 
@@ -9676,14 +9560,6 @@ const form = reactive<SettingsForm>({
   enable_model_fallback: false,
   fallback_model_anthropic: "claude-3-5-sonnet-20241022",
   fallback_model_openai: "gpt-4o",
-  fallback_model_gemini: "gemini-2.5-pro",
-  fallback_model_antigravity: "gemini-2.5-pro",
-  grok_default_text_model: "grok-4.5",
-  grok_cross_client_model_map_enabled: false,
-  grok_default_base_url_mode: "cli",
-  // Identity patch (Claude -> Gemini)
-  enable_identity_patch: true,
-  identity_patch_prompt: "",
   // Ops monitoring (vNext)
   ops_monitoring_enabled: true,
   ops_realtime_monitoring_enabled: true,
@@ -9720,7 +9596,6 @@ const form = reactive<SettingsForm>({
   enable_anthropic_cache_ttl_1h_injection: false,
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
-  antigravity_user_agent_version: "",
   openai_codex_user_agent: "",
   openai_codex_client_version: "",
   // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
@@ -10568,31 +10443,6 @@ function removeLoginAgreementDocument(index: number) {
   form.login_agreement_documents.splice(index, 1);
 }
 
-function normalizeLoginAgreementDocumentsForSave(): LoginAgreementDocument[] {
-  return form.login_agreement_documents
-    .map((doc, index) => ({
-      id:
-        normalizeLoginAgreementDocumentId(doc.id || doc.title) ||
-        `doc-${index + 1}`,
-      title: doc.title.trim(),
-      content_md: doc.content_md.trim(),
-    }))
-    .filter((doc) => doc.title || doc.content_md);
-}
-
-function findDuplicateLoginAgreementDocumentId(
-  documents: LoginAgreementDocument[],
-): string | null {
-  const seen = new Set<string>();
-  for (const doc of documents) {
-    if (seen.has(doc.id)) {
-      return doc.id;
-    }
-    seen.add(doc.id);
-  }
-  return null;
-}
-
 function formatTablePageSizeOptions(options: number[]): string {
   return options.join(", ");
 }
@@ -10862,7 +10712,7 @@ async function loadSettings() {
       openaiFastPolicyForm.rules =
         settings.openai_fast_policy_settings.rules.map((rule) => ({
           ...rule,
-          user_ids: rule.user_ids ? [...rule.user_ids] : [],
+          user_ids: [],
           model_whitelist: rule.model_whitelist
             ? [...rule.model_whitelist]
             : [],
@@ -10879,18 +10729,6 @@ async function loadSettings() {
     );
   } finally {
     loading.value = false;
-  }
-}
-
-async function loadSubscriptionGroups() {
-  try {
-    const groups = await adminAPI.groups.getAll();
-    subscriptionGroups.value = groups.filter(
-      (group) =>
-        group.subscription_type === "subscription" && group.status === "active",
-    );
-  } catch (_error: unknown) {
-    subscriptionGroups.value = [];
   }
 }
 
@@ -10936,20 +10774,6 @@ function removeAuthSourceDefaultSubscription(
   authSourceDefaults[source].subscriptions.splice(index, 1);
 }
 
-function findDuplicateDefaultSubscription(
-  subscriptions: DefaultSubscriptionSetting[],
-): DefaultSubscriptionSetting | undefined {
-  const seenGroupIDs = new Set<number>();
-
-  return subscriptions.find((item) => {
-    if (seenGroupIDs.has(item.group_id)) {
-      return true;
-    }
-    seenGroupIDs.add(item.group_id);
-    return false;
-  });
-}
-
 async function saveSettings() {
   saving.value = true;
   try {
@@ -10986,92 +10810,9 @@ async function saveSettings() {
     form.table_default_page_size = normalizedTableDefaultPageSize;
     form.table_page_size_options = normalizedTablePageSizeOptions;
 
-    const normalizedLoginAgreementDocuments =
-      normalizeLoginAgreementDocumentsForSave();
-    if (form.login_agreement_enabled && normalizedLoginAgreementDocuments.length === 0) {
-      appStore.showError(
-        localText(
-          "启用登录条款确认时，至少需要保留一份文档。",
-          "At least one document is required when login agreement is enabled.",
-        ),
-      );
-      return;
-    }
-    const emptyTitleDocument = normalizedLoginAgreementDocuments.find(
-      (doc) => !doc.title,
-    );
-    if (emptyTitleDocument) {
-      appStore.showError(
-        localText(
-          "登录条款文档名称不能为空。",
-          "Login agreement document title cannot be empty.",
-        ),
-      );
-      return;
-    }
-    const duplicateLoginAgreementDocumentId =
-      findDuplicateLoginAgreementDocumentId(normalizedLoginAgreementDocuments);
-    if (duplicateLoginAgreementDocumentId) {
-      appStore.showError(
-        localText(
-          `登录条款文档路由不能重复：/legal/${duplicateLoginAgreementDocumentId}`,
-          `Login agreement document routes cannot be duplicated: /legal/${duplicateLoginAgreementDocumentId}`,
-        ),
-      );
-      return;
-    }
-    form.login_agreement_mode =
-      form.login_agreement_mode === "checkbox" ? "checkbox" : "modal";
-    form.login_agreement_documents = normalizedLoginAgreementDocuments;
     form.forwarded_client_ip_headers = normalizeForwardedClientIpHeaders(
       form.forwarded_client_ip_headers,
     );
-
-    const normalizedDefaultSubscriptions = normalizeDefaultSubscriptionSettings(
-      form.default_subscriptions,
-    );
-    const duplicateDefaultSubscription = findDuplicateDefaultSubscription(
-      normalizedDefaultSubscriptions,
-    );
-    if (duplicateDefaultSubscription) {
-      appStore.showError(
-        t("admin.settings.defaults.defaultSubscriptionsDuplicate", {
-          groupId: duplicateDefaultSubscription.group_id,
-        }),
-      );
-      return;
-    }
-
-    for (const authSource of authSourceDefaultsMeta.value) {
-      authSourceDefaults[authSource.source].subscriptions =
-        normalizeDefaultSubscriptionSettings(
-          authSourceDefaults[authSource.source].subscriptions,
-        );
-      const duplicate = findDuplicateDefaultSubscription(
-        authSourceDefaults[authSource.source].subscriptions,
-      );
-      if (duplicate) {
-        appStore.showError(
-          `${authSource.title}: ${t(
-            "admin.settings.defaults.defaultSubscriptionsDuplicate",
-            {
-              groupId: duplicate.group_id,
-            },
-          )}`,
-        );
-        return;
-      }
-    }
-
-    if (form.wechat_connect_mp_enabled && form.wechat_connect_mobile_enabled) {
-      appStore.showError(
-        localText(
-          "公众号和移动应用不能同时启用。",
-          "Official Account and Mobile App cannot be enabled at the same time.",
-        ),
-      );
-      return;
-    }
     // Validate URL fields — novalidate disables browser-native checks, so we validate here
     const isValidHttpUrl = (url: string): boolean => {
       if (!url) return true;
@@ -11085,13 +10826,6 @@ async function saveSettings() {
     // Optional URL fields: auto-clear invalid values so they don't cause backend 400 errors
     if (!isValidHttpUrl(form.frontend_url)) form.frontend_url = "";
     if (!isValidHttpUrl(form.doc_url)) form.doc_url = "";
-    syncWeChatConnectMode();
-    const wechatStoredMode = deriveWeChatConnectStoredMode(
-      form.wechat_connect_open_enabled,
-      form.wechat_connect_mp_enabled,
-      form.wechat_connect_mobile_enabled,
-      form.wechat_connect_mode,
-    );
     const claudeOAuthSystemPromptBlocksJSON =
       serializeClaudeOAuthSystemPromptBlocksToJSON(
         claudeOAuthSystemPromptBlocks.value,
@@ -11100,43 +10834,6 @@ async function saveSettings() {
       claudeOAuthSystemPromptBlocksJSON;
 
     const payload: UpdateSettingsRequest = {
-      registration_enabled: form.registration_enabled,
-      email_verify_enabled: form.email_verify_enabled,
-      registration_email_suffix_whitelist:
-        registrationEmailSuffixWhitelistTags.value.map((suffix) =>
-          suffix.startsWith("*.") ? suffix : `@${suffix}`,
-        ),
-      registration_email_domain_quota_enabled:
-        form.registration_email_domain_quota_enabled,
-      promo_code_enabled: form.promo_code_enabled,
-      invitation_code_enabled: form.invitation_code_enabled,
-      password_reset_enabled: form.password_reset_enabled,
-      totp_enabled: form.totp_enabled,
-      passkey_enabled: form.passkey_enabled,
-      session_binding_enabled: form.session_binding_enabled,
-      step_up_enabled: form.step_up_enabled,
-      // 清空数字框时 v-model.number 会得到空串，后端 int 字段解析空串会 400 拒绝整次保存；
-      // 空/非法值回退默认 180（与后端 parseAuditLogRetentionDays("") 语义一致，0 仍表示永久保留）。
-      audit_log_retention_days: Number.isFinite(form.audit_log_retention_days)
-        ? form.audit_log_retention_days
-        : 180,
-      login_agreement_enabled: form.login_agreement_enabled,
-      login_agreement_mode: form.login_agreement_mode,
-      login_agreement_updated_at: form.login_agreement_updated_at,
-      login_agreement_documents: form.login_agreement_documents,
-      default_balance: form.default_balance,
-      affiliate_rebate_rate: Math.min(
-        100,
-        Math.max(0, Number(form.affiliate_rebate_rate) || 0),
-      ),
-      affiliate_rebate_freeze_hours: Math.max(0, Math.min(720, Number(form.affiliate_rebate_freeze_hours) || 0)),
-      affiliate_rebate_duration_days: Math.max(0, Math.min(3650, Math.floor(Number(form.affiliate_rebate_duration_days) || 0))),
-      affiliate_rebate_per_invitee_cap: Math.max(0, Number(form.affiliate_rebate_per_invitee_cap) || 0),
-      affiliate_admin_recharge_enabled: form.affiliate_admin_recharge_enabled,
-      default_concurrency: form.default_concurrency,
-      default_subscriptions: normalizedDefaultSubscriptions,
-      force_email_on_third_party_signup: form.force_email_on_third_party_signup,
-      default_user_rpm_limit: form.default_user_rpm_limit,
       site_name: form.site_name,
       site_logo: form.site_logo,
       site_subtitle: form.site_subtitle,
@@ -11149,136 +10846,12 @@ async function saveSettings() {
       hide_ccs_import_button: form.hide_ccs_import_button,
       table_default_page_size: form.table_default_page_size,
       table_page_size_options: form.table_page_size_options,
-      custom_menu_items: form.custom_menu_items,
-      custom_endpoints: form.custom_endpoints,
       frontend_url: form.frontend_url,
-      smtp_host: form.smtp_host,
-      smtp_port: form.smtp_port,
-      smtp_username: form.smtp_username,
-      smtp_password: form.smtp_password || undefined,
-      smtp_from_email: form.smtp_from_email,
-      smtp_from_name: form.smtp_from_name,
-      smtp_use_tls: form.smtp_use_tls,
-      turnstile_enabled: form.turnstile_enabled,
-      turnstile_site_key: form.turnstile_site_key,
-      turnstile_secret_key: form.turnstile_secret_key || undefined,
-      tencent_captcha_enabled: form.tencent_captcha_enabled,
-      tencent_captcha_app_id: form.tencent_captcha_app_id,
-      tencent_captcha_app_secret_key:
-        form.tencent_captcha_app_secret_key || undefined,
-      tencent_captcha_cloud_secret_id:
-        form.tencent_captcha_cloud_secret_id || undefined,
-      tencent_captcha_cloud_secret_key:
-        form.tencent_captcha_cloud_secret_key || undefined,
-      tencent_captcha_region: form.tencent_captcha_region,
-      aliyun_captcha_enabled: form.aliyun_captcha_enabled,
-      aliyun_captcha_access_key_id: form.aliyun_captcha_access_key_id,
-      aliyun_captcha_access_key_secret:
-        form.aliyun_captcha_access_key_secret || undefined,
-      aliyun_captcha_scene_id: form.aliyun_captcha_scene_id,
-      aliyun_captcha_prefix: form.aliyun_captcha_prefix,
-      aliyun_captcha_region: form.aliyun_captcha_region,
       api_key_acl_trust_forwarded_ip: form.api_key_acl_trust_forwarded_ip,
       forwarded_client_ip_headers: form.forwarded_client_ip_headers,
-      linuxdo_connect_enabled: form.linuxdo_connect_enabled,
-      linuxdo_connect_client_id: form.linuxdo_connect_client_id,
-      linuxdo_connect_client_secret:
-        form.linuxdo_connect_client_secret || undefined,
-      linuxdo_connect_redirect_url: form.linuxdo_connect_redirect_url,
-      dingtalk_connect_enabled: form.dingtalk_connect_enabled,
-      dingtalk_connect_client_id: form.dingtalk_connect_client_id,
-      dingtalk_connect_client_secret:
-        form.dingtalk_connect_client_secret || undefined,
-      dingtalk_connect_redirect_url: form.dingtalk_connect_redirect_url,
-      dingtalk_connect_corp_restriction_policy:
-        form.dingtalk_connect_corp_restriction_policy,
-      dingtalk_connect_internal_corp_id: form.dingtalk_connect_internal_corp_id,
-      dingtalk_connect_bypass_registration: form.dingtalk_connect_bypass_registration,
-      dingtalk_connect_sync_corp_email: form.dingtalk_connect_sync_corp_email,
-      dingtalk_connect_sync_display_name: form.dingtalk_connect_sync_display_name,
-      dingtalk_connect_sync_dept: form.dingtalk_connect_sync_dept,
-      dingtalk_connect_sync_corp_email_attr_key: form.dingtalk_connect_sync_corp_email_attr_key,
-      dingtalk_connect_sync_display_name_attr_key: form.dingtalk_connect_sync_display_name_attr_key,
-      dingtalk_connect_sync_dept_attr_key: form.dingtalk_connect_sync_dept_attr_key,
-      dingtalk_connect_sync_corp_email_attr_name: form.dingtalk_connect_sync_corp_email_attr_name,
-      dingtalk_connect_sync_display_name_attr_name: form.dingtalk_connect_sync_display_name_attr_name,
-      dingtalk_connect_sync_dept_attr_name: form.dingtalk_connect_sync_dept_attr_name,
-      wechat_connect_enabled: form.wechat_connect_enabled,
-      wechat_connect_app_id:
-        form.wechat_connect_open_app_id ||
-        form.wechat_connect_mp_app_id ||
-        form.wechat_connect_mobile_app_id ||
-        form.wechat_connect_app_id,
-      wechat_connect_app_secret: form.wechat_connect_app_secret || undefined,
-      wechat_connect_open_app_id: form.wechat_connect_open_app_id,
-      wechat_connect_open_app_secret:
-        form.wechat_connect_open_app_secret || undefined,
-      wechat_connect_mp_app_id: form.wechat_connect_mp_app_id,
-      wechat_connect_mp_app_secret:
-        form.wechat_connect_mp_app_secret || undefined,
-      wechat_connect_mobile_app_id: form.wechat_connect_mobile_app_id,
-      wechat_connect_mobile_app_secret:
-        form.wechat_connect_mobile_app_secret || undefined,
-      wechat_connect_open_enabled: form.wechat_connect_open_enabled,
-      wechat_connect_mp_enabled: form.wechat_connect_mp_enabled,
-      wechat_connect_mobile_enabled: form.wechat_connect_mobile_enabled,
-      wechat_connect_mode: wechatStoredMode,
-      wechat_connect_scopes:
-        defaultWeChatConnectScopesForMode(wechatStoredMode),
-      wechat_connect_redirect_url: form.wechat_connect_redirect_url,
-      wechat_connect_frontend_redirect_url:
-        form.wechat_connect_frontend_redirect_url,
-      oidc_connect_enabled: form.oidc_connect_enabled,
-      oidc_connect_provider_name: form.oidc_connect_provider_name,
-      oidc_connect_client_id: form.oidc_connect_client_id,
-      oidc_connect_client_secret: form.oidc_connect_client_secret || undefined,
-      oidc_connect_issuer_url: form.oidc_connect_issuer_url,
-      oidc_connect_discovery_url: form.oidc_connect_discovery_url,
-      oidc_connect_authorize_url: form.oidc_connect_authorize_url,
-      oidc_connect_token_url: form.oidc_connect_token_url,
-      oidc_connect_userinfo_url: form.oidc_connect_userinfo_url,
-      oidc_connect_jwks_url: form.oidc_connect_jwks_url,
-      oidc_connect_scopes: form.oidc_connect_scopes,
-      oidc_connect_redirect_url: form.oidc_connect_redirect_url,
-      oidc_connect_frontend_redirect_url:
-        form.oidc_connect_frontend_redirect_url,
-      oidc_connect_token_auth_method: form.oidc_connect_token_auth_method,
-      oidc_connect_use_pkce: form.oidc_connect_use_pkce,
-      oidc_connect_validate_id_token: form.oidc_connect_validate_id_token,
-      oidc_connect_allowed_signing_algs: form.oidc_connect_allowed_signing_algs,
-      oidc_connect_clock_skew_seconds: form.oidc_connect_clock_skew_seconds,
-      oidc_connect_require_email_verified:
-        form.oidc_connect_require_email_verified,
-      oidc_connect_userinfo_email_path: form.oidc_connect_userinfo_email_path,
-      oidc_connect_userinfo_id_path: form.oidc_connect_userinfo_id_path,
-      oidc_connect_userinfo_username_path:
-        form.oidc_connect_userinfo_username_path,
-      github_oauth_enabled: form.github_oauth_enabled,
-      github_oauth_client_id: form.github_oauth_client_id,
-      github_oauth_client_secret:
-        form.github_oauth_client_secret || undefined,
-      github_oauth_redirect_url: form.github_oauth_redirect_url,
-      github_oauth_frontend_redirect_url:
-        form.github_oauth_frontend_redirect_url,
-      google_oauth_enabled: form.google_oauth_enabled,
-      google_oauth_client_id: form.google_oauth_client_id,
-      google_oauth_client_secret:
-        form.google_oauth_client_secret || undefined,
-      google_oauth_redirect_url: form.google_oauth_redirect_url,
-      google_oauth_frontend_redirect_url:
-        form.google_oauth_frontend_redirect_url,
       enable_model_fallback: form.enable_model_fallback,
       fallback_model_anthropic: form.fallback_model_anthropic,
       fallback_model_openai: form.fallback_model_openai,
-      fallback_model_gemini: form.fallback_model_gemini,
-      fallback_model_antigravity: form.fallback_model_antigravity,
-      grok_default_text_model:
-        form.grok_default_text_model.trim() || "grok-4.5",
-      grok_cross_client_model_map_enabled:
-        form.grok_cross_client_model_map_enabled,
-      grok_default_base_url_mode: form.grok_default_base_url_mode,
-      enable_identity_patch: form.enable_identity_patch,
-      identity_patch_prompt: form.identity_patch_prompt,
       min_claude_code_version: form.min_claude_code_version,
       max_claude_code_version: form.max_claude_code_version,
       allow_ungrouped_key_scheduling: form.allow_ungrouped_key_scheduling,
@@ -11296,8 +10869,6 @@ async function saveSettings() {
       rewrite_message_cache_control: form.rewrite_message_cache_control,
       enable_client_dateline_normalization:
         form.enable_client_dateline_normalization,
-      antigravity_user_agent_version:
-        form.antigravity_user_agent_version?.trim() || "",
       openai_codex_user_agent:
         form.openai_codex_user_agent?.trim() || "",
       openai_codex_client_version:
@@ -11317,41 +10888,10 @@ async function saveSettings() {
       codex_cli_only_whitelist: serializeCodexRowsToJSON(
         codexWhitelistRows.value,
       ),
-      // Payment configuration
-      payment_enabled: form.payment_enabled,
       risk_control_enabled: form.risk_control_enabled,
       cyber_session_block_enabled: form.cyber_session_block_enabled,
       cyber_session_block_ttl_seconds:
         Number(form.cyber_session_block_ttl_seconds) || 3600,
-      payment_min_amount: Number(form.payment_min_amount) || 0,
-      payment_max_amount: Number(form.payment_max_amount) || 0,
-      payment_daily_limit: Number(form.payment_daily_limit) || 0,
-      payment_max_pending_orders: Number(form.payment_max_pending_orders) || 0,
-      payment_order_timeout_minutes:
-        Number(form.payment_order_timeout_minutes) || 0,
-      payment_balance_disabled: form.payment_balance_disabled,
-      payment_balance_recharge_multiplier:
-        Number(form.payment_balance_recharge_multiplier) || 1,
-      payment_subscription_usd_to_cny_rate:
-        Number(form.payment_subscription_usd_to_cny_rate) || 0,
-      payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
-      payment_enabled_types: form.payment_enabled_types,
-      payment_load_balance_strategy: form.payment_load_balance_strategy,
-      payment_product_name_prefix: form.payment_product_name_prefix,
-      payment_product_name_suffix: form.payment_product_name_suffix,
-      payment_help_image_url: form.payment_help_image_url,
-      payment_help_text: form.payment_help_text,
-      payment_cancel_rate_limit_enabled: form.payment_cancel_rate_limit_enabled,
-      payment_cancel_rate_limit_max:
-        Number(form.payment_cancel_rate_limit_max) || 10,
-      payment_cancel_rate_limit_window:
-        Number(form.payment_cancel_rate_limit_window) || 1,
-      payment_cancel_rate_limit_unit: form.payment_cancel_rate_limit_unit,
-      payment_cancel_rate_limit_window_mode:
-        form.payment_cancel_rate_limit_window_mode,
-      payment_alipay_force_qrcode: form.payment_alipay_force_qrcode,
-      payment_alipay_mobile_precreate_deep_link:
-        form.payment_alipay_mobile_precreate_deep_link,
       openai_low_upstream_rate_priority_enabled:
         form.openai_low_upstream_rate_priority_enabled,
       openai_oauth_scheduling_rate_multiplier:
@@ -11383,34 +10923,6 @@ async function saveSettings() {
         form.openai_advanced_scheduler_weight_previous_response.trim(),
       openai_advanced_scheduler_weight_session_sticky:
         form.openai_advanced_scheduler_weight_session_sticky.trim(),
-      // 余额、订阅到期与账号限额通知
-      balance_low_notify_enabled: form.balance_low_notify_enabled,
-      balance_low_notify_threshold:
-        Number(form.balance_low_notify_threshold) || 0,
-      balance_low_notify_recharge_url: (form.balance_low_notify_recharge_url =
-        form.balance_low_notify_recharge_url || currentOrigin),
-      subscription_expiry_notify_enabled:
-        form.subscription_expiry_notify_enabled,
-      account_quota_notify_enabled: form.account_quota_notify_enabled,
-      account_quota_notify_emails: (
-        form.account_quota_notify_emails || []
-      ).filter((e) => e.email.trim() !== ""),
-      // Channel Monitor feature switch
-      channel_monitor_enabled: form.channel_monitor_enabled,
-      channel_monitor_mode: form.channel_monitor_mode === 'v1' ? 'v1' : 'v2',
-      channel_monitor_default_interval_seconds:
-        Number(form.channel_monitor_default_interval_seconds) || 60,
-      channel_monitor_hide_throughput: Boolean(form.channel_monitor_hide_throughput),
-      channel_monitor_show_quota: Boolean(form.channel_monitor_show_quota),
-      // Available Channels feature switch
-      available_channels_enabled: form.available_channels_enabled,
-      // Model Plaza feature switches + description
-      model_plaza_enabled: form.model_plaza_enabled,
-      model_plaza_require_auth: form.model_plaza_require_auth,
-      model_plaza_description: form.model_plaza_description,
-      // Affiliate (邀请返利) feature switch
-      affiliate_enabled: form.affiliate_enabled,
-      allow_user_view_error_requests: form.allow_user_view_error_requests,
     };
 
     // 仅当 openai_fast_policy_settings 已成功从后端加载时才回写，
@@ -11426,10 +10938,7 @@ async function saveSettings() {
             service_tier: rule.service_tier,
             action: rule.action,
             scope: rule.scope,
-            user_ids:
-              rule.user_ids && rule.user_ids.length > 0
-                ? [...rule.user_ids]
-                : undefined,
+            user_ids: undefined,
             error_message:
               rule.action === "block" ? rule.error_message : undefined,
             model_whitelist: hasWhitelist ? whitelist : undefined,
@@ -11445,11 +10954,9 @@ async function saveSettings() {
       };
     }
 
-    payload.default_platform_quotas = sanitizePlatformQuotasMap(form.default_platform_quotas);
     payload.account_scheduling_thresholds = sanitizeAccountSchedulingThresholdsMap(
       form.account_scheduling_thresholds,
     );
-    appendAuthSourceDefaultsToUpdateRequest(payload, authSourceDefaults);
 
     const updated = await settingsStepUp.run(() =>
       adminAPI.settings.updateSettings(payload),
@@ -11460,15 +10967,9 @@ async function saveSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
-    Object.assign(authSourceDefaults, buildAuthSourceDefaultsState(updated));
-    form.default_platform_quotas = normalizePlatformQuotasMap(updated.default_platform_quotas);
     form.account_scheduling_thresholds = normalizeAccountSchedulingThresholdsMap(
       updated.account_scheduling_thresholds,
     );
-    registrationEmailSuffixWhitelistTags.value =
-      normalizeRegistrationEmailSuffixDomains(
-        updated.registration_email_suffix_whitelist,
-      );
     form.forwarded_client_ip_headers = normalizeForwardedClientIpHeaders(
       updated.forwarded_client_ip_headers,
     );
@@ -11478,39 +10979,6 @@ async function saveSettings() {
         ? updated.table_page_size_options
         : [10, 20, 50, 100],
     );
-    registrationEmailSuffixWhitelistDraft.value = "";
-    form.smtp_password = "";
-    smtpPasswordManuallyEdited.value = false;
-    form.turnstile_secret_key = "";
-    form.aliyun_captcha_access_key_secret = "";
-    form.linuxdo_connect_client_secret = "";
-    form.dingtalk_connect_client_secret = "";
-    form.github_oauth_client_secret = "";
-    form.google_oauth_client_secret = "";
-    form.wechat_connect_app_secret = "";
-    form.wechat_connect_open_app_secret = "";
-    form.wechat_connect_mp_app_secret = "";
-    form.wechat_connect_mobile_app_secret = "";
-    const updatedWechatCapabilities = resolveWeChatConnectModeCapabilities(
-      updated.wechat_connect_open_enabled,
-      updated.wechat_connect_mp_enabled,
-      updated.wechat_connect_mobile_enabled,
-      updated.wechat_connect_mode,
-    );
-    form.wechat_connect_open_enabled = updatedWechatCapabilities.openEnabled;
-    form.wechat_connect_mp_enabled = updatedWechatCapabilities.mpEnabled;
-    form.wechat_connect_mobile_enabled =
-      updatedWechatCapabilities.mobileEnabled;
-    form.wechat_connect_mode = deriveWeChatConnectStoredMode(
-      updatedWechatCapabilities.openEnabled,
-      updatedWechatCapabilities.mpEnabled,
-      updatedWechatCapabilities.mobileEnabled,
-      updated.wechat_connect_mode,
-    );
-    form.wechat_connect_scopes = defaultWeChatConnectScopesForMode(
-      form.wechat_connect_mode,
-    );
-    form.oidc_connect_client_secret = "";
     // Refresh OpenAI fast/flex policy from server response
     if (
       updated.openai_fast_policy_settings &&
@@ -11519,7 +10987,7 @@ async function saveSettings() {
       openaiFastPolicyForm.rules =
         updated.openai_fast_policy_settings.rules.map((rule) => ({
           ...rule,
-          user_ids: rule.user_ids ? [...rule.user_ids] : [],
+          user_ids: [],
           model_whitelist: rule.model_whitelist
             ? [...rule.model_whitelist]
             : [],
@@ -12488,7 +11956,6 @@ async function handleDeleteProvider() {
 
 onMounted(() => {
   loadSettings();
-  loadSubscriptionGroups();
   loadAdminApiKey();
   loadUpstreamBillingProbeSettings();
   loadOllamaCloudUsageSettings();
@@ -12498,7 +11965,6 @@ onMounted(() => {
   loadStreamTimeoutSettings();
   loadRectifierSettings();
   loadBetaPolicySettings();
-  loadProviders();
 });
 
 // =========================
@@ -12845,15 +12311,6 @@ async function submitAffiliateBatchModal() {
 // as enabled. The form starts disabled and is updated to the server's value
 // after the settings load — so this fires either when the saved value is
 // truthy on first paint, or when the admin manually toggles it on.
-watch(
-  () => form.affiliate_enabled,
-  (enabled, prev) => {
-    if (enabled && !prev) {
-      loadAffiliateUsers();
-    }
-  },
-);
-
 // bypass_registration 与身份同步三开关仅在 internal_only 模式下生效。切换 policy 到其它值时，
 // 立即把相关字段重置为 false，避免保存请求里残留旧值。后端 admin handler 与
 // 配置加载层都有 coerce 兜底，这里是 UX 层的同步而非安全防线。

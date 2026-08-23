@@ -139,7 +139,7 @@ func TestEvaluateOpenAIFastPolicy_ScopeFiltersOAuth(t *testing.T) {
 	require.Equal(t, BetaPolicyActionPass, action)
 }
 
-func TestEvaluateOpenAIFastPolicy_UserScopedRuleOverridesGlobalRule(t *testing.T) {
+func TestEvaluateOpenAIFastPolicy_IgnoresLegacyUserIDs(t *testing.T) {
 	settings := &OpenAIFastPolicySettings{
 		Rules: []OpenAIFastPolicyRule{
 			{
@@ -160,7 +160,7 @@ func TestEvaluateOpenAIFastPolicy_UserScopedRuleOverridesGlobalRule(t *testing.T
 
 	allowedUserCtx := context.WithValue(context.Background(), ctxkey.UserID, int64(42))
 	action, _ := svc.evaluateOpenAIFastPolicy(allowedUserCtx, account, "gpt-5.5", OpenAIFastTierPriority)
-	require.Equal(t, BetaPolicyActionPass, action)
+	require.Equal(t, BetaPolicyActionFilter, action)
 
 	otherUserCtx := context.WithValue(context.Background(), ctxkey.UserID, int64(43))
 	action, _ = svc.evaluateOpenAIFastPolicy(otherUserCtx, account, "gpt-5.5", OpenAIFastTierPriority)
@@ -211,7 +211,7 @@ func TestApplyOpenAIFastPolicyToBody_ExplicitFilterRemovesField(t *testing.T) {
 	require.NotContains(t, string(updated), `"service_tier"`)
 }
 
-func TestApplyOpenAIFastPolicyToBody_UserScopedRuleOverridesGlobalRule(t *testing.T) {
+func TestApplyOpenAIFastPolicyToBody_IgnoresLegacyUserIDs(t *testing.T) {
 	settings := &OpenAIFastPolicySettings{
 		Rules: []OpenAIFastPolicyRule{
 			{
@@ -234,7 +234,7 @@ func TestApplyOpenAIFastPolicyToBody_UserScopedRuleOverridesGlobalRule(t *testin
 	allowedUserCtx := context.WithValue(context.Background(), ctxkey.UserID, int64(42))
 	updated, err := svc.applyOpenAIFastPolicyToBody(allowedUserCtx, account, "gpt-5.5", body)
 	require.NoError(t, err)
-	require.Equal(t, "priority", gjson.GetBytes(updated, "service_tier").String())
+	require.NotContains(t, string(updated), `"service_tier"`)
 
 	otherUserCtx := context.WithValue(context.Background(), ctxkey.UserID, int64(43))
 	updated, err = svc.applyOpenAIFastPolicyToBody(otherUserCtx, account, "gpt-5.5", body)
@@ -372,28 +372,8 @@ func TestSetOpenAIFastPolicySettings_Validation(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	// Non-positive and duplicate user IDs are rejected.
-	err = svc.SetOpenAIFastPolicySettings(context.Background(), &OpenAIFastPolicySettings{
-		Rules: []OpenAIFastPolicyRule{{
-			ServiceTier: OpenAIFastTierPriority,
-			Action:      BetaPolicyActionPass,
-			Scope:       BetaPolicyScopeAll,
-			UserIDs:     []int64{0},
-		}},
-	})
-	require.Error(t, err)
-
-	err = svc.SetOpenAIFastPolicySettings(context.Background(), &OpenAIFastPolicySettings{
-		Rules: []OpenAIFastPolicyRule{{
-			ServiceTier: OpenAIFastTierPriority,
-			Action:      BetaPolicyActionPass,
-			Scope:       BetaPolicyScopeAll,
-			UserIDs:     []int64{42, 42},
-		}},
-	})
-	require.Error(t, err)
-
-	// Valid settings persisted
+	// Legacy user selectors are accepted for rolling compatibility but stripped
+	// before persistence because fast policy is system-wide.
 	err = svc.SetOpenAIFastPolicySettings(context.Background(), &OpenAIFastPolicySettings{
 		Rules: []OpenAIFastPolicyRule{{
 			ServiceTier: OpenAIFastTierPriority,
@@ -409,5 +389,5 @@ func TestSetOpenAIFastPolicySettings_Validation(t *testing.T) {
 	require.Len(t, got.Rules, 1)
 	require.Equal(t, OpenAIFastTierPriority, got.Rules[0].ServiceTier)
 	require.Equal(t, OpenAIFastPolicyActionForcePriority, got.Rules[0].Action)
-	require.Equal(t, []int64{42, 43}, got.Rules[0].UserIDs)
+	require.Empty(t, got.Rules[0].UserIDs)
 }

@@ -346,6 +346,18 @@ func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
 	}
 }
 
+func TestLoadBindsAdminEmailEnvironmentToRuntimeIdentity(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	configFile := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(configFile, []byte("default:\n  admin_email: legacy-admin@example.com\n"), 0o600))
+	t.Setenv("CONFIG_FILE", configFile)
+	t.Setenv("ADMIN_EMAIL", "env-admin@example.com")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "env-admin@example.com", cfg.Default.AdminEmail)
+}
+
 func TestNormalizeRunMode(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -570,19 +582,6 @@ func TestLoadOpenAICompactModelFromEnv(t *testing.T) {
 	require.Equal(t, "gpt-5.3-codex", cfg.Gateway.OpenAICompactModel)
 }
 
-func TestLoadDefaultGrokFreeQuotaSoftGate(t *testing.T) {
-	resetViperWithJWTSecret(t)
-
-	cfg, err := Load()
-	require.NoError(t, err)
-	require.False(t, cfg.Gateway.Grok.PasswordAuthEnabled)
-	require.True(t, cfg.Gateway.Grok.FreeQuotaSoftGateEnabled)
-	require.Equal(t, int64(500_000), cfg.Gateway.Grok.FreeQuotaTokenLimit)
-	require.Equal(t, 95, cfg.Gateway.Grok.FreeQuotaSoftGatePercent)
-	require.Equal(t, 24, cfg.Gateway.Grok.FreeQuotaWindowHours)
-	require.Equal(t, 60, cfg.Gateway.Grok.FreeQuotaStatsCacheSeconds)
-}
-
 func TestLoadDefaultOpenAIHTTP2Enabled(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
@@ -804,18 +803,25 @@ func TestLoadDefaultSecurityToggles(t *testing.T) {
 		t.Fatalf("ResponseHeaders.Enabled = false, want true")
 	}
 
-	wantHosts := []string{
+	retiredHosts := []string{
+		"api.x.ai",
+		"accounts.x.ai",
+		"cli-chat-proxy.grok.com",
 		"api.kimi.com",
 		"api.moonshot.ai",
 		"api.moonshot.cn",
+		"open.bigmodel.cn",
+		"api.deepseek.com",
+		"generativelanguage.googleapis.com",
+		"cloudcode-pa.googleapis.com",
 	}
 	hostSet := make(map[string]struct{}, len(cfg.Security.URLAllowlist.UpstreamHosts))
 	for _, h := range cfg.Security.URLAllowlist.UpstreamHosts {
 		hostSet[h] = struct{}{}
 	}
-	for _, want := range wantHosts {
-		if _, ok := hostSet[want]; !ok {
-			t.Fatalf("URLAllowlist.UpstreamHosts missing %q; got %v", want, cfg.Security.URLAllowlist.UpstreamHosts)
+	for _, retired := range retiredHosts {
+		if _, ok := hostSet[retired]; ok {
+			t.Fatalf("URLAllowlist.UpstreamHosts contains retired provider host %q; got %v", retired, cfg.Security.URLAllowlist.UpstreamHosts)
 		}
 	}
 }

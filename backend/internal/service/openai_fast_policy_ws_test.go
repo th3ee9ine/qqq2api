@@ -68,7 +68,7 @@ func TestWSResponseCreate_ExplicitFilterStripsServiceTier(t *testing.T) {
 	require.NotContains(t, string(updated), `"service_tier"`)
 }
 
-func TestWSResponseCreate_UserScopedRuleOverridesGlobalRule(t *testing.T) {
+func TestWSResponseCreate_IgnoresLegacyUserIDs(t *testing.T) {
 	settings := &OpenAIFastPolicySettings{
 		Rules: []OpenAIFastPolicyRule{
 			{
@@ -92,7 +92,7 @@ func TestWSResponseCreate_UserScopedRuleOverridesGlobalRule(t *testing.T) {
 	updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(allowedUserCtx, account, "gpt-5.5", frame)
 	require.NoError(t, err)
 	require.Nil(t, blocked)
-	require.Equal(t, "priority", gjson.GetBytes(updated, "service_tier").String())
+	require.NotContains(t, string(updated), `"service_tier"`)
 
 	otherUserCtx := context.WithValue(context.Background(), ctxkey.UserID, int64(43))
 	updated, blocked, err = svc.applyOpenAIFastPolicyToWSResponseCreate(otherUserCtx, account, "gpt-5.5", frame)

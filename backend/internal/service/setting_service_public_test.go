@@ -52,19 +52,83 @@ func (s *settingPublicRepoStub) Delete(ctx context.Context, key string) error {
 	panic("unexpected Delete call")
 }
 
-func TestSettingService_GetPublicSettings_ExposesRegistrationEmailSuffixWhitelist(t *testing.T) {
+func TestSettingService_GetPublicSettings_ForcesRetiredFeaturesOff(t *testing.T) {
 	repo := &settingPublicRepoStub{
 		values: map[string]string{
-			SettingKeyRegistrationEnabled:              "true",
-			SettingKeyEmailVerifyEnabled:               "true",
-			SettingKeyRegistrationEmailSuffixWhitelist: `["@EXAMPLE.com"," @foo.bar ","*.EDU.CN","@invalid_domain",""]`,
+			SettingKeyRegistrationEnabled:                 "true",
+			SettingKeyEmailVerifyEnabled:                  "true",
+			SettingKeyRegistrationEmailSuffixWhitelist:    `["@EXAMPLE.com"," @foo.bar ","*.EDU.CN","@invalid_domain",""]`,
+			SettingKeyForceEmailOnThirdPartySignup:        "true",
+			SettingKeyRegistrationEmailDomainQuotaEnabled: "true",
+			SettingKeyPromoCodeEnabled:                    "true",
+			SettingKeyPasswordResetEnabled:                "true",
+			SettingKeyInvitationCodeEnabled:               "true",
+			SettingKeyPasskeyEnabled:                      "true",
+			SettingKeyLoginAgreementEnabled:               "true",
+			SettingKeyPurchaseSubscriptionEnabled:         "true",
+			SettingKeyPurchaseSubscriptionURL:             "https://buy.example.com",
+			SettingPaymentEnabled:                         "true",
+			SettingKeyLinuxDoConnectEnabled:               "true",
+			SettingKeyDingTalkConnectEnabled:              "true",
+			SettingKeyOIDCConnectEnabled:                  "true",
+			SettingKeyGitHubOAuthEnabled:                  "true",
+			SettingKeyGoogleOAuthEnabled:                  "true",
+			SettingKeyWeChatConnectEnabled:                "true",
+			SettingKeyWeChatConnectOpenEnabled:            "true",
+			SettingKeyWeChatConnectMPEnabled:              "true",
+			SettingKeyWeChatConnectMobileEnabled:          "true",
+			SettingKeyBalanceLowNotifyEnabled:             "true",
+			SettingKeyBalanceLowNotifyThreshold:           "10",
+			SettingKeyBalanceLowNotifyRechargeURL:         "https://recharge.example.com",
+			SettingKeyAccountQuotaNotifyEnabled:           "true",
+			SettingKeyChannelMonitorEnabled:               "true",
+			SettingKeyChannelMonitorHideThroughput:        "true",
+			SettingKeyChannelMonitorShowQuota:             "true",
+			SettingKeyAvailableChannelsEnabled:            "true",
+			SettingKeyModelPlazaEnabled:                   "true",
+			SettingKeyModelPlazaRequireAuth:               "true",
+			SettingKeyAffiliateEnabled:                    "true",
+			SettingKeyAllowUserViewErrorRequests:          "true",
 		},
 	}
 	svc := NewSettingService(repo, &config.Config{})
 
 	settings, err := svc.GetPublicSettings(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []string{"@example.com", "@foo.bar", "*.edu.cn"}, settings.RegistrationEmailSuffixWhitelist)
+	require.False(t, settings.RegistrationEnabled)
+	require.False(t, settings.EmailVerifyEnabled)
+	require.False(t, settings.ForceEmailOnThirdPartySignup)
+	require.Empty(t, settings.RegistrationEmailSuffixWhitelist)
+	require.False(t, settings.RegistrationEmailDomainQuotaEnabled)
+	require.False(t, settings.PromoCodeEnabled)
+	require.False(t, settings.PasswordResetEnabled)
+	require.False(t, settings.InvitationCodeEnabled)
+	require.False(t, settings.PasskeyEnabled)
+	require.False(t, settings.LoginAgreementEnabled)
+	require.False(t, settings.PurchaseSubscriptionEnabled)
+	require.Empty(t, settings.PurchaseSubscriptionURL)
+	require.False(t, settings.PaymentEnabled)
+	require.False(t, settings.LinuxDoOAuthEnabled)
+	require.False(t, settings.DingTalkOAuthEnabled)
+	require.False(t, settings.OIDCOAuthEnabled)
+	require.False(t, settings.GitHubOAuthEnabled)
+	require.False(t, settings.GoogleOAuthEnabled)
+	require.False(t, settings.WeChatOAuthEnabled)
+	require.False(t, settings.WeChatOAuthOpenEnabled)
+	require.False(t, settings.WeChatOAuthMPEnabled)
+	require.False(t, settings.WeChatOAuthMobileEnabled)
+	require.False(t, settings.BalanceLowNotifyEnabled)
+	require.False(t, settings.AccountQuotaNotifyEnabled)
+	require.Zero(t, settings.BalanceLowNotifyThreshold)
+	require.Empty(t, settings.BalanceLowNotifyRechargeURL)
+	require.False(t, settings.ChannelMonitorEnabled)
+	require.False(t, settings.ChannelMonitorHideThroughput)
+	require.False(t, settings.ChannelMonitorShowQuota)
+	require.False(t, settings.AvailableChannelsEnabled)
+	require.False(t, settings.ModelPlazaEnabled)
+	require.False(t, settings.ModelPlazaRequireAuth)
+	require.False(t, settings.AffiliateEnabled)
+	require.False(t, settings.AllowUserViewErrorRequests)
 }
 
 func TestSettingService_GetPublicSettings_ExposesTablePreferences(t *testing.T) {
@@ -106,7 +170,7 @@ func TestSettingService_ChannelMonitorHideThroughputDefaultsToPrivate(t *testing
 	require.True(t, missing.HideThroughput)
 	public, err := NewSettingService(&settingPublicRepoStub{values: map[string]string{}}, &config.Config{}).GetPublicSettings(context.Background())
 	require.NoError(t, err)
-	require.True(t, public.ChannelMonitorHideThroughput)
+	require.False(t, public.ChannelMonitorHideThroughput, "retired public monitor flags stay disabled")
 
 	for _, value := range []string{"false", "0", "off", "disabled"} {
 		runtime := NewSettingService(&settingPublicRepoStub{values: map[string]string{
@@ -139,7 +203,7 @@ func TestSettingService_ChannelMonitorShowQuotaFailsClosed(t *testing.T) {
 	}
 }
 
-func TestSettingService_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t *testing.T) {
+func TestSettingService_GetPublicSettings_DoesNotExposeForceEmailOnThirdPartySignup(t *testing.T) {
 	repo := &settingPublicRepoStub{
 		values: map[string]string{
 			SettingKeyForceEmailOnThirdPartySignup: "true",
@@ -149,10 +213,10 @@ func TestSettingService_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t 
 
 	settings, err := svc.GetPublicSettings(context.Background())
 	require.NoError(t, err)
-	require.True(t, settings.ForceEmailOnThirdPartySignup)
+	require.False(t, settings.ForceEmailOnThirdPartySignup)
 }
 
-func TestSettingService_GetPublicSettings_ExposesAllowUserViewErrorRequests(t *testing.T) {
+func TestSettingService_GetPublicSettings_DoesNotExposeUserErrorRequests(t *testing.T) {
 	repo := &settingPublicRepoStub{
 		values: map[string]string{
 			SettingKeyAllowUserViewErrorRequests: "true",
@@ -162,10 +226,10 @@ func TestSettingService_GetPublicSettings_ExposesAllowUserViewErrorRequests(t *t
 
 	settings, err := svc.GetPublicSettings(context.Background())
 	require.NoError(t, err)
-	require.True(t, settings.AllowUserViewErrorRequests)
+	require.False(t, settings.AllowUserViewErrorRequests)
 }
 
-func TestSettingService_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *testing.T) {
+func TestSettingService_GetPublicSettings_DoesNotExposeWeChatOAuthModeCapabilities(t *testing.T) {
 	svc := NewSettingService(&settingPublicRepoStub{
 		values: map[string]string{
 			SettingKeyWeChatConnectEnabled:             "true",
@@ -182,9 +246,9 @@ func TestSettingService_GetPublicSettings_ExposesWeChatOAuthModeCapabilities(t *
 
 	settings, err := svc.GetPublicSettings(context.Background())
 	require.NoError(t, err)
-	require.True(t, settings.WeChatOAuthEnabled)
-	require.True(t, settings.WeChatOAuthOpenEnabled)
-	require.True(t, settings.WeChatOAuthMPEnabled)
+	require.False(t, settings.WeChatOAuthEnabled)
+	require.False(t, settings.WeChatOAuthOpenEnabled)
+	require.False(t, settings.WeChatOAuthMPEnabled)
 }
 
 func TestSettingService_GetPublicSettings_DoesNotExposeMobileOnlyWeChatAsWebOAuthAvailable(t *testing.T) {
@@ -204,10 +268,10 @@ func TestSettingService_GetPublicSettings_DoesNotExposeMobileOnlyWeChatAsWebOAut
 	require.False(t, settings.WeChatOAuthEnabled)
 	require.False(t, settings.WeChatOAuthOpenEnabled)
 	require.False(t, settings.WeChatOAuthMPEnabled)
-	require.True(t, settings.WeChatOAuthMobileEnabled)
+	require.False(t, settings.WeChatOAuthMobileEnabled)
 }
 
-func TestSettingService_GetPublicSettings_FallsBackToConfigForWeChatOAuthCapabilities(t *testing.T) {
+func TestSettingService_GetPublicSettings_DoesNotFallBackToConfigForRetiredWeChatOAuth(t *testing.T) {
 	svc := NewSettingService(&settingPublicRepoStub{values: map[string]string{}}, &config.Config{
 		WeChat: config.WeChatConnectConfig{
 			Enabled:             true,
@@ -220,8 +284,8 @@ func TestSettingService_GetPublicSettings_FallsBackToConfigForWeChatOAuthCapabil
 
 	settings, err := svc.GetPublicSettings(context.Background())
 	require.NoError(t, err)
-	require.True(t, settings.WeChatOAuthEnabled)
-	require.True(t, settings.WeChatOAuthOpenEnabled)
+	require.False(t, settings.WeChatOAuthEnabled)
+	require.False(t, settings.WeChatOAuthOpenEnabled)
 	require.False(t, settings.WeChatOAuthMPEnabled)
 	require.False(t, settings.WeChatOAuthMobileEnabled)
 }

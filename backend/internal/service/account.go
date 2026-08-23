@@ -179,7 +179,7 @@ func (a *Account) EffectiveLoadFactor() int {
 }
 
 func (a *Account) IsSchedulable() bool {
-	if !a.IsActive() || !a.Schedulable {
+	if a == nil || !IsActiveAccountPlatform(a.Platform) || !a.IsActive() || !a.Schedulable {
 		return false
 	}
 	now := time.Now()

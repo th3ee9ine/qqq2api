@@ -34,6 +34,10 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 			return decision, fmt.Errorf("list composite routes: %w", err)
 		}
 		if route, ok := matchCompositeRoute(routes, model, endpoint); ok {
+			if !IsActiveAccountPlatform(route.TargetPlatform) {
+				decision.Reason = "matched route targets an unsupported platform"
+				return decision, nil
+			}
 			upstreamModel := strings.TrimSpace(route.UpstreamModel)
 			if upstreamModel == "" {
 				upstreamModel = model
@@ -51,7 +55,7 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 		}
 	}
 
-	if platform, ok := DetectModelPlatform(model); ok {
+	if platform, ok := DetectModelPlatform(model); ok && IsActiveAccountPlatform(platform) {
 		return CompositeRouteDecision{
 			Matched:        true,
 			Source:         CompositeRouteSourceDetector,

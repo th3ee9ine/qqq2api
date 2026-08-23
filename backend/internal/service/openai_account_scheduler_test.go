@@ -789,7 +789,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_AlphaSearchAllowsAPIKey
 	require.Equal(t, int64(38001), selection.Account.ID)
 }
 
-func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_AllowsGrokChatAccount(t *testing.T) {
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_RejectsRetiredGrokChatAccount(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 
 	ctx := context.Background()
@@ -814,7 +814,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_AllowsG
 		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
 	}
 
-	selection, decision, err := svc.SelectAccountWithSchedulerForCapability(
+	selection, _, err := svc.SelectAccountWithSchedulerForCapability(
 		ctx,
 		&groupID,
 		"",
@@ -828,14 +828,11 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_AllowsG
 		false,
 		PlatformGrok,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, selection)
-	require.NotNil(t, selection.Account)
-	require.Equal(t, int64(36041), selection.Account.ID)
-	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.Error(t, err)
+	require.Nil(t, selection)
 }
 
-func TestOpenAIGatewayService_SelectAccountWithScheduler_GrokMediaCapabilityFiltersIneligibleAccounts(t *testing.T) {
+func TestOpenAIGatewayService_SelectAccountWithScheduler_RejectsRetiredGrokCapabilities(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 
 	ctx := context.Background()
@@ -861,43 +858,36 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_GrokMediaCapabilityFilt
 		}
 	}
 
-	t.Run("media generation skips higher priority ineligible account", func(t *testing.T) {
-		selection, _, err := newService([]Account{ineligible, eligible}).SelectAccountWithSchedulerForCapability(
-			ctx, &groupID, "", "", "grok-imagine-video", nil,
-			OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityGrokMediaGeneration,
-			false, false, false, PlatformGrok,
-		)
+	for _, tc := range []struct {
+		name       string
+		accounts   []Account
+		model      string
+		capability OpenAIEndpointCapability
+	}{
+		{
+			name:       "media generation",
+			accounts:   []Account{ineligible, eligible},
+			model:      "grok-imagine-video",
+			capability: OpenAIEndpointCapabilityGrokMediaGeneration,
+		},
+		{
+			name:       "chat completions",
+			accounts:   []Account{ineligible},
+			model:      "grok-4.3",
+			capability: OpenAIEndpointCapabilityChatCompletions,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			selection, _, err := newService(tc.accounts).SelectAccountWithSchedulerForCapability(
+				ctx, &groupID, "", "", tc.model, nil,
+				OpenAIUpstreamTransportHTTPSSE, tc.capability,
+				false, false, false, PlatformGrok,
+			)
 
-		require.NoError(t, err)
-		require.NotNil(t, selection)
-		require.NotNil(t, selection.Account)
-		require.Equal(t, eligible.ID, selection.Account.ID)
-	})
-
-	t.Run("media generation fails closed when all accounts are ineligible", func(t *testing.T) {
-		selection, _, err := newService([]Account{ineligible}).SelectAccountWithSchedulerForCapability(
-			ctx, &groupID, "", "", "grok-imagine-video", nil,
-			OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityGrokMediaGeneration,
-			false, false, false, PlatformGrok,
-		)
-
-		require.Error(t, err)
-		require.ErrorIs(t, err, ErrNoAvailableAccounts)
-		require.Nil(t, selection)
-	})
-
-	t.Run("chat remains routable on media-ineligible account", func(t *testing.T) {
-		selection, _, err := newService([]Account{ineligible}).SelectAccountWithSchedulerForCapability(
-			ctx, &groupID, "", "", "grok-4.3", nil,
-			OpenAIUpstreamTransportHTTPSSE, OpenAIEndpointCapabilityChatCompletions,
-			false, false, false, PlatformGrok,
-		)
-
-		require.NoError(t, err)
-		require.NotNil(t, selection)
-		require.NotNil(t, selection.Account)
-		require.Equal(t, ineligible.ID, selection.Account.ID)
-	})
+			require.Error(t, err)
+			require.Nil(t, selection)
+		})
+	}
 }
 
 // Regression #4599: when the advanced scheduler's load-balance initial filter

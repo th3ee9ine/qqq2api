@@ -45,15 +45,15 @@ func TestQuotaPlatformCompositeUsesResolvedOrForceOnly(t *testing.T) {
 	apiKey := &APIKey{Group: &Group{Platform: PlatformComposite}}
 
 	require.Equal(t, "", QuotaPlatform(context.Background(), apiKey))
-	require.Equal(t, PlatformGemini, QuotaPlatform(WithResolvedTargetPlatform(context.Background(), PlatformGemini), apiKey))
-	require.Equal(t, PlatformAntigravity, QuotaPlatform(context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity), apiKey))
+	require.Equal(t, "", QuotaPlatform(WithResolvedTargetPlatform(context.Background(), PlatformGemini), apiKey))
+	require.Equal(t, "", QuotaPlatform(context.WithValue(context.Background(), ctxkey.ForcePlatform, PlatformAntigravity), apiKey))
 
 	ctx := WithResolvedTargetPlatform(context.Background(), PlatformAnthropic)
 	ctx = context.WithValue(ctx, ctxkey.ForcePlatform, PlatformAntigravity)
-	require.Equal(t, PlatformAntigravity, QuotaPlatform(ctx, apiKey))
+	require.Equal(t, "", QuotaPlatform(ctx, apiKey))
 }
 
-func TestCompositeGroupSchedulerHasAllCanonicalPlatformBuckets(t *testing.T) {
+func TestCompositeGroupSchedulerHasOnlyActivePlatformBuckets(t *testing.T) {
 	seen := make(map[string]struct{})
 	for _, bucket := range schedulerCanonicalBuckets(99) {
 		seen[bucket.Platform] = struct{}{}
@@ -63,14 +63,14 @@ func TestCompositeGroupSchedulerHasAllCanonicalPlatformBuckets(t *testing.T) {
 		platforms = append(platforms, platform)
 	}
 	require.ElementsMatch(t,
-		[]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek},
+		[]string{PlatformAnthropic, PlatformOpenAI},
 		platforms,
 	)
 }
 
-func TestCompositeConcretePlatformsIncludeCNProviders(t *testing.T) {
+func TestCompositeConcretePlatformsExcludeRetiredProviders(t *testing.T) {
 	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
-		require.True(t, isConcreteRequestPlatform(platform))
-		require.True(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
+		require.False(t, isConcreteRequestPlatform(platform))
+		require.False(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
 	}
 }

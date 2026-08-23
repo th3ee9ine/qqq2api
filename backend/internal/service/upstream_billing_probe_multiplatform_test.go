@@ -11,15 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 探测资格：/v1/sub2api/billing 是 key 级端点，全部
-// 受支持平台（含国产供应商）的 API-key 账号都可开启探测；OAuth/Bedrock 无静态 Key 仍不合格。
-func TestUpstreamBillingProbeIdentityCoversAllAPIKeyPlatforms(t *testing.T) {
-	for _, platform := range []string{
-		PlatformOpenAI, PlatformGrok, PlatformAnthropic, PlatformGemini, PlatformAntigravity,
-		PlatformKimi, PlatformZhipu, PlatformDeepseek,
-	} {
+// 探测资格只覆盖仍在生产启用的平台；历史平台即使保留 API-key
+// 凭据也必须 fail closed。OAuth/Bedrock 无静态 Key，同样不合格。
+func TestUpstreamBillingProbeIdentityCoversActiveAPIKeyPlatformsOnly(t *testing.T) {
+	for _, platform := range []string{PlatformOpenAI, PlatformAnthropic} {
 		require.True(t, IsUpstreamBillingProbeIdentity(platform, AccountTypeAPIKey), platform)
 		require.True(t, isUpstreamBillingProbeAccount(&Account{Platform: platform, Type: AccountTypeAPIKey}), platform)
+	}
+	for _, platform := range []string{
+		PlatformGrok, PlatformGemini, PlatformAntigravity, PlatformKimi, PlatformZhipu, PlatformDeepseek,
+	} {
+		require.False(t, IsUpstreamBillingProbeIdentity(platform, AccountTypeAPIKey), platform)
+		require.False(t, isUpstreamBillingProbeAccount(&Account{Platform: platform, Type: AccountTypeAPIKey}), platform)
 	}
 	require.False(t, IsUpstreamBillingProbeIdentity(PlatformOpenAI, AccountTypeOAuth))
 	require.False(t, IsUpstreamBillingProbeIdentity(PlatformGrok, AccountTypeOAuth))
@@ -42,15 +45,15 @@ func upstreamBillingProbeValidBody() io.ReadCloser {
 	}`))
 }
 
-func TestUpstreamBillingProbeGrokAccountPersistsSnapshot(t *testing.T) {
+func TestUpstreamBillingProbeAnthropicRelayPersistsSnapshot(t *testing.T) {
 	account := &Account{
 		ID:          151,
-		Platform:    PlatformGrok,
+		Platform:    PlatformAnthropic,
 		Type:        AccountTypeAPIKey,
 		Status:      StatusActive,
 		Concurrency: 2,
 		Credentials: map[string]any{
-			"api_key":  "sk-grok-relay",
+			"api_key":  "sk-anthropic-relay",
 			"base_url": "https://relay.example/v1",
 		},
 	}
@@ -69,7 +72,7 @@ func TestUpstreamBillingProbeGrokAccountPersistsSnapshot(t *testing.T) {
 	require.Equal(t, UpstreamBillingProbeStatusOK, snapshot.Status)
 	require.Equal(t, 0.02, snapshot.Data["resolved_rate_multiplier"])
 	require.Equal(t, "https://relay.example/v1/sub2api/billing", upstream.lastReq.URL.String())
-	require.Equal(t, "Bearer sk-grok-relay", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "Bearer sk-anthropic-relay", upstream.lastReq.Header.Get("Authorization"))
 	// 非 OpenAI 平台探测使用默认传输画像。
 	require.Equal(t, HTTPUpstreamProfileDefault, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 
@@ -83,10 +86,10 @@ func TestUpstreamBillingProbeGrokAccountPersistsSnapshot(t *testing.T) {
 func TestUpstreamBillingProbeNonOpenAIWithoutBaseURLIsUnsupportedWithoutRequest(t *testing.T) {
 	account := &Account{
 		ID:          152,
-		Platform:    PlatformGrok,
+		Platform:    PlatformAnthropic,
 		Type:        AccountTypeAPIKey,
 		Status:      StatusActive,
-		Credentials: map[string]any{"api_key": "sk-grok-official"},
+		Credentials: map[string]any{"api_key": "sk-anthropic-official"},
 	}
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}
 	upstream := &httpUpstreamRecorder{}
@@ -111,28 +114,19 @@ func TestUpstreamBillingProbeOfficialAPIBaseURLIsUnsupportedWithoutRequest(t *te
 		{PlatformAnthropic, "https://api.anthropic.com:443"},
 		{PlatformAnthropic, "https://api.anthropic.com./"},
 		{PlatformAnthropic, "HTTPS://API.ANTHROPIC.COM/"},
-		{PlatformGemini, "https://generativelanguage.googleapis.com"},
-		{PlatformAntigravity, "https://cloudcode-pa.googleapis.com"},
-		{PlatformGrok, "https://api.x.ai/v1"},
-		{PlatformGrok, "https://us-east-1.api.x.ai/v1"},
-		{PlatformGrok, "https://eu-west-1.api.x.ai/v1"},
-		{PlatformGrok, "https://cli-chat-proxy.grok.com/v1"},
 		// 跨平台官方域同样必无该端点，一并拦截。
 		{PlatformAnthropic, "https://api.x.ai/v1"},
-		{PlatformGrok, "https://api.openai.com"},
+		{PlatformAnthropic, "https://api.openai.com"},
 		// Ollama Cloud 是本仓一等支持配置（platform openai/anthropic +
 		// base_url https://ollama.com/v1），同为官方 API，不能拿 Key 去空探。
 		{PlatformAnthropic, "https://ollama.com/v1"},
 		{PlatformAnthropic, "https://ollama.com"},
 		{PlatformAnthropic, "https://www.ollama.com/v1"},
-		// 国产供应商官方域（含各协议端点）同样是官方 API，创建即开探测也不发请求。
-		{PlatformKimi, "https://api.moonshot.cn/v1"},
-		{PlatformKimi, "https://api.moonshot.cn/anthropic"},
-		{PlatformKimi, "https://api.kimi.com/coding"},
-		{PlatformZhipu, "https://open.bigmodel.cn/api/paas/v4"},
-		{PlatformZhipu, "https://open.bigmodel.cn/api/anthropic"},
-		{PlatformDeepseek, "https://api.deepseek.com"},
-		{PlatformDeepseek, "https://api.deepseek.com/anthropic"},
+		// 退役供应商的官方域仍是禁止发送 Anthropic 密钥的目标。
+		{PlatformAnthropic, "https://api.moonshot.cn/v1"},
+		{PlatformAnthropic, "https://api.kimi.com/coding"},
+		{PlatformAnthropic, "https://open.bigmodel.cn/api/anthropic"},
+		{PlatformAnthropic, "https://api.deepseek.com/anthropic"},
 	}
 	for i, tc := range cases {
 		account := &Account{
@@ -212,7 +206,7 @@ func TestUpstreamBillingProbeOpenAIDefaultBaseURLPreserved(t *testing.T) {
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 }
 
-func TestUpstreamBillingProbeSetAccountEnabledAcceptsGrokAPIKey(t *testing.T) {
+func TestUpstreamBillingProbeSetAccountEnabledRejectsRetiredGrokAccounts(t *testing.T) {
 	grokAPIKey := &Account{
 		ID:          151,
 		Platform:    PlatformGrok,
@@ -227,9 +221,10 @@ func TestUpstreamBillingProbeSetAccountEnabledAcceptsGrokAPIKey(t *testing.T) {
 	}}
 	svc := newUpstreamBillingProbeTestService(repo, &upstreamBillingProbeHTTPStub{}, &upstreamBillingProbeSettingRepo{})
 
-	require.NoError(t, svc.SetAccountEnabled(context.Background(), grokAPIKey.ID, true))
-	require.Equal(t, true, repo.accounts[grokAPIKey.ID].Extra[UpstreamBillingProbeEnabledExtraKey])
+	err := svc.SetAccountEnabled(context.Background(), grokAPIKey.ID, true)
+	require.ErrorIs(t, err, ErrUpstreamBillingProbeAccountInvalid)
+	require.NotContains(t, repo.accounts[grokAPIKey.ID].Extra, UpstreamBillingProbeEnabledExtraKey)
 
-	err := svc.SetAccountEnabled(context.Background(), grokOAuth.ID, true)
+	err = svc.SetAccountEnabled(context.Background(), grokOAuth.ID, true)
 	require.ErrorIs(t, err, ErrUpstreamBillingProbeAccountInvalid)
 }

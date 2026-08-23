@@ -8,6 +8,7 @@ type NavigationGuard = (
 
 const routerHarness = vi.hoisted(() => ({
   guard: null as NavigationGuard | null,
+  routes: [] as Array<Record<string, any>>,
 }))
 
 const authStore = vi.hoisted(() => ({
@@ -32,13 +33,16 @@ const appStore = vi.hoisted(() => ({
 
 vi.mock('vue-router', () => ({
   createWebHistory: vi.fn(() => ({})),
-  createRouter: vi.fn(() => ({
-    beforeEach: vi.fn((guard: NavigationGuard) => {
-      routerHarness.guard = guard
-    }),
-    afterEach: vi.fn(),
-    onError: vi.fn(),
-  })),
+  createRouter: vi.fn((options: { routes: Array<Record<string, any>> }) => {
+    routerHarness.routes = options.routes
+    return {
+      beforeEach: vi.fn((guard: NavigationGuard) => {
+        routerHarness.guard = guard
+      }),
+      afterEach: vi.fn(),
+      onError: vi.fn(),
+    }
+  }),
 }))
 
 vi.mock('@/stores/auth', () => ({
@@ -77,14 +81,6 @@ vi.mock('@/composables/useRoutePrefetch', () => ({
   }),
 }))
 
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise
-  })
-  return { promise, resolve }
-}
-
 function runGuard(meta: Record<string, unknown>, path: string) {
   if (!routerHarness.guard) {
     throw new Error('router guard was not registered')
@@ -112,38 +108,26 @@ describe('feature route guard', () => {
 
   beforeEach(() => {
     authStore.isAuthenticated = true
-    authStore.isAdmin = false
+    authStore.isAdmin = true
     authStore.isSimpleMode = false
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
     appStore.fetchPublicSettings.mockReset()
   })
 
-  it('waits for the first public-settings request before deciding payment access', async () => {
-    const deferred = createDeferred<{ payment_enabled: boolean }>()
-    appStore.fetchPublicSettings.mockImplementation(async () => {
-      const settings = await deferred.promise
-      appStore.cachedPublicSettings = settings
-      appStore.publicSettingsLoaded = true
-      return settings
-    })
+  it('does not register model plaza and redirects its legacy URL', async () => {
+    expect(routerHarness.routes.some((route) => route.path === '/model-plaza')).toBe(false)
 
-    const { navigation, next } = runGuard({ requiresPayment: true }, '/purchase')
-
-    await vi.waitFor(() => expect(appStore.fetchPublicSettings).toHaveBeenCalledTimes(1))
-    expect(next).not.toHaveBeenCalled()
-
-    deferred.resolve({ payment_enabled: true })
+    const { navigation, next } = runGuard({ requiresAuth: false }, '/model-plaza')
     await navigation
+
     expect(next).toHaveBeenCalledOnce()
-    expect(next).toHaveBeenCalledWith()
+    expect(next).toHaveBeenCalledWith('/admin/dashboard')
   })
 
   it.each([
-    ['payment', { requiresPayment: true }, '/purchase'],
     ['risk control', { requiresRiskControl: true }, '/admin/risk-control'],
   ])('does not treat a failed %s settings load as explicitly disabled', async (_name, meta, path) => {
-    authStore.isAdmin = meta.requiresRiskControl === true
     appStore.fetchPublicSettings.mockResolvedValue(null)
 
     const { navigation, next } = runGuard(meta, path)
@@ -155,7 +139,6 @@ describe('feature route guard', () => {
   })
 
   it.each([
-    ['payment', { requiresPayment: true }, { payment_enabled: false }, '/dashboard'],
     [
       'risk control',
       { requiresRiskControl: true },
@@ -163,7 +146,7 @@ describe('feature route guard', () => {
       '/admin/settings',
     ],
   ])('redirects when loaded settings explicitly disable %s', async (_name, meta, settings, target) => {
-    authStore.isAdmin = meta.requiresRiskControl === true
+    authStore.isAdmin = true
     appStore.cachedPublicSettings = settings
     appStore.publicSettingsLoaded = true
 

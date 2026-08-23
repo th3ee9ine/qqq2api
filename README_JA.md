@@ -658,32 +658,6 @@ go generate ./cmd/server
 
 ---
 
-## Antigravity サポート
-
-Sub2API は [Antigravity](https://antigravity.so/) アカウントをサポートしています。認証後、Claude および Gemini モデル用の専用エンドポイントが利用可能になります。
-
-### 専用エンドポイント
-
-| エンドポイント | モデル |
-|----------|-------|
-| `/antigravity/v1/messages` | Claude モデル |
-| `/antigravity/v1beta/` | Gemini モデル |
-
-### Claude Code の設定
-
-```bash
-export ANTHROPIC_BASE_URL="http://localhost:8080/antigravity"
-export ANTHROPIC_AUTH_TOKEN="sk-xxx"
-```
-
-### ハイブリッドスケジューリングモード
-
-Antigravity アカウントはオプションの**ハイブリッドスケジューリング**をサポートしています。有効にすると、汎用エンドポイント `/v1/messages` および `/v1beta/` も Antigravity アカウントにリクエストをルーティングします。
-
-> **⚠️ 警告**: Anthropic Claude と Antigravity Claude は**同じ会話コンテキスト内で混在させることはできません**。グループを使用して適切に分離してください。
-
----
-
 ## プロジェクト構成
 
 ```

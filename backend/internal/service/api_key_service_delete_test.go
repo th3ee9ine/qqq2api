@@ -25,26 +25,28 @@ import (
 //   - deleteErr: 模拟 Delete 返回的错误
 //   - deletedIDs: 记录被调用删除的 API Key ID，用于断言验证
 type apiKeyRepoStub struct {
-	apiKey                 *APIKey // GetKeyAndOwnerID 的返回值
-	getByIDErr             error   // GetKeyAndOwnerID 的错误返回值
-	deleteErr              error   // Delete 的错误返回值
-	updateErr              error   // Update 的错误返回值
-	deletedIDs             []int64 // 记录已删除的 API Key ID 列表
-	updatedKeys            []APIKey
-	allowListByUserID      bool
-	listByUserIDKeys       []APIKey
-	listByUserIDErr        error
-	listByUserIDCalls      []int64
-	listByUserIDParams     []pagination.PaginationParams
-	listByUserIDFilters    []APIKeyListFilters
-	allowListAllByUserID   bool
-	listAllByUserIDKeys    []APIKey
-	listAllByUserIDErr     error
-	listAllByUserIDCalls   []int64
-	listAllByUserIDFilters []APIKeyListFilters
-	updateLastUsed         func(ctx context.Context, id int64, usedAt time.Time) error
-	touchedIDs             []int64
-	touchedUsedAts         []time.Time
+	apiKey                  *APIKey // GetKeyAndOwnerID 的返回值
+	getByIDErr              error   // GetKeyAndOwnerID 的错误返回值
+	deleteErr               error   // Delete 的错误返回值
+	updateErr               error   // Update 的错误返回值
+	deletedIDs              []int64 // 记录已删除的 API Key ID 列表
+	updatedKeys             []APIKey
+	allowListByUserID       bool
+	listByUserIDKeys        []APIKey
+	listByUserIDErr         error
+	listByUserIDCalls       []int64
+	listByUserIDParams      []pagination.PaginationParams
+	listByUserIDFilters     []APIKeyListFilters
+	allowListAllByUserID    bool
+	listAllByUserIDKeys     []APIKey
+	listAllByUserIDErr      error
+	listAllByUserIDCalls    []int64
+	listAllByUserIDFilters  []APIKeyListFilters
+	listAllCalls            int
+	listAllUnpaginatedCalls int
+	updateLastUsed          func(ctx context.Context, id int64, usedAt time.Time) error
+	touchedIDs              []int64
+	touchedUsedAts          []time.Time
 }
 
 // 以下方法在本测试中不应被调用，使用 panic 确保测试失败时能快速定位问题
@@ -123,6 +125,41 @@ func (s *apiKeyRepoStub) ListByUserID(ctx context.Context, userID int64, params 
 	}, nil
 }
 
+func (s *apiKeyRepoStub) ListAll(ctx context.Context, params pagination.PaginationParams, filters APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
+	if !s.allowListByUserID {
+		panic("unexpected ListAll call")
+	}
+	s.listAllCalls++
+	s.listByUserIDParams = append(s.listByUserIDParams, params)
+	s.listByUserIDFilters = append(s.listByUserIDFilters, filters)
+	if s.listByUserIDErr != nil {
+		return nil, nil, s.listByUserIDErr
+	}
+	keys := append([]APIKey(nil), s.listByUserIDKeys...)
+	return keys, &pagination.PaginationResult{
+		Total:    int64(len(keys)),
+		Page:     params.Page,
+		PageSize: params.PageSize,
+		Pages:    1,
+	}, nil
+}
+
+func (s *apiKeyRepoStub) ListAllUnpaginated(ctx context.Context, filters APIKeyListFilters) ([]APIKey, error) {
+	if !s.allowListAllByUserID {
+		panic("unexpected ListAllUnpaginated call")
+	}
+	s.listAllUnpaginatedCalls++
+	s.listAllByUserIDFilters = append(s.listAllByUserIDFilters, filters)
+	if s.listAllByUserIDErr != nil {
+		return nil, s.listAllByUserIDErr
+	}
+	source := s.listByUserIDKeys
+	if s.listAllByUserIDKeys != nil {
+		source = s.listAllByUserIDKeys
+	}
+	return filterAPIKeyStubKeys(0, source, filters), nil
+}
+
 func (s *apiKeyRepoStub) ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error) {
 	if !s.allowListAllByUserID {
 		panic("unexpected ListAllByUserID call")
@@ -139,13 +176,10 @@ func (s *apiKeyRepoStub) ListAllByUserID(ctx context.Context, userID int64, filt
 	return filterAPIKeyStubKeys(userID, source, filters), nil
 }
 
-func filterAPIKeyStubKeys(userID int64, keys []APIKey, filters APIKeyListFilters) []APIKey {
+func filterAPIKeyStubKeys(_ int64, keys []APIKey, filters APIKeyListFilters) []APIKey {
 	result := make([]APIKey, 0, len(keys))
 	search := strings.ToLower(filters.Search)
 	for _, key := range keys {
-		if key.UserID != userID {
-			continue
-		}
 		if search != "" &&
 			!strings.Contains(strings.ToLower(key.Name), search) &&
 			!strings.Contains(strings.ToLower(key.Key), search) {
@@ -290,34 +324,24 @@ func (s *apiKeyCacheStub) SubscribeAuthCacheInvalidation(ctx context.Context, ha
 	return nil
 }
 
-// TestApiKeyService_Delete_OwnerMismatch 测试非所有者尝试删除时返回权限错误。
-// 预期行为：
-//   - GetKeyAndOwnerID 返回所有者 ID 为 1
-//   - 调用者 userID 为 2（不匹配）
-//   - 返回 ErrInsufficientPerms 错误
-//   - Delete 方法不被调用
-//   - 缓存不被清除
-func TestApiKeyService_Delete_OwnerMismatch(t *testing.T) {
+// Global API Keys are not protected by the legacy owner column. The caller ID
+// is retained only as the administrator's technical cache subject.
+func TestApiKeyService_Delete_IgnoresLegacyOwner(t *testing.T) {
 	repo := &apiKeyRepoStub{
 		apiKey: &APIKey{ID: 10, UserID: 1, Key: "k"},
 	}
 	cache := &apiKeyCacheStub{}
 	svc := &APIKeyService{apiKeyRepo: repo, cache: cache}
 
-	err := svc.Delete(context.Background(), 10, 2) // API Key ID=10, 调用者 userID=2
-	require.ErrorIs(t, err, ErrInsufficientPerms)
-	require.Empty(t, repo.deletedIDs)   // 验证删除操作未被调用
-	require.Empty(t, cache.invalidated) // 验证缓存未被清除
-	require.Empty(t, cache.deleteAuthKeys)
+	err := svc.Delete(context.Background(), 10, 2)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10}, repo.deletedIDs)
+	require.Equal(t, []int64{2}, cache.invalidated)
+	require.Equal(t, []string{svc.authCacheKey("k")}, cache.deleteAuthKeys)
 }
 
-// TestApiKeyService_Delete_Success 测试所有者成功删除 API Key 的场景。
-// 预期行为：
-//   - GetKeyAndOwnerID 返回所有者 ID 为 7
-//   - 调用者 userID 为 7（匹配）
-//   - Delete 成功执行
-//   - 缓存被正确清除（使用 ownerID）
-//   - 返回 nil 错误
+// TestApiKeyService_Delete_Success covers the normal global deletion path and
+// cache invalidation for the administrator's technical subject.
 func TestApiKeyService_Delete_Success(t *testing.T) {
 	repo := &apiKeyRepoStub{
 		apiKey: &APIKey{ID: 42, UserID: 7, Key: "k"},
@@ -358,7 +382,7 @@ func TestAPIKeyService_List_FillsCurrentConcurrency(t *testing.T) {
 		allowListByUserID: true,
 		listByUserIDKeys: []APIKey{
 			{ID: 10, UserID: 7, Key: "sk-10", Name: "key-10"},
-			{ID: 11, UserID: 7, Key: "sk-11", Name: "key-11"},
+			{ID: 11, UserID: 99, Key: "sk-11", Name: "key-11"},
 		},
 	}
 	concurrency := NewConcurrencyService(&stubConcurrencyCacheForTest{
@@ -415,13 +439,13 @@ func TestAPIKeyService_List_SortByCurrentConcurrency(t *testing.T) {
 		SortOrder: "desc",
 	}, filters)
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 3}, apiKeyTestIDs(got))
-	require.Equal(t, int64(4), page.Total)
+	require.Equal(t, []int64{2, 1}, apiKeyTestIDs(got))
+	require.Equal(t, int64(5), page.Total)
 	require.Equal(t, 2, page.Page)
 	require.Equal(t, 2, page.PageSize)
-	require.Equal(t, 2, page.Pages)
+	require.Equal(t, 3, page.Pages)
 	require.Empty(t, repo.listByUserIDCalls)
-	require.Equal(t, []int64{7}, repo.listAllByUserIDCalls)
+	require.Equal(t, 1, repo.listAllUnpaginatedCalls)
 	require.Len(t, repo.listAllByUserIDFilters, 1)
 	require.Equal(t, filters.Search, repo.listAllByUserIDFilters[0].Search)
 	require.Equal(t, filters.Status, repo.listAllByUserIDFilters[0].Status)

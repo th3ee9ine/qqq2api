@@ -1203,6 +1203,9 @@ func (h *AccountHandler) PreviewFromCRS(c *gin.Context) {
 // refreshSingleAccount refreshes credentials for a single OAuth account.
 // Returns (updatedAccount, warning, error) where warning is used for Antigravity ProjectIDMissing scenario.
 func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *service.Account) (*service.Account, string, error) {
+	if account == nil || !service.IsActiveAccountPlatform(account.Platform) {
+		return nil, "", service.ErrPlatformRetired
+	}
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
@@ -2573,6 +2576,10 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		response.NotFound(c, "Account not found")
 		return
 	}
+	if !service.IsActiveAccountPlatform(account.Platform) {
+		response.ErrorFrom(c, service.ErrPlatformRetired)
+		return
+	}
 
 	// Handle OpenAI accounts
 	if account.IsOpenAI() {
@@ -2846,7 +2853,7 @@ func (h *AccountHandler) SyncUpstreamModelsPreview(c *gin.Context) {
 	response.Success(c, gin.H{"models": models})
 }
 
-// SetPrivacy handles setting privacy for a single OpenAI/Antigravity OAuth account
+// SetPrivacy handles setting privacy for a single OpenAI OAuth account.
 // POST /api/v1/admin/accounts/:id/set-privacy
 func (h *AccountHandler) SetPrivacy(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
@@ -2863,16 +2870,11 @@ func (h *AccountHandler) SetPrivacy(c *gin.Context) {
 		response.BadRequest(c, "Only OAuth accounts support privacy setting")
 		return
 	}
-	var mode string
-	switch account.Platform {
-	case service.PlatformOpenAI:
-		mode = h.adminService.ForceOpenAIPrivacy(c.Request.Context(), account)
-	case service.PlatformAntigravity:
-		mode = h.adminService.ForceAntigravityPrivacy(c.Request.Context(), account)
-	default:
-		response.BadRequest(c, "Only OpenAI and Antigravity OAuth accounts support privacy setting")
+	if !service.IsActiveAccountPlatform(account.Platform) || account.Platform != service.PlatformOpenAI {
+		response.ErrorFrom(c, service.ErrPlatformRetired)
 		return
 	}
+	mode := h.adminService.ForceOpenAIPrivacy(c.Request.Context(), account)
 	if mode == "" {
 		response.BadRequest(c, "Cannot set privacy: missing access_token")
 		return

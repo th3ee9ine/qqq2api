@@ -702,7 +702,6 @@ export interface CompositeRouteDecision {
 
 export interface ApiKey {
   id: number
-  user_id: number
   key: string
   name: string
   group_id: number | null
@@ -1785,11 +1784,6 @@ export interface RedeemCodeRequest {
 // ==================== Dashboard & Statistics ====================
 
 export interface DashboardStats {
-  // 用户统计
-  total_users: number
-  today_new_users: number // 今日新增用户数
-  active_users: number // 今日有请求的用户数
-  hourly_active_users: number // 当前小时活跃用户数（UTC）
   stats_updated_at: string // 统计更新时间（UTC RFC3339）
   stats_stale: boolean // 统计是否过期
 
@@ -1896,48 +1890,6 @@ export interface GroupStat {
   cost: number // 标准计费
   actual_cost: number // 实际扣除
   account_cost?: number // 账号成本（仅管理员接口返回）
-}
-
-export interface UserBreakdownItem {
-  user_id: number
-  email: string
-  requests: number
-  input_tokens: number
-  output_tokens: number
-  cache_tokens: number
-  total_tokens: number
-  cost: number
-  actual_cost: number
-  account_cost: number
-}
-
-export interface UserUsageTrendPoint {
-  date: string
-  user_id: number
-  email: string
-  username: string
-  requests: number
-  tokens: number
-  cost: number // 标准计费
-  actual_cost: number // 实际扣除
-}
-
-export interface UserSpendingRankingItem {
-  user_id: number
-  email: string
-  username: string
-  actual_cost: number
-  requests: number
-  tokens: number
-}
-
-export interface UserSpendingRankingResponse {
-  ranking: UserSpendingRankingItem[]
-  total_actual_cost: number
-  total_requests: number
-  total_tokens: number
-  start_date: string
-  end_date: string
 }
 
 export interface ApiKeyUsageTrendPoint {
@@ -2359,11 +2311,3 @@ export interface UpdateScheduledTestPlanRequest {
 
 // Payment types
 export type { SubscriptionPlan, PaymentOrder, CheckoutInfoResponse } from './payment'
-
-export type {
-  PlatformQuotaItem,
-  PlatformQuotaUpdateItem,
-  PlatformQuotaPlatform,
-  PlatformQuotaWindow,
-  PlatformQuotasResponse,
-} from '@/api/admin/users'

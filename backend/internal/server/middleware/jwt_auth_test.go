@@ -58,6 +58,7 @@ func newJWTTestEnv(users map[int64]*service.User) (*gin.Engine, *service.AuthSer
 	cfg := &config.Config{}
 	cfg.JWT.Secret = "test-jwt-secret-32bytes-long!!!"
 	cfg.JWT.AccessTokenExpireMinutes = 60
+	cfg.Default.AdminEmail = "admin@example.com"
 
 	userRepo := &stubJWTUserRepo{users: users}
 	authSvc := service.NewAuthService(nil, userRepo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -80,8 +81,8 @@ func newJWTTestEnv(users map[int64]*service.User) (*gin.Engine, *service.AuthSer
 func TestJWTAuth_ValidToken(t *testing.T) {
 	user := &service.User{
 		ID:           1,
-		Email:        "test@example.com",
-		Role:         "user",
+		Email:        "admin@example.com",
+		Role:         service.RoleAdmin,
 		Status:       service.StatusActive,
 		Concurrency:  5,
 		TokenVersion: 1,
@@ -101,14 +102,32 @@ func TestJWTAuth_ValidToken(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 	require.Equal(t, float64(1), body["user_id"])
-	require.Equal(t, "user", body["role"])
+	require.Equal(t, service.RoleAdmin, body["role"])
+}
+
+func TestJWTAuth_RejectsOtherDatabaseAdministrator(t *testing.T) {
+	otherAdmin := &service.User{
+		ID: 2, Email: "other-admin@example.com", Role: service.RoleAdmin,
+		Status: service.StatusActive, TokenVersion: 1,
+	}
+	router, authSvc := newJWTTestEnv(map[int64]*service.User{2: otherAdmin})
+	token, err := authSvc.GenerateToken(context.Background(), otherAdmin)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Contains(t, w.Body.String(), "ADMIN_ONLY_MODE")
 }
 
 func TestJWTAuth_ValidToken_LowercaseBearer(t *testing.T) {
 	user := &service.User{
 		ID:           1,
-		Email:        "test@example.com",
-		Role:         "user",
+		Email:        "admin@example.com",
+		Role:         service.RoleAdmin,
 		Status:       service.StatusActive,
 		Concurrency:  5,
 		TokenVersion: 1,
@@ -129,8 +148,8 @@ func TestJWTAuth_ValidToken_LowercaseBearer(t *testing.T) {
 func TestJWTAuth_ValidToken_TouchesLastActive(t *testing.T) {
 	user := &service.User{
 		ID:           1,
-		Email:        "test@example.com",
-		Role:         "user",
+		Email:        "admin@example.com",
+		Role:         service.RoleAdmin,
 		Status:       service.StatusActive,
 		Concurrency:  5,
 		TokenVersion: 1,
@@ -141,6 +160,7 @@ func TestJWTAuth_ValidToken_TouchesLastActive(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.JWT.Secret = "test-jwt-secret-32bytes-long!!!"
 	cfg.JWT.AccessTokenExpireMinutes = 60
+	cfg.Default.AdminEmail = "admin@example.com"
 
 	userRepo := &stubJWTUserRepo{users: map[int64]*service.User{1: user}}
 	authSvc := service.NewAuthService(nil, userRepo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -261,8 +281,8 @@ func TestJWTAuth_UserNotFound(t *testing.T) {
 func TestJWTAuth_UserInactive(t *testing.T) {
 	user := &service.User{
 		ID:           1,
-		Email:        "disabled@example.com",
-		Role:         "user",
+		Email:        "admin@example.com",
+		Role:         service.RoleAdmin,
 		Status:       service.StatusDisabled,
 		TokenVersion: 1,
 	}
@@ -286,15 +306,15 @@ func TestJWTAuth_TokenVersionMismatch(t *testing.T) {
 	// Token 生成时 TokenVersion=1，但数据库中用户已更新为 TokenVersion=2（密码修改）
 	userForToken := &service.User{
 		ID:           1,
-		Email:        "test@example.com",
-		Role:         "user",
+		Email:        "admin@example.com",
+		Role:         service.RoleAdmin,
 		Status:       service.StatusActive,
 		TokenVersion: 1,
 	}
 	userInDB := &service.User{
 		ID:           1,
-		Email:        "test@example.com",
-		Role:         "user",
+		Email:        "admin@example.com",
+		Role:         service.RoleAdmin,
 		Status:       service.StatusActive,
 		TokenVersion: 2, // 密码修改后版本递增
 	}

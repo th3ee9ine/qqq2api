@@ -33,12 +33,8 @@
     <!-- Row 2: Plan type + Privacy mode (only if either exists) -->
     <div v-if="planLabel || privacyBadge" class="inline-flex items-center overflow-hidden rounded-md">
       <span v-if="planLabel" :class="['inline-flex items-center gap-1 px-1.5 py-1', planBadgeClass]">
-        <GrokFreeIcon
-          v-if="isGrokFreePlan"
-          data-testid="grok-free-plan-icon"
-        />
         <Icon
-          v-else-if="planIconName"
+          v-if="planIconName"
           :name="planIconName"
           size="xs"
           data-testid="grok-plan-icon"
@@ -68,7 +64,6 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { AccountPlatform, AccountType } from '@/types'
-import GrokFreeIcon from './GrokFreeIcon.vue'
 import PlatformIcon from './PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 
@@ -157,16 +152,9 @@ const planLabel = computed(() => {
   }
 })
 
-const isGrokFreePlan = computed(() =>
-  props.platform === 'grok' &&
-  (normalizedPlanType.value === 'free' ||
-    normalizedPlanType.value === 'basic' ||
-    normalizedPlanType.value === 'xbasic')
-)
-
 const planIconName = computed<'bolt' | null>(() => {
   if (props.platform !== 'grok') return null
-  // Paid Grok tiers (SuperGrok / Heavy) share the bolt mark; free uses GrokFreeIcon.
+  // Historical paid Grok tiers use the generic bolt mark.
   if (
     normalizedPlanType.value === 'supergrok' ||
     normalizedPlanType.value === 'supergrokheavy' ||

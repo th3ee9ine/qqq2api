@@ -426,9 +426,9 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_CompactFallsBackToUnkno
 	require.Equal(t, int64(71021), selection.Account.ID, "unknown account should be picked when no supported account available")
 }
 
-// TestOpenAIGatewayService_SelectAccountWithScheduler_CompactAllowsGrok verifies
-// that OpenAI-compatible compact routing does not reject Grok accounts.
-func TestOpenAIGatewayService_SelectAccountWithScheduler_CompactAllowsGrok(t *testing.T) {
+// TestOpenAIGatewayService_SelectAccountWithScheduler_CompactRejectsRetiredGrok
+// verifies that compact routing cannot bypass the retired-platform policy.
+func TestOpenAIGatewayService_SelectAccountWithScheduler_CompactRejectsRetiredGrok(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 
 	ctx := context.Background()
@@ -470,10 +470,8 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_CompactAllowsGrok(t *te
 		true,
 		PlatformGrok,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, selection)
-	require.NotNil(t, selection.Account)
-	require.Equal(t, int64(71030), selection.Account.ID)
+	require.Error(t, err)
+	require.Nil(t, selection)
 }
 
 // TestOpenAICompactSupportTier 验证 tier 分类逻辑。

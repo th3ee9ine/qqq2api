@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -216,6 +217,68 @@ func TestPromptAdminRejectsInvalidEventIDsTimesAndPagination(t *testing.T) {
 		response := promptAdminRequest(t, router, tc.method, tc.path, tc.body)
 		require.Equalf(t, http.StatusBadRequest, response.Code, "%s %s", tc.method, tc.path)
 		require.Contains(t, response.Body.String(), tc.reason)
+	}
+}
+
+func TestPromptAdminRejectsLegacyUserFilters(t *testing.T) {
+	router := promptAdminRouter(&fakePromptAdminService{})
+	response := promptAdminRequest(t, router, http.MethodGet, "/admin/prompt-audit/events?user_id=7", nil)
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Contains(t, response.Body.String(), "prompt_audit_user_filter_unsupported")
+
+	start := time.Now().Add(-time.Hour).UTC()
+	end := time.Now().UTC()
+	response = promptAdminRequest(t, router, http.MethodPost, "/admin/prompt-audit/events/delete-preview", map[string]any{
+		"user_id":  7,
+		"start_at": start,
+		"end_at":   end,
+	})
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Contains(t, response.Body.String(), "prompt_audit_delete_preview_invalid")
+
+	response = promptAdminRequest(t, router, http.MethodPost, "/admin/prompt-audit/events/delete-by-filter", map[string]any{
+		"filter": map[string]any{
+			"user_id":  7,
+			"start_at": start,
+			"end_at":   end,
+		},
+		"confirm": true,
+	})
+	require.Equal(t, http.StatusBadRequest, response.Code)
+	require.Contains(t, response.Body.String(), "prompt_audit_delete_confirmation_invalid")
+}
+
+func TestPromptAdminEventResponsesOmitUserIdentityAndKeepGlobalKeyGroup(t *testing.T) {
+	userID := int64(7)
+	apiKeyID := int64(11)
+	groupID := int64(13)
+	event := &Event{ID: 17, Snapshot: PromptSnapshot{
+		UserID:             userID,
+		UsernameSnapshot:   "legacy-user",
+		UserEmailSnapshot:  "legacy-user@example.com",
+		APIKeyID:           apiKeyID,
+		APIKeyNameSnapshot: "global-key",
+		GroupID:            &groupID,
+		GroupName:          "audit-group",
+	}}
+	service := &fakePromptAdminService{
+		list: func(context.Context, EventFilter, int, int) (*EventPage, error) {
+			return &EventPage{Items: []*Event{event}, Total: 1, Page: 1, PageSize: 20, Pages: 1}, nil
+		},
+		get: func(context.Context, int64) (*Event, error) { return event, nil },
+	}
+
+	for _, path := range []string{"/admin/prompt-audit/events", "/admin/prompt-audit/events/17"} {
+		response := promptAdminRequest(t, promptAdminRouter(service), http.MethodGet, path, nil)
+		require.Equal(t, http.StatusOK, response.Code)
+		body := response.Body.String()
+		for _, field := range []string{`"user_id"`, `"username"`, `"user_email"`} {
+			require.NotContains(t, body, field)
+		}
+		require.Contains(t, body, `"api_key_id":11`)
+		require.Contains(t, body, `"api_key_name":"global-key"`)
+		require.Contains(t, body, `"group_id":13`)
+		require.Contains(t, body, `"group_name":"audit-group"`)
 	}
 }
 

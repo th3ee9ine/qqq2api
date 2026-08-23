@@ -2,7 +2,6 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import BulkEditAccountModal from '../BulkEditAccountModal.vue'
-import ModelWhitelistSelector from '../ModelWhitelistSelector.vue'
 import { adminAPI } from '@/api/admin'
 
 const { showError, showSuccess, translate } = vi.hoisted(() => ({
@@ -28,10 +27,6 @@ vi.mock('@/api/admin', () => ({
   }
 }))
 
-vi.mock('@/api/admin/accounts', () => ({
-  getAntigravityDefaultModelMapping: vi.fn()
-}))
-
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   return {
@@ -47,7 +42,7 @@ function mountModal(extraProps: Record<string, unknown> = {}) {
     props: {
       show: true,
       accountIds: [1, 2],
-      selectedPlatforms: ['antigravity'],
+      selectedPlatforms: ['anthropic'],
       selectedTypes: ['apikey'],
       proxies: [],
       groups: [],
@@ -125,30 +120,6 @@ describe('BulkEditAccountModal', () => {
     expect(showError).toHaveBeenCalledWith('admin.accounts.bulkEdit.rateSyncConflict')
   })
 
-  it('antigravity 白名单包含 Gemini 图片模型且过滤掉普通 GPT 模型', async () => {
-    const wrapper = mountModal()
-    const selector = wrapper.findComponent(ModelWhitelistSelector)
-    expect(selector.exists()).toBe(true)
-
-    await selector.find('div.cursor-pointer').trigger('click')
-
-    expect(wrapper.text()).toContain('gemini-3.1-flash-image')
-    expect(wrapper.text()).toContain('gemini-2.5-flash-image')
-    expect(wrapper.text()).not.toContain('gpt-5.3-codex')
-  })
-
-  it('antigravity 映射预设包含图片映射并过滤 OpenAI 预设', async () => {
-    const wrapper = mountModal()
-
-    const mappingTab = wrapper.findAll('button').find((btn) => btn.text().includes('admin.accounts.modelMapping'))
-    expect(mappingTab).toBeTruthy()
-    await mappingTab!.trigger('click')
-
-    expect(wrapper.text()).toContain('3.1-Flash-Image透传')
-    expect(wrapper.text()).toContain('3-Pro-Image→3.1')
-    expect(wrapper.text()).not.toContain('GPT-5.3 Codex Spark')
-  })
-
   it('仅勾选模型限制且白名单留空时，应提交空 model_mapping 以支持所有模型', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['anthropic'],
@@ -163,112 +134,6 @@ describe('BulkEditAccountModal', () => {
     expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
       credentials: {
         model_mapping: {}
-      }
-    })
-  })
-
-  it('全部目标为 Grok OAuth 时，官方主机 base_url 作为手动端点切换正常提交', async () => {
-    const wrapper = mountModal({
-      selectedPlatforms: ['grok'],
-      selectedTypes: ['oauth']
-    })
-
-    await wrapper.get('#bulk-edit-base-url-enabled').setValue(true)
-    await wrapper.get('#bulk-edit-base-url').setValue('https://api.x.ai/v1')
-    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-      credentials: {
-        base_url: 'https://api.x.ai/v1'
-      }
-    })
-  })
-
-  it('所选全为 grok 时展示快捷端点，点击后填入并自动勾选 base_url', async () => {
-    const wrapper = mountModal({
-      selectedPlatforms: ['grok'],
-      selectedTypes: ['oauth']
-    })
-
-    const presets = wrapper.findAll('[data-testid="grok-base-url-preset"]')
-    expect(presets.length).toBe(5)
-
-    // 第三个预设为区域 API (us-east-1.api.x.ai/v1)
-    await presets[2].trigger('click')
-    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-      credentials: {
-        base_url: 'https://us-east-1.api.x.ai/v1'
-      }
-    })
-  })
-
-  it('所选含非 grok 平台时不展示快捷端点', async () => {
-    const wrapper = mountModal({
-      selectedPlatforms: ['grok', 'anthropic'],
-      selectedTypes: ['apikey']
-    })
-
-    expect(wrapper.findAll('[data-testid="grok-base-url-preset"]').length).toBe(0)
-  })
-
-  it.each(['kimi', 'zhipu', 'deepseek'])('全部目标为 %s API Key 时展示请求头覆写', (platform) => {
-    const wrapper = mountModal({
-      selectedPlatforms: [platform],
-      selectedTypes: ['apikey']
-    })
-
-    expect(wrapper.find('#bulk-edit-header-override-enabled').exists()).toBe(true)
-  })
-
-  it.each(['kimi', 'zhipu', 'deepseek'])('目标为 %s OAuth 时不展示请求头覆写', (platform) => {
-    const wrapper = mountModal({
-      selectedPlatforms: [platform],
-      selectedTypes: ['oauth']
-    })
-
-    expect(wrapper.find('#bulk-edit-header-override-enabled').exists()).toBe(false)
-  })
-
-  it('全部目标为 Grok OAuth 时，第三方 base_url 正常提交', async () => {
-    const wrapper = mountModal({
-      selectedPlatforms: ['grok'],
-      selectedTypes: ['oauth']
-    })
-
-    await wrapper.get('#bulk-edit-base-url-enabled').setValue(true)
-    await wrapper.get('#bulk-edit-base-url').setValue('https://relay.example.com/v1')
-    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-      credentials: {
-        base_url: 'https://relay.example.com/v1'
-      }
-    })
-  })
-
-  it('混合类型选择（含 apikey）时官方主机 base_url 不拦截', async () => {
-    const wrapper = mountModal({
-      selectedPlatforms: ['grok'],
-      selectedTypes: ['apikey', 'oauth']
-    })
-
-    await wrapper.get('#bulk-edit-base-url-enabled').setValue(true)
-    await wrapper.get('#bulk-edit-base-url').setValue('https://api.x.ai/v1')
-    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-      credentials: {
-        base_url: 'https://api.x.ai/v1'
       }
     })
   })
@@ -725,23 +590,6 @@ describe('BulkEditAccountModal', () => {
   it('OpenAI API Key 批量编辑可统一开启上游倍率自动探测', async () => {
     const wrapper = mountModal({
       selectedPlatforms: ['openai'],
-      selectedTypes: ['apikey']
-    })
-
-    await wrapper.get('#bulk-edit-upstream-billing-auto-probe-enabled').setValue(true)
-    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
-    await flushPromises()
-
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
-    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
-      upstream_billing_probe_enabled: true
-    })
-  })
-
-  it('非 OpenAI 平台的 API Key 批量编辑同样可开启上游倍率自动探测', async () => {
-    // 探测已放宽到全部 API-key 平台，混合平台选择只要求类型全为 apikey。
-    const wrapper = mountModal({
-      selectedPlatforms: ['grok', 'anthropic'],
       selectedTypes: ['apikey']
     })
 

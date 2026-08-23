@@ -388,8 +388,8 @@ type ContentModerationDecision struct {
 type ContentModerationLog struct {
 	ID                int64              `json:"id"`
 	RequestID         string             `json:"request_id"`
-	UserID            *int64             `json:"user_id,omitempty"`
-	UserEmail         string             `json:"user_email"`
+	UserID            *int64             `json:"-"`
+	UserEmail         string             `json:"-"`
 	APIKeyID          *int64             `json:"api_key_id,omitempty"`
 	APIKeyName        string             `json:"api_key_name"`
 	GroupID           *int64             `json:"group_id,omitempty"`
@@ -409,9 +409,9 @@ type ContentModerationLog struct {
 	UpstreamLatencyMS *int               `json:"upstream_latency_ms,omitempty"`
 	Error             string             `json:"error"`
 	ViolationCount    int                `json:"violation_count"`
-	AutoBanned        bool               `json:"auto_banned"`
+	AutoBanned        bool               `json:"-"`
 	EmailSent         bool               `json:"email_sent"`
-	UserStatus        string             `json:"user_status"`
+	UserStatus        string             `json:"-"`
 	QueueDelayMS      *int               `json:"queue_delay_ms,omitempty"`
 	CreatedAt         time.Time          `json:"created_at"`
 }
@@ -657,15 +657,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if input.EmailOnHit != nil {
 		cfg.EmailOnHit = *input.EmailOnHit
 	}
-	if input.AutoBanEnabled != nil {
-		cfg.AutoBanEnabled = *input.AutoBanEnabled
-	}
-	if input.BanThreshold != nil {
-		cfg.BanThreshold = *input.BanThreshold
-	}
-	if input.ViolationWindowHours != nil {
-		cfg.ViolationWindowHours = *input.ViolationWindowHours
-	}
+	// User auto-ban settings are retained in the compatibility schema only.
+	// Global API Keys have no per-user enforcement target, so updates to these
+	// legacy controls are intentionally ignored.
 	if input.RetryCount != nil {
 		cfg.RetryCount = *input.RetryCount
 	}
@@ -695,9 +689,6 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if input.RecordNonHits != nil {
 		cfg.RecordNonHits = *input.RecordNonHits
-	}
-	if input.CyberPolicyExcludeFromBanCount != nil {
-		cfg.CyberPolicyExcludeFromBanCount = *input.CyberPolicyExcludeFromBanCount
 	}
 	if input.Thresholds != nil {
 		cfg.Thresholds = mergeContentModerationThresholds(ContentModerationDefaultThresholds(), *input.Thresholds)
@@ -1920,32 +1911,10 @@ func (s *ContentModerationService) applyFlaggedAccountSideEffects(ctx context.Co
 		}
 	}
 	log.ViolationCount = count
-	autoBanJustApplied := false
-	if cfg.AutoBanEnabled && cfg.BanThreshold > 0 && count >= cfg.BanThreshold && s.userRepo != nil {
-		user, err := s.userRepo.GetByID(ctx, *log.UserID)
-		if err != nil {
-			slog.Warn("content_moderation.ban_get_user_failed", "user_id", *log.UserID, "error", err)
-			return false
-		}
-		if user.IsAdmin() {
-			slog.Warn("content_moderation.autoban_skipped_admin", "user_id", *log.UserID, "role", user.Role, "count", count, "threshold", cfg.BanThreshold)
-			// TODO: Disable the triggering API key instead when API key mutation is available here.
-			return false
-		}
-		if user.Status != StatusDisabled {
-			user.Status = StatusDisabled
-			if err := s.userRepo.Update(ctx, user, UserUpdateFields{Status: true}); err != nil {
-				slog.Warn("content_moderation.ban_update_user_failed", "user_id", *log.UserID, "error", err)
-				return false
-			}
-			if s.authCacheInvalidator != nil {
-				s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, *log.UserID)
-			}
-			autoBanJustApplied = true
-		}
-		log.AutoBanned = true
-	}
-	return autoBanJustApplied
+	// Content moderation remains an audit/blocking layer. In global API Key
+	// mode it must never mutate the technical administrator's user status.
+	log.AutoBanned = false
+	return false
 }
 
 func (s *ContentModerationService) sendFlaggedNotificationSideEffects(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog, autoBanJustApplied bool) {
@@ -2093,7 +2062,7 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		BlockStatus:          defaultContentModerationBlockHTTPStatus,
 		BlockMessage:         defaultContentModerationBlockMessage,
 		EmailOnHit:           true,
-		AutoBanEnabled:       true,
+		AutoBanEnabled:       false,
 		BanThreshold:         defaultContentModerationBanThreshold,
 		ViolationWindowHours: defaultContentModerationViolationWindowHours,
 		RetryCount:           defaultContentModerationRetryCount,
@@ -2128,6 +2097,9 @@ func cloneContentModerationConfig(cfg *ContentModerationConfig) *ContentModerati
 }
 
 func (cfg *ContentModerationConfig) normalize() {
+	// Kept in persisted/config response schemas for backwards compatibility,
+	// but per-user auto-ban is not a valid operation for global API Keys.
+	cfg.AutoBanEnabled = false
 	if cfg.APIKey != "" {
 		cfg.APIKeys = normalizeModerationAPIKeys(append(cfg.APIKeys, cfg.APIKey))
 		cfg.APIKey = ""

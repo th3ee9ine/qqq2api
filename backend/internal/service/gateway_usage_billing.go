@@ -13,23 +13,14 @@ import (
 )
 
 func (s *GatewayService) getUserGroupRateMultiplier(ctx context.Context, userID, groupID int64, groupDefaultMultiplier float64) float64 {
-	if s == nil {
-		return groupDefaultMultiplier
-	}
-	resolver := s.userGroupRateResolver
-	if resolver == nil {
-		resolver = newUserGroupRateResolver(
-			s.userGroupRateRepo,
-			s.userGroupRateCache,
-			resolveUserGroupRateCacheTTL(s.cfg),
-			&s.userGroupRateSF,
-			"service.gateway",
-		)
-	}
-	return resolver.Resolve(ctx, userID, groupID, groupDefaultMultiplier)
+	// API Keys are global. Keep the legacy resolver signature for callers, but
+	// never apply a user×group override to system-wide traffic.
+	_, _, _ = ctx, userID, groupID
+	return groupDefaultMultiplier
 }
 
-// ResolveUserGroupRateMultiplier resolves the same cached multiplier used by usage billing.
+// ResolveUserGroupRateMultiplier returns the global group multiplier. The
+// historical name remains for source compatibility.
 func (s *GatewayService) ResolveUserGroupRateMultiplier(ctx context.Context, userID, groupID int64, groupDefaultMultiplier float64) float64 {
 	return s.getUserGroupRateMultiplier(ctx, userID, groupID, groupDefaultMultiplier)
 }
@@ -104,17 +95,23 @@ func PlatformFromAPIKey(apiKey *APIKey) string {
 func QuotaPlatform(ctx context.Context, apiKey *APIKey) string {
 	if ctx != nil {
 		if fp, ok := ctx.Value(ctxkey.ForcePlatform).(string); ok && fp != "" {
-			return fp
+			if IsActiveAccountPlatform(fp) {
+				return strings.ToLower(strings.TrimSpace(fp))
+			}
+			return ""
 		}
 	}
 	if platform, ok := ResolvedTargetPlatformFromContext(ctx); ok {
-		return platform
-	}
-	platform := PlatformFromAPIKey(apiKey)
-	if platform == PlatformComposite {
+		if IsActiveAccountPlatform(platform) {
+			return strings.ToLower(strings.TrimSpace(platform))
+		}
 		return ""
 	}
-	return platform
+	platform := PlatformFromAPIKey(apiKey)
+	if !IsActiveAccountPlatform(platform) {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(platform))
 }
 
 func (p *postUsageBillingParams) shouldDeductAPIKeyQuota() bool {
@@ -138,7 +135,10 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 
 	cost := p.Cost
 
-	if p.IsSubscriptionBill {
+	if p.APIKey != nil {
+		// Global API Keys do not charge a user wallet or subscription. Usage
+		// cost and key/account quotas are still recorded below.
+	} else if p.IsSubscriptionBill {
 		// Subscription usage tracked by ActualCost so group rate multiplier
 		// consumes the quota at the expected speed.
 		if cost.ActualCost > 0 {
@@ -183,7 +183,7 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	//   - flusher_enabled=false（降级）:保留原有同步直写 DB
 	//   - flusher_enabled=true:跳过直写 DB，由 flusher 异步批量刷（markDirty 在 IncrementUserPlatformQuotaUsage 内部完成）
 	//   - 失败仅记 ALERT log + counter，不阻断主扣费流程
-	if !p.IsSubscriptionBill && p.Platform != "" && cost.ActualCost > 0 && p.User != nil && deps.userPlatformQuotaRepo != nil {
+	if p.APIKey == nil && !p.IsSubscriptionBill && p.Platform != "" && cost.ActualCost > 0 && p.User != nil && deps.userPlatformQuotaRepo != nil {
 		if deps.billingCacheService.HasUserPlatformQuotaLimit(billingCtx, p.User.ID, p.Platform) {
 			deps.billingCacheService.IncrementUserPlatformQuotaUsage(p.User.ID, p.Platform, cost.ActualCost)
 			if deps.cfg == nil || !deps.cfg.Database.UserPlatformQuotaFlusherEnabled {
@@ -306,11 +306,11 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		}
 	}
 
-	// Record subscription / balance cost using ActualCost so the group (and any
-	// user-specific) rate multiplier consumes subscription quota at the expected
-	// speed. TotalCost remains the raw (pre-multiplier) value; downstream guards
-	// on "> 0" still correctly skip free subscriptions (RateMultiplier == 0).
-	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
+	// Global API Keys deliberately carry no user balance/subscription cost.
+	// Total and actual cost remain available on the usage log itself.
+	if p.APIKey != nil {
+		// No user-owned billing command fields.
+	} else if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
 		cmd.SubscriptionID = &p.Subscription.ID
 		cmd.SubscriptionCost = p.Cost.ActualCost
 	} else if p.Cost.ActualCost > 0 {
@@ -451,7 +451,7 @@ func notifyBalanceLow(p *postUsageBillingParams, deps *billingDeps, result *Usag
 			slog.Error("panic in notifyBalanceLow", "recover", r)
 		}
 	}()
-	if p.IsSubscriptionBill || p.Cost.ActualCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
+	if p.APIKey != nil || p.IsSubscriptionBill || p.Cost.ActualCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
 		slog.Debug("notifyBalanceLow: skipped",
 			"is_subscription", p.IsSubscriptionBill,
 			"actual_cost", p.Cost.ActualCost,
@@ -794,7 +794,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		cacheTTLOverridden = (result.Usage.CacheCreation5mTokens + result.Usage.CacheCreation1hTokens) > 0
 	}
 
-	// 获取费率倍数（优先级：用户专属 > 分组默认 > 系统默认）
+	// 获取全局费率倍数（分组默认 > 系统默认）。
 	multiplier := 1.0
 	if s.cfg != nil {
 		multiplier = s.cfg.Default.RateMultiplier

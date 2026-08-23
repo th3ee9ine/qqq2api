@@ -19,13 +19,29 @@ type EventFilter struct {
 	RiskLevel  string     `json:"risk_level,omitempty"`
 	Endpoint   string     `json:"endpoint,omitempty"`
 	GroupID    *int64     `json:"group_id,omitempty"`
-	UserID     *int64     `json:"user_id,omitempty"`
 	APIKeyID   *int64     `json:"api_key_id,omitempty"`
 	RequestID  string     `json:"request_id,omitempty"`
 	PromptHash string     `json:"prompt_hash,omitempty"`
 	Keyword    string     `json:"keyword,omitempty"`
 	StartAt    *time.Time `json:"start_at,omitempty"`
 	EndAt      *time.Time `json:"end_at,omitempty"`
+}
+
+func (f *EventFilter) UnmarshalJSON(raw []byte) error {
+	type eventFilterWire EventFilter
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	if _, exists := fields["user_id"]; exists {
+		return errors.New("prompt audit user_id filter is not supported")
+	}
+	var decoded eventFilterWire
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*f = EventFilter(decoded)
+	return nil
 }
 
 type EventPage struct {
@@ -282,9 +298,6 @@ func buildEventWhere(filter EventFilter, firstIndex int) (string, []any) {
 	if filter.GroupID != nil {
 		add(" AND e.group_id=$%d", *filter.GroupID)
 	}
-	if filter.UserID != nil {
-		add(" AND e.user_id=$%d", *filter.UserID)
-	}
 	if filter.APIKeyID != nil {
 		add(" AND e.api_key_id=$%d", *filter.APIKeyID)
 	}
@@ -296,10 +309,10 @@ func buildEventWhere(filter EventFilter, firstIndex int) (string, []any) {
 	}
 	if filter.Keyword != "" {
 		add(` AND (e.request_id ILIKE $%d OR e.prompt_hash ILIKE $%d OR e.redacted_preview ILIKE $%d
-			OR e.username_snapshot ILIKE $%d OR e.user_email_snapshot ILIKE $%d OR e.api_key_name_snapshot ILIKE $%d)`, "%"+TrimRunes(filter.Keyword, 128)+"%")
-		// The clause has six placeholders but add only supplied one. Rebuild it with one shared placeholder.
+			OR e.api_key_name_snapshot ILIKE $%d OR e.group_name ILIKE $%d)`, "%"+TrimRunes(filter.Keyword, 128)+"%")
+		// The clause has five placeholders but add only supplied one. Rebuild it with one shared placeholder.
 		clauses[len(clauses)-1] = fmt.Sprintf(` AND (e.request_id ILIKE $%[1]d OR e.prompt_hash ILIKE $%[1]d OR e.redacted_preview ILIKE $%[1]d
-			OR e.username_snapshot ILIKE $%[1]d OR e.user_email_snapshot ILIKE $%[1]d OR e.api_key_name_snapshot ILIKE $%[1]d)`, firstIndex+len(args)-1)
+			OR e.api_key_name_snapshot ILIKE $%[1]d OR e.group_name ILIKE $%[1]d)`, firstIndex+len(args)-1)
 	}
 	if filter.StartAt != nil {
 		add(" AND e.created_at >= $%d", filter.StartAt.UTC())

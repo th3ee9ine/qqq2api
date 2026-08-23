@@ -41,6 +41,13 @@ func (s *OpsService) ListSystemLogs(ctx context.Context, filter *OpsSystemLogFil
 	if err != nil {
 		return nil, infraerrors.InternalServer("OPS_SYSTEM_LOG_LIST_FAILED", "Failed to list system logs").WithCause(err)
 	}
+	for _, item := range result.Logs {
+		if item == nil {
+			continue
+		}
+		item.UserID = nil
+		item.Extra = cloneOpsMapWithoutUserIdentity(item.Extra)
+	}
 	return result, nil
 }
 
@@ -98,9 +105,6 @@ func marshalSystemLogCleanupConditions(filter *OpsSystemLogCleanupFilter) string
 		"model":             strings.TrimSpace(filter.Model),
 		"query":             strings.TrimSpace(filter.Query),
 	}
-	if filter.UserID != nil {
-		payload["user_id"] = *filter.UserID
-	}
 	if filter.APIKeyID != nil {
 		payload["api_key_id"] = *filter.APIKeyID
 	}
@@ -118,6 +122,56 @@ func marshalSystemLogCleanupConditions(filter *OpsSystemLogCleanupFilter) string
 		return "{}"
 	}
 	return string(raw)
+}
+
+func removeOpsUserIdentityFields(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, nested := range typed {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "user_id", "user_email", "user_query", "username":
+				delete(typed, key)
+			default:
+				removeOpsUserIdentityFields(nested)
+			}
+		}
+	case []any:
+		for _, nested := range typed {
+			removeOpsUserIdentityFields(nested)
+		}
+	}
+}
+
+func cloneOpsMapWithoutUserIdentity(source map[string]any) map[string]any {
+	if source == nil {
+		return nil
+	}
+	cloned, _ := cloneOpsValueWithoutUserIdentity(source).(map[string]any)
+	return cloned
+}
+
+func cloneOpsValueWithoutUserIdentity(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		cloned := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			switch strings.ToLower(strings.TrimSpace(key)) {
+			case "user_id", "user_email", "user_query", "username":
+				continue
+			default:
+				cloned[key] = cloneOpsValueWithoutUserIdentity(nested)
+			}
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, len(typed))
+		for index, nested := range typed {
+			cloned[index] = cloneOpsValueWithoutUserIdentity(nested)
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 func (s *OpsService) GetSystemLogSinkHealth() OpsSystemLogSinkHealth {

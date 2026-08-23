@@ -43,22 +43,25 @@ vi.mock('@/composables/useRoutePrefetch', () => ({
   }),
 }))
 
-describe('router WeChat OAuth route', () => {
-  it('registers the WeChat callback route as a public route', async () => {
+describe('router removed public routes', () => {
+  it('does not register the WeChat callback route', async () => {
     const { default: router } = await import('@/router')
     const route = router.getRoutes().find((record) => record.name === 'WeChatOAuthCallback')
 
-    expect(route?.path).toBe('/auth/wechat/callback')
-    expect(route?.meta.requiresAuth).toBe(false)
-    expect(route?.meta.title).toBe('WeChat OAuth Callback')
+    expect(route).toBeUndefined()
   })
 
-  it('registers the WeChat payment callback route as a public route', async () => {
+  it('does not register the WeChat payment callback route', async () => {
     const { default: router } = await import('@/router')
     const route = router.getRoutes().find((record) => record.name === 'WeChatPaymentOAuthCallback')
 
-    expect(route?.path).toBe('/auth/wechat/payment/callback')
-    expect(route?.meta.requiresAuth).toBe(false)
-    expect(route?.meta.title).toBe('WeChat Payment Callback')
+    expect(route).toBeUndefined()
+  })
+
+  it('does not register the model plaza route', async () => {
+    const { default: router } = await import('@/router')
+    const route = router.getRoutes().find((record) => record.name === 'ModelPlaza')
+
+    expect(route).toBeUndefined()
   })
 })

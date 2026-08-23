@@ -390,18 +390,22 @@ func TestCNProviderQuotaSnapshotReset(t *testing.T) {
 }
 
 // TestNormalizeOpenAICompatiblePlatform_SchedulerExactMatch 回归保护：
-// grok 与国产供应商原样保留，其余归一为 openai —— 保证 kimi/zhipu/deepseek 分组请求
-// 精确匹配同名账号（与 openai/grok 当前行为一致），不会错误并入 openai 池。
+// 仅 OpenAI 是活动平台；退役及未知值不能被并入 OpenAI 池。
 func TestNormalizeOpenAICompatiblePlatform_SchedulerExactMatch(t *testing.T) {
 	t.Parallel()
-	require.Equal(t, PlatformGrok, NormalizeOpenAICompatiblePlatform(PlatformGrok))
-	require.Equal(t, PlatformKimi, NormalizeOpenAICompatiblePlatform(PlatformKimi))
-	require.Equal(t, PlatformZhipu, NormalizeOpenAICompatiblePlatform(PlatformZhipu))
-	require.Equal(t, PlatformDeepseek, NormalizeOpenAICompatiblePlatform(PlatformDeepseek))
-	// 其他平台（含空、anthropic、未知）一律归一为 openai。
-	require.Equal(t, PlatformOpenAI, NormalizeOpenAICompatiblePlatform(""))
-	require.Equal(t, PlatformOpenAI, NormalizeOpenAICompatiblePlatform(PlatformAnthropic))
-	require.Equal(t, PlatformOpenAI, NormalizeOpenAICompatiblePlatform("something-else"))
+	require.Equal(t, PlatformOpenAI, NormalizeOpenAICompatiblePlatform(" OpenAI "))
+	for _, platform := range []string{PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, "", PlatformAnthropic, "something-else"} {
+		require.Empty(t, NormalizeOpenAICompatiblePlatform(platform), platform)
+	}
+}
+
+func TestOpenAIGatewayListSchedulableAccounts_RetiredPlatformFailsBeforeRepository(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	for _, platform := range []string{PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformGemini, PlatformAntigravity, "GLM"} {
+		accounts, err := svc.listSchedulableAccounts(context.Background(), nil, platform)
+		require.Nil(t, accounts, "platform=%s", platform)
+		require.ErrorIs(t, err, ErrPlatformRetired, "platform=%s", platform)
+	}
 }
 
 // TestGetOpenAIProtocolAPIKey_CNProviders 验证 OpenAI 协议族密钥读取覆盖国产供应商，

@@ -30,10 +30,6 @@ export interface ContentModerationConfig {
   queue_size: number
   block_status: number
   block_message: string
-  email_on_hit: boolean
-  auto_ban_enabled: boolean
-  ban_threshold: number
-  violation_window_hours: number
   retry_count: number
   hit_retention_days: number
   non_hit_retention_days: number
@@ -41,7 +37,6 @@ export interface ContentModerationConfig {
   blocked_keywords: string[]
   keyword_blocking_mode: KeywordBlockingMode
   model_filter: ContentModerationModelFilter
-  cyber_policy_exclude_from_ban_count: boolean
 }
 
 export type ContentModerationAPIKeyStatusValue = 'unknown' | 'ok' | 'error' | 'frozen'
@@ -110,10 +105,6 @@ export interface UpdateContentModerationConfig {
   queue_size?: number
   block_status?: number
   block_message?: string
-  email_on_hit?: boolean
-  auto_ban_enabled?: boolean
-  ban_threshold?: number
-  violation_window_hours?: number
   retry_count?: number
   hit_retention_days?: number
   non_hit_retention_days?: number
@@ -121,7 +112,6 @@ export interface UpdateContentModerationConfig {
   blocked_keywords?: string[]
   keyword_blocking_mode?: KeywordBlockingMode
   model_filter?: ContentModerationModelFilter
-  cyber_policy_exclude_from_ban_count?: boolean
 }
 
 export interface ContentModerationRuntimeStatus {
@@ -173,8 +163,6 @@ export interface ContentModerationAPIKeyLoad {
 export interface ContentModerationLog {
   id: number
   request_id: string
-  user_id: number | null
-  user_email: string
   api_key_id: number | null
   api_key_name: string
   group_id: number | null
@@ -193,10 +181,6 @@ export interface ContentModerationLog {
   input_excerpt: string
   upstream_latency_ms: number | null
   error: string
-  violation_count: number
-  auto_banned: boolean
-  email_sent: boolean
-  user_status: string
   queue_delay_ms: number | null
   created_at: string
 }
@@ -218,11 +202,6 @@ export interface ContentModerationLogsResponse {
   page: number
   page_size: number
   pages: number
-}
-
-export interface ContentModerationUnbanUserResponse {
-  user_id: number
-  status: string
 }
 
 export interface DeleteFlaggedHashResponse {
@@ -267,13 +246,6 @@ export async function listLogs(
   return data
 }
 
-export async function unbanUser(userID: number): Promise<ContentModerationUnbanUserResponse> {
-  const { data } = await apiClient.post<ContentModerationUnbanUserResponse>(
-    `/admin/risk-control/users/${userID}/unban`
-  )
-  return data
-}
-
 export async function deleteFlaggedHash(inputHash: string): Promise<DeleteFlaggedHashResponse> {
   const { data } = await apiClient.delete<DeleteFlaggedHashResponse>('/admin/risk-control/hashes', {
     data: { input_hash: inputHash },
@@ -292,7 +264,6 @@ export const riskControlAPI = {
   getStatus,
   testAPIKeys,
   listLogs,
-  unbanUser,
   deleteFlaggedHash,
   clearFlaggedHashes,
 }

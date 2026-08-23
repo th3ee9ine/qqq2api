@@ -10,6 +10,8 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
+var opsAlertPublicFilterKeys = []string{"platform", "group_id", "region"}
+
 func (s *OpsService) ListAlertRules(ctx context.Context) ([]*OpsAlertRule, error) {
 	if err := s.RequireMonitoringEnabled(ctx); err != nil {
 		return nil, err
@@ -17,7 +19,14 @@ func (s *OpsService) ListAlertRules(ctx context.Context) ([]*OpsAlertRule, error
 	if s.opsRepo == nil {
 		return []*OpsAlertRule{}, nil
 	}
-	return s.opsRepo.ListAlertRules(ctx)
+	rules, err := s.opsRepo.ListAlertRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for index, rule := range rules {
+		rules[index] = sanitizeOpsAlertRule(rule)
+	}
+	return rules, nil
 }
 
 func (s *OpsService) CreateAlertRule(ctx context.Context, rule *OpsAlertRule) (*OpsAlertRule, error) {
@@ -31,11 +40,11 @@ func (s *OpsService) CreateAlertRule(ctx context.Context, rule *OpsAlertRule) (*
 		return nil, infraerrors.BadRequest("INVALID_RULE", "invalid rule")
 	}
 
-	created, err := s.opsRepo.CreateAlertRule(ctx, rule)
+	created, err := s.opsRepo.CreateAlertRule(ctx, sanitizeOpsAlertRule(rule))
 	if err != nil {
 		return nil, err
 	}
-	return created, nil
+	return sanitizeOpsAlertRule(created), nil
 }
 
 func (s *OpsService) UpdateAlertRule(ctx context.Context, rule *OpsAlertRule) (*OpsAlertRule, error) {
@@ -49,14 +58,14 @@ func (s *OpsService) UpdateAlertRule(ctx context.Context, rule *OpsAlertRule) (*
 		return nil, infraerrors.BadRequest("INVALID_RULE", "invalid rule")
 	}
 
-	updated, err := s.opsRepo.UpdateAlertRule(ctx, rule)
+	updated, err := s.opsRepo.UpdateAlertRule(ctx, sanitizeOpsAlertRule(rule))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, infraerrors.NotFound("OPS_ALERT_RULE_NOT_FOUND", "alert rule not found")
 		}
 		return nil, err
 	}
-	return updated, nil
+	return sanitizeOpsAlertRule(updated), nil
 }
 
 func (s *OpsService) DeleteAlertRule(ctx context.Context, id int64) error {
@@ -85,7 +94,14 @@ func (s *OpsService) ListAlertEvents(ctx context.Context, filter *OpsAlertEventF
 	if s.opsRepo == nil {
 		return []*OpsAlertEvent{}, nil
 	}
-	return s.opsRepo.ListAlertEvents(ctx, filter)
+	events, err := s.opsRepo.ListAlertEvents(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for index, event := range events {
+		events[index] = sanitizeOpsAlertEvent(event)
+	}
+	return events, nil
 }
 
 func (s *OpsService) GetAlertEventByID(ctx context.Context, eventID int64) (*OpsAlertEvent, error) {
@@ -108,7 +124,33 @@ func (s *OpsService) GetAlertEventByID(ctx context.Context, eventID int64) (*Ops
 	if ev == nil {
 		return nil, infraerrors.NotFound("OPS_ALERT_EVENT_NOT_FOUND", "alert event not found")
 	}
-	return ev, nil
+	return sanitizeOpsAlertEvent(ev), nil
+}
+
+func sanitizeOpsAlertRule(rule *OpsAlertRule) *OpsAlertRule {
+	if rule == nil {
+		return nil
+	}
+	cloned := *rule
+	cloned.Filters = make(map[string]any, len(rule.Filters))
+	for _, key := range opsAlertPublicFilterKeys {
+		if value, ok := rule.Filters[key]; ok {
+			cloned.Filters[key] = cloneOpsValueWithoutUserIdentity(value)
+		}
+	}
+	if len(cloned.Filters) == 0 {
+		cloned.Filters = nil
+	}
+	return &cloned
+}
+
+func sanitizeOpsAlertEvent(event *OpsAlertEvent) *OpsAlertEvent {
+	if event == nil {
+		return nil
+	}
+	cloned := *event
+	cloned.Dimensions = cloneOpsMapWithoutUserIdentity(event.Dimensions)
+	return &cloned
 }
 
 func (s *OpsService) GetActiveAlertEvent(ctx context.Context, ruleID int64) (*OpsAlertEvent, error) {
@@ -121,7 +163,11 @@ func (s *OpsService) GetActiveAlertEvent(ctx context.Context, ruleID int64) (*Op
 	if ruleID <= 0 {
 		return nil, infraerrors.BadRequest("INVALID_RULE_ID", "invalid rule id")
 	}
-	return s.opsRepo.GetActiveAlertEvent(ctx, ruleID)
+	event, err := s.opsRepo.GetActiveAlertEvent(ctx, ruleID)
+	if err != nil {
+		return nil, err
+	}
+	return sanitizeOpsAlertEvent(event), nil
 }
 
 func (s *OpsService) CreateAlertSilence(ctx context.Context, input *OpsAlertSilence) (*OpsAlertSilence, error) {
@@ -177,7 +223,11 @@ func (s *OpsService) GetLatestAlertEvent(ctx context.Context, ruleID int64) (*Op
 	if ruleID <= 0 {
 		return nil, infraerrors.BadRequest("INVALID_RULE_ID", "invalid rule id")
 	}
-	return s.opsRepo.GetLatestAlertEvent(ctx, ruleID)
+	event, err := s.opsRepo.GetLatestAlertEvent(ctx, ruleID)
+	if err != nil {
+		return nil, err
+	}
+	return sanitizeOpsAlertEvent(event), nil
 }
 
 func (s *OpsService) CreateAlertEvent(ctx context.Context, event *OpsAlertEvent) (*OpsAlertEvent, error) {
@@ -191,11 +241,12 @@ func (s *OpsService) CreateAlertEvent(ctx context.Context, event *OpsAlertEvent)
 		return nil, infraerrors.BadRequest("INVALID_EVENT", "invalid event")
 	}
 
-	created, err := s.opsRepo.CreateAlertEvent(ctx, event)
+	sanitized := sanitizeOpsAlertEvent(event)
+	created, err := s.opsRepo.CreateAlertEvent(ctx, sanitized)
 	if err != nil {
 		return nil, err
 	}
-	return created, nil
+	return sanitizeOpsAlertEvent(created), nil
 }
 
 func (s *OpsService) UpdateAlertEventStatus(ctx context.Context, eventID int64, status string, resolvedAt *time.Time) error {

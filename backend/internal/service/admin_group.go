@@ -9,14 +9,11 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
 // Group management implementations
@@ -30,10 +27,23 @@ func (s *adminServiceImpl) ListGroups(ctx context.Context, page, pageSize int, p
 }
 
 func (s *adminServiceImpl) GetAllGroups(ctx context.Context) ([]Group, error) {
-	return s.groupRepo.ListActive(ctx)
+	groups, err := s.groupRepo.ListActive(ctx)
+	if err != nil {
+		return nil, err
+	}
+	active := make([]Group, 0, len(groups))
+	for _, group := range groups {
+		if IsActiveGroupPlatform(group.Platform) {
+			active = append(active, group)
+		}
+	}
+	return active, nil
 }
 
 func (s *adminServiceImpl) GetAllGroupsByPlatform(ctx context.Context, platform string) ([]Group, error) {
+	if err := requireActiveGroupPlatform(platform); err != nil {
+		return nil, err
+	}
 	return s.groupRepo.ListActiveByPlatform(ctx, platform)
 }
 
@@ -61,6 +71,9 @@ func (s *adminServiceImpl) GetGroupModelsListCandidates(ctx context.Context, id 
 	}
 	if platform == "" {
 		platform = PlatformAnthropic
+	}
+	if err := requireActiveGroupPlatform(platform); err != nil {
+		return nil, err
 	}
 
 	candidates := defaultModelsListCandidateIDs(platform)
@@ -232,42 +245,27 @@ func defaultModelsListCandidateIDs(platform string) []string {
 	switch platform {
 	case PlatformOpenAI:
 		return openai.DefaultModelIDs()
-	case PlatformGemini:
-		ids := make([]string, 0, len(geminicli.DefaultModels))
-		for _, model := range geminicli.DefaultModels {
-			ids = append(ids, model.ID)
-		}
-		return ids
-	case PlatformAntigravity:
-		models := antigravity.DefaultModels()
-		ids := make([]string, 0, len(models))
-		for _, model := range models {
-			ids = append(ids, model.ID)
-		}
-		return ids
-	case PlatformGrok:
-		return xai.DefaultModelIDs()
 	case PlatformComposite:
 		return compositeDefaultModelsListCandidateIDs()
-	default:
+	case PlatformAnthropic:
 		ids := make([]string, 0, len(claude.DefaultModels))
 		for _, model := range claude.DefaultModels {
 			ids = append(ids, model.ID)
 		}
 		return ids
+	default:
+		return nil
 	}
 }
 
 func defaultAllowImageGenerationForPlatform(platform string) bool {
-	// Grok image and video generation routes share the legacy image-generation gate.
-	// Older clients send the false zero value, so Grok groups must default enabled.
-	return platform == PlatformGrok
+	return false
 }
 
 func compositeDefaultModelsListCandidateIDs() []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
-	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI} {
 		for _, id := range defaultModelsListCandidateIDs(platform) {
 			if _, ok := seen[id]; ok {
 				continue
@@ -288,10 +286,7 @@ func canCopyAccountsFromGroupPlatform(targetPlatform, sourcePlatform string) boo
 
 func groupSupportsOAuthOnlyFilter(platform string) bool {
 	return platform == PlatformOpenAI ||
-		platform == PlatformAntigravity ||
 		platform == PlatformAnthropic ||
-		platform == PlatformGemini ||
-		platform == PlatformGrok ||
 		platform == PlatformComposite
 }
 
@@ -301,6 +296,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	}
 
 	platform := NormalizeGroupPlatform(input.Platform)
+	if err := requireActiveGroupPlatform(platform); err != nil {
+		return nil, err
+	}
 	modelPricing, err := normalizeGroupModelPricing(platform, input.ModelPricing)
 	if err != nil {
 		return nil, err
@@ -314,15 +312,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_REASONING_EFFORT_MAPPING", "%v", err)
 	}
 
-	subscriptionType := input.SubscriptionType
-	if subscriptionType == "" {
-		subscriptionType = SubscriptionTypeStandard
-	}
-
-	// 限额字段：nil/负数 表示"无限制"，0 表示"不允许用量"，正数表示具体限额
-	dailyLimit := normalizeLimit(input.DailyLimitUSD)
-	weeklyLimit := normalizeLimit(input.WeeklyLimitUSD)
-	monthlyLimit := normalizeLimit(input.MonthlyLimitUSD)
+	// Subscription billing is retired. Keep the legacy request and entity fields
+	// for wire/schema compatibility, but never allow callers to recreate it.
+	subscriptionType := SubscriptionTypeStandard
+	var dailyLimit, weeklyLimit, monthlyLimit *float64
 
 	// 图片价格：负数表示清除（使用默认价格），0 保留（表示免费）
 	imagePrice1K := normalizePrice(input.ImagePrice1K)
@@ -370,15 +363,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		videoRateMultiplier = *input.VideoRateMultiplier
 	}
 
-	peakRateMultiplier := 1.0
-	if input.PeakRateMultiplier != nil {
-		peakRateMultiplier = *input.PeakRateMultiplier
-	}
-	// 先归一化（非订阅分组清空高峰配置、清洗停用状态下的脏字段）再校验，与 UpdateGroup 同一收口。
-	peakRateEnabled, peakStart, peakEnd, peakRateMultiplier := NormalizePeakRateConfig(subscriptionType, input.PeakRateEnabled, input.PeakStart, input.PeakEnd, peakRateMultiplier)
-	if err := ValidatePeakRateConfig(subscriptionType, peakRateEnabled, peakStart, peakEnd, peakRateMultiplier); err != nil {
-		return nil, err
-	}
+	peakRateEnabled, peakStart, peakEnd, peakRateMultiplier := false, "", "", 1.0
 
 	profitMinMargin := 0.0
 	if input.ProfitMinMargin != nil {
@@ -550,14 +535,6 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	return group, nil
 }
 
-// normalizeLimit 将负数转换为 nil（表示无限制），0 保留（表示限额为零）
-func normalizeLimit(limit *float64) *float64 {
-	if limit == nil || *limit < 0 {
-		return nil
-	}
-	return limit
-}
-
 // normalizePrice 将负数转换为 nil（表示使用默认价格），0 保留（表示免费）
 func normalizePrice(price *float64) *float64 {
 	if price == nil || *price < 0 {
@@ -640,9 +617,19 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
+	if err := requireActiveGroupPlatform(group.Platform); err != nil {
+		return nil, err
+	}
 
 	// 渠道缓存里存了 groupID → platform 的映射，改了平台要让它失效（见函数末尾）
 	previousPlatform := group.Platform
+	targetPlatform := group.Platform
+	if input.Platform != "" {
+		targetPlatform = input.Platform
+	}
+	if err := requireActiveGroupPlatform(targetPlatform); err != nil {
+		return nil, err
+	}
 
 	if input.Name != "" {
 		group.Name = input.Name
@@ -651,7 +638,7 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.Description = *input.Description
 	}
 	if input.Platform != "" {
-		group.Platform = input.Platform
+		group.Platform = targetPlatform
 	}
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier <= 0 {
@@ -676,15 +663,12 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.ModelPricing = modelPricing
 	}
 
-	// 订阅相关字段
-	if input.SubscriptionType != "" {
-		group.SubscriptionType = input.SubscriptionType
-	}
-	// 限额字段：nil/负数 表示"无限制"，0 表示"不允许用量"，正数表示具体限额
-	// 前端始终发送这三个字段，无需 nil 守卫
-	group.DailyLimitUSD = normalizeLimit(input.DailyLimitUSD)
-	group.WeeklyLimitUSD = normalizeLimit(input.WeeklyLimitUSD)
-	group.MonthlyLimitUSD = normalizeLimit(input.MonthlyLimitUSD)
+	// Subscription billing is retired. Updating any legacy group also repairs it,
+	// irrespective of compatibility fields supplied by an older client.
+	group.SubscriptionType = SubscriptionTypeStandard
+	group.DailyLimitUSD = nil
+	group.WeeklyLimitUSD = nil
+	group.MonthlyLimitUSD = nil
 	// 图片生成计费配置：负数表示清除（使用默认价格）
 	if input.AllowImageGeneration != nil {
 		group.AllowImageGeneration = *input.AllowImageGeneration
@@ -731,25 +715,10 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 		group.VideoRateMultiplier = *input.VideoRateMultiplier
 	}
-	if input.PeakRateEnabled != nil {
-		group.PeakRateEnabled = *input.PeakRateEnabled
-	}
-	if input.PeakStart != nil {
-		group.PeakStart = *input.PeakStart
-	}
-	if input.PeakEnd != nil {
-		group.PeakEnd = *input.PeakEnd
-	}
-	if input.PeakRateMultiplier != nil {
-		group.PeakRateMultiplier = *input.PeakRateMultiplier
-	}
-	// 先归一化（非订阅分组——含本次更新转为非订阅——静默清空高峰配置，清洗停用状态下的脏字段），
-	// 再收敛校验：Update 可能只传部分 peak 字段，需对合并后的最终配置统一校验，
-	// 防止单独修改 start/end 导致最终 start>=end 等非法配置入库。与 CreateGroup 同一收口。
-	group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier = NormalizePeakRateConfig(group.SubscriptionType, group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier)
-	if err := ValidatePeakRateConfig(group.SubscriptionType, group.PeakRateEnabled, group.PeakStart, group.PeakEnd, group.PeakRateMultiplier); err != nil {
-		return nil, err
-	}
+	group.PeakRateEnabled = false
+	group.PeakStart = ""
+	group.PeakEnd = ""
+	group.PeakRateMultiplier = 1.0
 	if input.ProfitControlEnabled != nil {
 		group.ProfitControlEnabled = *input.ProfitControlEnabled
 	}
@@ -1149,6 +1118,9 @@ func (s *adminServiceImpl) AdminUpdateAPIKeyGroupID(ctx context.Context, keyID i
 		}
 		if group.Status != StatusActive {
 			return nil, infraerrors.BadRequest("GROUP_NOT_ACTIVE", "target group is not active")
+		}
+		if err := requireActiveGroupPlatform(group.Platform); err != nil {
+			return nil, err
 		}
 		// 订阅类型分组：用户须持有该分组的有效订阅才可绑定
 		if group.IsSubscriptionType() {

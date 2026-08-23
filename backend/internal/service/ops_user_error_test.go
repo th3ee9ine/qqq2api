@@ -120,7 +120,6 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 			Type:             "api_error",
 			Message:          "upstream error",
 			UserID:           &uid,
-			UserEmail:        "secret@example.com",
 			ClientIP:         func() *string { s := "1.2.3.4"; return &s }(),
 			UpstreamEndpoint: "https://api.openai.com/v1/chat/completions",
 			UserAgent:        "codex_cli_rs/0.125.0",

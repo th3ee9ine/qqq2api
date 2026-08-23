@@ -114,15 +114,30 @@ function simulateGuard(
     return '/dashboard'
   }
 
+  const disabledFeaturePaths = [
+    '/admin/subscriptions',
+    '/admin/promo-codes',
+    '/admin/announcements',
+    '/admin/channels',
+    '/admin/channels/pricing',
+    '/redeem',
+    '/subscriptions',
+    '/monitor',
+  ]
+  const normalizedToPath = toPath.length > 1 ? toPath.replace(/\/+$/, '') : toPath
+  if (
+    disabledFeaturePaths.some((path) =>
+      path === '/admin/channels'
+        ? normalizedToPath === path
+        : normalizedToPath === path || normalizedToPath.startsWith(`${path}/`),
+    )
+  ) {
+    return authState.isAdmin ? '/admin/dashboard' : '/dashboard'
+  }
+
   // 简易模式限制
   if (authState.isSimpleMode) {
-    const restrictedPaths = [
-      '/admin/groups',
-      '/admin/subscriptions',
-      '/admin/redeem',
-      '/subscriptions',
-      '/redeem',
-    ]
+    const restrictedPaths = ['/admin/groups']
     if (restrictedPaths.some((path) => toPath.startsWith(path))) {
       return authState.isAdmin ? '/admin/dashboard' : '/dashboard'
     }

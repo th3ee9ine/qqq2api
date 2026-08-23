@@ -29,15 +29,13 @@ type dashboardSnapshotV2Response struct {
 	EndDate     string `json:"end_date"`
 	Granularity string `json:"granularity"`
 
-	Stats      *dashboardSnapshotV2Stats        `json:"stats,omitempty"`
-	Trend      []usagestats.TrendDataPoint      `json:"trend,omitempty"`
-	Models     []usagestats.ModelStat           `json:"models,omitempty"`
-	Groups     []usagestats.GroupStat           `json:"groups,omitempty"`
-	UsersTrend []usagestats.UserUsageTrendPoint `json:"users_trend,omitempty"`
+	Stats  *dashboardSnapshotV2Stats   `json:"stats,omitempty"`
+	Trend  []usagestats.TrendDataPoint `json:"trend,omitempty"`
+	Models []usagestats.ModelStat      `json:"models,omitempty"`
+	Groups []usagestats.GroupStat      `json:"groups,omitempty"`
 }
 
 type dashboardSnapshotV2Filters struct {
-	UserID                int64
 	APIKeyID              int64
 	AccountID             int64
 	GroupID               int64
@@ -52,7 +50,6 @@ type dashboardSnapshotV2CacheKey struct {
 	StartTime             string `json:"start_time"`
 	EndTime               string `json:"end_time"`
 	Granularity           string `json:"granularity"`
-	UserID                int64  `json:"user_id"`
 	APIKeyID              int64  `json:"api_key_id"`
 	AccountID             int64  `json:"account_id"`
 	GroupID               int64  `json:"group_id"`
@@ -65,8 +62,6 @@ type dashboardSnapshotV2CacheKey struct {
 	IncludeTrend          bool   `json:"include_trend"`
 	IncludeModels         bool   `json:"include_models"`
 	IncludeGroups         bool   `json:"include_groups"`
-	IncludeUsersTrend     bool   `json:"include_users_trend"`
-	UsersTrendLimit       int    `json:"users_trend_limit"`
 }
 
 func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
@@ -80,14 +75,6 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 	includeTrend := parseBoolQueryWithDefault(c.Query("include_trend"), true)
 	includeModels := parseBoolQueryWithDefault(c.Query("include_model_stats"), true)
 	includeGroups := parseBoolQueryWithDefault(c.Query("include_group_stats"), false)
-	includeUsersTrend := parseBoolQueryWithDefault(c.Query("include_users_trend"), false)
-	usersTrendLimit := 12
-	if raw := strings.TrimSpace(c.Query("users_trend_limit")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 50 {
-			usersTrendLimit = parsed
-		}
-	}
-
 	filters, err := parseDashboardSnapshotV2Filters(c)
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -98,7 +85,6 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		StartTime:             startTime.UTC().Format(time.RFC3339),
 		EndTime:               endTime.UTC().Format(time.RFC3339),
 		Granularity:           granularity,
-		UserID:                filters.UserID,
 		APIKeyID:              filters.APIKeyID,
 		AccountID:             filters.AccountID,
 		GroupID:               filters.GroupID,
@@ -111,8 +97,6 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 		IncludeTrend:          includeTrend,
 		IncludeModels:         includeModels,
 		IncludeGroups:         includeGroups,
-		IncludeUsersTrend:     includeUsersTrend,
-		UsersTrendLimit:       usersTrendLimit,
 	})
 	cacheKey := string(keyRaw)
 
@@ -127,8 +111,6 @@ func (h *DashboardHandler) GetSnapshotV2(c *gin.Context) {
 			includeTrend,
 			includeModels,
 			includeGroups,
-			includeUsersTrend,
-			usersTrendLimit,
 		)
 	})
 	if err != nil {
@@ -152,8 +134,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 	startTime, endTime time.Time,
 	granularity string,
 	filters *dashboardSnapshotV2Filters,
-	includeStats, includeTrend, includeModels, includeGroups, includeUsersTrend bool,
-	usersTrendLimit int,
+	includeStats, includeTrend, includeModels, includeGroups bool,
 ) (*dashboardSnapshotV2Response, error) {
 	resp := &dashboardSnapshotV2Response{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
@@ -179,7 +160,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			startTime,
 			endTime,
 			granularity,
-			filters.UserID,
+			0,
 			filters.APIKeyID,
 			filters.AccountID,
 			filters.GroupID,
@@ -200,7 +181,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			ctx,
 			startTime,
 			endTime,
-			filters.UserID,
+			0,
 			filters.APIKeyID,
 			filters.AccountID,
 			filters.GroupID,
@@ -221,7 +202,7 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 			ctx,
 			startTime,
 			endTime,
-			filters.UserID,
+			0,
 			filters.APIKeyID,
 			filters.AccountID,
 			filters.GroupID,
@@ -236,14 +217,6 @@ func (h *DashboardHandler) buildSnapshotV2Response(
 		resp.Groups = groups
 	}
 
-	if includeUsersTrend {
-		usersTrend, _, err := h.getUserUsageTrendCached(ctx, startTime, endTime, granularity, usersTrendLimit)
-		if err != nil {
-			return nil, errors.New("failed to get user usage trend")
-		}
-		resp.UsersTrend = usersTrend
-	}
-
 	return resp, nil
 }
 
@@ -252,13 +225,6 @@ func parseDashboardSnapshotV2Filters(c *gin.Context) (*dashboardSnapshotV2Filter
 		Model: strings.TrimSpace(c.Query("model")),
 	}
 
-	if userIDStr := strings.TrimSpace(c.Query("user_id")); userIDStr != "" {
-		id, err := strconv.ParseInt(userIDStr, 10, 64)
-		if err != nil {
-			return nil, err
-		}
-		filters.UserID = id
-	}
 	if apiKeyIDStr := strings.TrimSpace(c.Query("api_key_id")); apiKeyIDStr != "" {
 		id, err := strconv.ParseInt(apiKeyIDStr, 10, 64)
 		if err != nil {

@@ -888,6 +888,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			Kind:         src.Kind,
 			Name:         src.Name,
 		}
+		item.Action = "skipped"
+		item.Error = "platform is retired"
+		result.Skipped++
+		result.Items = append(result.Items, item)
+		continue
 
 		refreshToken, _ := src.Credentials["refresh_token"].(string)
 		if strings.TrimSpace(refreshToken) == "" {
@@ -1024,6 +1029,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			Kind:         src.Kind,
 			Name:         src.Name,
 		}
+		item.Action = "skipped"
+		item.Error = "platform is retired"
+		result.Skipped++
+		result.Items = append(result.Items, item)
+		continue
 
 		apiKey, _ := src.Credentials["api_key"].(string)
 		if strings.TrimSpace(apiKey) == "" {
@@ -1577,12 +1587,5 @@ func (s *CRSSyncService) PreviewFromCRS(ctx context.Context, input SyncFromCRSIn
 	for _, src := range exported.Data.OpenAIResponsesAccounts {
 		classify(src.ID, src.Kind, src.Name, PlatformOpenAI, AccountTypeAPIKey)
 	}
-	for _, src := range exported.Data.GeminiOAuthAccounts {
-		classify(src.ID, src.Kind, src.Name, PlatformGemini, AccountTypeOAuth)
-	}
-	for _, src := range exported.Data.GeminiAPIKeyAccounts {
-		classify(src.ID, src.Kind, src.Name, PlatformGemini, AccountTypeAPIKey)
-	}
-
 	return result, nil
 }

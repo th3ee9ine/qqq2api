@@ -49,7 +49,7 @@ func adminAuth(
 		// 检查 x-api-key header（Admin API Key 认证）
 		apiKey := c.GetHeader("x-api-key")
 		if apiKey != "" {
-			if !validateAdminAPIKey(c, apiKey, settingService, userService) {
+			if !validateAdminAPIKey(c, apiKey, authService, settingService, userService) {
 				return
 			}
 			c.Next()
@@ -121,6 +121,7 @@ func extractJWTFromWebSocketSubprotocol(c *gin.Context) string {
 func validateAdminAPIKey(
 	c *gin.Context,
 	key string,
+	authService *service.AuthService,
 	settingService *service.SettingService,
 	userService *service.UserService,
 ) bool {
@@ -136,10 +137,22 @@ func validateAdminAPIKey(
 		return false
 	}
 
-	// 获取真实的管理员用户
-	admin, err := userService.GetFirstAdmin(c.Request.Context())
+	configuredEmail := authService.ConfiguredAdminEmail()
+	// Resolve the configured environment administrator, never an arbitrary
+	var admin *service.User
+	if configuredEmail != "" {
+		admin, err = userService.GetByEmail(c.Request.Context(), configuredEmail)
+	} else {
+		// Legacy config compatibility: setup now persists default.admin_email,
+		// but older installations may not have it yet.
+		admin, err = userService.GetFirstAdmin(c.Request.Context())
+	}
 	if err != nil {
 		AbortWithError(c, 500, "INTERNAL_ERROR", "No admin user found")
+		return false
+	}
+	if !admin.IsActive() || !authService.IsConfiguredAdmin(c.Request.Context(), admin) {
+		AbortWithError(c, 403, "ADMIN_ONLY_MODE", "Administrator access is restricted to the configured account")
 		return false
 	}
 
@@ -185,6 +198,10 @@ func validateJWTForAdmin(
 		AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
 		return false
 	}
+	if !authService.IsConfiguredAdmin(c.Request.Context(), user) {
+		AbortWithError(c, 403, "ADMIN_ONLY_MODE", "Administrator access is restricted to the configured account")
+		return false
+	}
 
 	// 校验 TokenVersion，确保管理员改密后旧 token 失效
 	if claims.TokenVersion != user.TokenVersion {
@@ -194,12 +211,6 @@ func validateJWTForAdmin(
 
 	// 会话绑定校验：IP/UA 任一变化即撤销会话（功能可在系统设置中关闭）
 	if !enforceSessionBinding(c, authService, settingService, auditService, claims) {
-		return false
-	}
-
-	// 检查管理员权限
-	if !user.IsAdmin() {
-		AbortWithError(c, 403, "FORBIDDEN", "Admin access required")
 		return false
 	}
 

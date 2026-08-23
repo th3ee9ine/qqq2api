@@ -5,18 +5,14 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { DashboardStats } from '@/types'
 import DashboardView from '../DashboardView.vue'
 
-const { getSnapshotV2, getUserUsageTrend, getUserSpendingRanking } = vi.hoisted(() => ({
-  getSnapshotV2: vi.fn(),
-  getUserUsageTrend: vi.fn(),
-  getUserSpendingRanking: vi.fn()
+const { getSnapshotV2 } = vi.hoisted(() => ({
+  getSnapshotV2: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
   adminAPI: {
     dashboard: {
-      getSnapshotV2,
-      getUserUsageTrend,
-      getUserSpendingRanking
+      getSnapshotV2
     }
   }
 }))
@@ -91,27 +87,11 @@ describe('admin DashboardView', () => {
     setActivePinia(createPinia())
 
     getSnapshotV2.mockReset()
-    getUserUsageTrend.mockReset()
-    getUserSpendingRanking.mockReset()
 
     getSnapshotV2.mockResolvedValue({
       stats: createDashboardStats(),
       trend: [],
       models: []
-    })
-    getUserUsageTrend.mockResolvedValue({
-      trend: [],
-      start_date: '',
-      end_date: '',
-      granularity: 'hour'
-    })
-    getUserSpendingRanking.mockResolvedValue({
-      ranking: [],
-      total_actual_cost: 0,
-      total_requests: 0,
-      total_tokens: 0,
-      start_date: '',
-      end_date: ''
     })
   })
 
@@ -125,8 +105,7 @@ describe('admin DashboardView', () => {
           DateRangePicker: true,
           Select: true,
           ModelDistributionChart: true,
-          TokenUsageTrend: true,
-          Line: true
+          TokenUsageTrend: true
         }
       }
     })
@@ -142,5 +121,34 @@ describe('admin DashboardView', () => {
       end_date: formatLocalDate(now),
       granularity: 'hour'
     }))
+  })
+
+  it('does not render or request user-specific dashboard data', async () => {
+    const wrapper = mount(DashboardView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          LoadingSpinner: true,
+          Icon: true,
+          DateRangePicker: true,
+          Select: true,
+          ModelDistributionChart: {
+            template: '<div data-test="model-chart" />'
+          },
+          TokenUsageTrend: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('admin.dashboard.users')
+    expect(wrapper.text()).not.toContain('admin.dashboard.activeUsers')
+    expect(wrapper.text()).not.toContain('admin.dashboard.recentUsage')
+    expect(wrapper.find('[data-test="model-chart"]').attributes()).not.toHaveProperty('enable-breakdown')
+    expect(getSnapshotV2).toHaveBeenCalledTimes(1)
+    const snapshotParams = getSnapshotV2.mock.calls[0][0]
+    expect(snapshotParams).not.toHaveProperty('user_id')
+    expect(snapshotParams).not.toHaveProperty('include_users_trend')
   })
 })

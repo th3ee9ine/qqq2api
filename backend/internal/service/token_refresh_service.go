@@ -90,13 +90,10 @@ func NewTokenRefreshService(
 	accountRepo AccountRepository,
 	oauthService *OAuthService,
 	openaiOAuthService *OpenAIOAuthService,
-	geminiOAuthService *GeminiOAuthService,
-	antigravityOAuthService *AntigravityOAuthService,
 	cacheInvalidator TokenCacheInvalidator,
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
 	tempUnschedCache TempUnschedCache,
-	grokOAuthServices ...*GrokOAuthService,
 ) *TokenRefreshService {
 	refreshCfg := &config.TokenRefreshConfig{}
 	if cfg != nil {
@@ -121,24 +118,14 @@ func NewTokenRefreshService(
 	openAIRefresher := NewOpenAITokenRefresher(openaiOAuthService, accountRepo)
 
 	claudeRefresher := NewClaudeTokenRefresher(oauthService)
-	geminiRefresher := NewGeminiTokenRefresher(geminiOAuthService)
-	agRefresher := NewAntigravityTokenRefresher(antigravityOAuthService)
-	var grokOAuthService *GrokOAuthService
-	if len(grokOAuthServices) > 0 {
-		grokOAuthService = grokOAuthServices[0]
-	}
-	grokRefresher := NewGrokTokenRefresher(grokOAuthService)
 
-	// Each provider is registered exactly once. The same registry supplies both
-	// execution and repository eligibility, preventing future platform drift.
+	// Only production-supported providers enter the background refresh registry.
+	// Retired implementations remain constructible for historical data tools but
+	// are deliberately unreachable from the runtime loop.
 	s.registrations = []tokenRefreshRegistration{
 		{platform: PlatformAnthropic, refresher: claudeRefresher, executor: claudeRefresher},
 		{platform: PlatformOpenAI, refresher: openAIRefresher, executor: openAIRefresher},
-		{platform: PlatformGemini, refresher: geminiRefresher, executor: geminiRefresher},
-		{platform: PlatformAntigravity, refresher: agRefresher, executor: agRefresher},
-		{platform: PlatformGrok, refresher: grokRefresher, executor: grokRefresher},
 	}
-
 	return s
 }
 

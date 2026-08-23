@@ -16,6 +16,7 @@
     <template v-else>
       <div v-if="isTempUnschedulable" class="flex flex-col items-center gap-1">
         <button
+          v-if="tempUnschedActionEnabled"
           type="button"
           :class="['badge text-xs', statusClass, 'cursor-pointer']"
           :title="t('admin.accounts.status.viewTempUnschedDetails')"
@@ -23,6 +24,9 @@
         >
           {{ statusText }}
         </button>
+        <span v-else :class="['badge text-xs', statusClass]">
+          {{ statusText }}
+        </span>
         <span class="max-w-[180px] text-center text-[11px] leading-4 text-gray-500 dark:text-gray-400">
           {{ tempUnschedRecoveryText }}
         </span>
@@ -167,9 +171,12 @@ import { formatCountdown, formatDateTime, formatDateTimeToMinute, formatCountdow
 
 const { t } = useI18n()
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   account: Account
-}>()
+  tempUnschedActionEnabled?: boolean
+}>(), {
+  tempUnschedActionEnabled: true
+})
 
 const emit = defineEmits<{
   (e: 'show-temp-unsched', account: Account): void
@@ -354,7 +361,7 @@ const statusText = computed(() => {
 })
 
 const handleTempUnschedClick = () => {
-  if (!isTempUnschedulable.value) return
+  if (!props.tempUnschedActionEnabled || !isTempUnschedulable.value) return
   emit('show-temp-unsched', props.account)
 }
 </script>

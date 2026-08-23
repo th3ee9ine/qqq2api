@@ -63,6 +63,12 @@ var validOpsAlertSeveritySet = func() map[string]struct{} {
 	return set
 }()
 
+var validOpsAlertFilterKeys = map[string]struct{}{
+	"platform": {},
+	"group_id": {},
+	"region":   {},
+}
+
 type opsAlertRuleValidatedInput struct {
 	Name       string
 	MetricType string
@@ -111,6 +117,18 @@ func validateOpsAlertRulePayload(raw map[string]json.RawMessage) (*opsAlertRuleV
 	for _, field := range requiredFields {
 		if _, ok := raw[field]; !ok {
 			return nil, fmt.Errorf("%s is required", field)
+		}
+	}
+
+	if value, ok := raw["filters"]; ok && strings.TrimSpace(string(value)) != "null" {
+		var filters map[string]json.RawMessage
+		if err := json.Unmarshal(value, &filters); err != nil || filters == nil {
+			return nil, fmt.Errorf("filters must be an object")
+		}
+		for key := range filters {
+			if _, ok := validOpsAlertFilterKeys[key]; !ok {
+				return nil, fmt.Errorf("filters.%s is not supported", key)
+			}
 		}
 	}
 

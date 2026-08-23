@@ -5,14 +5,13 @@ package service
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestBatchImageSettlementService_SettlesAndChargesSuccessfulImagesOnly(t *testing.T) {
+func TestBatchImageSettlementService_SettlesAndRecordsSuccessfulImageCostWithoutUserWallet(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_settle")
 	job.SuccessCount = 3
@@ -38,15 +37,7 @@ func TestBatchImageSettlementService_SettlesAndChargesSuccessfulImagesOnly(t *te
 	require.NotEmpty(t, batchImageDerefString(repo.jobs[job.BatchID].ManifestHash))
 	require.NotNil(t, repo.jobs[job.BatchID].SettledAt)
 	require.Equal(t, "batch-settlement-session", batchImageDerefString(usageLogs.lastLog.SessionID))
-	require.Len(t, billing.captures, 1)
-	require.Equal(t, int64(321), billing.captures[0].APIKeyID)
-	require.Equal(t, job.UserID, billing.captures[0].UserID)
-	require.Equal(t, job.BatchID, billing.captures[0].BatchID)
-	require.Equal(t, 0.75, billing.captures[0].ActualAmount)
-	require.Equal(t, 1.25, billing.captures[0].HoldAmount)
-	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), batchImageTestData)
-	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), "gs://")
-	require.NotContains(t, fmt.Sprintf("%+v", billing.captures[0]), "prompt")
+	require.Empty(t, billing.captures, "global API keys do not charge a user wallet")
 }
 
 func TestBatchImageSettlementService_ZeroSuccessCanComplete(t *testing.T) {
@@ -63,8 +54,7 @@ func TestBatchImageSettlementService_ZeroSuccessCanComplete(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0.0, result.ActualCost)
 	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
-	require.Len(t, billing.captures, 1)
-	require.Equal(t, 0.0, billing.captures[0].ActualAmount)
+	require.Empty(t, billing.captures)
 }
 
 func TestBatchImageSettlementService_CompletedJobReturnsAlreadySettledWithoutBilling(t *testing.T) {
@@ -84,7 +74,7 @@ func TestBatchImageSettlementService_CompletedJobReturnsAlreadySettledWithoutBil
 	require.Empty(t, billing.captures)
 }
 
-func TestBatchImageSettlementService_IdempotentAfterBillingCrash(t *testing.T) {
+func TestBatchImageSettlementService_IgnoresLegacyBillingLedgerForGlobalKey(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_crash")
 	repo.jobs[job.BatchID] = job
@@ -95,7 +85,7 @@ func TestBatchImageSettlementService_IdempotentAfterBillingCrash(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0.5, result.ActualCost)
 	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
-	require.Len(t, billing.captures, 1)
+	require.Empty(t, billing.captures)
 }
 
 func TestBatchImageSettlementService_ValidationErrors(t *testing.T) {
@@ -182,24 +172,22 @@ func TestBatchImageSettlementService_UsesSubmittedPricingSnapshot(t *testing.T) 
 	result, err := svc.Settle(context.Background(), job.BatchID)
 	require.NoError(t, err)
 	require.InDelta(t, 0.5, result.ActualCost, 1e-12)
-	require.Len(t, billing.captures, 1)
-	require.InDelta(t, 0.5, billing.captures[0].ActualAmount, 1e-12)
-	require.InDelta(t, 0.55, billing.captures[0].HoldAmount, 1e-12)
+	require.Empty(t, billing.captures)
 }
 
-func TestBatchImageSettlementService_BillingFailureLeavesSettlingAndRecordsError(t *testing.T) {
+func TestBatchImageSettlementService_IgnoresLegacyWalletFailureForGlobalKey(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_billing_fail")
 	repo.jobs[job.BatchID] = job
 	billing := &fakeBatchImageBillingRepo{err: errors.New("temporary billing timeout with gs://hidden-output")}
 	svc := &BatchImageSettlementService{Repo: repo, BillingRepo: billing, Pricing: &fakeBatchImagePricingResolver{unitPrice: 0.25}}
 
-	_, err := svc.Settle(context.Background(), job.BatchID)
-	require.ErrorIs(t, err, ErrBatchImageSettlementBillingFailed)
-	require.Equal(t, BatchImageJobStatusSettling, repo.jobs[job.BatchID].Status)
-	require.Equal(t, "SETTLEMENT_BILLING_FAILED", batchImageDerefString(repo.jobs[job.BatchID].LastErrorCode))
-	require.Contains(t, batchImageDerefString(repo.jobs[job.BatchID].LastErrorMessage), "temporary billing timeout")
-	require.NotNil(t, billing.captures[0])
+	result, err := svc.Settle(context.Background(), job.BatchID)
+	require.NoError(t, err)
+	require.InDelta(t, 0.5, result.ActualCost, 1e-12)
+	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
+	require.Empty(t, batchImageDerefString(repo.jobs[job.BatchID].LastErrorCode))
+	require.Empty(t, billing.captures)
 }
 
 func TestBatchImagePipelineProcessor_SettlesQueuedSettlingJob(t *testing.T) {
@@ -217,10 +205,10 @@ func TestBatchImagePipelineProcessor_SettlesQueuedSettlingJob(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Terminal)
 	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
-	require.Len(t, billing.captures, 1)
+	require.Empty(t, billing.captures)
 }
 
-func TestBatchImagePipelineProcessor_RequeuesTransientSettlementFailure(t *testing.T) {
+func TestBatchImagePipelineProcessor_DoesNotRequeueForLegacyWalletFailure(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_pipeline_retry")
 	repo.jobs[job.BatchID] = job
@@ -232,12 +220,11 @@ func TestBatchImagePipelineProcessor_RequeuesTransientSettlementFailure(t *testi
 
 	result, err := processor.Process(context.Background(), job.BatchID)
 	require.NoError(t, err)
-	require.False(t, result.Terminal)
-	require.Equal(t, batchImageSettlementRetryDelay, result.RequeueAfter)
-	require.Equal(t, BatchImageJobStatusSettling, repo.jobs[job.BatchID].Status)
+	require.True(t, result.Terminal)
+	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
 }
 
-func TestBatchImagePipelineProcessor_FailsAndReleasesAfterSettlementRetryLimit(t *testing.T) {
+func TestBatchImagePipelineProcessor_IgnoresLegacyCaptureFailureForGlobalKey(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_pipeline_retry_exhausted")
 	job.RetryCount = batchImageSettlementMaxRetries - 1
@@ -252,11 +239,9 @@ func TestBatchImagePipelineProcessor_FailsAndReleasesAfterSettlementRetryLimit(t
 	result, err := processor.Process(context.Background(), job.BatchID)
 	require.NoError(t, err)
 	require.True(t, result.Terminal)
-	require.Equal(t, BatchImageJobStatusFailed, repo.jobs[job.BatchID].Status)
-	require.Equal(t, "SETTLEMENT_BILLING_RETRY_EXHAUSTED", batchImageDerefString(repo.jobs[job.BatchID].LastErrorCode))
-	require.Len(t, billing.captures, 1)
-	require.Len(t, billing.releases, 1)
-	require.Equal(t, BatchImageReleaseRequestID(job.BatchID), billing.releases[0].RequestID)
+	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
+	require.Empty(t, billing.captures)
+	require.Empty(t, billing.releases)
 }
 
 func TestBatchImageSettlementRetryExhaustedReleaseIsIdempotentAfterTransitionFailure(t *testing.T) {
@@ -272,16 +257,15 @@ func TestBatchImageSettlementRetryExhaustedReleaseIsIdempotentAfterTransitionFai
 	_, err := svc.Settle(context.Background(), job.BatchID)
 	require.ErrorContains(t, err, "temporary transition failure")
 	require.Equal(t, BatchImageJobStatusSettling, repo.jobs[job.BatchID].Status)
-	require.Len(t, billing.releases, 1)
-	require.Len(t, billing.seen, 1)
+	require.Empty(t, billing.releases)
+	require.Empty(t, billing.seen)
 
 	repo.transitionErr = nil
 	_, err = svc.Settle(context.Background(), job.BatchID)
 	require.ErrorIs(t, err, ErrBatchImageSettlementBillingFailed)
 	require.Equal(t, BatchImageJobStatusFailed, repo.jobs[job.BatchID].Status)
-	require.Len(t, billing.releases, 2)
-	require.Equal(t, billing.releases[0].RequestID, billing.releases[1].RequestID)
-	require.Len(t, billing.seen, 1)
+	require.Empty(t, billing.releases)
+	require.Empty(t, billing.seen)
 }
 
 func TestBatchImageSettlementService_CostExceedsHoldExhaustsAndReleases(t *testing.T) {
@@ -310,11 +294,7 @@ func TestBatchImageSettlementService_CostExceedsHoldExhaustsAndReleases(t *testi
 	require.ErrorIs(t, err, ErrBatchImageSettlementBillingFailed)
 	require.Equal(t, BatchImageJobStatusFailed, repo.jobs[job.BatchID].Status)
 	require.Empty(t, billing.captures)
-	require.Len(t, billing.releases, 1)
-	require.Equal(t, BatchImageReleaseRequestID(job.BatchID), billing.releases[0].RequestID)
-	// 释放指纹必须与 processor/Cancel/recovery 一致地使用 RequestHash，
-	// 否则共享同一 request id 的后续释放会命中指纹冲突（毒消息）。
-	require.Equal(t, requestHash, billing.releases[0].RequestPayloadHash)
+	require.Empty(t, billing.releases)
 }
 
 func TestBatchImageSettlementService_InvalidCountsExhaustsAndReleases(t *testing.T) {
@@ -337,18 +317,17 @@ func TestBatchImageSettlementService_InvalidCountsExhaustsAndReleases(t *testing
 	require.ErrorIs(t, err, ErrBatchImageSettlementBillingFailed)
 	require.Equal(t, BatchImageJobStatusFailed, repo.jobs[job.BatchID].Status)
 	require.Empty(t, billing.captures)
-	require.Len(t, billing.releases, 1)
-	require.Equal(t, requestHash, billing.releases[0].RequestPayloadHash)
+	require.Empty(t, billing.releases)
 }
 
-func TestReleaseBatchImageBalanceHold_TreatsFingerprintConflictAsReleased(t *testing.T) {
+func TestReleaseBatchImageBalanceHold_SkipsLegacyWalletForGlobalKey(t *testing.T) {
 	job := testSettlingBatchImageJob("imgbatch_release_conflict")
 	// 历史版本用 manifestHash 释放过一次：同一 request id 再以 RequestHash
 	// 释放会命中指纹冲突。资金已归还，必须视为幂等成功而非毒消息。
 	billing := &fakeBatchImageBillingRepo{releaseErr: ErrUsageBillingRequestConflict}
 	err := releaseBatchImageBalanceHold(context.Background(), billing, job, "request-hash")
 	require.NoError(t, err)
-	require.Len(t, billing.releases, 1)
+	require.Empty(t, billing.releases)
 }
 
 func TestBatchImageSettlementManifestHash(t *testing.T) {
@@ -366,7 +345,7 @@ func TestBatchImageSettlementManifestHash(t *testing.T) {
 	require.NotContains(t, BuildBatchImageSettlementManifestHash(job), promptOrBase64)
 }
 
-func TestBatchImageSettlementBillingRequestIDs(t *testing.T) {
+func TestBatchImageSettlementResultRequestIDsRemainUniqueWithoutWalletCharges(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	first := testSettlingBatchImageJob("imgbatch_unique_1")
 	second := testSettlingBatchImageJob("imgbatch_unique_2")
@@ -375,18 +354,19 @@ func TestBatchImageSettlementBillingRequestIDs(t *testing.T) {
 	billing := &fakeBatchImageBillingRepo{}
 	svc := &BatchImageSettlementService{Repo: repo, BillingRepo: billing, Pricing: &fakeBatchImagePricingResolver{unitPrice: 0.25}}
 
-	_, err := svc.Settle(context.Background(), first.BatchID)
+	firstResult, err := svc.Settle(context.Background(), first.BatchID)
 	require.NoError(t, err)
-	_, err = svc.Settle(context.Background(), first.BatchID)
+	firstRepeat, err := svc.Settle(context.Background(), first.BatchID)
 	require.NoError(t, err)
-	_, err = svc.Settle(context.Background(), second.BatchID)
+	secondResult, err := svc.Settle(context.Background(), second.BatchID)
 	require.NoError(t, err)
 
-	require.Len(t, billing.captures, 2)
-	require.Equal(t, BatchImageCaptureRequestID(first.BatchID), billing.captures[0].RequestID)
-	require.Equal(t, BatchImageCaptureRequestID(second.BatchID), billing.captures[1].RequestID)
-	require.NotEqual(t, billing.captures[0].RequestID, billing.captures[1].RequestID)
-	require.Len(t, billing.seen, 2)
+	require.Equal(t, BatchImageCaptureRequestID(first.BatchID), firstResult.RequestID)
+	require.Equal(t, firstResult.RequestID, firstRepeat.RequestID)
+	require.Equal(t, BatchImageCaptureRequestID(second.BatchID), secondResult.RequestID)
+	require.NotEqual(t, firstResult.RequestID, secondResult.RequestID)
+	require.Empty(t, billing.captures)
+	require.Empty(t, billing.seen)
 }
 
 func testSettlingBatchImageJob(batchID string) *BatchImageJob {

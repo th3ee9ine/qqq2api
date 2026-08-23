@@ -112,9 +112,6 @@ func (r *opsRepository) ListIngressRejects(ctx context.Context, filter *service.
 	if value := strings.TrimSpace(filter.ClientIP); value != "" {
 		add("client_ip = $%d::inet", value)
 	}
-	if filter.UserID != nil {
-		add("user_id = $%d", *filter.UserID)
-	}
 	if filter.APIKeyID != nil {
 		add("api_key_id = $%d", *filter.APIKeyID)
 	}

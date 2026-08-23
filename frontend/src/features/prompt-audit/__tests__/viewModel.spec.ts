@@ -6,6 +6,7 @@ import {
   draftFingerprint,
   emptyEventFilters,
   eventFilterPayload,
+  eventQueryParams,
   hasExplicitDeleteRange,
   SCANNER_CATALOG,
 } from '../viewModel'
@@ -83,5 +84,11 @@ describe('Prompt Audit view model', () => {
       start_at: new Date(filters.start_at).toISOString(),
       end_at: new Date(filters.end_at).toISOString(),
     })
+  })
+
+  it('does not restore the removed user ID filter from legacy client state', () => {
+    const filters = { ...emptyEventFilters(), user_id: '42', api_key_id: '7' }
+    expect(eventQueryParams(filters)).toMatchObject({ api_key_id: 7 })
+    expect(eventQueryParams(filters)).not.toHaveProperty('user_id')
   })
 })

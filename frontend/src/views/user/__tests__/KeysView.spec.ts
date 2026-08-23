@@ -10,7 +10,6 @@ const {
   getPublicSettings,
   getDashboardApiKeysUsage,
   getAvailableGroups,
-  getUserGroupRates,
   showError,
   showSuccess,
   copyToClipboard,
@@ -21,7 +20,6 @@ const {
   getPublicSettings: vi.fn(),
   getDashboardApiKeysUsage: vi.fn(),
   getAvailableGroups: vi.fn(),
-  getUserGroupRates: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
   copyToClipboard: vi.fn(),
@@ -66,12 +64,13 @@ vi.mock('@/api', () => ({
   authAPI: {
     getPublicSettings,
   },
-  usageAPI: {
-    getDashboardApiKeysUsage,
+  adminAPI: {
+    dashboard: {
+      getBatchApiKeysUsage: getDashboardApiKeysUsage,
+    },
   },
-  userGroupsAPI: {
+  groupsAPI: {
     getAvailable: getAvailableGroups,
-    getUserGroupRates,
   },
 }))
 
@@ -107,7 +106,6 @@ vi.mock('vue-i18n', async () => {
 
 const createApiKey = (): ApiKey => ({
   id: 1,
-  user_id: 1,
   key: 'sk-test-key',
   name: 'test-key',
   group_id: null,
@@ -264,7 +262,6 @@ describe('user KeysView column settings', () => {
     getPublicSettings.mockReset()
     getDashboardApiKeysUsage.mockReset()
     getAvailableGroups.mockReset()
-    getUserGroupRates.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
     copyToClipboard.mockReset()
@@ -281,7 +278,6 @@ describe('user KeysView column settings', () => {
     getPublicSettings.mockResolvedValue({})
     getDashboardApiKeysUsage.mockResolvedValue({ stats: {} })
     getAvailableGroups.mockResolvedValue([])
-    getUserGroupRates.mockResolvedValue({})
     isCurrentStep.mockReturnValue(false)
   })
 

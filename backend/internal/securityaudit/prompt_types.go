@@ -94,9 +94,9 @@ func (r Request) Clone() Request {
 
 type PromptSnapshot struct {
 	RequestID          string `json:"request_id"`
-	UserID             int64  `json:"user_id"`
-	UsernameSnapshot   string `json:"username"`
-	UserEmailSnapshot  string `json:"user_email"`
+	UserID             int64  `json:"-"`
+	UsernameSnapshot   string `json:"-"`
+	UserEmailSnapshot  string `json:"-"`
 	APIKeyID           int64  `json:"api_key_id"`
 	APIKeyNameSnapshot string `json:"api_key_name"`
 	GroupID            *int64 `json:"group_id,omitempty"`

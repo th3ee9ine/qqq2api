@@ -66,7 +66,7 @@ func TestUpdateSettingsSMTPFromAliasIsWritable(t *testing.T) {
 	require.Equal(t, "new@example.com", repo.values[service.SettingKeySMTPFrom])
 }
 
-func TestUpdateSettingsGrokDefaultBaseURLModeIsWritable(t *testing.T) {
+func TestUpdateSettingsGrokDefaultBaseURLModeIsIgnored(t *testing.T) {
 	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
 		service.SettingKeyGrokDefaultBaseURLMode: service.GrokDefaultBaseURLModeCLI,
 	})
@@ -75,7 +75,7 @@ func TestUpdateSettingsGrokDefaultBaseURLModeIsWritable(t *testing.T) {
 		"grok_default_base_url_mode": service.GrokDefaultBaseURLModeEUWest1,
 	}, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, service.GrokDefaultBaseURLModeEUWest1, repo.values[service.SettingKeyGrokDefaultBaseURLMode])
+	require.Equal(t, service.GrokDefaultBaseURLModeCLI, repo.values[service.SettingKeyGrokDefaultBaseURLMode])
 }
 
 func TestUpdateSettingsRejectsTwoCaptchaProviders(t *testing.T) {

@@ -916,13 +916,20 @@ func TestAdminService_UpdateGroup_ClearsReasoningPolicyForUnsupportedPlatform(t 
 	require.Empty(t, repo.updated.ReasoningEffortMappings)
 }
 
-func TestAdminService_UpdateGroup_ClearsPeakRateWhenChangingToStandard(t *testing.T) {
+func TestAdminService_UpdateGroup_RepairsRetiredSubscriptionConfiguration(t *testing.T) {
+	dailyLimit := 10.0
+	weeklyLimit := 20.0
+	monthlyLimit := 30.0
+	peakMultiplier := 2.0
 	existingGroup := &Group{
 		ID:                 1,
 		Name:               "existing-group",
 		Platform:           PlatformOpenAI,
 		Status:             StatusActive,
 		SubscriptionType:   SubscriptionTypeSubscription,
+		DailyLimitUSD:      &dailyLimit,
+		WeeklyLimitUSD:     &weeklyLimit,
+		MonthlyLimitUSD:    &monthlyLimit,
 		PeakRateEnabled:    true,
 		PeakStart:          "14:00",
 		PeakEnd:            "18:00",
@@ -932,12 +939,22 @@ func TestAdminService_UpdateGroup_ClearsPeakRateWhenChangingToStandard(t *testin
 	svc := &adminServiceImpl{groupRepo: repo}
 
 	group, err := svc.UpdateGroup(context.Background(), 1, &UpdateGroupInput{
-		SubscriptionType: SubscriptionTypeStandard,
+		SubscriptionType:   SubscriptionTypeSubscription,
+		DailyLimitUSD:      &dailyLimit,
+		WeeklyLimitUSD:     &weeklyLimit,
+		MonthlyLimitUSD:    &monthlyLimit,
+		PeakRateEnabled:    func() *bool { value := true; return &value }(),
+		PeakStart:          ptrString("09:00"),
+		PeakEnd:            ptrString("12:00"),
+		PeakRateMultiplier: &peakMultiplier,
 	})
 	require.NoError(t, err)
 	require.NotNil(t, group)
 	require.NotNil(t, repo.updated)
 	require.Equal(t, SubscriptionTypeStandard, repo.updated.SubscriptionType)
+	require.Nil(t, repo.updated.DailyLimitUSD)
+	require.Nil(t, repo.updated.WeeklyLimitUSD)
+	require.Nil(t, repo.updated.MonthlyLimitUSD)
 	require.False(t, repo.updated.PeakRateEnabled)
 	require.Equal(t, "", repo.updated.PeakStart)
 	require.Equal(t, "", repo.updated.PeakEnd)
@@ -1350,8 +1367,12 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsUnsupportedPlatfo
 	require.Nil(t, repo.created)
 }
 
-func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsSubscription(t *testing.T) {
+func TestAdminService_CreateGroup_IgnoresRetiredSubscriptionConfiguration(t *testing.T) {
 	fallbackID := int64(10)
+	dailyLimit := 10.0
+	weeklyLimit := 20.0
+	monthlyLimit := 30.0
+	peakMultiplier := 2.0
 	repo := &groupRepoStubForInvalidRequestFallback{
 		groups: map[int64]*Group{
 			fallbackID: {ID: fallbackID, Platform: PlatformAnthropic, SubscriptionType: SubscriptionTypeStandard},
@@ -1359,16 +1380,31 @@ func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsSubscription(t *t
 	}
 	svc := &adminServiceImpl{groupRepo: repo}
 
-	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
 		Name:                            "g1",
 		Platform:                        PlatformAnthropic,
 		RateMultiplier:                  1.0,
 		SubscriptionType:                SubscriptionTypeSubscription,
+		DailyLimitUSD:                   &dailyLimit,
+		WeeklyLimitUSD:                  &weeklyLimit,
+		MonthlyLimitUSD:                 &monthlyLimit,
+		PeakRateEnabled:                 true,
+		PeakStart:                       "09:00",
+		PeakEnd:                         "12:00",
+		PeakRateMultiplier:              &peakMultiplier,
 		FallbackGroupIDOnInvalidRequest: &fallbackID,
 	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "subscription groups cannot set invalid request fallback")
-	require.Nil(t, repo.created)
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.created)
+	require.Equal(t, SubscriptionTypeStandard, repo.created.SubscriptionType)
+	require.Nil(t, repo.created.DailyLimitUSD)
+	require.Nil(t, repo.created.WeeklyLimitUSD)
+	require.Nil(t, repo.created.MonthlyLimitUSD)
+	require.False(t, repo.created.PeakRateEnabled)
+	require.Empty(t, repo.created.PeakStart)
+	require.Empty(t, repo.created.PeakEnd)
+	require.Equal(t, 1.0, repo.created.PeakRateMultiplier)
 }
 
 func TestAdminService_CreateGroup_InvalidRequestFallbackRejectsFallbackGroup(t *testing.T) {
@@ -1511,7 +1547,7 @@ func TestAdminService_UpdateGroup_InvalidRequestFallbackPlatformMismatch(t *test
 	require.Nil(t, repo.updated)
 }
 
-func TestAdminService_UpdateGroup_InvalidRequestFallbackSubscriptionMismatch(t *testing.T) {
+func TestAdminService_UpdateGroup_InvalidRequestFallbackIgnoresRetiredSubscriptionType(t *testing.T) {
 	fallbackID := int64(10)
 	existing := &Group{
 		ID:                              1,
@@ -1529,12 +1565,14 @@ func TestAdminService_UpdateGroup_InvalidRequestFallbackSubscriptionMismatch(t *
 	}
 	svc := &adminServiceImpl{groupRepo: repo}
 
-	_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
+	group, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{
 		SubscriptionType: SubscriptionTypeSubscription,
 	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "subscription groups cannot set invalid request fallback")
-	require.Nil(t, repo.updated)
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	require.NotNil(t, repo.updated)
+	require.Equal(t, SubscriptionTypeStandard, repo.updated.SubscriptionType)
+	require.Equal(t, fallbackID, *repo.updated.FallbackGroupIDOnInvalidRequest)
 }
 
 func TestAdminService_UpdateGroup_InvalidRequestFallbackClearsOnZero(t *testing.T) {

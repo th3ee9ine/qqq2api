@@ -17,7 +17,7 @@ describe('fetchAllAccountIds', () => {
     })
 
     const filters = {
-      platform: 'grok',
+      platform: 'openai',
       status: 'active',
       search: 'example'
     }

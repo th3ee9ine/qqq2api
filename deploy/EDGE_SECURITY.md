@@ -11,8 +11,8 @@ terminate healthy long generations and streams.
 - `server.read_header_timeout: 10` bounds slow-header attacks. It does not
   limit request processing or response streaming.
 - `server.max_request_body_size: 268435456` is the absolute 256 MiB safety net.
-- `gateway.max_body_size: 268435456` remains available to multimodal, Gemini,
-  image, video, and batch-image endpoints.
+- `gateway.max_body_size: 268435456` remains available to multimodal and image
+  endpoints.
 - `gateway.text_max_body_size: 33554432` limits the known pure-text
   `/embeddings` and `/alpha/search` endpoints to 32 MiB.
 - H2C defaults to 50 concurrent streams per connection, a 2 MiB connection

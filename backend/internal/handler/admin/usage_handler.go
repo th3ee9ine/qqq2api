@@ -46,7 +46,6 @@ func NewUsageHandler(
 type CreateUsageCleanupTaskRequest struct {
 	StartDate   string  `json:"start_date"`
 	EndDate     string  `json:"end_date"`
-	UserID      *int64  `json:"user_id"`
 	APIKeyID    *int64  `json:"api_key_id"`
 	AccountID   *int64  `json:"account_id"`
 	GroupID     *int64  `json:"group_id"`
@@ -72,15 +71,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 	}
 
 	// Parse filters
-	var userID, apiKeyID, accountID, groupID int64
-	if userIDStr := c.Query("user_id"); userIDStr != "" {
-		id, err := strconv.ParseInt(userIDStr, 10, 64)
-		if err != nil {
-			response.BadRequest(c, "Invalid user_id")
-			return
-		}
-		userID = id
-	}
+	var apiKeyID, accountID, groupID int64
 
 	if apiKeyIDStr := c.Query("api_key_id"); apiKeyIDStr != "" {
 		id, err := strconv.ParseInt(apiKeyIDStr, 10, 64)
@@ -183,7 +174,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		SortOrder: c.DefaultQuery("sort_order", "desc"),
 	}
 	filters := usagestats.UsageLogFilters{
-		UserID:                userID,
+		UserID:                0,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,
 		GroupID:               groupID,
@@ -217,15 +208,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 // GET /api/v1/admin/usage/stats
 func (h *UsageHandler) Stats(c *gin.Context) {
 	// Parse filters - same as List endpoint
-	var userID, apiKeyID, accountID, groupID int64
-	if userIDStr := c.Query("user_id"); userIDStr != "" {
-		id, err := strconv.ParseInt(userIDStr, 10, 64)
-		if err != nil {
-			response.BadRequest(c, "Invalid user_id")
-			return
-		}
-		userID = id
-	}
+	var apiKeyID, accountID, groupID int64
 
 	if apiKeyIDStr := c.Query("api_key_id"); apiKeyIDStr != "" {
 		id, err := strconv.ParseInt(apiKeyIDStr, 10, 64)
@@ -336,7 +319,7 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 
 	// Build filters and call GetStatsWithFilters
 	filters := usagestats.UsageLogFilters{
-		UserID:                userID,
+		UserID:                0,
 		APIKeyID:              apiKeyID,
 		AccountID:             accountID,
 		GroupID:               groupID,
@@ -531,7 +514,6 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 	filters := service.UsageCleanupFilters{
 		StartTime:   startTime,
 		EndTime:     endTime,
-		UserID:      req.UserID,
 		APIKeyID:    req.APIKeyID,
 		AccountID:   req.AccountID,
 		GroupID:     req.GroupID,
@@ -541,10 +523,6 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		BillingType: req.BillingType,
 	}
 
-	var userID any
-	if filters.UserID != nil {
-		userID = *filters.UserID
-	}
 	var apiKeyID any
 	if filters.APIKeyID != nil {
 		apiKeyID = *filters.APIKeyID
@@ -582,11 +560,10 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		Body:       req,
 	}
 	executeAdminIdempotentJSON(c, "admin.usage.cleanup_tasks.create", idempotencyPayload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
-		logger.LegacyPrintf("handler.admin.usage", "[UsageCleanup] 请求创建清理任务: operator=%d start=%s end=%s user_id=%v api_key_id=%v account_id=%v group_id=%v model=%v request_type=%v stream=%v billing_type=%v tz=%q",
+		logger.LegacyPrintf("handler.admin.usage", "[UsageCleanup] 请求创建清理任务: operator=%d start=%s end=%s api_key_id=%v account_id=%v group_id=%v model=%v request_type=%v stream=%v billing_type=%v tz=%q",
 			subject.UserID,
 			filters.StartTime.Format(time.RFC3339),
 			filters.EndTime.Format(time.RFC3339),
-			userID,
 			apiKeyID,
 			accountID,
 			groupID,

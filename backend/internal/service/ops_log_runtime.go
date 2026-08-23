@@ -59,6 +59,7 @@ func normalizeOpsRuntimeLogConfig(cfg *OpsRuntimeLogConfig, defaults *OpsRuntime
 	if cfg.RetentionDays <= 0 {
 		cfg.RetentionDays = defaults.RetentionDays
 	}
+	cfg.Extra = cloneOpsMapWithoutUserIdentity(cfg.Extra)
 }
 
 func validateOpsRuntimeLogConfig(cfg *OpsRuntimeLogConfig) error {

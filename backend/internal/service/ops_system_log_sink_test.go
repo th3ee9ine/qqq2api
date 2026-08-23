@@ -165,6 +165,11 @@ func TestOpsSystemLogSink_StartStopAndFlushSuccess(t *testing.T) {
 			"request_id":        "req-1",
 			"client_request_id": "creq-1",
 			"user_id":           "12",
+			"user_email":        "user@example.com",
+			"user_query":        "ordinary-user",
+			"username":          "ordinary-user",
+			"user_agent":        "curl/8.0",
+			"actor_user_id":     int64(99),
 			"api_key_id":        int64(56),
 			"account_id":        json.Number("34"),
 			"platform":          "openai",
@@ -199,6 +204,18 @@ func TestOpsSystemLogSink_StartStopAndFlushSuccess(t *testing.T) {
 	}
 	if strings.TrimSpace(item.Message) == "" {
 		t.Fatalf("message should not be empty")
+	}
+	var extra map[string]any
+	if err := json.Unmarshal([]byte(item.ExtraJSON), &extra); err != nil {
+		t.Fatalf("unmarshal extra: %v", err)
+	}
+	for _, forbidden := range []string{"user_id", "user_email", "user_query", "username"} {
+		if _, ok := extra[forbidden]; ok {
+			t.Fatalf("extra must not contain %q: %s", forbidden, item.ExtraJSON)
+		}
+	}
+	if extra["user_agent"] != "curl/8.0" || extra["actor_user_id"] != float64(99) {
+		t.Fatalf("extra must preserve request and actor audit fields: %s", item.ExtraJSON)
 	}
 	// writtenCount is incremented after BatchInsertSystemLogsFn returns,
 	// so poll briefly to avoid a race between the done signal and the atomic add.

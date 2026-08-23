@@ -316,6 +316,15 @@ func (s *UserService) GetFirstAdmin(ctx context.Context) (*User, error) {
 	return admin, nil
 }
 
+// GetByEmail resolves the configured administrator row for authentication
+// middleware. It intentionally does not fall back to the first role=admin row.
+func (s *UserService) GetByEmail(ctx context.Context, email string) (*User, error) {
+	if s == nil || s.userRepo == nil {
+		return nil, ErrUserNotFound
+	}
+	return s.userRepo.GetByEmail(ctx, strings.TrimSpace(email))
+}
+
 // GetProfile 获取用户资料
 func (s *UserService) GetProfile(ctx context.Context, userID int64) (*User, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)

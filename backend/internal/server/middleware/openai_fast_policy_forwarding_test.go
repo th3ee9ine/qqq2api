@@ -18,7 +18,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream(t *testing.T) {
+func TestAPIKeyAuthForwardsSystemWideOpenAIFastPolicyIgnoringLegacyUserIDs(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	upstreamBodies := make(chan []byte, 2)
@@ -35,19 +35,12 @@ func TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream(t *testing.T) {
 	defer upstreamServer.Close()
 
 	settings := &service.OpenAIFastPolicySettings{
-		Rules: []service.OpenAIFastPolicyRule{
-			{
-				ServiceTier: service.OpenAIFastTierPriority,
-				Action:      service.BetaPolicyActionFilter,
-				Scope:       service.BetaPolicyScopeAll,
-			},
-			{
-				ServiceTier: service.OpenAIFastTierPriority,
-				Action:      service.BetaPolicyActionPass,
-				Scope:       service.BetaPolicyScopeAll,
-				UserIDs:     []int64{42},
-			},
-		},
+		Rules: []service.OpenAIFastPolicyRule{{
+			ServiceTier: service.OpenAIFastTierPriority,
+			Action:      service.BetaPolicyActionFilter,
+			Scope:       service.BetaPolicyScopeAll,
+			UserIDs:     []int64{42},
+		}},
 	}
 	settingsJSON, err := json.Marshal(settings)
 	require.NoError(t, err)
@@ -127,7 +120,7 @@ func TestAPIKeyAuthForwardsUserScopedOpenAIFastPolicyToUpstream(t *testing.T) {
 
 	allowedUserBody := <-upstreamBodies
 	otherUserBody := <-upstreamBodies
-	require.Equal(t, service.OpenAIFastTierPriority, gjson.GetBytes(allowedUserBody, "service_tier").String())
+	require.False(t, gjson.GetBytes(allowedUserBody, "service_tier").Exists())
 	require.False(t, gjson.GetBytes(otherUserBody, "service_tier").Exists())
 }
 

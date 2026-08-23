@@ -5,14 +5,6 @@ import ModelDistributionChart from '../ModelDistributionChart.vue'
 
 const messages: Record<string, string> = {
   'admin.dashboard.modelDistribution': 'Model Distribution',
-  'admin.dashboard.spendingRankingTitle': 'User Spending Ranking',
-  'admin.dashboard.viewModelDistribution': 'Model Distribution',
-  'admin.dashboard.viewSpendingRanking': 'User Spending Ranking',
-  'admin.dashboard.spendingRankingUser': 'User',
-  'admin.dashboard.spendingRankingRequests': 'Requests',
-  'admin.dashboard.spendingRankingTokens': 'Tokens',
-  'admin.dashboard.spendingRankingSpend': 'Spend',
-  'admin.dashboard.spendingRankingOther': 'Others',
   'admin.dashboard.model': 'Model',
   'admin.dashboard.requests': 'Requests',
   'admin.dashboard.tokens': 'Tokens',
@@ -22,7 +14,6 @@ const messages: Record<string, string> = {
   'admin.dashboard.metricTokens': 'By Tokens',
   'admin.dashboard.metricActualCost': 'By Actual Cost',
   'admin.dashboard.noDataAvailable': 'No data available',
-  'admin.redeem.userPrefix': 'User #{id}',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -132,7 +123,7 @@ describe('ModelDistributionChart', () => {
     expect(label).toBe('model-b: $1.40 (87.5%)')
   })
 
-  it('can hide account cost for user usage stats without account_cost', () => {
+  it('can hide account cost when the source does not provide account_cost', () => {
     const wrapper = mount(ModelDistributionChart, {
       props: {
         modelStats,
@@ -150,52 +141,4 @@ describe('ModelDistributionChart', () => {
     expect(wrapper.findAll('tbody tr')[0].findAll('td')).toHaveLength(5)
   })
 
-  it('uses the dashboard user label policy and renders Others with a dedicated chart color', async () => {
-    const wrapper = mount(ModelDistributionChart, {
-      props: {
-        modelStats: [],
-        enableRankingView: true,
-        rankingItems: [
-          { user_id: 1, email: 'alpha@example.com', username: 'alpha', actual_cost: 12, requests: 10, tokens: 1000 },
-          { user_id: 2, email: 'beta@example.com', username: '   ', actual_cost: 8, requests: 6, tokens: 600 },
-          { user_id: 3, email: '   ', username: '', actual_cost: 0, requests: 0, tokens: 0 },
-        ],
-        rankingTotalActualCost: 30,
-        rankingTotalRequests: 20,
-        rankingTotalTokens: 2000,
-      },
-      global: {
-        stubs: {
-          LoadingSpinner: true,
-        },
-      },
-    })
-
-    const rankingButton = wrapper.findAll('button').find((button) => button.text() === 'User Spending Ranking')
-    expect(rankingButton).toBeTruthy()
-    await rankingButton!.trigger('click')
-
-    const chartData = JSON.parse(wrapper.find('.chart-data').text())
-    expect(chartData.labels).toEqual([
-      '#1 alpha',
-      '#2 beta@example.com',
-      '#3 User #3',
-      'Others',
-    ])
-    expect(chartData.datasets[0].data).toEqual([12, 8, 0, 10])
-    expect(chartData.datasets[0].backgroundColor[0]).toBe('#3b82f6')
-    expect(chartData.datasets[0].backgroundColor[3]).toBe('#94a3b8')
-    expect(chartData.datasets[0].backgroundColor[3]).not.toBe(chartData.datasets[0].backgroundColor[0])
-
-    const rows = wrapper.findAll('tbody tr')
-    expect(rows).toHaveLength(4)
-    expect(rows[0].text()).toContain('alpha')
-    expect(rows[0].text()).not.toContain('alpha@example.com')
-    expect(rows[1].text()).toContain('beta@example.com')
-    expect(rows[2].text()).toContain('User #3')
-    expect(rows[3].text()).toContain('Others')
-    expect(rows[3].text()).toContain('4')
-    expect(rows[3].text()).toContain('400')
-    expect(rows[3].text()).toContain('$10.00')
-  })
 })

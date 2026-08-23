@@ -44,7 +44,6 @@ Navigation sidebar with user and admin sections.
   - Dashboard
   - API Keys
   - Usage
-  - Redeem
   - Profile
 - Admin navigation links (shown only if user is admin):
   - Admin Dashboard
@@ -194,7 +193,6 @@ Components use HTML entity icons for simplicity:
 - &#128200; Chart (Dashboard)
 - &#128273; Key (API Keys)
 - &#128202; Bar Chart (Usage)
-- &#127873; Gift (Redeem)
 - &#128100; User (Profile)
 - &#128268; Admin
 - &#128101; Users

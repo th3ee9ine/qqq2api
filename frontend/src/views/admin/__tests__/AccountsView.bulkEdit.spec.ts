@@ -121,6 +121,18 @@ const BulkEditAccountModalStub = {
   template: '<div data-test="bulk-edit-modal" :data-show="String(show)" :data-target-mode="target?.mode ?? \'\'"></div>'
 }
 
+const AccountTableFiltersStub = {
+  emits: ['update:filters'],
+  template: `
+    <button
+      data-test="supported-platform-filter"
+      @click="$emit('update:filters', { platform: 'openai' })"
+    >
+      filter OpenAI
+    </button>
+  `
+}
+
 describe('admin AccountsView bulk edit scope', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -168,7 +180,7 @@ describe('admin AccountsView bulk edit scope', () => {
           Pagination: true,
           ConfirmDialog: true,
           AccountTableActions: { template: '<div><slot name="beforeCreate" /><slot name="after" /></div>' },
-          AccountTableFilters: { template: '<div></div>' },
+          AccountTableFilters: AccountTableFiltersStub,
           AccountBulkActionsBar: AccountBulkActionsBarStub,
           AccountActionMenu: true,
           ImportDataModal: true,
@@ -195,6 +207,7 @@ describe('admin AccountsView bulk edit scope', () => {
     })
 
     await flushPromises()
+    await wrapper.get('[data-test="supported-platform-filter"]').trigger('click')
     await wrapper.get('[data-test="edit-filtered"]').trigger('click')
     await flushPromises()
 

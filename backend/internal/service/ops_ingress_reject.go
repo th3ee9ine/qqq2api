@@ -25,7 +25,7 @@ type OpsIngressRejectAggregate struct {
 	RouteFamily  string    `json:"route_family"`
 	Protocol     string    `json:"protocol"`
 	ClientIP     string    `json:"client_ip"`
-	UserID       *int64    `json:"user_id,omitempty"`
+	UserID       *int64    `json:"-"`
 	APIKeyID     *int64    `json:"api_key_id,omitempty"`
 	RequestCount int64     `json:"request_count"`
 	FirstSeen    time.Time `json:"first_seen"`
@@ -39,7 +39,6 @@ type OpsIngressRejectFilter struct {
 	RouteFamily  string
 	Protocol     string
 	ClientIP     string
-	UserID       *int64
 	APIKeyID     *int64
 	Page         int
 	PageSize     int

@@ -65,7 +65,7 @@ const LoginFormTestComponent = defineComponent({
           return
         }
 
-        mockPush('/dashboard')
+        mockPush('/admin/dashboard')
       } catch (error: any) {
         errorMessage.value = error.message || '登录失败'
       } finally {
@@ -91,25 +91,25 @@ describe('LoginForm 核心逻辑', () => {
     vi.clearAllMocks()
   })
 
-  it('成功登录后跳转到 dashboard', async () => {
+  it('管理员登录后跳转到管理仪表盘', async () => {
     mockLogin.mockResolvedValue({
       access_token: 'token',
       token_type: 'Bearer',
-      user: { id: 1, username: 'test', email: 'test@example.com', role: 'user', balance: 0, concurrency: 5, status: 'active', allowed_groups: null, created_at: '', updated_at: '' },
+      user: { id: 1, username: 'admin', email: 'admin@example.com', role: 'admin', balance: 0, concurrency: 0, status: 'active', allowed_groups: null, created_at: '', updated_at: '' },
     })
 
     const wrapper = mount(LoginFormTestComponent)
 
-    await wrapper.find('#email').setValue('test@example.com')
+    await wrapper.find('#email').setValue('admin@example.com')
     await wrapper.find('#password').setValue('password123')
     await wrapper.find('form').trigger('submit')
     await flushPromises()
 
     expect(mockLogin).toHaveBeenCalledWith({
-      email: 'test@example.com',
+      email: 'admin@example.com',
       password: 'password123',
     })
-    expect(mockPush).toHaveBeenCalledWith('/dashboard')
+    expect(mockPush).toHaveBeenCalledWith('/admin/dashboard')
   })
 
   it('登录失败时显示错误信息', async () => {
@@ -169,7 +169,7 @@ describe('LoginForm 核心逻辑', () => {
     resolveLogin!({
       access_token: 'token',
       token_type: 'Bearer',
-      user: { id: 1, username: 'test', email: 'test@example.com', role: 'user', balance: 0, concurrency: 5, status: 'active', allowed_groups: null, created_at: '', updated_at: '' },
+      user: { id: 1, username: 'admin', email: 'admin@example.com', role: 'admin', balance: 0, concurrency: 0, status: 'active', allowed_groups: null, created_at: '', updated_at: '' },
     })
     await flushPromises()
 

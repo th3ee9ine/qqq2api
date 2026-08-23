@@ -52,7 +52,7 @@ type AdminUser struct {
 
 type APIKey struct {
 	ID          int64      `json:"id"`
-	UserID      int64      `json:"user_id"`
+	UserID      int64      `json:"-"`
 	Key         string     `json:"key"`
 	Name        string     `json:"name"`
 	GroupID     *int64     `json:"group_id"`
@@ -83,7 +83,7 @@ type APIKey struct {
 	Reset1dAt     *time.Time `json:"reset_1d_at,omitempty"`
 	Reset7dAt     *time.Time `json:"reset_7d_at,omitempty"`
 
-	User  *User  `json:"user,omitempty"`
+	User  *User  `json:"-"`
 	Group *Group `json:"group,omitempty"`
 }
 
@@ -479,7 +479,7 @@ type BatchUpdateRedeemCodesRequest struct {
 // UsageLog 是普通用户接口使用的 usage log DTO（不包含管理员字段）。
 type UsageLog struct {
 	ID        int64  `json:"id"`
-	UserID    int64  `json:"user_id"`
+	UserID    int64  `json:"-"`
 	APIKeyID  int64  `json:"api_key_id"`
 	AccountID int64  `json:"account_id"`
 	RequestID string `json:"request_id"`
@@ -550,10 +550,10 @@ type UsageLog struct {
 
 	CreatedAt time.Time `json:"created_at"`
 
-	User         *User             `json:"user,omitempty"`
+	User         *User             `json:"-"`
 	APIKey       *APIKey           `json:"api_key,omitempty"`
 	Group        *Group            `json:"group,omitempty"`
-	Subscription *UserSubscription `json:"subscription,omitempty"`
+	Subscription *UserSubscription `json:"-"`
 }
 
 // AdminUsageLog 是管理员接口使用的 usage log DTO（包含管理员字段）。
@@ -590,7 +590,7 @@ type AdminUsageLog struct {
 type UsageCleanupFilters struct {
 	StartTime   time.Time `json:"start_time"`
 	EndTime     time.Time `json:"end_time"`
-	UserID      *int64    `json:"user_id,omitempty"`
+	UserID      *int64    `json:"-"`
 	APIKeyID    *int64    `json:"api_key_id,omitempty"`
 	AccountID   *int64    `json:"account_id,omitempty"`
 	GroupID     *int64    `json:"group_id,omitempty"`

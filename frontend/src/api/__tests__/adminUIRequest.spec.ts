@@ -23,7 +23,7 @@ describe('Admin UI request marker', () => {
     expect(shouldMarkAdminUIRequest(requestURL, '/login')).toBe(true)
   })
 
-  it.each(['/keys', '/groups/available', '/auth/me', '/announcements'])(
+  it.each(['/keys', '/groups/available', '/auth/me'])(
     'marks shared request %s while an Admin page is active',
     (requestURL) => {
       expect(shouldMarkAdminUIRequest(requestURL, '/admin/dashboard')).toBe(true)
@@ -40,7 +40,7 @@ describe('Admin UI request marker', () => {
   })
 })
 
-describe('User UI request marker', () => {
+describe('authenticated panel request marker', () => {
   it('uses the stable request header name', () => {
     expect(USER_UI_REQUEST_HEADER).toBe('X-User-UI-Request')
   })
@@ -48,37 +48,13 @@ describe('User UI request marker', () => {
   it.each([
     '/auth/me',
     '/auth/revoke-all-sessions',
-    '/auth/oauth/bind-token',
-    '/user',
-    '/user/profile',
-    '/user/password',
-    '/user/notify-email/send-code',
     '/user/totp/status',
-    '/user/aff',
-    '/user/platform-quotas',
+    '/user/api-keys/12/usage/daily',
     '/keys',
     '/keys/12',
     '/groups/available',
-    '/groups/rates',
-    '/channels/available',
-    '/usage',
-    '/usage/stats',
-    '/usage/dashboard/snapshot-v2',
-    '/announcements',
-    '/announcements/3/read',
-    '/redeem',
-    '/redeem/history',
-    '/subscriptions',
-    '/subscriptions/active',
-    '/channel-monitors',
-    '/channel-monitors/9/status',
-    '/payment/config',
-    '/payment/plans',
-    '/payment/orders',
-    '/payment/orders/my',
     '/api/v1/auth/me',
     '/api/v1/keys?page=1',
-    'https://api.example.test/api/v1/payment/orders/1',
   ])('marks user timing API %s', (requestURL) => {
     expect(shouldMarkUserUIRequest(requestURL)).toBe(true)
     expect(isUserTimingAPIPath(requestURL)).toBe(true)
@@ -90,6 +66,15 @@ describe('User UI request marker', () => {
     '/admin/users',
     '/groups',
     '/channels',
+    '/auth/oauth/bind-token',
+    '/user/profile',
+    '/groups/rates',
+    '/usage',
+    '/announcements',
+    '/redeem',
+    '/subscriptions',
+    '/channel-monitors',
+    '/payment/orders',
     '/payment/public/orders/verify',
     '/payment/webhook/stripe',
     '/api/v1/payment/public/orders/resolve',

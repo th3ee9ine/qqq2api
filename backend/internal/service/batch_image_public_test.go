@@ -41,9 +41,7 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Len(t, gemini.submits, 1)
 		require.Equal(t, []string{got.ID}, queue.enqueued)
 		billing := svc.BillingRepo.(*fakeBatchImageBillingRepo)
-		require.Len(t, billing.reserves, 1)
-		require.Equal(t, BatchImageHoldRequestID(got.ID), billing.reserves[0].RequestID)
-		require.InDelta(t, 0.3, billing.reserves[0].HoldAmount, 1e-12)
+		require.Empty(t, billing.reserves, "global API keys do not reserve a user balance")
 		require.Empty(t, billing.releases)
 		authCache := svc.AuthCache.(*fakeBatchImageAuthCacheInvalidator)
 		require.Equal(t, []int64{11}, authCache.userIDs)
@@ -66,7 +64,7 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Equal(t, "batch-session-123", batchImageDerefString(job.SessionID))
 	})
 
-	t.Run("combines user group image rate account rate discount and hold margin", func(t *testing.T) {
+	t.Run("ignores legacy user rate and combines system group account discount and hold margin", func(t *testing.T) {
 		svc, repo, _, _, _ := newTestBatchImagePublicService(true)
 		groupID := int64(7)
 		accountMultiplier := 1.25
@@ -89,19 +87,19 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 
 		got, err := svc.Submit(ctx, BatchImageOwner{UserID: 11, APIKeyID: 22, GroupID: &groupID}, validBatchImageSubmitRequest(), "")
 		require.NoError(t, err)
-		require.InDelta(t, 0.25, got.EstimatedCost, 1e-12)
+		require.InDelta(t, 1.0, got.EstimatedCost, 1e-12)
 
 		job := repo.jobs[got.ID]
 		require.InDelta(t, 0.25, job.BaseUnitPrice, 1e-12)
-		require.InDelta(t, 0.5, job.GroupRateMultiplier, 1e-12)
+		require.InDelta(t, 2.0, job.GroupRateMultiplier, 1e-12)
 		require.InDelta(t, 1.25, job.AccountRateMultiplier, 1e-12)
 		require.InDelta(t, 0.8, job.BatchDiscountMultiplier, 1e-12)
 		// 配置的 hold(0.6) < discount(0.8) 属于会导致结算死锁的脏数据，
 		// 快照时被钳制为 discount，保证 holdAmount >= 实际成本上限。
 		require.InDelta(t, 0.8, job.HoldMultiplier, 1e-12)
-		require.InDelta(t, 0.125, job.BillableUnitPrice, 1e-12)
-		require.InDelta(t, 0.125, job.HoldUnitPrice, 1e-12)
-		require.InDelta(t, 0.25, *job.HoldAmount, 1e-12)
+		require.InDelta(t, 0.5, job.BillableUnitPrice, 1e-12)
+		require.InDelta(t, 0.5, job.HoldUnitPrice, 1e-12)
+		require.InDelta(t, 1.0, *job.HoldAmount, 1e-12)
 	})
 
 	t.Run("uses configured group 1k image price for batch image base price", func(t *testing.T) {
@@ -317,22 +315,21 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.Len(t, vertex.submits, 1)
 	})
 
-	t.Run("insufficient balance rejects before provider submit", func(t *testing.T) {
+	t.Run("legacy insufficient balance does not reject a global key", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		billing := &fakeBatchImageBillingRepo{err: ErrBatchImageInsufficientBalance}
 		svc.BillingRepo = billing
 
-		_, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "")
-		require.ErrorIs(t, err, ErrBatchImageInsufficientBalance)
-		require.Empty(t, queue.enqueued)
-		require.Empty(t, gemini.submits)
-		require.Len(t, billing.reserves, 1)
+		got, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "")
+		require.NoError(t, err)
+		require.Equal(t, []string{got.ID}, queue.enqueued)
+		require.Len(t, gemini.submits, 1)
+		require.Empty(t, billing.reserves)
 		require.Empty(t, billing.releases)
 		require.Len(t, repo.jobs, 1)
 		for _, job := range repo.jobs {
-			require.Equal(t, BatchImageJobStatusFailed, job.Status)
-			require.Equal(t, "INSUFFICIENT_BALANCE", batchImageDerefString(job.LastErrorCode))
-			require.NotNil(t, job.UserDeletedAt)
+			require.Equal(t, BatchImageJobStatusSubmitted, job.Status)
+			require.Empty(t, batchImageDerefString(job.LastErrorCode))
 		}
 	})
 
@@ -344,9 +341,8 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		_, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "")
 		require.ErrorIs(t, err, ErrBatchImageProviderSubmitFailed)
 		require.Empty(t, queue.enqueued)
-		require.Len(t, billing.reserves, 1)
-		require.Len(t, billing.releases, 1)
-		require.Equal(t, BatchImageReleaseRequestID(billing.reserves[0].BatchID), billing.releases[0].RequestID)
+		require.Empty(t, billing.reserves)
+		require.Empty(t, billing.releases)
 		require.Len(t, repo.jobs, 1)
 		for _, job := range repo.jobs {
 			require.Equal(t, BatchImageJobStatusFailed, job.Status)
@@ -356,21 +352,21 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		}
 	})
 
-	t.Run("provider failure with release failure enqueues billing retry", func(t *testing.T) {
+	t.Run("provider failure ignores legacy wallet release errors", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		gemini.submitErr = errors.New("projects/secret-provider-job failed")
 		billing := svc.BillingRepo.(*fakeBatchImageBillingRepo)
 		billing.releaseErr = errors.New("billing database timeout")
 
 		_, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "")
-		require.ErrorIs(t, err, ErrBatchImageBillingHoldFailed)
-		require.Len(t, billing.reserves, 1)
-		require.Len(t, billing.releases, 1)
+		require.ErrorIs(t, err, ErrBatchImageProviderSubmitFailed)
+		require.Empty(t, billing.reserves)
+		require.Empty(t, billing.releases)
 		require.Len(t, repo.jobs, 1)
 		for _, job := range repo.jobs {
 			require.Equal(t, BatchImageJobStatusFailed, job.Status)
-			require.Equal(t, "BILLING_RELEASE_FAILED", batchImageDerefString(job.LastErrorCode))
-			require.Equal(t, []string{job.BatchID}, queue.enqueued)
+			require.Equal(t, "PROVIDER_SUBMIT_FAILED", batchImageDerefString(job.LastErrorCode))
+			require.Empty(t, queue.enqueued)
 		}
 	})
 
@@ -381,7 +377,7 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 
 		_, err := svc.Submit(ctx, testBatchImageOwner(), validBatchImageSubmitRequest(), "")
 		require.ErrorIs(t, err, ErrBatchImageQueueFailed)
-		require.Len(t, billing.reserves, 1)
+		require.Empty(t, billing.reserves)
 		require.Empty(t, billing.releases)
 		require.Len(t, repo.jobs, 1)
 		for _, job := range repo.jobs {

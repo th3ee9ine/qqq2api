@@ -191,7 +191,7 @@ func TestCompositeRouteResolverIgnoresDisabledRoutesAndFallsBackToDetector(t *te
 	require.Nil(t, decision.Route)
 }
 
-func TestCompositeRouteResolverExplicitRoutesCoverBucketTwoProviders(t *testing.T) {
+func TestCompositeRouteResolverExplicitRoutesIgnoreRetiredProviders(t *testing.T) {
 	resolver := NewCompositeRouteResolver(compositeRouteRepoStub{
 		routes: []CompositeModelRoute{
 			{
@@ -244,13 +244,14 @@ func TestCompositeRouteResolverExplicitRoutesCoverBucketTwoProviders(t *testing.
 	tests := []struct {
 		model        string
 		endpoint     string
+		wantMatched  bool
 		wantPlatform string
 		wantUpstream string
 	}{
-		{"all/gpt-5", CompositeRouteEndpointResponses, PlatformOpenAI, "gpt-5"},
-		{"all/claude-sonnet", CompositeRouteEndpointMessages, PlatformAnthropic, "claude-sonnet-4-6"},
-		{"all/gemini-pro", CompositeRouteEndpointGemini, PlatformGemini, "gemini-2.5-pro"},
-		{"all/grok", CompositeRouteEndpointResponses, PlatformGrok, "grok-4.3"},
+		{"all/gpt-5", CompositeRouteEndpointResponses, true, PlatformOpenAI, "gpt-5"},
+		{"all/claude-sonnet", CompositeRouteEndpointMessages, true, PlatformAnthropic, "claude-sonnet-4-6"},
+		{"all/gemini-pro", CompositeRouteEndpointGemini, false, "", ""},
+		{"all/grok", CompositeRouteEndpointResponses, false, "", ""},
 	}
 
 	for _, tt := range tests {
@@ -258,7 +259,10 @@ func TestCompositeRouteResolverExplicitRoutesCoverBucketTwoProviders(t *testing.
 			decision, err := resolver.Resolve(context.Background(), 7, tt.model, tt.endpoint)
 
 			require.NoError(t, err)
-			require.True(t, decision.Matched)
+			require.Equal(t, tt.wantMatched, decision.Matched)
+			if !tt.wantMatched {
+				return
+			}
 			require.Equal(t, CompositeRouteSourceExplicit, decision.Source)
 			require.Equal(t, tt.wantPlatform, decision.TargetPlatform)
 			require.Equal(t, tt.wantUpstream, decision.UpstreamModel)

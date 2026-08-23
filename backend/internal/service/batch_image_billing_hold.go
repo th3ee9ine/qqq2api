@@ -56,6 +56,10 @@ func buildBatchImageHoldCommand(job *BatchImageJob, requestID string, actualAmou
 }
 
 func reserveBatchImageBalanceHold(ctx context.Context, repo UsageBillingRepository, job *BatchImageJob, payloadHash string) error {
+	if job != nil && job.APIKeyID != nil {
+		// Global API Keys have no user wallet to reserve.
+		return nil
+	}
 	if repo == nil {
 		return ErrBatchImageBillingHoldFailed.WithCause(errors.New("batch image billing repository is not configured"))
 	}
@@ -76,6 +80,10 @@ func reserveBatchImageBalanceHold(ctx context.Context, repo UsageBillingReposito
 }
 
 func captureBatchImageBalanceHold(ctx context.Context, repo UsageBillingRepository, job *BatchImageJob, actualAmount float64, payloadHash string) error {
+	if job != nil && job.APIKeyID != nil {
+		// Actual cost remains recorded on the batch job; no user wallet is charged.
+		return nil
+	}
 	if repo == nil {
 		return ErrBatchImageSettlementBillingFailed.WithCause(errors.New("batch image billing repository is not configured"))
 	}
@@ -90,6 +98,9 @@ func captureBatchImageBalanceHold(ctx context.Context, repo UsageBillingReposito
 }
 
 func releaseBatchImageBalanceHold(ctx context.Context, repo UsageBillingRepository, job *BatchImageJob, payloadHash string) error {
+	if job != nil && job.APIKeyID != nil {
+		return nil
+	}
 	if repo == nil || job == nil {
 		return nil
 	}

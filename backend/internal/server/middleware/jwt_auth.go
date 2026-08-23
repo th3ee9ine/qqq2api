@@ -80,6 +80,10 @@ func jwtAuth(
 			AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
 			return
 		}
+		if !authService.IsConfiguredAdmin(c.Request.Context(), user) {
+			AbortWithError(c, 403, "ADMIN_ONLY_MODE", "Administrator access is restricted to the configured account")
+			return
+		}
 
 		// Security: Validate TokenVersion to ensure token hasn't been invalidated
 		// This check ensures tokens issued before a password change are rejected

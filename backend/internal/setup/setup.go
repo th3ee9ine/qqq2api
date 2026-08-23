@@ -129,8 +129,8 @@ type adminBootstrapDecision struct {
 	reason       string
 }
 
-func decideAdminBootstrap(totalUsers, adminUsers int64) adminBootstrapDecision {
-	if adminUsers > 0 {
+func decideAdminBootstrap(totalUsers, configuredAdminUsers int64) adminBootstrapDecision {
+	if configuredAdminUsers > 0 {
 		return adminBootstrapDecision{
 			shouldCreate: false,
 			reason:       adminBootstrapReasonAdminExists,
@@ -138,7 +138,7 @@ func decideAdminBootstrap(totalUsers, adminUsers int64) adminBootstrapDecision {
 	}
 	if totalUsers > 0 {
 		return adminBootstrapDecision{
-			shouldCreate: false,
+			shouldCreate: true,
 			reason:       adminBootstrapReasonUsersExistWithoutAdmin,
 		}
 	}
@@ -327,7 +327,8 @@ func Install(cfg *SetupConfig) error {
 		return fmt.Errorf("database initialization failed: %w", err)
 	}
 
-	// Create admin user (only when database is empty and no admin exists).
+	// Ensure an active administrator exists, including when migrating a database
+	// that already contains only regular or inactive users.
 	if _, _, err := createAdminUser(cfg); err != nil {
 		return fmt.Errorf("admin user creation failed: %w", err)
 	}
@@ -402,21 +403,47 @@ func createAdminUser(cfg *SetupConfig) (bool, string, error) {
 	// 使用超时上下文避免安装流程因数据库异常而长时间阻塞。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	return createAdminUserWithDB(ctx, db, cfg)
+}
+
+func createAdminUserWithDB(ctx context.Context, db *sql.DB, cfg *SetupConfig) (bool, string, error) {
+	adminEmail := strings.ToLower(strings.TrimSpace(cfg.Admin.Email))
+	cfg.Admin.Email = adminEmail
 
 	var totalUsers int64
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(1) FROM users").Scan(&totalUsers); err != nil {
 		return false, "", err
 	}
-	var adminUsers int64
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(1) FROM users WHERE role = $1", service.RoleAdmin).Scan(&adminUsers); err != nil {
+	var existingAdminID int64
+	var existingRole, existingStatus string
+	err := db.QueryRowContext(
+		ctx,
+		`SELECT id, role, status
+		 FROM users
+		 WHERE LOWER(BTRIM(email)) = $1 AND deleted_at IS NULL
+		 ORDER BY id
+		 LIMIT 1`,
+		adminEmail,
+	).Scan(&existingAdminID, &existingRole, &existingStatus)
+	if err != nil && err != sql.ErrNoRows {
 		return false, "", err
 	}
-	decision := decideAdminBootstrap(totalUsers, adminUsers)
-	if !decision.shouldCreate {
-		return false, decision.reason, nil
+	configuredAdminUsers := int64(0)
+	if err == nil && existingRole == service.RoleAdmin && existingStatus == service.StatusActive {
+		configuredAdminUsers = 1
+	}
+	decision := decideAdminBootstrap(totalUsers, configuredAdminUsers)
+	adminExists := err == nil
+
+	admin := &service.User{
+		Email:       adminEmail,
+		Role:        service.RoleAdmin,
+		Status:      service.StatusActive,
+		Balance:     0,
+		Concurrency: setupDefaultAdminConcurrency(),
 	}
 
-	if strings.TrimSpace(cfg.Admin.Password) == "" {
+	if decision.shouldCreate && strings.TrimSpace(cfg.Admin.Password) == "" {
 		password, genErr := generateSecret(16)
 		if genErr != nil {
 			return false, "", fmt.Errorf("failed to generate admin password: %w", genErr)
@@ -426,37 +453,98 @@ func createAdminUser(cfg *SetupConfig) (bool, string, error) {
 		fmt.Println("IMPORTANT: Save this password! It will not be shown again.")
 	}
 
-	admin := &service.User{
-		Email:       cfg.Admin.Email,
-		Role:        service.RoleAdmin,
-		Status:      service.StatusActive,
-		Balance:     0,
-		Concurrency: setupDefaultAdminConcurrency(),
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+	if decision.shouldCreate {
+		if err := admin.SetPassword(cfg.Admin.Password); err != nil {
+			return false, "", err
+		}
 	}
 
-	if err := admin.SetPassword(cfg.Admin.Password); err != nil {
-		return false, "", err
-	}
-
-	_, err = db.ExecContext(
-		ctx,
-		`INSERT INTO users (email, password_hash, role, balance, concurrency, status, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		admin.Email,
-		admin.PasswordHash,
-		admin.Role,
-		admin.Balance,
-		admin.Concurrency,
-		admin.Status,
-		admin.CreatedAt,
-		admin.UpdatedAt,
-	)
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, "", err
 	}
-	return true, decision.reason, nil
+	defer func() { _ = tx.Rollback() }()
+
+	var adminID int64
+	if !adminExists {
+		err = tx.QueryRowContext(
+			ctx,
+			`INSERT INTO users (email, password_hash, role, balance, concurrency, status, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+			 ON CONFLICT (email) WHERE deleted_at IS NULL
+			 DO UPDATE SET
+			     password_hash = CASE
+			         WHEN users.role = EXCLUDED.role AND users.status = EXCLUDED.status
+			         THEN users.password_hash
+			         ELSE EXCLUDED.password_hash
+			     END,
+			     role = EXCLUDED.role,
+			     concurrency = EXCLUDED.concurrency,
+			     status = EXCLUDED.status,
+			     updated_at = NOW()
+			 RETURNING id`,
+			admin.Email,
+			admin.PasswordHash,
+			admin.Role,
+			admin.Balance,
+			admin.Concurrency,
+			admin.Status,
+		).Scan(&adminID)
+	} else if decision.shouldCreate {
+		err = tx.QueryRowContext(
+			ctx,
+			`UPDATE users
+			 SET email = $2,
+			     password_hash = $3,
+			     role = $4,
+			     concurrency = $5,
+			     status = $6,
+			     updated_at = NOW()
+			 WHERE id = $1 AND deleted_at IS NULL
+			 RETURNING id`,
+			existingAdminID,
+			admin.Email,
+			admin.PasswordHash,
+			admin.Role,
+			admin.Concurrency,
+			admin.Status,
+		).Scan(&adminID)
+	} else {
+		// A fully bootstrapped administrator may have changed its password and
+		// other account settings after installation. Keep the row untouched and
+		// only use its identity for legacy ownership normalization.
+		adminID = existingAdminID
+	}
+	if err != nil {
+		return false, "", err
+	}
+
+	// Migration 229 runs before this bootstrap. If the legacy database had no
+	// active administrator at migration time, normalize technical ownership now
+	// that the environment administrator is guaranteed to exist.
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE api_keys
+		 SET user_id = $1, updated_at = NOW()
+		 WHERE user_id IS DISTINCT FROM $1`,
+		adminID,
+	); err != nil {
+		return false, "", err
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE batch_image_jobs
+		 SET user_id = $1, updated_at = NOW()
+		 WHERE user_id IS DISTINCT FROM $1`,
+		adminID,
+	); err != nil {
+		return false, "", err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, "", err
+	}
+	return decision.shouldCreate, decision.reason, nil
 }
 
 func writeConfigFile(cfg *SetupConfig) error {
@@ -466,7 +554,8 @@ func writeConfigFile(cfg *SetupConfig) error {
 		tz = "Asia/Shanghai"
 	}
 
-	// Prepare config for YAML (exclude sensitive data and admin config)
+	// Persist the configured administrator identity for runtime authorization,
+	// but never write the bootstrap password to disk.
 	yamlConfig := struct {
 		Server   ServerConfig   `yaml:"server"`
 		Database DatabaseConfig `yaml:"database"`
@@ -476,6 +565,7 @@ func writeConfigFile(cfg *SetupConfig) error {
 			ExpireHour int    `yaml:"expire_hour"`
 		} `yaml:"jwt"`
 		Default struct {
+			AdminEmail      string  `yaml:"admin_email"`
 			UserConcurrency int     `yaml:"user_concurrency"`
 			UserBalance     float64 `yaml:"user_balance"`
 			APIKeyPrefix    string  `yaml:"api_key_prefix"`
@@ -498,11 +588,13 @@ func writeConfigFile(cfg *SetupConfig) error {
 			ExpireHour: cfg.JWT.ExpireHour,
 		},
 		Default: struct {
+			AdminEmail      string  `yaml:"admin_email"`
 			UserConcurrency int     `yaml:"user_concurrency"`
 			UserBalance     float64 `yaml:"user_balance"`
 			APIKeyPrefix    string  `yaml:"api_key_prefix"`
 			RateMultiplier  float64 `yaml:"rate_multiplier"`
 		}{
+			AdminEmail:      strings.TrimSpace(cfg.Admin.Email),
 			UserConcurrency: defaultUserConcurrency,
 			UserBalance:     0,
 			APIKeyPrefix:    "sk-",
@@ -651,9 +743,7 @@ func AutoSetupFromEnv() error {
 	} else {
 		switch reason {
 		case adminBootstrapReasonAdminExists:
-			logger.LegacyPrintf("setup", "%s", "Admin user already exists, skipping admin bootstrap")
-		case adminBootstrapReasonUsersExistWithoutAdmin:
-			logger.LegacyPrintf("setup", "%s", "Database already has user data; skipping auto admin bootstrap to avoid password overwrite")
+			logger.LegacyPrintf("setup", "Configured active admin already exists; preserved account state: %s", cfg.Admin.Email)
 		default:
 			logger.LegacyPrintf("setup", "%s", "Admin bootstrap skipped")
 		}

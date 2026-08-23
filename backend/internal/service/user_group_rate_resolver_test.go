@@ -68,7 +68,7 @@ func TestUserGroupRateResolverResolve_InvalidCacheEntryLoadsRepoAndCaches(t *tes
 	require.Equal(t, int64(0), fallback)
 }
 
-func TestGatewayServiceGetUserGroupRateMultiplier_FallbacksAndUsesExistingResolver(t *testing.T) {
+func TestGatewayServiceGetUserGroupRateMultiplier_UsesGlobalGroupDefault(t *testing.T) {
 	var nilSvc *GatewayService
 	require.Equal(t, 1.3, nilSvc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.3))
 
@@ -78,6 +78,6 @@ func TestGatewayServiceGetUserGroupRateMultiplier_FallbacksAndUsesExistingResolv
 	svc := &GatewayService{userGroupRateResolver: resolver}
 
 	got := svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.2)
-	require.Equal(t, rate, got)
-	require.Equal(t, 1, repo.calls)
+	require.Equal(t, 1.2, got)
+	require.Equal(t, 0, repo.calls, "global API keys must not resolve user-specific rates")
 }

@@ -487,14 +487,13 @@ func (s *AuthService) ValidatePasswordCredentials(ctx context.Context, email, pa
 	return user, nil
 }
 
-// RecordSuccessfulLogin updates last-login activity after a non-standard login
-// flow finishes with a real session.
+// RecordSuccessfulLogin updates last-login activity after an administrator
+// session is established. Self-service identity binding is no longer part of
+// the interactive authentication surface, so a successful password/TOTP login
+// must not create or mutate OAuth/email identity records.
 func (s *AuthService) RecordSuccessfulLogin(ctx context.Context, userID int64) {
-	if s != nil && s.userRepo != nil && userID > 0 {
-		user, err := s.userRepo.GetByID(ctx, userID)
-		if err == nil && user != nil && !isReservedEmail(user.Email) {
-			s.backfillEmailIdentityOnSuccessfulLogin(ctx, user)
-		}
+	if s == nil {
+		return
 	}
 	s.touchUserLogin(ctx, userID)
 }

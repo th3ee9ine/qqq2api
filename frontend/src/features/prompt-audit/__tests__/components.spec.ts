@@ -84,18 +84,20 @@ describe('Prompt Audit components', () => {
     expect(emitted.worker_count).toBe(6)
   })
 
-  it('keeps identity fields separate, supports selection, and opens filter deletion from the toolbar', async () => {
+  it('uses global API Key and group identity, supports selection, and opens filter deletion from the toolbar', async () => {
     const event: PromptAuditEvent = {
       id: 1, job_id: 1, decision: 'critical', risk_level: 'critical', action: 'Block', categories: ['pii'], matched_scanners: ['pii'], scanner_scores: { pii: 1 }, scanner_evidence: { pii: 'redacted' }, scanner_backend: 'qwen3guard-openai', scanner_version: '1', guard_endpoint_id: 'guard-1', policy_id: 'priority', policy_version: 1, config_version: 1, chunk_total: 1, latency_ms: 10, issue_summaries: [], created_at: '2026-07-16T00:00:00Z',
-      snapshot: { request_id: 'req-1', user_id: 1, username: 'alice', user_email: 'alice@example.test', api_key_id: 2, api_key_name: 'alice-key', group_id: 3, group_name: 'Alpha', provider: 'openai', endpoint: '/v1/chat/completions', protocol: 'openai_chat', model: 'gpt-test', prompt_hash: 'a'.repeat(64), redacted_preview: 'redacted preview', full_prompt: 'full prompt text', prompt_length: 10, message_count: 1, stage: 'http' },
+      snapshot: { request_id: 'req-1', api_key_id: 2, api_key_name: 'global-key', group_id: 3, group_name: 'Alpha', provider: 'openai', endpoint: '/v1/chat/completions', protocol: 'openai_chat', model: 'gpt-test', prompt_hash: 'a'.repeat(64), redacted_preview: 'redacted preview', full_prompt: 'full prompt text', prompt_length: 10, message_count: 1, stage: 'http' },
     }
     const wrapper = mount(EventWorkspace, {
       props: { events: [event], total: 1, page: 1, pageSize: 20, filters: emptyEventFilters(), selectedIds: [], loading: false, error: '' },
       global: { stubs: { Pagination: PaginationStub } },
     })
-    expect(wrapper.text()).toContain('alice')
-    expect(wrapper.text()).toContain('alice@example.test')
-    expect(wrapper.text()).toContain('alice-key')
+    expect(wrapper.text()).toContain('global-key')
+    expect(wrapper.text()).toContain('Alpha')
+    expect(wrapper.text()).not.toContain('admin.promptAudit.events.user')
+    expect(wrapper.text()).not.toContain('admin.promptAudit.events.email')
+    expect(wrapper.find('[aria-label="admin.promptAudit.events.userId"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('admin.promptAudit.decisions.critical · admin.promptAudit.riskLevels.critical')
     expect(wrapper.text()).toContain('admin.promptAudit.scanners.pii')
     expect(wrapper.get('[data-test="filter-delete"]').attributes()).not.toHaveProperty('disabled')
@@ -123,6 +125,8 @@ describe('Prompt Audit components', () => {
       global: { stubs: { BaseDialog: DialogStub } },
     })
     expect(wrapper.get<HTMLInputElement>('[data-test="range-preset-7d"]').element.checked).toBe(true)
+    expect(wrapper.find('[aria-label="admin.promptAudit.events.userId"]').exists()).toBe(false)
+    expect(wrapper.get('[aria-label="admin.promptAudit.events.apiKeyId"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="custom-range"]').exists()).toBe(false)
     expect(wrapper.get('[data-test="delete-preview-empty"]').exists()).toBeTruthy()
     // A valid preset is enough: confirm is armed immediately (one-click flow)
@@ -218,8 +222,7 @@ describe('Prompt Audit components', () => {
       }],
       created_at: '2026-07-16T00:00:00Z',
       snapshot: {
-        request_id: 'req-1', user_id: 1, username: 'alice', user_email: 'alice@example.test',
-        api_key_id: 2, api_key_name: 'alice-key', group_id: 3, group_name: 'Alpha', provider: 'openai',
+        request_id: 'req-1', api_key_id: 2, api_key_name: 'global-key', group_id: 3, group_name: 'Alpha', provider: 'openai',
         endpoint: '/v1/chat/completions', protocol: 'openai_chat', model: 'gpt-test',
         prompt_hash: 'a'.repeat(64), redacted_preview: 'redacted prompt body', full_prompt: 'complete unmasked prompt body', prompt_length: 20,
         message_count: 1, stage: 'http',
@@ -253,8 +256,7 @@ describe('Prompt Audit components', () => {
       policy_id: 'priority', policy_version: 1, config_version: 1, chunk_total: 1, latency_ms: 5,
       issue_summaries: [], created_at: '2026-07-16T00:00:00Z',
       snapshot: {
-        request_id: 'req-2', user_id: 1, username: 'bob', user_email: '', api_key_id: 2,
-        api_key_name: 'bob-key', group_id: 3, group_name: 'Alpha', provider: 'openai',
+        request_id: 'req-2', api_key_id: 2, api_key_name: 'global-key', group_id: 3, group_name: 'Alpha', provider: 'openai',
         endpoint: '/v1/chat/completions', protocol: 'openai_chat', model: 'gpt-test',
         prompt_hash: 'b'.repeat(64), redacted_preview: 'legacy redacted preview', full_prompt: '', prompt_length: 20,
         message_count: 1, stage: 'http',

@@ -284,17 +284,15 @@ func (s *OpenAIGatewayService) SelectAccountForTokenCount(
 	)
 }
 
-// NormalizeOpenAICompatiblePlatform 保留 grok 与国产 OpenAI 兼容供应商（kimi/zhipu/
-// deepseek）的原值，其他值一律归一为 openai。调度器据此对账号与请求做精确平台匹配：
-// kimi 分组请求只命中 kimi 账号，语义与 openai/grok 一致。
-// （upstream 曾将本函数改为未导出 normalizeOpenAICompatiblePlatform，本分支的
-// handler 调度入口仍需导出，保持导出名。）
+// NormalizeOpenAICompatiblePlatform is the fail-closed platform boundary for
+// the OpenAI-compatible scheduler. Retired and unknown values must not be
+// coerced to OpenAI, otherwise stale groups can cross into the active pool.
 func NormalizeOpenAICompatiblePlatform(platform string) string {
-	switch platform {
-	case PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
-		return platform
-	default:
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case PlatformOpenAI:
 		return PlatformOpenAI
+	default:
+		return ""
 	}
 }
 
@@ -1397,7 +1395,14 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 }
 
 func (s *OpenAIGatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string) ([]Account, error) {
+	originalPlatform := platform
 	platform = NormalizeOpenAICompatiblePlatform(platform)
+	if platform == "" {
+		if IsRetiredPlatform(originalPlatform) {
+			return nil, ErrPlatformRetired
+		}
+		return nil, ErrPlatformUnsupported
+	}
 	if s.schedulerSnapshot != nil {
 		accounts, _, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, false)
 		if err != nil {

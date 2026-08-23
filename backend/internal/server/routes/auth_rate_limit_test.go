@@ -52,11 +52,8 @@ func TestAuthRoutesRateLimitFailCloseWhenRedisUnavailable(t *testing.T) {
 
 	router := newAuthRoutesTestRouter(rdb)
 	paths := []string{
-		"/api/v1/auth/register",
 		"/api/v1/auth/login",
 		"/api/v1/auth/login/2fa",
-		"/api/v1/auth/send-verify-code",
-		"/api/v1/auth/oauth/pending/send-verify-code",
 	}
 
 	for _, path := range paths {
@@ -69,5 +66,30 @@ func TestAuthRoutesRateLimitFailCloseWhenRedisUnavailable(t *testing.T) {
 
 		require.Equal(t, http.StatusTooManyRequests, w.Code, "path=%s", path)
 		require.Contains(t, w.Body.String(), "rate limit exceeded", "path=%s", path)
+	}
+
+	// Self-service authentication routes are removed entirely in the
+	// single-administrator deployment, so they must not reach a rate limiter or
+	// handler at all.
+	for _, route := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/auth/register"},
+		{http.MethodPost, "/api/v1/auth/send-verify-code"},
+		{http.MethodPost, "/api/v1/auth/forgot-password"},
+		{http.MethodPost, "/api/v1/auth/reset-password"},
+		{http.MethodPost, "/api/v1/auth/passkey/login/begin"},
+		{http.MethodPost, "/api/v1/auth/oauth/pending/send-verify-code"},
+		{http.MethodGet, "/api/v1/auth/oauth/linuxdo/start"},
+		{http.MethodGet, "/api/v1/auth/oauth/oidc/start"},
+		{http.MethodGet, "/api/v1/auth/oauth/wechat/start"},
+		{http.MethodGet, "/api/v1/auth/oauth/dingtalk/start"},
+	} {
+		req := httptest.NewRequest(route.method, route.path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNotFound, w.Code, "method=%s path=%s", route.method, route.path)
 	}
 }

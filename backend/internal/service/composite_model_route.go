@@ -94,8 +94,7 @@ func normalizeCompositeRouteEndpoint(endpoint string) string {
 		CompositeRouteEndpointResponses,
 		CompositeRouteEndpointChatCompletions,
 		CompositeRouteEndpointEmbeddings,
-		CompositeRouteEndpointImages,
-		CompositeRouteEndpointGemini:
+		CompositeRouteEndpointImages:
 		return endpoint
 	default:
 		return CompositeRouteEndpointAny

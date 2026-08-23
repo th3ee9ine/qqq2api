@@ -64,22 +64,6 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
-        <template #cell-user="{ row }">
-          <div v-if="row.user_id" class="text-sm">
-            <button
-              v-if="userClickable && row.user_email"
-              class="font-medium text-primary-600 underline decoration-dashed underline-offset-2 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
-              :title="t('admin.usage.clickToViewBalance')"
-              @click.stop="emit('userClick', row.user_id, row.user_email)"
-            >
-              {{ row.user_email }}
-            </button>
-            <span v-else class="font-medium text-gray-900 dark:text-white">{{ row.user_email || '-' }}</span>
-            <span class="ml-1 text-gray-500 dark:text-gray-400">#{{ row.user_id }}</span>
-          </div>
-          <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
-        </template>
-
         <template #cell-api_key="{ row }">
           <div v-if="row.api_key_id || row.api_key_name" class="text-sm">
             <span class="text-gray-900 dark:text-white">{{ row.api_key_name || '#' + row.api_key_id }}</span>
@@ -194,10 +178,9 @@ import { mapErrorSortKey, statusCodeBadgeClass } from '@/utils/errorBadges'
 
 const { t } = useI18n()
 
-// 列序对齐管理端用量明细:身份(用户→Key→账号)→ 请求形态(平台→模型→端点→分组→类型)
+// 列序对齐管理端用量明细:身份(Key→账号)→ 请求形态(平台→模型→端点→分组→类型)
 // → 结果(状态→消息)→ 时间→UA→IP→操作
 const allColumns = computed<Column[]>(() => [
-  { key: 'user', label: t('admin.ops.errorLog.user') },
   { key: 'api_key', label: t('admin.ops.errorLog.apiKey') },
   { key: 'account', label: t('admin.ops.errorLog.account') },
   { key: 'platform', label: t('admin.ops.errorLog.platform') },
@@ -284,8 +267,6 @@ interface Props {
   loading: boolean
   page: number
   pageSize: number
-  /** 用户邮箱可点击(emit userClick),仅在有弹窗承接的使用方开启 */
-  userClickable?: boolean
   /** 列设置:仅显示这些 key 的列;不传则全量 */
   visibleColumnKeys?: string[]
   /** 嵌入统一卡片内使用：去掉自身卡片外观 */
@@ -298,7 +279,6 @@ interface Emits {
   (e: 'update:pageSize', value: number): void
   (e: 'ipGeoBatchFailed'): void
   (e: 'sort', sortBy: string, sortOrder: 'asc' | 'desc'): void
-  (e: 'userClick', userId: number, email?: string): void
 }
 
 const props = defineProps<Props>()

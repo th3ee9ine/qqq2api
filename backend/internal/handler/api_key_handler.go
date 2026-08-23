@@ -150,7 +150,7 @@ func (h *APIKeyHandler) List(c *gin.Context) {
 // GetByID handles getting a single API key
 // GET /api/v1/api-keys/:id
 func (h *APIKeyHandler) GetByID(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	_, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
 		response.Unauthorized(c, "User not authenticated")
 		return
@@ -165,12 +165,6 @@ func (h *APIKeyHandler) GetByID(c *gin.Context) {
 	key, err := h.apiKeyService.GetByID(c.Request.Context(), keyID)
 	if err != nil {
 		response.ErrorFrom(c, err)
-		return
-	}
-
-	// 验证所有权
-	if key.UserID != subject.UserID {
-		response.NotFound(c, "API key not found")
 		return
 	}
 

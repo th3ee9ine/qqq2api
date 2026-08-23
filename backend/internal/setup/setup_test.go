@@ -1,43 +1,64 @@
 package setup
 
 import (
+	"context"
+	"database/sql/driver"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/spf13/viper"
+	"golang.org/x/crypto/bcrypt"
 )
+
+type passwordHashMatcher struct {
+	password string
+}
+
+func (m passwordHashMatcher) Match(value driver.Value) bool {
+	hash, ok := value.(string)
+	if !ok {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(m.password)) == nil
+}
 
 func TestDecideAdminBootstrap(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		totalUsers int64
-		adminUsers int64
-		should     bool
-		reason     string
+		name                 string
+		totalUsers           int64
+		configuredAdminUsers int64
+		should               bool
+		reason               string
 	}{
 		{
-			name:       "empty database should create admin",
-			totalUsers: 0,
-			adminUsers: 0,
-			should:     true,
-			reason:     adminBootstrapReasonEmptyDatabase,
+			name:                 "empty database should create admin",
+			totalUsers:           0,
+			configuredAdminUsers: 0,
+			should:               true,
+			reason:               adminBootstrapReasonEmptyDatabase,
 		},
 		{
-			name:       "admin exists should skip",
-			totalUsers: 10,
-			adminUsers: 1,
-			should:     false,
-			reason:     adminBootstrapReasonAdminExists,
+			name:                 "configured admin exists should preserve password",
+			totalUsers:           10,
+			configuredAdminUsers: 1,
+			should:               false,
+			reason:               adminBootstrapReasonAdminExists,
 		},
 		{
-			name:       "users exist without admin should skip",
-			totalUsers: 5,
-			adminUsers: 0,
-			should:     false,
-			reason:     adminBootstrapReasonUsersExistWithoutAdmin,
+			name:                 "other users including admins do not replace configured admin",
+			totalUsers:           5,
+			configuredAdminUsers: 0,
+			should:               true,
+			reason:               adminBootstrapReasonUsersExistWithoutAdmin,
 		},
 	}
 
@@ -45,7 +66,7 @@ func TestDecideAdminBootstrap(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := decideAdminBootstrap(tc.totalUsers, tc.adminUsers)
+			got := decideAdminBootstrap(tc.totalUsers, tc.configuredAdminUsers)
 			if got.shouldCreate != tc.should {
 				t.Fatalf("shouldCreate=%v, want %v", got.shouldCreate, tc.should)
 			}
@@ -53,6 +74,169 @@ func TestDecideAdminBootstrap(t *testing.T) {
 				t.Fatalf("reason=%q, want %q", got.reason, tc.reason)
 			}
 		})
+	}
+}
+
+func TestCreateAdminUserWithDBCreatesConfiguredAdminWhenOtherAdminExists(t *testing.T) {
+	t.Setenv("RUN_MODE", "standard")
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const (
+		adminID       = int64(42)
+		adminEmail    = "system-admin@example.com"
+		adminPassword = "environment-password"
+	)
+	cfg := &SetupConfig{Admin: AdminConfig{Email: adminEmail, Password: adminPassword}}
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(1) FROM users")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(7)))
+	// The configured address is absent even though the populated database may
+	// already contain another active administrator.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, role, status FROM users WHERE LOWER(BTRIM(email)) = $1 AND deleted_at IS NULL ORDER BY id LIMIT 1")).
+		WithArgs(adminEmail).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "role", "status"}))
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO users .* ON CONFLICT \\(email\\) WHERE deleted_at IS NULL").
+		WithArgs(
+			adminEmail,
+			passwordHashMatcher{password: adminPassword},
+			service.RoleAdmin,
+			float64(0),
+			defaultUserConcurrency,
+			service.StatusActive,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(adminID))
+	mock.ExpectExec("UPDATE api_keys").
+		WithArgs(adminID).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectExec("UPDATE batch_image_jobs").
+		WithArgs(adminID).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectCommit()
+
+	created, reason, err := createAdminUserWithDB(context.Background(), db, cfg)
+	if err != nil {
+		t.Fatalf("createAdminUserWithDB() error = %v", err)
+	}
+	if !created {
+		t.Fatal("createAdminUserWithDB() created = false, want true")
+	}
+	if reason != adminBootstrapReasonUsersExistWithoutAdmin {
+		t.Fatalf("createAdminUserWithDB() reason = %q, want %q", reason, adminBootstrapReasonUsersExistWithoutAdmin)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestCreateAdminUserWithDBPreservesExistingConfiguredAdminPassword(t *testing.T) {
+	t.Setenv("RUN_MODE", "standard")
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const (
+		adminID         = int64(42)
+		configuredEmail = " System-Admin@Example.COM "
+		normalizedEmail = "system-admin@example.com"
+		environmentPass = "stale-environment-password"
+	)
+	cfg := &SetupConfig{Admin: AdminConfig{Email: configuredEmail, Password: environmentPass}}
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(1) FROM users")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(7)))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, role, status FROM users WHERE LOWER(BTRIM(email)) = $1 AND deleted_at IS NULL ORDER BY id LIMIT 1")).
+		WithArgs(normalizedEmail).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "role", "status"}).AddRow(adminID, service.RoleAdmin, service.StatusActive))
+	mock.ExpectBegin()
+	// No users UPDATE is expected: a fully bootstrapped administrator keeps its
+	// password hash and later account changes.
+	mock.ExpectExec("UPDATE api_keys").
+		WithArgs(adminID).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectExec("UPDATE batch_image_jobs").
+		WithArgs(adminID).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectCommit()
+
+	created, reason, err := createAdminUserWithDB(context.Background(), db, cfg)
+	if err != nil {
+		t.Fatalf("createAdminUserWithDB() error = %v", err)
+	}
+	if created {
+		t.Fatal("createAdminUserWithDB() created = true, want false for existing configured admin")
+	}
+	if reason != adminBootstrapReasonAdminExists {
+		t.Fatalf("createAdminUserWithDB() reason = %q, want %q", reason, adminBootstrapReasonAdminExists)
+	}
+	if cfg.Admin.Email != normalizedEmail {
+		t.Fatalf("configured admin email = %q, want %q", cfg.Admin.Email, normalizedEmail)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestCreateAdminUserWithDBResetsPasswordWhenPromotingConfiguredUser(t *testing.T) {
+	t.Setenv("RUN_MODE", "standard")
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	const (
+		adminID       = int64(84)
+		adminEmail    = "system-admin@example.com"
+		adminPassword = "environment-password"
+	)
+	cfg := &SetupConfig{Admin: AdminConfig{Email: adminEmail, Password: adminPassword}}
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(1) FROM users")).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(7)))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id, role, status FROM users WHERE LOWER(BTRIM(email)) = $1 AND deleted_at IS NULL ORDER BY id LIMIT 1")).
+		WithArgs(adminEmail).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "role", "status"}).AddRow(adminID, service.RoleUser, service.StatusDisabled))
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE users SET email = $2, password_hash = $3, role = $4, concurrency = $5, status = $6, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id")).
+		WithArgs(
+			adminID,
+			adminEmail,
+			passwordHashMatcher{password: adminPassword},
+			service.RoleAdmin,
+			defaultUserConcurrency,
+			service.StatusActive,
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(adminID))
+	mock.ExpectExec("UPDATE api_keys").
+		WithArgs(adminID).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectExec("UPDATE batch_image_jobs").
+		WithArgs(adminID).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectCommit()
+
+	created, reason, err := createAdminUserWithDB(context.Background(), db, cfg)
+	if err != nil {
+		t.Fatalf("createAdminUserWithDB() error = %v", err)
+	}
+	if !created {
+		t.Fatal("createAdminUserWithDB() created = false, want bootstrap to run for inactive non-admin user")
+	}
+	if reason != adminBootstrapReasonUsersExistWithoutAdmin {
+		t.Fatalf("createAdminUserWithDB() reason = %q, want %q", reason, adminBootstrapReasonUsersExistWithoutAdmin)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }
 
@@ -223,6 +407,61 @@ func TestWriteConfigFileIncludesRedisUsername(t *testing.T) {
 
 	if !strings.Contains(string(data), "username: app-user") {
 		t.Fatalf("config missing Redis username, got:\n%s", string(data))
+	}
+}
+
+func TestWriteConfigFilePersistsAdminEmailForConfigLoad(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+	dataDir := t.TempDir()
+	t.Setenv("DATA_DIR", dataDir)
+	t.Setenv("CONFIG_FILE", GetConfigFilePath())
+	t.Setenv("ADMIN_EMAIL", "")
+
+	const (
+		adminEmail    = "admin@example.com"
+		adminPassword = "must-not-be-persisted"
+	)
+	if err := writeConfigFile(&SetupConfig{
+		Admin:  AdminConfig{Email: adminEmail, Password: adminPassword},
+		Server: ServerConfig{Host: "0.0.0.0", Port: 8080, Mode: "release"},
+		Database: DatabaseConfig{
+			Host: "db", Port: 5432, User: "postgres", DBName: "sub2api", SSLMode: "disable",
+		},
+		Redis: RedisConfig{Host: "redis", Port: 6379},
+		JWT:   JWTConfig{Secret: strings.Repeat("a", 64), ExpireHour: 24},
+	}); err != nil {
+		t.Fatalf("writeConfigFile() error = %v", err)
+	}
+
+	data, err := os.ReadFile(GetConfigFilePath())
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "admin_email: "+adminEmail) {
+		t.Fatalf("config missing persisted admin email, got:\n%s", string(data))
+	}
+	if strings.Contains(string(data), adminPassword) {
+		t.Fatal("config must not persist the bootstrap admin password")
+	}
+
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load() without ADMIN_EMAIL error = %v", err)
+	}
+	if loaded.Default.AdminEmail != adminEmail {
+		t.Fatalf("loaded admin email = %q, want persisted %q", loaded.Default.AdminEmail, adminEmail)
+	}
+
+	const overrideEmail = "override@example.com"
+	viper.Reset()
+	t.Setenv("ADMIN_EMAIL", overrideEmail)
+	loaded, err = config.Load()
+	if err != nil {
+		t.Fatalf("config.Load() with ADMIN_EMAIL error = %v", err)
+	}
+	if loaded.Default.AdminEmail != overrideEmail {
+		t.Fatalf("loaded admin email = %q, want environment override %q", loaded.Default.AdminEmail, overrideEmail)
 	}
 }
 

@@ -1776,6 +1776,12 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	if err := viper.BindEnv("server.enable_server_timing", "ENABLE_SERVER_TIMING"); err != nil {
 		return nil, fmt.Errorf("bind ENABLE_SERVER_TIMING: %w", err)
 	}
+	// Setup historically consumes ADMIN_EMAIL directly, while AutomaticEnv
+	// would otherwise look for DEFAULT_ADMIN_EMAIL for this nested key. Bind
+	// the runtime identity check to the same environment variable as setup.
+	if err := viper.BindEnv("default.admin_email", "ADMIN_EMAIL"); err != nil {
+		return nil, fmt.Errorf("bind ADMIN_EMAIL: %w", err)
+	}
 
 	// 默认值
 	setDefaults()
@@ -2022,13 +2028,7 @@ func setDefaults() {
 	viper.SetDefault("security.url_allowlist.upstream_hosts", []string{
 		"api.openai.com",
 		"api.anthropic.com",
-		"api.kimi.com",
-		"api.moonshot.ai",
-		"api.moonshot.cn",
-		"open.bigmodel.cn",
 		"api.minimaxi.com",
-		"generativelanguage.googleapis.com",
-		"cloudcode-pa.googleapis.com",
 		"*.openai.azure.com",
 	})
 	viper.SetDefault("security.url_allowlist.pricing_hosts", []string{
@@ -2330,7 +2330,6 @@ func setDefaults() {
 	// Gateway
 	viper.SetDefault("gateway.response_header_timeout", 600) // 600秒(10分钟)等待上游响应头，LLM高负载时可能排队较久
 	viper.SetDefault("gateway.openai_response_header_timeout", 0)
-	viper.SetDefault("gateway.grok_response_header_timeout", 120)
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.log_upstream_error_body", true)
@@ -2338,7 +2337,6 @@ func setDefaults() {
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
-	viper.SetDefault("gateway.max_account_switches_gemini", 3)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
@@ -2413,31 +2411,15 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.failure_threshold", 2)
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.window_seconds", 60)
 	viper.SetDefault("gateway.openai_proxy_stream_circuit.ttl_seconds", 600)
-	// Grok free-tier local soft gate (scheduler-only; admin QueryQuota does not use this).
-	// Enabled by default because free detection requires an explicit free tier marker.
-	viper.SetDefault("gateway.grok.free_quota_soft_gate_enabled", true)
-	viper.SetDefault("gateway.grok.password_auth_enabled", false)
-	// Free soft-gate nominal limit: 500k tokens / rolling 24h (operator policy).
-	viper.SetDefault("gateway.grok.free_quota_token_limit", int64(500_000))
-	viper.SetDefault("gateway.grok.free_quota_soft_gate_percent", 95)
-	viper.SetDefault("gateway.grok.free_quota_window_hours", 24)
-	viper.SetDefault("gateway.grok.free_quota_stats_cache_seconds", 60)
-	// 国产供应商余额检测（kimi/deepseek payg；zhipu 无余额端点，仅靠响应式 429/402）。
-	viper.SetDefault("gateway.cn_providers.balance_check_enabled", true)
-	viper.SetDefault("gateway.cn_providers.balance_threshold", 0.5)
-	viper.SetDefault("gateway.cn_providers.balance_check_interval_minutes", 10)
 	viper.SetDefault("gateway.image_concurrency.enabled", false)
 	viper.SetDefault("gateway.image_concurrency.max_concurrent_requests", 0)
 	viper.SetDefault("gateway.image_concurrency.overflow_mode", ImageConcurrencyOverflowModeReject)
 	viper.SetDefault("gateway.image_concurrency.wait_timeout_seconds", 30)
 	viper.SetDefault("gateway.image_concurrency.max_waiting_requests", 100)
-	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
-	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
 	viper.SetDefault("gateway.text_max_body_size", int64(32*1024*1024))
 	viper.SetDefault("gateway.upstream_response_read_max_bytes", DefaultUpstreamResponseReadMaxBytes)
 	viper.SetDefault("gateway.proxy_probe_response_read_max_bytes", int64(1024*1024))
-	viper.SetDefault("gateway.gemini_debug_response_headers", false)
 	viper.SetDefault("gateway.connection_pool_isolation", ConnectionPoolIsolationAccountProxy)
 	// HTTP 上游连接池配置（针对 5000+ 并发用户优化）
 	viper.SetDefault("gateway.max_idle_conns", 2560)          // 最大空闲连接总数（高并发场景可调大）
@@ -2516,14 +2498,6 @@ func setDefaults() {
 	viper.SetDefault("token_refresh.provider_failure_threshold", 3)
 	viper.SetDefault("token_refresh.attempt_timeout_seconds", 15)
 	viper.SetDefault("token_refresh.cycle_timeout_seconds", 240)
-
-	// Gemini OAuth - configure via environment variables or config file
-	// GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET
-	// Default: uses Gemini CLI public credentials (set via environment)
-	viper.SetDefault("gemini.oauth.client_id", "")
-	viper.SetDefault("gemini.oauth.client_secret", "")
-	viper.SetDefault("gemini.oauth.scopes", "")
-	viper.SetDefault("gemini.quota.policy", "")
 
 	// Subscription Maintenance (bounded queue + worker pool)
 	viper.SetDefault("subscription_maintenance.worker_count", 2)
@@ -2731,14 +2705,6 @@ func (c *Config) Validate() error {
 	}
 	if c.SubscriptionMaintenance.QueueSize < 0 {
 		return fmt.Errorf("subscription_maintenance.queue_size must be non-negative")
-	}
-
-	// Gemini OAuth 配置校验：client_id 与 client_secret 必须同时设置或同时留空。
-	// 留空时表示使用内置的 Gemini CLI OAuth 客户端（其 client_secret 通过环境变量注入）。
-	geminiClientID := strings.TrimSpace(c.Gemini.OAuth.ClientID)
-	geminiClientSecret := strings.TrimSpace(c.Gemini.OAuth.ClientSecret)
-	if (geminiClientID == "") != (geminiClientSecret == "") {
-		return fmt.Errorf("gemini.oauth.client_id and gemini.oauth.client_secret must be both set or both empty")
 	}
 
 	if strings.TrimSpace(c.Server.FrontendURL) != "" {
@@ -3245,9 +3211,6 @@ func (c *Config) Validate() error {
 	if c.Gateway.OpenAIResponseHeaderTimeout < 0 {
 		return fmt.Errorf("gateway.openai_response_header_timeout must be non-negative")
 	}
-	if c.Gateway.GrokResponseHeaderTimeout < 0 || c.Gateway.GrokResponseHeaderTimeout > 1800 {
-		return fmt.Errorf("gateway.grok_response_header_timeout must be between 0-1800 seconds")
-	}
 	if c.Gateway.OpenAIFirstOutputTimeoutSeconds < 0 || c.Gateway.OpenAIFirstOutputTimeoutSeconds > 600 ||
 		(c.Gateway.OpenAIFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIFirstOutputTimeoutSeconds < 30) {
 		return fmt.Errorf("gateway.openai_first_output_timeout_seconds must be 0 or between 30-600 seconds")
@@ -3642,20 +3605,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Concurrency.PingInterval < 5 || c.Concurrency.PingInterval > 30 {
 		return fmt.Errorf("concurrency.ping_interval must be between 5-30 seconds")
-	}
-	if c.Gateway.Grok.FreeQuotaSoftGateEnabled {
-		if c.Gateway.Grok.FreeQuotaTokenLimit <= 0 {
-			return fmt.Errorf("gateway.grok.free_quota_token_limit must be positive")
-		}
-		if c.Gateway.Grok.FreeQuotaSoftGatePercent < 1 || c.Gateway.Grok.FreeQuotaSoftGatePercent > 100 {
-			return fmt.Errorf("gateway.grok.free_quota_soft_gate_percent must be between 1 and 100")
-		}
-		if c.Gateway.Grok.FreeQuotaWindowHours <= 0 {
-			return fmt.Errorf("gateway.grok.free_quota_window_hours must be positive")
-		}
-	}
-	if c.Gateway.Grok.FreeQuotaStatsCacheSeconds < 0 {
-		return fmt.Errorf("gateway.grok.free_quota_stats_cache_seconds must be non-negative")
 	}
 	if err := ValidateDingTalkConfig(c.DingTalk); err != nil {
 		return fmt.Errorf("dingtalk_connect: %w", err)

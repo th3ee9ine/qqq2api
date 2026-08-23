@@ -176,7 +176,9 @@ func TestDashboardService_CacheHitFresh(t *testing.T) {
 
 	got, err := svc.GetDashboardStats(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, stats, got)
+	require.Zero(t, got.TotalUsers, "dashboard cache must not expose retired user metrics")
+	require.Equal(t, stats.StatsUpdatedAt, got.StatsUpdatedAt)
+	require.Equal(t, stats.StatsStale, got.StatsStale)
 	require.Equal(t, int32(0), atomic.LoadInt32(&repo.calls))
 	require.Equal(t, int32(1), atomic.LoadInt32(&cache.getCalls))
 	require.Equal(t, int32(0), atomic.LoadInt32(&cache.setCalls))
@@ -210,7 +212,9 @@ func TestDashboardService_CacheMiss_StoresCache(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&cache.getCalls))
 	require.Equal(t, int32(1), atomic.LoadInt32(&cache.setCalls))
 	entry := cache.readLastEntry(t)
-	require.Equal(t, stats, entry.Stats)
+	require.Zero(t, entry.Stats.TotalUsers, "dashboard cache must not persist retired user metrics")
+	require.Equal(t, stats.StatsUpdatedAt, entry.Stats.StatsUpdatedAt)
+	require.Equal(t, stats.StatsStale, entry.Stats.StatsStale)
 	require.WithinDuration(t, time.Now(), time.Unix(entry.UpdatedAt, 0), time.Second)
 }
 
@@ -277,7 +281,9 @@ func TestDashboardService_CacheHitStale_TriggersAsyncRefresh(t *testing.T) {
 
 	got, err := svc.GetDashboardStats(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, staleStats, got)
+	require.Zero(t, got.TotalUsers, "dashboard cache must not expose retired user metrics")
+	require.Equal(t, staleStats.StatsUpdatedAt, got.StatsUpdatedAt)
+	require.Equal(t, staleStats.StatsStale, got.StatsStale)
 
 	select {
 	case <-refreshCh:

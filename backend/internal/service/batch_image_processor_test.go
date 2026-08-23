@@ -312,8 +312,7 @@ func TestBatchImageProviderProcessor_StatusFlow(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, got.Terminal)
 		require.Equal(t, BatchImageJobStatusCancelled, repo.jobs["imgbatch_flow"].Status)
-		require.Len(t, billing.releases, 1)
-		require.Equal(t, BatchImageReleaseRequestID("imgbatch_flow"), billing.releases[0].RequestID)
+		require.Empty(t, billing.releases, "global API keys have no user balance hold to release")
 	})
 }
 

@@ -17,7 +17,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -637,6 +636,7 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	t.Run("exact_claude_model_override_wins", func(t *testing.T) {
 		apiKey := &service.APIKey{
 			Group: &service.Group{
+				Platform: service.PlatformOpenAI,
 				MessagesDispatchModelConfig: service.OpenAIMessagesDispatchModelConfig{
 					SonnetMappedModel: "gpt-5.2",
 					ExactModelMappings: map[string]string{
@@ -651,7 +651,7 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	})
 
 	t.Run("uses_family_default_when_no_override", func(t *testing.T) {
-		apiKey := &service.APIKey{Group: &service.Group{}}
+		apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformOpenAI}}
 		require.Equal(t, "gpt-5.4", resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "claude-opus-4-6"))
 		require.Equal(t, "gpt-5.3-codex", resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "claude-sonnet-4-5-20250929"))
 		require.Equal(t, "gpt-5.4-mini", resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "claude-haiku-4-5-20251001"))
@@ -663,22 +663,20 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(nil, &service.APIKey{Group: &service.Group{}}, "gpt-5.4"))
 	})
 
-	t.Run("grok_group_maps_claude_cli_model_to_grok_default", func(t *testing.T) {
-		original := xai.RuntimeModelMappingOptions()
-		t.Cleanup(func() { xai.SetRuntimeModelMappingOptions(original) })
-		xai.SetRuntimeModelMappingOptions(xai.ModelMappingOptions{EnableCrossClientMap: true})
+	t.Run("retired_grok_group_fails_closed", func(t *testing.T) {
 		apiKey := &service.APIKey{
 			Group: &service.Group{
 				Platform: service.PlatformGrok,
 			},
 		}
-		require.Equal(t, "grok-4.6", resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "claude-sonnet-4-5"))
+		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "claude-sonnet-4-5"))
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "grok"))
 	})
 
 	t.Run("does_not_fall_back_to_group_default_mapped_model", func(t *testing.T) {
 		apiKey := &service.APIKey{
 			Group: &service.Group{
+				Platform:           service.PlatformOpenAI,
 				DefaultMappedModel: "gpt-5.4",
 			},
 		}
@@ -687,7 +685,7 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	})
 }
 
-func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
+func TestOpenAIGatewayMessagesDispatchGateRejectsRetiredGrokGroups(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	t.Run("openai_group_without_dispatch_flag_is_rejected", func(t *testing.T) {
@@ -715,7 +713,7 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 		require.Contains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
 	})
 
-	t.Run("grok_group_without_dispatch_flag_reaches_gateway_dependencies", func(t *testing.T) {
+	t.Run("grok_group_is_rejected_before_gateway_dependencies", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`))
@@ -735,9 +733,9 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 		h := &OpenAIGatewayHandler{}
 		h.Messages(c)
 
-		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-		require.Equal(t, "api_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
-		require.NotContains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.Equal(t, "permission_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+		require.Contains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
 	})
 }
 

@@ -2,10 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
 import { flushPromises, mount } from "@vue/test-utils";
 
-import enCommon from "@/i18n/locales/en/common";
-import enSettings from "@/i18n/locales/en/admin/settings";
-import zhCommon from "@/i18n/locales/zh/common";
-import zhSettings from "@/i18n/locales/zh/admin/settings";
 import SettingsView from "../SettingsView.vue";
 
 const {
@@ -451,10 +447,6 @@ const baseSettingsResponse = {
   enable_model_fallback: false,
   fallback_model_anthropic: "",
   fallback_model_openai: "",
-  fallback_model_gemini: "",
-  fallback_model_antigravity: "",
-  grok_default_text_model: "grok-4.5",
-  grok_cross_client_model_map_enabled: false,
   enable_identity_patch: false,
   identity_patch_prompt: "",
   ops_monitoring_enabled: false,
@@ -473,7 +465,6 @@ const baseSettingsResponse = {
   enable_anthropic_cache_ttl_1h_injection: false,
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
-  antigravity_user_agent_version: "",
   openai_codex_user_agent: "",
   payment_enabled: true,
   payment_min_amount: 1,
@@ -537,8 +528,6 @@ const baseSettingsResponse = {
   default_platform_quotas: {
     anthropic:   { daily: null, weekly: null, monthly: null },
     openai:      { daily: null, weekly: 12.5, monthly: null },
-    gemini:      { daily: null, weekly: null, monthly: 200 },
-    antigravity: { daily: null, weekly: null, monthly: null },
   },
 };
 
@@ -547,6 +536,7 @@ function mountView() {
     global: {
       stubs: {
         AppLayout: AppLayoutStub,
+        RouterLink: true,
         Select: SelectStub,
         Toggle: ToggleStub,
         Icon: true,
@@ -557,20 +547,13 @@ function mountView() {
         GroupOptionItem: true,
         ProxySelector: true,
         ImageUpload: ImageUploadStub,
+        OpenAIFastPolicyUserSelector: {
+          template: '<div data-testid="openai-fast-policy-user-selector" />',
+        },
         BackupSettings: true,
       },
     },
   });
-}
-
-async function openPaymentTab(wrapper: ReturnType<typeof mountView>) {
-  const paymentTabButton = wrapper
-    .findAll("button")
-    .find((node) => node.text().includes("admin.settings.tabs.payment"));
-
-  expect(paymentTabButton).toBeDefined();
-  await paymentTabButton?.trigger("click");
-  await flushPromises();
 }
 
 async function openSecurityTab(wrapper: ReturnType<typeof mountView>) {
@@ -593,39 +576,7 @@ async function openGatewayTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
-async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
-  const usersTabButton = wrapper
-    .findAll("button")
-    .find((node) => node.text().includes("admin.settings.tabs.users"));
-
-  expect(usersTabButton).toBeDefined();
-  await usersTabButton?.trigger("click");
-  await flushPromises();
-}
-
-describe("admin SettingsView email domain quota copy", () => {
-  it("documents the email domain quota and empty-whitelist behavior in both locales", () => {
-    expect(zhCommon.auth.emailDomainRegistrationLimit).toContain("主流邮箱");
-    expect(zhCommon.auth.emailDomainRegistrationLimit).toContain("联系客服");
-    expect(enCommon.auth.emailDomainRegistrationLimit).toContain("mainstream email");
-    expect(enCommon.auth.emailDomainRegistrationLimit).toContain("contact support");
-
-    // 白名单 hint 描述严格默认语义；额度语义移入独立开关的 hint。
-    const zhWhitelistHint = zhSettings.settings.registration.emailSuffixWhitelistHint;
-    const enWhitelistHint = enSettings.settings.registration.emailSuffixWhitelistHint;
-    expect(zhWhitelistHint).toContain("留空则不限制");
-    expect(enWhitelistHint).toContain("leave empty for no restriction");
-
-    const zhQuotaHint = zhSettings.settings.registration.emailDomainQuotaHint;
-    const enQuotaHint = enSettings.settings.registration.emailDomainQuotaHint;
-    expect(zhQuotaHint).toContain("其他可注册主域名各限注册一个账户");
-    expect(zhQuotaHint).toContain("关闭时非白名单域名直接拒绝");
-    expect(enQuotaHint).toContain("one account");
-    expect(enQuotaHint).toContain("When disabled");
-  });
-});
-
-describe("admin SettingsView payment visible method controls", () => {
+describe("admin SettingsView", () => {
   beforeEach(() => {
     getSettings.mockReset();
     updateSettings.mockReset();
@@ -773,207 +724,38 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(showSuccess).toHaveBeenCalled();
   });
 
-  it("does not render legacy visible payment method controls", async () => {
+  it("does not expose retired user-facing settings or per-user policy controls", async () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await openPaymentTab(wrapper);
 
-    expect(wrapper.text()).not.toContain("可见方式");
-    expect(wrapper.text()).not.toContain("支付来源");
-  });
+    const tabLabels = wrapper.findAll('[role="tab"]').map((tab) => tab.text());
+    expect(tabLabels).not.toContain("admin.settings.tabs.users");
+    expect(tabLabels).not.toContain("admin.settings.tabs.payment");
+    expect(tabLabels).not.toContain("admin.settings.tabs.email");
+    expect(tabLabels).not.toContain("admin.settings.tabs.agreement");
 
-  it("shows valid passkey RP configuration and persists the sign-in toggle", async () => {
-    const wrapper = mountView();
+    expect(wrapper.find('[data-testid="passkey-settings"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="captcha-enabled-toggle"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="wechat-connect-mp-app-id"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="auth-source-email-enabled"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="openai-fast-policy-user-selector"]').exists()).toBe(false);
+    expect(getGroups).not.toHaveBeenCalled();
+    expect(getProviders).not.toHaveBeenCalled();
 
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    const settings = wrapper.get('[data-testid="passkey-settings"]');
-    const toggle = settings.get('[data-testid="passkey-toggle"]');
-    expect(toggle.attributes("disabled")).toBeUndefined();
-    expect(settings.text()).toContain("sub3.nebula-spaces.com");
-    expect(settings.text()).toContain("https://sub3.nebula-spaces.com");
-    expect(settings.text()).not.toContain("webauthn.enabled");
-
-    await toggle.setValue(false);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ passkey_enabled: false }),
-    );
-  });
-
-  it("人机验证切换到腾讯天御并保存四项配置", async () => {
-    const wrapper = mountView();
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
-    await masterToggle.setValue(true);
-    // 默认选中 Turnstile
-    expect(wrapper.text()).toContain("admin.settings.turnstile.siteKey");
-
-    await wrapper.get('[data-testid="captcha-provider-tencent"]').trigger("click");
-    await flushPromises();
-
-    const card = wrapper
-      .findAll(".card")
-      .find((node) => node.text().includes("admin.settings.captcha.title"));
-    expect(card).toBeDefined();
-    expect(card!.text()).not.toContain("admin.settings.turnstile.siteKey");
-    expect(card!.get('a[href="https://console.cloud.tencent.com/captcha"]').exists()).toBe(true);
-    expect(card!.get('a[href="https://console.cloud.tencent.com/cam/capi"]').exists()).toBe(true);
-    expect(
-      card!.get('a[href="https://cloud.tencent.com/document/product/1110/36841"]').exists(),
-    ).toBe(true);
-    const inputs = card!.findAll("input").filter((input) => input.attributes("type") !== "checkbox");
-    await inputs[0]!.setValue("123456789");
-    await inputs[1]!.setValue("app-secret-value");
-    await inputs[2]!.setValue("cloud-secret-id-value");
-    await inputs[3]!.setValue("cloud-secret-key-value");
-
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        turnstile_enabled: false,
-        tencent_captcha_enabled: true,
-        aliyun_captcha_enabled: false,
-        tencent_captcha_app_id: "123456789",
-        tencent_captcha_app_secret_key: "app-secret-value",
-        tencent_captcha_cloud_secret_id: "cloud-secret-id-value",
-        tencent_captcha_cloud_secret_key: "cloud-secret-key-value",
-        tencent_captcha_region: "cn",
-      }),
-    );
-  });
-
-  it("腾讯天御切换到国际站后保存站点并更新控制台入口", async () => {
-    const wrapper = mountView();
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    await wrapper.get('[data-testid="captcha-enabled-toggle"]').setValue(true);
-    await wrapper.get('[data-testid="captcha-provider-tencent"]').trigger("click");
-    await wrapper.get('[data-testid="tencent-captcha-region-intl"]').trigger("click");
-
-    const card = wrapper
-      .findAll(".card")
-      .find((node) => node.text().includes("admin.settings.captcha.title"));
-    expect(card).toBeDefined();
-    expect(card!.get('a[href="https://console.tencentcloud.com/captcha/graphical"]').exists()).toBe(
-      true,
-    );
-    expect(card!.get('a[href="https://console.tencentcloud.com/cam/capi"]').exists()).toBe(true);
-
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tencent_captcha_enabled: true,
-        tencent_captcha_region: "intl",
-      }),
-    );
-  });
-
-  it("人机验证切换到阿里云并保存配置", async () => {
-    const wrapper = mountView();
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
-    await masterToggle.setValue(true);
-
-    await wrapper.get('[data-testid="captcha-provider-aliyun"]').trigger("click");
-    await flushPromises();
-
-    const card = wrapper
-      .findAll(".card")
-      .find((node) => node.text().includes("admin.settings.captcha.title"));
-    expect(card).toBeDefined();
-    expect(card!.text()).toContain("admin.settings.aliyunCaptcha.region");
-    expect(card!.text()).not.toContain("admin.settings.turnstile.siteKey");
-    const inputs = card!.findAll("input").filter((input) => input.attributes("type") !== "checkbox");
-    await inputs[0]!.setValue("prefix-1");
-    await inputs[1]!.setValue("scene-1");
-    await inputs[2]!.setValue("ak-id");
-    await inputs[3]!.setValue("ak-secret-value");
-
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        turnstile_enabled: false,
-        tencent_captcha_enabled: false,
-        aliyun_captcha_enabled: true,
-        aliyun_captcha_prefix: "prefix-1",
-        aliyun_captcha_scene_id: "scene-1",
-        aliyun_captcha_access_key_id: "ak-id",
-        aliyun_captcha_access_key_secret: "ak-secret-value",
-        aliyun_captcha_region: "cn",
-      }),
-    );
-  });
-
-  it("关闭人机验证总开关会同时关闭所有服务商", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      tencent_captcha_enabled: true,
-      tencent_captcha_app_id: "123456789",
-      tencent_captcha_app_secret_key_configured: true,
-      tencent_captcha_cloud_secret_id_configured: true,
-      tencent_captcha_cloud_secret_key_configured: true,
-    });
-    const wrapper = mountView();
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
-    expect((masterToggle.element as HTMLInputElement).checked).toBe(true);
-    // 加载后选中项跟随已启用的服务商
-    expect(wrapper.text()).toContain("admin.settings.tencentCaptcha.appId");
-
-    await masterToggle.setValue(false);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        turnstile_enabled: false,
-        tencent_captcha_enabled: false,
-        aliyun_captcha_enabled: false,
-      }),
-    );
-  });
-
-  it("disables passkey sign-in when the RP configuration is unavailable", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      passkey_enabled: false,
-      passkey_configured: false,
-      passkey_rp_id: "",
-      passkey_rp_origins: [],
-    });
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    const settings = wrapper.get('[data-testid="passkey-settings"]');
-    expect(settings.get('[data-testid="passkey-toggle"]').attributes("disabled")).toBeDefined();
-    const status = settings.get('[data-testid="passkey-config-status"]');
-    expect(status.text()).toContain(
-      "admin.settings.security.passkeyNotConfigured",
-    );
-    expect(status.text()).toContain("webauthn.enabled");
-    expect(status.text()).toContain("webauthn.rp_id");
-    expect(status.text()).toContain("webauthn.rp_origins");
-    expect(status.text()).toContain("然后重启服务");
+    const text = wrapper.text();
+    expect(text).not.toContain("admin.settings.registration.title");
+    expect(text).not.toContain("admin.settings.payment.title");
+    expect(text).not.toContain("admin.settings.smtp.title");
+    expect(text).not.toContain("admin.settings.defaults.defaultPlatformQuotas");
+    expect(text).not.toContain("admin.settings.subscriptionExpiryNotify.title");
+    expect(text).not.toContain("admin.settings.customMenu.title");
+    expect(text).not.toContain("admin.settings.usageRecords.title");
+    expect(text).not.toContain("admin.settings.features.channelMonitor.title");
+    expect(text).not.toContain("admin.settings.features.availableChannels.title");
+    expect(text).not.toContain("admin.settings.features.modelPlaza.title");
+    expect(text).not.toContain("admin.settings.features.affiliate.title");
+    expect(text).not.toContain("admin.settings.openaiFastPolicy.userIds");
   });
 
   it("loads, edits, validates, and saves forwarded client-IP headers", async () => {
@@ -1030,67 +812,6 @@ describe("admin SettingsView payment visible method controls", () => {
       expect.objectContaining({
         api_key_acl_trust_forwarded_ip: true,
         forwarded_client_ip_headers: ["Cf-Connecting-Ip", "X-Client-Ip"],
-      }),
-    );
-  });
-
-  it("links payment guidance to README sections instead of removed payment docs", async () => {
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openPaymentTab(wrapper);
-
-    const paymentLinks = wrapper
-      .findAll("a")
-      .filter((node) =>
-        ["查看支付配置说明", "查看支持的支付方式"].includes(node.text()),
-      );
-
-    expect(paymentLinks).toHaveLength(2);
-    expect(paymentLinks[0]?.attributes("href")).toBe(
-      "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md",
-    );
-    expect(paymentLinks[1]?.attributes("href")).toBe(
-      "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md#支持的支付方式",
-    );
-    for (const link of paymentLinks) {
-      expect(link.attributes("href")).toContain("docs/PAYMENT");
-    }
-  });
-
-  it("does not submit legacy visible payment method settings", async () => {
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openPaymentTab(wrapper);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledTimes(1);
-    const payload = updateSettings.mock.calls[0]?.[0];
-    expect(payload).not.toHaveProperty("payment_visible_method_alipay_source");
-    expect(payload).not.toHaveProperty("payment_visible_method_wxpay_source");
-    expect(payload).not.toHaveProperty("payment_visible_method_alipay_enabled");
-    expect(payload).not.toHaveProperty("payment_visible_method_wxpay_enabled");
-  });
-
-  it("submits the admin recharge affiliate rebate setting", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      affiliate_enabled: true,
-      affiliate_admin_recharge_enabled: true,
-    });
-
-    const wrapper = mountView();
-
-    await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledTimes(1);
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        affiliate_admin_recharge_enabled: true,
       }),
     );
   });
@@ -1169,89 +890,6 @@ describe("admin SettingsView payment visible method controls", () => {
         },
       },
     ]);
-  });
-
-  it("submits Antigravity user agent version gateway setting", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      antigravity_user_agent_version: "1.23.2",
-    });
-
-    const wrapper = mountView();
-
-    await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledTimes(1);
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        antigravity_user_agent_version: "1.23.2",
-      }),
-    );
-  });
-
-  it("updates provider enablement immediately and reloads providers", async () => {
-    const provider = {
-      id: 7,
-      provider_key: "alipay",
-      name: "Official Alipay",
-      config: {},
-      supported_types: ["alipay"],
-      enabled: false,
-      payment_mode: "",
-      refund_enabled: false,
-      allow_user_refund: false,
-      limits: "",
-      sort_order: 0,
-    };
-    getProviders.mockReset();
-    getProviders
-      .mockResolvedValueOnce({ data: [provider] })
-      .mockResolvedValueOnce({ data: [{ ...provider, enabled: true }] });
-    updateProvider.mockResolvedValue({ data: { ...provider, enabled: true } });
-
-    const PaymentProviderListStub = defineComponent({
-      emits: ["toggleField"],
-      setup(_, { emit }) {
-        return () =>
-          h(
-            "button",
-            {
-              class: "provider-toggle-stub",
-              onClick: () => emit("toggleField", provider, "enabled"),
-            },
-            "toggle provider",
-          );
-      },
-    });
-
-    const wrapper = mount(SettingsView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          Select: SelectStub,
-          Toggle: ToggleStub,
-          Icon: true,
-          ConfirmDialog: true,
-          PaymentProviderList: PaymentProviderListStub,
-          PaymentProviderDialog: true,
-          GroupBadge: true,
-          GroupOptionItem: true,
-          ProxySelector: true,
-          ImageUpload: ImageUploadStub,
-          BackupSettings: true,
-        },
-      },
-    });
-
-    await flushPromises();
-    await openPaymentTab(wrapper);
-    await wrapper.get(".provider-toggle-stub").trigger("click");
-    await flushPromises();
-
-    expect(updateProvider).toHaveBeenCalledWith(7, { enabled: true });
-    expect(getProviders).toHaveBeenCalledTimes(2);
   });
 
   it("renders advanced scheduler copy as local experimental gateway policy", async () => {
@@ -1333,34 +971,6 @@ describe("admin SettingsView payment visible method controls", () => {
       interval_minutes: 60,
     });
     expect(showSuccess).toHaveBeenCalledWith("上游倍率自动探测设置已保存");
-  });
-
-  it("loads and saves configurable Grok cross-client model mapping", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      grok_default_text_model: "grok-4.1-fast",
-      grok_cross_client_model_map_enabled: true,
-    });
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openGatewayTab(wrapper);
-
-    const modelInput = wrapper.get('[data-testid="grok-default-text-model"]');
-    const mappingToggle = wrapper.get(
-      '[data-testid="grok-cross-client-model-map-toggle"]',
-    );
-    expect((modelInput.element as HTMLInputElement).value).toBe("grok-4.1-fast");
-    expect((mappingToggle.element as HTMLInputElement).checked).toBe(true);
-
-    await modelInput.setValue("grok-custom-text");
-    await mappingToggle.setValue(false);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    const payload = updateSettings.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(payload.grok_default_text_model).toBe("grok-custom-text");
-    expect(payload.grok_cross_client_model_map_enabled).toBe(false);
   });
 
   it("loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in", async () => {
@@ -1450,485 +1060,4 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(weightedModeText).toContain("计费倍率");
   });
 
-  it("passes translated upload and remove labels to the payment help image uploader", async () => {
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openPaymentTab(wrapper);
-
-    const imageUploads = wrapper.findAll(".image-upload-stub");
-    expect(imageUploads.length).toBeGreaterThan(0);
-
-    const paymentHelpImageUpload = imageUploads.find(
-      (node) => node.attributes("data-placeholder") === "admin.settings.payment.helpImagePlaceholder",
-    );
-
-    expect(paymentHelpImageUpload).toBeDefined();
-    expect(paymentHelpImageUpload?.attributes("data-upload-label")).toBe("上传图片");
-    expect(paymentHelpImageUpload?.attributes("data-remove-label")).toBe("移除");
-  });
-
-  it("normalizes null supported_types from API so provider card stays visible", async () => {
-    // Backend returns null for supported_types when the list is empty
-    // (Go nil slice → JSON null). Without normalization, ProviderCard's
-    // isSelected() throws TypeError on null.includes(), causing the card
-    // to vanish from the list.
-    const providerWithNullTypes = {
-      id: 42,
-      provider_key: "easypay",
-      name: "EasyPay",
-      config: {},
-      supported_types: null as unknown as string[],
-      enabled: true,
-      payment_mode: "",
-      refund_enabled: false,
-      allow_user_refund: false,
-      limits: "",
-      sort_order: 0,
-    };
-    getProviders.mockReset();
-    getProviders.mockResolvedValue({ data: [providerWithNullTypes] });
-
-    let receivedProviders: Array<Record<string, unknown>> = [];
-    const PaymentProviderListCapture = defineComponent({
-      props: {
-        providers: {
-          type: Array,
-          default: () => [],
-        },
-      },
-      setup(props) {
-        receivedProviders = props.providers as Array<Record<string, unknown>>;
-        return () => h("div", { class: "provider-list-capture" });
-      },
-    });
-
-    const wrapper = mount(SettingsView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          Select: SelectStub,
-          Toggle: ToggleStub,
-          Icon: true,
-          ConfirmDialog: true,
-          PaymentProviderList: PaymentProviderListCapture,
-          PaymentProviderDialog: true,
-          GroupBadge: true,
-          GroupOptionItem: true,
-          ProxySelector: true,
-          ImageUpload: ImageUploadStub,
-          BackupSettings: true,
-        },
-      },
-    });
-
-    await flushPromises();
-    await openPaymentTab(wrapper);
-
-    // The provider should still be in the list
-    expect(receivedProviders.length).toBe(1);
-    // supported_types should be normalized to an empty array, not null
-    expect(Array.isArray(receivedProviders[0].supported_types)).toBe(true);
-    expect(receivedProviders[0].supported_types).toEqual([]);
-  });
-});
-
-describe("admin SettingsView wechat connect controls", () => {
-  beforeEach(() => {
-    getSettings.mockReset();
-    updateSettings.mockReset();
-    getWebSearchEmulationConfig.mockReset();
-    updateWebSearchEmulationConfig.mockReset();
-    getAdminApiKey.mockReset();
-    getOverloadCooldownSettings.mockReset();
-    getRateLimit429CooldownSettings.mockReset();
-    updateRateLimit429CooldownSettings.mockReset();
-    getStreamTimeoutSettings.mockReset();
-    getRectifierSettings.mockReset();
-    getBetaPolicySettings.mockReset();
-    getGroups.mockReset();
-    listProxies.mockReset();
-    getProviders.mockReset();
-    updateProvider.mockReset();
-    createProvider.mockReset();
-    deleteProvider.mockReset();
-    fetchPublicSettings.mockReset();
-    adminSettingsFetch.mockReset();
-    showError.mockReset();
-    showSuccess.mockReset();
-
-    getSettings.mockResolvedValue({
-      ...baseSettingsResponse,
-      payment_visible_method_wxpay_source: "official_wxpay",
-    });
-    updateSettings.mockImplementation(async (payload) => ({
-      ...baseSettingsResponse,
-      payment_visible_method_wxpay_source: "official_wxpay",
-      ...payload,
-    }));
-    getWebSearchEmulationConfig.mockResolvedValue({
-      enabled: false,
-      providers: [],
-    });
-    updateWebSearchEmulationConfig.mockResolvedValue({
-      enabled: false,
-      providers: [],
-    });
-    getAdminApiKey.mockResolvedValue({
-      exists: false,
-      masked_key: "",
-    });
-    getOverloadCooldownSettings.mockResolvedValue({
-      enabled: true,
-      cooldown_minutes: 10,
-    });
-    getRateLimit429CooldownSettings.mockResolvedValue({
-      enabled: true,
-      cooldown_seconds: 5,
-    });
-    updateRateLimit429CooldownSettings.mockImplementation(async (payload) => payload);
-    getStreamTimeoutSettings.mockResolvedValue({
-      enabled: true,
-      action: "temp_unsched",
-      temp_unsched_minutes: 5,
-      threshold_count: 3,
-      threshold_window_minutes: 10,
-    });
-    getRectifierSettings.mockResolvedValue({
-      enabled: true,
-      thinking_signature_enabled: true,
-      thinking_budget_enabled: true,
-      apikey_signature_enabled: false,
-      apikey_signature_patterns: [],
-    });
-    getBetaPolicySettings.mockResolvedValue({
-      rules: [],
-    });
-    getGroups.mockResolvedValue([]);
-    listProxies.mockResolvedValue({
-      items: [],
-    });
-    getProviders.mockResolvedValue({
-      data: [],
-    });
-    fetchPublicSettings.mockResolvedValue(undefined);
-    adminSettingsFetch.mockResolvedValue(undefined);
-  });
-
-  it("loads and echoes WeChat Connect fields from the backend payload", async () => {
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    expect(
-      (
-        wrapper.get('[data-testid="wechat-connect-mp-app-id"]')
-          .element as HTMLInputElement
-      ).value,
-    ).toBe("wx-app-id-123");
-    expect(
-      (
-        wrapper.get('[data-testid="wechat-connect-open-enabled"]')
-          .element as HTMLInputElement
-      ).checked,
-    ).toBe(false);
-    expect(
-      (
-        wrapper.get('[data-testid="wechat-connect-mp-enabled"]')
-          .element as HTMLInputElement
-      ).checked,
-    ).toBe(true);
-    expect(wrapper.find('[data-testid="wechat-connect-scopes"]').exists()).toBe(
-      false,
-    );
-    expect(
-      wrapper
-        .get('[data-testid="wechat-connect-mp-app-secret"]')
-        .attributes("placeholder"),
-    ).toContain("密钥已配置");
-    expect(
-      (
-        wrapper.get('[data-testid="wechat-connect-frontend-redirect-url"]')
-          .element as HTMLInputElement
-      ).value,
-    ).toBe("/auth/wechat/callback");
-  });
-
-  it("links GitHub OAuth Apps guide to GitHub developer settings", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      github_oauth_enabled: true,
-    });
-
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    const link = wrapper.get('[data-testid="github-oauth-apps-guide-link"]');
-    expect(link.text()).toContain("OAuth Apps");
-    expect(link.attributes("href")).toBe("https://github.com/settings/developers");
-    expect(link.attributes("target")).toBe("_blank");
-    expect(link.attributes("rel")).toContain("noopener");
-  });
-
-  it("saves WeChat Connect fields using the backend contract and clears the secret after save", async () => {
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openSecurityTab(wrapper);
-
-    await wrapper
-      .get('[data-testid="wechat-connect-mp-app-id"]')
-      .setValue("wx-app-id-updated");
-    await wrapper
-      .get('[data-testid="wechat-connect-mp-app-secret"]')
-      .setValue("new-secret");
-    await wrapper
-      .get('[data-testid="wechat-connect-open-enabled"]')
-      .setValue(true);
-    await wrapper
-      .get('[data-testid="wechat-connect-mp-enabled"]')
-      .setValue(true);
-    await wrapper
-      .get('[data-testid="wechat-connect-redirect-url"]')
-      .setValue("https://admin.example.com/api/v1/auth/oauth/wechat/callback");
-    await wrapper
-      .get('[data-testid="wechat-connect-frontend-redirect-url"]')
-      .setValue("/auth/wechat/callback");
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledTimes(1);
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wechat_connect_enabled: true,
-        wechat_connect_app_id: "wx-app-id-updated",
-        wechat_connect_open_enabled: true,
-        wechat_connect_mp_enabled: true,
-        wechat_connect_mp_app_id: "wx-app-id-updated",
-        wechat_connect_mp_app_secret: "new-secret",
-        wechat_connect_redirect_url:
-          "https://admin.example.com/api/v1/auth/oauth/wechat/callback",
-        wechat_connect_frontend_redirect_url: "/auth/wechat/callback",
-      }),
-    );
-    expect(
-      (
-        wrapper.get('[data-testid="wechat-connect-mp-app-secret"]')
-          .element as HTMLInputElement
-      ).value,
-    ).toBe("");
-    expect(
-      wrapper
-        .get('[data-testid="wechat-connect-mp-app-secret"]')
-        .attributes("placeholder"),
-    ).toContain("密钥已配置");
-  });
-
-  it("collapses auth source defaults until the source is enabled", async () => {
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openUsersTab(wrapper);
-
-    expect(
-      (
-        wrapper.get('[data-testid="auth-source-email-enabled"]')
-          .element as HTMLInputElement
-      ).checked,
-    ).toBe(false);
-    expect(
-      wrapper.find('[data-testid="auth-source-email-panel"]').exists(),
-    ).toBe(false);
-    expect(wrapper.text()).not.toContain("注册即授权");
-
-    await wrapper
-      .get('[data-testid="auth-source-email-enabled"]')
-      .setValue(true);
-
-    expect(
-      wrapper.find('[data-testid="auth-source-email-panel"]').exists(),
-    ).toBe(true);
-    expect(wrapper.text()).toContain("首次绑定时授权");
-  });
-
-  it("preserves optional OIDC compatibility flags instead of forcing them on save", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      oidc_connect_enabled: true,
-      oidc_connect_use_pkce: false,
-      oidc_connect_validate_id_token: false,
-    });
-
-    const wrapper = mountView();
-
-    await flushPromises();
-    await openSecurityTab(wrapper);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalledTimes(1);
-    expect(updateSettings).toHaveBeenCalledWith(
-      expect.objectContaining({
-        oidc_connect_use_pkce: false,
-        oidc_connect_validate_id_token: false,
-      }),
-    );
-  });
-});
-
-describe("admin SettingsView platform quota matrix", () => {
-  beforeEach(() => {
-    getSettings.mockReset();
-    updateSettings.mockReset();
-    getWebSearchEmulationConfig.mockReset();
-    updateWebSearchEmulationConfig.mockReset();
-    getAdminApiKey.mockReset();
-    getOverloadCooldownSettings.mockReset();
-    getRateLimit429CooldownSettings.mockReset();
-    updateRateLimit429CooldownSettings.mockReset();
-    getStreamTimeoutSettings.mockReset();
-    getRectifierSettings.mockReset();
-    getBetaPolicySettings.mockReset();
-    getGroups.mockReset();
-    listProxies.mockReset();
-    getProviders.mockReset();
-    updateProvider.mockReset();
-    createProvider.mockReset();
-    deleteProvider.mockReset();
-    fetchPublicSettings.mockReset();
-    adminSettingsFetch.mockReset();
-    showError.mockReset();
-    showSuccess.mockReset();
-    localeRef.value = "zh-CN";
-
-    getSettings.mockResolvedValue({ ...baseSettingsResponse });
-    updateSettings.mockImplementation(async (payload) => ({
-      ...baseSettingsResponse,
-      ...payload,
-    }));
-    getWebSearchEmulationConfig.mockResolvedValue({ enabled: false, providers: [] });
-    updateWebSearchEmulationConfig.mockResolvedValue({ enabled: false, providers: [] });
-    getAdminApiKey.mockResolvedValue({ exists: false, masked_key: "" });
-    getOverloadCooldownSettings.mockResolvedValue({});
-    getRateLimit429CooldownSettings.mockResolvedValue({});
-    updateRateLimit429CooldownSettings.mockResolvedValue({});
-    getStreamTimeoutSettings.mockResolvedValue({});
-    getRectifierSettings.mockResolvedValue({});
-    getBetaPolicySettings.mockResolvedValue({});
-    getGroups.mockResolvedValue([]);
-    listProxies.mockResolvedValue({ items: [] });
-    getProviders.mockResolvedValue({ data: [] });
-  });
-
-  it("从 baseSettings 加载默认平台配额数据并在 Users tab 渲染 5 平台行", async () => {
-    const wrapper = mountView();
-    await flushPromises();
-    await openUsersTab(wrapper);
-
-    expect(getSettings).toHaveBeenCalled();
-
-    const html = wrapper.html();
-    // 表格行的平台字段：font-mono 渲染纯英文 platform key
-    expect(html).toContain("anthropic");
-    expect(html).toContain("openai");
-    expect(html).toContain("gemini");
-    expect(html).toContain("antigravity");
-  });
-
-  it("保存时 updateSettings payload 应包含嵌套 default_platform_quotas 对象（含全 5 平台）", async () => {
-    const wrapper = mountView();
-    await flushPromises();
-    await openUsersTab(wrapper);
-
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    expect(updateSettings).toHaveBeenCalled();
-    const lastCallArgs = updateSettings.mock.calls.at(-1);
-    expect(lastCallArgs).toBeDefined();
-    const payload = lastCallArgs![0] as Record<string, unknown>;
-
-    // 应携带嵌套对象，而非扁平字段
-    expect(payload).toHaveProperty("default_platform_quotas");
-    const quotas = payload["default_platform_quotas"] as Record<string, unknown>;
-    const platforms = ["anthropic", "openai", "gemini", "antigravity", "grok"];
-    for (const p of platforms) {
-      expect(quotas).toHaveProperty(p);
-      const pq = quotas[p] as Record<string, unknown>;
-      expect(pq).toHaveProperty("daily");
-      expect(pq).toHaveProperty("weekly");
-      expect(pq).toHaveProperty("monthly");
-    }
-
-    // 不应存在旧扁平字段
-    expect(payload).not.toHaveProperty("default_platform_quota_anthropic_daily");
-    expect(payload).not.toHaveProperty("default_platform_quota_openai_weekly");
-  });
-
-  it("加载后 form.default_platform_quotas 含全 5 平台，从嵌套 JSON 正确读取数值", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      default_platform_quotas: {
-        anthropic: { daily: 5, weekly: null, monthly: null },
-        openai:    { daily: null, weekly: 12.5, monthly: null },
-        // gemini / antigravity 缺失 → 应被归一化为全 null
-      },
-    });
-
-    const wrapper = mountView();
-    await flushPromises();
-    await openUsersTab(wrapper);
-
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    const payload = updateSettings.mock.calls.at(-1)![0] as Record<string, unknown>;
-    const quotas = payload["default_platform_quotas"] as Record<string, Record<string, unknown>>;
-
-    expect(quotas["anthropic"]?.["daily"]).toBe(5);
-    expect(quotas["openai"]?.["weekly"]).toBe(12.5);
-    // 缺失平台应补全为 null
-    expect(quotas["gemini"]).toEqual({ daily: null, weekly: null, monthly: null });
-    expect(quotas["antigravity"]).toEqual({ daily: null, weekly: null, monthly: null });
-  });
-
-  it("空输入（v-model.number 产出 \"\"）在提交时清洗为 null 而非空字符串", async () => {
-    // 模拟后端返回带有 anthropic daily 值的配额
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      default_platform_quotas: {
-        anthropic: { daily: 10, weekly: null, monthly: null },
-        openai:    { daily: null, weekly: null, monthly: null },
-        gemini:    { daily: null, weekly: null, monthly: null },
-        antigravity: { daily: null, weekly: null, monthly: null },
-      },
-    });
-
-    const wrapper = mountView();
-    await flushPromises();
-    await openUsersTab(wrapper);
-
-    // 找到 anthropic daily 输入框并清空（模拟用户删除值）
-    const inputs = wrapper.findAll('input[type="number"]');
-    const anthropicDailyInput = inputs.find((i) => {
-      const parent = i.element.closest("tr");
-      return parent?.textContent?.includes("anthropic");
-    });
-
-    if (anthropicDailyInput) {
-      // 设置为空字符串，模拟 v-model.number 在清空时产出 ""
-      await anthropicDailyInput.setValue("");
-    }
-
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    const payload = updateSettings.mock.calls.at(-1)![0] as Record<string, unknown>;
-    const quotas = payload["default_platform_quotas"] as Record<string, Record<string, unknown>>;
-    // 不管输入是什么，提交值应为 null（而非 "" 或 NaN）
-    expect(quotas["anthropic"]?.["daily"]).toBe(null);
-  });
 });

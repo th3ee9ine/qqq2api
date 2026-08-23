@@ -50,6 +50,44 @@ func TestAPIKeyAuthRejectsOversizedCredentialsBeforeLookup(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
+func TestAPIKeyAuthGlobalKeyIgnoresTechnicalOwnerStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := &service.User{
+		ID:          7,
+		Role:        service.RoleUser,
+		Status:      service.StatusDisabled,
+		Concurrency: 3,
+	}
+	apiKey := &service.APIKey{
+		ID:     100,
+		UserID: user.ID,
+		Key:    "global-key-disabled-owner",
+		Status: service.StatusActive,
+		User:   user,
+	}
+	repo := &stubApiKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) {
+		clone := *apiKey
+		ownerClone := *user
+		clone.User = &ownerClone
+		return &clone, nil
+	}}
+
+	for _, runMode := range []string{config.RunModeSimple, config.RunModeStandard} {
+		t.Run(runMode, func(t *testing.T) {
+			cfg := &config.Config{RunMode: runMode}
+			svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
+			router := newAuthTestRouter(svc, nil, cfg)
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/t", nil)
+			req.Header.Set("x-api-key", apiKey.Key)
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+		})
+	}
+}
+
 func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -89,7 +127,7 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		},
 	}
 
-	t.Run("standard_mode_completes_maintenance_before_request", func(t *testing.T) {
+	t.Run("standard_mode_skips_owner_subscription_maintenance", func(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeStandard}
 		cfg.SubscriptionMaintenance.WorkerCount = 1
 		cfg.SubscriptionMaintenance.QueueSize = 1
@@ -148,9 +186,9 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 		select {
 		case <-maintenanceCalled:
-			// ok
-		case <-time.After(time.Second):
-			t.Fatalf("expected maintenance to complete before response")
+			t.Fatalf("global API key must not load or maintain an owner subscription")
+		default:
+			// expected
 		}
 	})
 
@@ -198,7 +236,7 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		req.Header.Set("x-api-key", apiKey.Key)
 		router.ServeHTTP(w, req)
 
-		require.Equal(t, http.StatusTooManyRequests, w.Code)
+		require.Equal(t, http.StatusOK, w.Code)
 	})
 
 	t.Run("simple_mode_bypasses_quota_check", func(t *testing.T) {
@@ -265,8 +303,8 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		req.Header.Set("x-api-key", apiKey.Key)
 		router.ServeHTTP(w, req)
 
-		require.Equal(t, http.StatusTooManyRequests, w.Code)
-		require.Contains(t, w.Body.String(), "USAGE_LIMIT_EXCEEDED")
+		require.Equal(t, http.StatusOK, w.Code)
+		require.NotContains(t, w.Body.String(), "USAGE_LIMIT_EXCEEDED")
 	})
 }
 
@@ -380,8 +418,7 @@ func TestAPIKeyAuthRejectsExclusiveGroupWhenUserNoLongerAllowed(t *testing.T) {
 	req.Header.Set("x-api-key", apiKey.Key)
 	router.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusForbidden, w.Code)
-	require.Contains(t, w.Body.String(), "GROUP_NOT_ALLOWED")
+	require.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestAPIKeyAuthOverwritesInvalidContextGroup(t *testing.T) {
@@ -750,69 +787,6 @@ func TestAPIKeyAuthSetsOpsFallbackKeyOnEarlyAbort(t *testing.T) {
 	require.Equal(t, groupID, *fallback.GroupID)
 	require.NotNil(t, fallback.Group)
 	require.Equal(t, service.PlatformAnthropic, fallback.Group.Platform)
-}
-
-func TestAPIKeyAuthGoogleSetsOpsFallbackKeyOnEarlyAbort(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	groupID := int64(202)
-	user := &service.User{
-		ID:          9,
-		Role:        service.RoleUser,
-		Status:      service.StatusActive,
-		Balance:     10,
-		Concurrency: 3,
-	}
-	apiKey := &service.APIKey{
-		ID:      200,
-		UserID:  user.ID,
-		GroupID: &groupID,
-		Key:     "g-key",
-		Status:  service.StatusActive,
-		User:    user,
-		Group: &service.Group{
-			ID:       groupID,
-			Name:     "disabled",
-			Status:   service.StatusDisabled,
-			Platform: service.PlatformGemini,
-			Hydrated: true,
-		},
-	}
-	apiKeyRepo := &stubApiKeyRepo{
-		getByKey: func(ctx context.Context, key string) (*service.APIKey, error) {
-			if key != apiKey.Key {
-				return nil, service.ErrAPIKeyNotFound
-			}
-			clone := *apiKey
-			return &clone, nil
-		},
-	}
-	cfg := &config.Config{RunMode: config.RunModeStandard}
-	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-
-	router := gin.New()
-	var fallback *service.APIKey
-	var fallbackOK bool
-	router.Use(func(c *gin.Context) {
-		c.Next()
-		fallback, fallbackOK = GetOpsFallbackAPIKey(c)
-	})
-	router.Use(gin.HandlerFunc(APIKeyAuthWithSubscriptionGoogle(apiKeyService, nil, cfg)))
-	router.GET("/t", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
-
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/t", nil)
-	req.Header.Set("x-goog-api-key", apiKey.Key)
-	router.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusForbidden, w.Code)
-	require.True(t, fallbackOK, "Google 鉴权早退时也应写入 ops fallback api key")
-	require.NotNil(t, fallback)
-	require.Equal(t, apiKey.ID, fallback.ID)
-	require.NotNil(t, fallback.User)
-	require.Equal(t, user.ID, fallback.User.ID)
 }
 
 func TestRequireGroupAssignmentMarksUngroupedKeyBusinessLimited(t *testing.T) {
@@ -1423,8 +1397,8 @@ func TestAPIKeyAuthRejectsExhaustedBalance(t *testing.T) {
 	req.Header.Set("x-api-key", apiKey.Key)
 	router.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusForbidden, w.Code)
-	requireAPIKeyAuthError(t, w, "INSUFFICIENT_BALANCE", "Insufficient account balance")
+	// The legacy owner balance is not an API-key authentication boundary.
+	require.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestAPIKeyAuthOpenAIQuotaErrorFormat(t *testing.T) {

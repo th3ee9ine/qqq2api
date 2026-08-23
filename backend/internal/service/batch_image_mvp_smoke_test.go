@@ -90,9 +90,7 @@ func TestBatchImageMVPFlow(t *testing.T) {
 	require.Equal(t, 2, submitted.ItemCount)
 	require.Equal(t, []string{submitted.ID}, queue.enqueued)
 	require.Len(t, provider.submits, 1)
-	require.Len(t, billing.reserves, 1)
-	require.Equal(t, BatchImageHoldRequestID(submitted.ID), billing.reserves[0].RequestID)
-	require.InDelta(t, 0.3, billing.reserves[0].HoldAmount, 1e-12)
+	require.Empty(t, billing.reserves, "global API keys do not reserve a user balance")
 	requireBatchImagePublicJSONHasNoInternals(t, mustMarshalBatchImageSmokeJSON(t, submitted))
 
 	firstProcess, err := processor.Process(ctx, submitted.ID)
@@ -115,15 +113,12 @@ func TestBatchImageMVPFlow(t *testing.T) {
 	require.NotNil(t, job.OutputExpiresAt)
 	require.Equal(t, 1, job.SuccessCount)
 	require.Equal(t, 1, job.FailCount)
-	require.Len(t, billing.captures, 1)
-	require.Equal(t, BatchImageCaptureRequestID(submitted.ID), billing.captures[0].RequestID)
-	require.InDelta(t, 0.3, billing.captures[0].HoldAmount, 1e-12)
-	require.InDelta(t, 0.125, billing.captures[0].ActualAmount, 1e-12)
+	require.Empty(t, billing.captures, "global API keys record cost without charging a user wallet")
 
 	secondSettlement, err := processor.SettlementService.Settle(ctx, submitted.ID)
 	require.NoError(t, err)
 	require.True(t, secondSettlement.AlreadySettled)
-	require.Len(t, billing.captures, 1)
+	require.Empty(t, billing.captures)
 
 	status, err := publicSvc.Get(ctx, owner, submitted.ID)
 	require.NoError(t, err)

@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -62,135 +61,49 @@ func newGatewayModelsHandlerForTest(repo service.AccountRepository) *GatewayHand
 	}
 }
 
-func TestDefaultModelIDsForCompositeIncludesAntigravityDefaults(t *testing.T) {
-	antigravityIDs := defaultModelIDsForPlatform(service.PlatformAntigravity)
-	require.NotEmpty(t, antigravityIDs)
-
+func TestDefaultModelIDsForCompositeIncludesOnlyActivePlatformDefaults(t *testing.T) {
 	compositeIDs := defaultModelIDsForPlatform(service.PlatformComposite)
-	require.Contains(t, compositeIDs, antigravityIDs[0])
+	require.Contains(t, compositeIDs, "claude-sonnet-4-6")
+	require.Contains(t, compositeIDs, "gpt-5.5")
+
+	for _, platform := range []string{
+		service.PlatformGemini,
+		service.PlatformAntigravity,
+		service.PlatformGrok,
+		service.PlatformKimi,
+		service.PlatformZhipu,
+		service.PlatformDeepseek,
+	} {
+		require.Empty(t, defaultModelIDsForPlatform(platform), "platform=%s", platform)
+	}
 }
 
-func TestGatewayModels_GeminiGroupFallsBackToGeminiModels(t *testing.T) {
+func TestGatewayModels_RetiredPlatformGroupsAreNotExposed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{})
 
-	groupID := int64(20)
-	h := newGatewayModelsHandlerForTest(
-		&gatewayModelsAccountRepoStub{
-			byGroup: map[int64][]service.Account{
-				groupID: {
-					{ID: 1, Platform: service.PlatformGemini},
-				},
-			},
-		},
-	)
+	for _, platform := range []string{
+		service.PlatformGemini,
+		service.PlatformAntigravity,
+		service.PlatformGrok,
+		service.PlatformKimi,
+		service.PlatformZhipu,
+		service.PlatformDeepseek,
+	} {
+		t.Run(platform, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+				Group: &service.Group{ID: 21, Platform: platform},
+			})
 
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{ID: groupID, Platform: service.PlatformGemini},
-	})
+			h.Models(c)
 
-	h.Models(c)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var got gatewayModelsResponseForTest
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, "list", got.Object)
-	require.Contains(t, modelIDsForTest(got.Data), "gemini-2.5-flash")
-	require.NotContains(t, modelIDsForTest(got.Data), "claude-sonnet-4-6")
-}
-
-func TestGatewayModels_Grok45AdvertisesReasoningEffortForGrokBuild(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	groupID := int64(4409)
-	h := newGatewayModelsHandlerForTest(
-		&gatewayModelsAccountRepoStub{
-			byGroup: map[int64][]service.Account{
-				groupID: {
-					{
-						ID:       1,
-						Platform: service.PlatformGrok,
-						Credentials: map[string]any{
-							"model_mapping": map[string]any{"grok-4.5": "grok-4.5"},
-						},
-					},
-				},
-			},
-		},
-	)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{ID: groupID, Platform: service.PlatformGrok},
-	})
-
-	h.Models(c)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	var got gatewayModelsResponseForTest
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Len(t, got.Data, 1)
-	model := got.Data[0]
-	require.Equal(t, "grok-4.5", model.ID)
-	require.True(t, model.SupportsReasoningEffort)
-	require.Equal(t, "high", model.ReasoningEffort)
-	require.Equal(t, []gatewayReasoningEffortOptionForTest{
-		{Value: "low", Label: "Low"},
-		{Value: "medium", Label: "Medium"},
-		{Value: "high", Label: "High", Default: true},
-	}, model.ReasoningEfforts)
-}
-
-func TestGatewayModels_GeminiGroupFiltersMappedModelsByPlatform(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	groupID := int64(21)
-	h := newGatewayModelsHandlerForTest(
-		&gatewayModelsAccountRepoStub{
-			byGroup: map[int64][]service.Account{
-				groupID: {
-					{
-						ID:       1,
-						Platform: service.PlatformAnthropic,
-						Credentials: map[string]any{
-							"model_mapping": map[string]any{
-								"claude-sonnet-4-6": "claude-sonnet-4-6",
-							},
-						},
-					},
-					{
-						ID:       2,
-						Platform: service.PlatformGemini,
-						Credentials: map[string]any{
-							"model_mapping": map[string]any{
-								"gemini-2.5-flash": "gemini-2.5-flash",
-							},
-						},
-					},
-				},
-			},
-		},
-	)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
-		Group: &service.Group{ID: groupID, Platform: service.PlatformGemini},
-	})
-
-	h.Models(c)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-
-	var got gatewayModelsResponseForTest
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"gemini-2.5-flash"}, modelIDsForTest(got.Data))
+			require.Equal(t, http.StatusNotFound, rec.Code)
+			require.Contains(t, rec.Body.String(), "Platform is not supported")
+		})
+	}
 }
 
 func TestGatewayModels_CustomModelsListDisabledKeepsOriginalModels(t *testing.T) {
@@ -286,7 +199,7 @@ func TestGatewayModels_CustomModelsListFiltersAndOrdersMappedModels(t *testing.T
 	require.Equal(t, []string{"gpt-5.5", "gpt-5.4"}, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t *testing.T) {
+func TestGatewayModels_CompositeCustomModelsListFiltersOutRetiredPlatforms(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(33)
@@ -368,10 +281,10 @@ func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"gemini-2.5-flash", "ag-custom-model", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"gpt-5.5"}, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_CompositeUnmappedAccountsFallbackToLinkedPlatformsOnly(t *testing.T) {
+func TestGatewayModels_CompositeUnmappedRetiredAccountsContributeNoDefaults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(34)
@@ -402,7 +315,7 @@ func TestGatewayModels_CompositeUnmappedAccountsFallbackToLinkedPlatformsOnly(t 
 
 	ids := modelIDsForTest(got.Data)
 	require.Contains(t, ids, "gpt-5.5")
-	require.Contains(t, ids, "grok-4.3")
+	require.NotContains(t, ids, "grok-4.3")
 	require.NotContains(t, ids, "claude-sonnet-4-6")
 	require.NotContains(t, ids, "gemini-2.5-flash")
 }
@@ -445,15 +358,9 @@ func TestGatewayModels_CompositeUnmappedCNAccountsContributeNoDefaults(t *testin
 	require.NotContains(t, ids, "claude-sonnet-4-6")
 }
 
-// 独立 CN 分组沿用 default 分支的 Claude 默认列表（Claude Code 客户端请求的
-// 就是这些模型名并经账号 model_mapping 转换），composite 支持不得改变该回退。
-func TestDefaultModelIDsForPlatform_CNProvidersKeepClaudeDefaults(t *testing.T) {
-	want := make([]string, 0, len(claude.DefaultModels))
-	for _, model := range claude.DefaultModels {
-		want = append(want, model.ID)
-	}
+func TestDefaultModelIDsForPlatform_RetiredProvidersHaveNoDefaults(t *testing.T) {
 	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek} {
-		require.Equal(t, want, defaultModelIDsForPlatform(platform), "platform=%s", platform)
+		require.Empty(t, defaultModelIDsForPlatform(platform), "platform=%s", platform)
 	}
 }
 
@@ -631,7 +538,7 @@ func TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeWithoutMappin
 			Platform: service.PlatformAnthropic,
 			ModelsListConfig: service.GroupModelsListConfig{
 				Enabled: true,
-				Models:  []string{"claude-opus-4-6-thinking", "claude-sonnet-4-5"},
+				Models:  []string{"claude-opus-4-6", "claude-sonnet-4-5-20250929"},
 			},
 		},
 	})
@@ -642,7 +549,7 @@ func TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeWithoutMappin
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"claude-opus-4-6-thinking", "claude-sonnet-4-5"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"claude-opus-4-6", "claude-sonnet-4-5-20250929"}, modelIDsForTest(got.Data))
 }
 
 func TestGatewayModels_CustomModelsListCanReturnEmptyWhenSelectionsUnavailable(t *testing.T) {

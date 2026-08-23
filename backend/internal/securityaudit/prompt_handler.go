@@ -256,11 +256,10 @@ func adminID(c *gin.Context) int64 {
 }
 
 func eventFilterFromQuery(c *gin.Context) (EventFilter, error) {
-	groupID, err := optionalPositiveInt64Query(c, "group_id")
-	if err != nil {
-		return EventFilter{}, err
+	if _, exists := c.GetQuery("user_id"); exists {
+		return EventFilter{}, infraerrors.BadRequest("prompt_audit_user_filter_unsupported", "提示词审计不支持 user_id 筛选")
 	}
-	userID, err := optionalPositiveInt64Query(c, "user_id")
+	groupID, err := optionalPositiveInt64Query(c, "group_id")
 	if err != nil {
 		return EventFilter{}, err
 	}
@@ -270,7 +269,7 @@ func eventFilterFromQuery(c *gin.Context) (EventFilter, error) {
 	}
 	filter := EventFilter{
 		Decision: c.Query("decision"), RiskLevel: c.Query("risk_level"), Endpoint: c.Query("endpoint"),
-		GroupID: groupID, UserID: userID, APIKeyID: apiKeyID, RequestID: c.Query("request_id"),
+		GroupID: groupID, APIKeyID: apiKeyID, RequestID: c.Query("request_id"),
 		PromptHash: c.Query("prompt_hash"), Keyword: c.Query("keyword"),
 	}
 	if value := strings.TrimSpace(c.Query("start_at")); value != "" {

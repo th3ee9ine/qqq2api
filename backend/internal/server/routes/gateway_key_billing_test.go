@@ -147,7 +147,8 @@ func TestGatewayRoutesKeyBillingInfoEndToEnd(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		require.Equal(t, "sub2api.key_billing", body["object"])
 		require.Equal(t, 0.75, body["effective_rate_multiplier"])
-		require.Equal(t, 1, rateRepo.lookupCalls)
+		// Global API-key billing is resolved from the group only.
+		require.Zero(t, rateRepo.lookupCalls)
 	})
 
 	t.Run("simple mode", func(t *testing.T) {

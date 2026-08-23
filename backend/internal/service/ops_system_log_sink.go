@@ -287,6 +287,7 @@ func (s *OpsSystemLogSink) flushBatch(baseCtx context.Context, batch []*logger.L
 		// 统一脱敏后写入索引。
 		message := logredact.RedactText(strings.TrimSpace(event.Message))
 		redactedExtra := logredact.RedactMap(fields)
+		removeOpsUserIdentityFields(redactedExtra)
 		extraJSONBytes, _ := json.Marshal(redactedExtra)
 		extraJSON := string(extraJSONBytes)
 		if strings.TrimSpace(extraJSON) == "" {

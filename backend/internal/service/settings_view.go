@@ -183,12 +183,12 @@ type SystemSettings struct {
 	EnableModelFallback      bool   `json:"enable_model_fallback"`
 	FallbackModelAnthropic   string `json:"fallback_model_anthropic"`
 	FallbackModelOpenAI      string `json:"fallback_model_openai"`
-	FallbackModelGemini      string `json:"fallback_model_gemini"`
-	FallbackModelAntigravity string `json:"fallback_model_antigravity"`
+	FallbackModelGemini      string `json:"-"`
+	FallbackModelAntigravity string `json:"-"`
 
-	// Identity patch configuration (Claude -> Gemini)
-	EnableIdentityPatch bool   `json:"enable_identity_patch"`
-	IdentityPatchPrompt string `json:"identity_patch_prompt"`
+	// Historical Gemini identity-patch fields are retained for stored-setting compatibility.
+	EnableIdentityPatch bool   `json:"-"`
+	IdentityPatchPrompt string `json:"-"`
 
 	// Ops monitoring (vNext)
 	OpsMonitoringEnabled         bool
@@ -204,9 +204,9 @@ type SystemSettings struct {
 	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
 
 	// Grok model mapping policy (admin settings; empty mapping falls back to these).
-	GrokDefaultTextModel           string `json:"grok_default_text_model"`
-	GrokCrossClientModelMapEnabled bool   `json:"grok_cross_client_model_map_enabled"`
-	GrokDefaultBaseURLMode         string `json:"grok_default_base_url_mode"`
+	GrokDefaultTextModel           string `json:"-"`
+	GrokCrossClientModelMapEnabled bool   `json:"-"`
+	GrokDefaultBaseURLMode         string `json:"-"`
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
@@ -382,9 +382,9 @@ type PublicSettings struct {
 	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
 
 	// Grok model mapping policy (admin settings).
-	GrokDefaultTextModel           string `json:"grok_default_text_model"`
-	GrokCrossClientModelMapEnabled bool   `json:"grok_cross_client_model_map_enabled"`
-	GrokDefaultBaseURLMode         string `json:"grok_default_base_url_mode"`
+	GrokDefaultTextModel           string `json:"-"`
+	GrokCrossClientModelMapEnabled bool   `json:"-"`
+	GrokDefaultBaseURLMode         string `json:"-"`
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`

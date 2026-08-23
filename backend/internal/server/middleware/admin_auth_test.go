@@ -20,6 +20,7 @@ func TestAdminAuthJWTValidatesTokenVersion(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{JWT: config.JWTConfig{Secret: "test-secret", ExpireHour: 1}}
+	cfg.Default.AdminEmail = "admin@example.com"
 	authService := service.NewAuthService(nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	admin := &service.User{
@@ -123,8 +124,75 @@ func TestAdminAuthJWTValidatesTokenVersion(t *testing.T) {
 	})
 }
 
+func TestAdminAuthJWTRejectsOtherDatabaseAdministrator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{JWT: config.JWTConfig{Secret: "test-secret", ExpireHour: 1}}
+	cfg.Default.AdminEmail = "admin@example.com"
+	otherAdmin := &service.User{
+		ID: 2, Email: "other-admin@example.com", Role: service.RoleAdmin,
+		Status: service.StatusActive, TokenVersion: 1,
+	}
+	authService := service.NewAuthService(nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	userRepo := &stubUserRepo{getByID: func(context.Context, int64) (*service.User, error) {
+		clone := *otherAdmin
+		return &clone, nil
+	}}
+	userService := service.NewUserService(userRepo, nil, nil, nil)
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAdminAuthMiddleware(authService, userService, nil, nil)))
+	router.GET("/t", func(c *gin.Context) { c.Status(http.StatusOK) })
+	token, err := authService.GenerateToken(context.Background(), otherAdmin)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/t", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+	require.Contains(t, w.Body.String(), "ADMIN_ONLY_MODE")
+}
+
+func TestAdminAuthAPIKeyResolvesConfiguredAdministratorByEmail(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := &config.Config{}
+	cfg.Default.AdminEmail = "env-admin@example.com"
+	envAdmin := &service.User{
+		ID: 9, Email: "env-admin@example.com", Role: service.RoleAdmin,
+		Status: service.StatusActive, Concurrency: 2,
+	}
+	var lookedUpEmail string
+	userRepo := &stubUserRepo{getByEmail: func(_ context.Context, email string) (*service.User, error) {
+		lookedUpEmail = email
+		clone := *envAdmin
+		return &clone, nil
+	}}
+	userService := service.NewUserService(userRepo, nil, nil, nil)
+	authService := service.NewAuthService(nil, userRepo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	settingService := service.NewSettingService(fakeSettingRepo{values: map[string]string{
+		service.SettingKeyAdminAPIKey: "admin-api-key",
+	}}, cfg)
+	router := gin.New()
+	router.Use(gin.HandlerFunc(NewAdminAuthMiddleware(authService, userService, settingService, nil)))
+	router.GET("/t", func(c *gin.Context) {
+		subject, ok := GetAuthSubjectFromContext(c)
+		require.True(t, ok)
+		require.Equal(t, envAdmin.ID, subject.UserID)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/t", nil)
+	req.Header.Set("x-api-key", "admin-api-key")
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, envAdmin.Email, lookedUpEmail)
+}
+
 type stubUserRepo struct {
-	getByID func(ctx context.Context, id int64) (*service.User, error)
+	getByID    func(ctx context.Context, id int64) (*service.User, error)
+	getByEmail func(ctx context.Context, email string) (*service.User, error)
 }
 
 func (s *stubUserRepo) Create(ctx context.Context, user *service.User) error {
@@ -143,7 +211,10 @@ func (s *stubUserRepo) GetByID(ctx context.Context, id int64) (*service.User, er
 }
 
 func (s *stubUserRepo) GetByEmail(ctx context.Context, email string) (*service.User, error) {
-	panic("unexpected GetByEmail call")
+	if s.getByEmail == nil {
+		panic("GetByEmail not stubbed")
+	}
+	return s.getByEmail(ctx, email)
 }
 
 func (s *stubUserRepo) GetFirstAdmin(ctx context.Context) (*service.User, error) {

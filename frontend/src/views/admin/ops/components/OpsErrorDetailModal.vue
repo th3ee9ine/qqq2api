@@ -30,14 +30,14 @@
 
         <div class="rounded-xl bg-gray-50 p-4 dark:bg-dark-900">
           <div class="text-xs font-bold uppercase tracking-wider text-gray-400">
-            {{ isUpstreamError(detail) ? t('admin.ops.errorDetail.account') : t('admin.ops.errorDetail.user') }}
+            {{ isUpstreamError(detail) ? t('admin.ops.errorDetail.account') : t('admin.ops.errorLog.apiKey') }}
           </div>
           <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
             <template v-if="isUpstreamError(detail)">
               {{ detail.account_name || (detail.account_id != null ? String(detail.account_id) : '—') }}
             </template>
             <template v-else>
-              {{ detail.user_email || (detail.user_id != null ? String(detail.user_id) : '—') }}
+              {{ detail.api_key_name || (detail.api_key_id != null ? String(detail.api_key_id) : '—') }}
             </template>
           </div>
         </div>

@@ -82,8 +82,8 @@ type dailyUsageHandlerResponse struct {
 	} `json:"data"`
 }
 
-func TestGetMyAPIKeyDailyUsageRejectsCrossUserAccess(t *testing.T) {
-	usageRepo := &dailyUsageRepoStub{}
+func TestGetMyAPIKeyDailyUsageAllowsGlobalKeyRegardlessOfLegacyOwner(t *testing.T) {
+	usageRepo := &dailyUsageRepoStub{trend: []usagestats.TrendDataPoint{}}
 	apiKeyRepo := &dailyUsageAPIKeyRepoStub{
 		keys: map[int64]*service.APIKey{
 			7: {ID: 7, UserID: 99, Status: service.StatusAPIKeyActive},
@@ -95,8 +95,10 @@ func TestGetMyAPIKeyDailyUsageRejectsCrossUserAccess(t *testing.T) {
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.False(t, usageRepo.called)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, usageRepo.called)
+	require.Zero(t, usageRepo.userID, "global key usage must not be filtered by a legacy owner")
+	require.Equal(t, int64(7), usageRepo.apiKeyID)
 }
 
 func TestGetMyAPIKeyDailyUsageRejectsInvalidDays(t *testing.T) {
@@ -143,7 +145,7 @@ func TestGetMyAPIKeyDailyUsageReturnsEmptyData(t *testing.T) {
 	require.Empty(t, got.Data.Items)
 }
 
-func TestGetMyAPIKeyDailyUsageAggregatesByDayForOwnedKey(t *testing.T) {
+func TestGetMyAPIKeyDailyUsageAggregatesByDayForGlobalKey(t *testing.T) {
 	usageRepo := &dailyUsageRepoStub{
 		trend: []usagestats.TrendDataPoint{
 			{
@@ -173,7 +175,7 @@ func TestGetMyAPIKeyDailyUsageAggregatesByDayForOwnedKey(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.True(t, usageRepo.called)
 	require.Equal(t, "day", usageRepo.granularity)
-	require.Equal(t, int64(42), usageRepo.userID)
+	require.Zero(t, usageRepo.userID, "global key history spans all legacy owner rows")
 	require.Equal(t, int64(7), usageRepo.apiKeyID)
 	require.True(t, usageRepo.startTime.Before(usageRepo.endTime))
 

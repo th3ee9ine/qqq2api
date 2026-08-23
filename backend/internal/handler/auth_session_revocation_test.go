@@ -21,9 +21,9 @@ func TestAuthHandlerRevokeAllSessionsInvalidatesAccessTokens(t *testing.T) {
 	repo := &userHandlerRepoStub{
 		user: &service.User{
 			ID:           29,
-			Email:        "session@example.com",
-			Username:     "session-user",
-			Role:         service.RoleUser,
+			Email:        "admin@example.com",
+			Username:     "admin",
+			Role:         service.RoleAdmin,
 			Status:       service.StatusActive,
 			TokenVersion: 7,
 		},
@@ -36,7 +36,11 @@ func TestAuthHandlerRevokeAllSessionsInvalidatesAccessTokens(t *testing.T) {
 		},
 	}
 	authService := service.NewAuthService(nil, repo, nil, refreshTokenCache, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
-	handler := &AuthHandler{authService: authService}
+	cfg.Default.AdminEmail = "admin@example.com"
+	handler := &AuthHandler{
+		authService: authService,
+		userService: service.NewUserService(repo, nil, nil, nil),
+	}
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -62,4 +66,28 @@ func TestAuthHandlerRevokeAllSessionsInvalidatesAccessTokens(t *testing.T) {
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
 	require.Equal(t, "All sessions have been revoked. Please log in again.", resp.Data.Message)
+}
+
+func TestAuthHandlerRevokeAllSessionsRejectsOtherDatabaseAdministrator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &userHandlerRepoStub{user: &service.User{
+		ID: 2, Email: "other-admin@example.com", Role: service.RoleAdmin, Status: service.StatusActive,
+	}}
+	refreshTokenCache := &userHandlerRefreshTokenCacheStub{}
+	cfg := &config.Config{JWT: config.JWTConfig{Secret: "test-secret", ExpireHour: 1}}
+	cfg.Default.AdminEmail = "admin@example.com"
+	authService := service.NewAuthService(nil, repo, nil, refreshTokenCache, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := &AuthHandler{
+		authService: authService,
+		userService: service.NewUserService(repo, nil, nil, nil),
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/revoke-all-sessions", nil)
+	c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 2})
+
+	handler.RevokeAllSessions(c)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Empty(t, refreshTokenCache.revokedUserIDs)
 }

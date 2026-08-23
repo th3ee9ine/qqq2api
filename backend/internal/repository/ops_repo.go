@@ -251,7 +251,6 @@ SELECT
   COALESCE(e.request_id, ''),
   COALESCE(e.error_message, ''),
   e.user_id,
-  COALESCE(u.email, ''),
   e.api_key_id,
   e.account_id,
   COALESCE(a.name, ''),
@@ -271,7 +270,6 @@ SELECT
 FROM ops_error_logs e
 LEFT JOIN accounts a ON e.account_id = a.id
 LEFT JOIN groups g ON e.group_id = g.id
-LEFT JOIN users u ON e.user_id = u.id
 LEFT JOIN users u2 ON e.resolved_by_user_id = u2.id
 LEFT JOIN api_keys ak ON ak.id = e.api_key_id
 ` + where + `
@@ -295,7 +293,6 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 		var accountName string
 		var groupID sql.NullInt64
 		var groupName string
-		var userEmail string
 		var resolvedAt sql.NullTime
 		var resolvedBy sql.NullInt64
 		var resolvedByName string
@@ -321,7 +318,6 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			&item.RequestID,
 			&item.Message,
 			&userID,
-			&userEmail,
 			&apiKeyID,
 			&accountID,
 			&accountName,
@@ -359,7 +355,6 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			v := userID.Int64
 			item.UserID = &v
 		}
-		item.UserEmail = userEmail
 		if apiKeyID.Valid {
 			v := apiKeyID.Int64
 			item.APIKeyID = &v
@@ -427,7 +422,6 @@ SELECT
   COALESCE(e.upstream_errors::text, ''),
   e.is_business_limited,
   e.user_id,
-  COALESCE(u.email, ''),
   e.api_key_id,
   e.account_id,
   COALESCE(a.name, ''),
@@ -451,7 +445,6 @@ SELECT
   COALESCE(ak.name, ''),
   ak.deleted_at
 FROM ops_error_logs e
-LEFT JOIN users u ON e.user_id = u.id
 LEFT JOIN accounts a ON e.account_id = a.id
 LEFT JOIN groups g ON e.group_id = g.id
 LEFT JOIN api_keys ak ON ak.id = e.api_key_id
@@ -501,7 +494,6 @@ LIMIT 1`
 		&out.UpstreamErrors,
 		&out.IsBusinessLimited,
 		&userID,
-		&out.UserEmail,
 		&apiKeyID,
 		&accountID,
 		&out.AccountName,
@@ -1002,13 +994,6 @@ func buildOpsErrorLogsWhere(filter *service.OpsErrorLogFilter) (string, []any) {
 		clauses = append(clauses, "(e.request_id ILIKE $"+n+" OR e.client_request_id ILIKE $"+n+" OR e.error_message ILIKE $"+n+")")
 	}
 
-	if userQuery := strings.TrimSpace(filter.UserQuery); userQuery != "" {
-		like := "%" + userQuery + "%"
-		args = append(args, like)
-		n := itoa(len(args))
-		clauses = append(clauses, "EXISTS (SELECT 1 FROM users u WHERE u.id = e.user_id AND u.email ILIKE $"+n+")")
-	}
-
 	if filter.UserID != nil && *filter.UserID > 0 {
 		args = append(args, *filter.UserID)
 		n := itoa(len(args))
@@ -1106,11 +1091,6 @@ func buildOpsSystemLogsWhere(filter *service.OpsSystemLogFilter) (string, []any,
 			clauses = append(clauses, "COALESCE(l.client_request_id,'') = $"+itoa(len(args)))
 			hasConstraint = true
 		}
-		if filter.UserID != nil && *filter.UserID > 0 {
-			args = append(args, *filter.UserID)
-			clauses = append(clauses, "l.user_id = $"+itoa(len(args)))
-			hasConstraint = true
-		}
 		if filter.APIKeyID != nil && *filter.APIKeyID > 0 {
 			args = append(args, *filter.APIKeyID)
 			clauses = append(clauses, "l.api_key_id = $"+itoa(len(args)))
@@ -1135,7 +1115,7 @@ func buildOpsSystemLogsWhere(filter *service.OpsSystemLogFilter) (string, []any,
 			like := "%" + v + "%"
 			args = append(args, like)
 			n := itoa(len(args))
-			clauses = append(clauses, "(l.message ILIKE $"+n+" OR COALESCE(l.request_id,'') ILIKE $"+n+" OR COALESCE(l.client_request_id,'') ILIKE $"+n+" OR COALESCE(l.extra::text,'') ILIKE $"+n+")")
+			clauses = append(clauses, "(l.message ILIKE $"+n+" OR COALESCE(l.request_id,'') ILIKE $"+n+" OR COALESCE(l.client_request_id,'') ILIKE $"+n+")")
 			hasConstraint = true
 		}
 	}
@@ -1155,7 +1135,6 @@ func buildOpsSystemLogsCleanupWhere(filter *service.OpsSystemLogCleanupFilter) (
 		Component:       filter.Component,
 		RequestID:       filter.RequestID,
 		ClientRequestID: filter.ClientRequestID,
-		UserID:          filter.UserID,
 		APIKeyID:        filter.APIKeyID,
 		AccountID:       filter.AccountID,
 		Platform:        filter.Platform,

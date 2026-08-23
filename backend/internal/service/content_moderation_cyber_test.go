@@ -196,7 +196,7 @@ func TestRecordCyberPolicyEvent_RespectsContentModerationScope(t *testing.T) {
 			model:      "gpt-5",
 			wantCalls:  []bool{false},
 			wantLogs:   1,
-			wantBanned: true,
+			wantBanned: false,
 		},
 	}
 

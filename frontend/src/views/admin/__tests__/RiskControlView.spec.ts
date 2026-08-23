@@ -36,7 +36,6 @@ vi.mock('@/api/admin', () => ({
       testAPIKeys: vi.fn(),
       deleteFlaggedHash: vi.fn(),
       clearFlaggedHashes: vi.fn(),
-      unbanUser: vi.fn(),
     },
     groups: {
       getAll: getGroups,
@@ -93,10 +92,6 @@ const baseConfig = (): ContentModerationConfig => ({
   queue_size: 32768,
   block_status: 403,
   block_message: '内容审计命中风险规则，请调整输入后重试',
-  email_on_hit: true,
-  auto_ban_enabled: true,
-  ban_threshold: 10,
-  violation_window_hours: 720,
   retry_count: 2,
   hit_retention_days: 180,
   non_hit_retention_days: 3,
@@ -414,5 +409,94 @@ describe('admin RiskControlView', () => {
       'max-h-[280px]',
       'overflow-y-auto',
     ]))
+  })
+
+  it('keeps audit logs and settings free of user-scoped moderation controls', async () => {
+    listLogs.mockResolvedValue({
+      items: [
+        {
+          id: 1,
+          request_id: 'req-1',
+          api_key_id: 9,
+          api_key_name: 'global-key',
+          group_id: 3,
+          group_name: 'default-group',
+          endpoint: '/v1/responses',
+          provider: 'openai',
+          model: 'gpt-5.5',
+          mode: 'pre_block',
+          action: 'block',
+          flagged: true,
+          highest_category: 'violence',
+          highest_score: 0.99,
+          matched_keyword: '',
+          category_scores: { violence: 0.99 },
+          threshold_snapshot: { violence: 0.95 },
+          input_excerpt: 'audit input excerpt',
+          upstream_latency_ms: 42,
+          error: '',
+          queue_delay_ms: 0,
+          created_at: '2026-08-23T00:00:00Z',
+          // Compatibility fields may still arrive from older backends, but the UI must ignore them.
+          user_id: 42,
+          user_email: 'hidden-user@example.com',
+          user_status: 'disabled',
+          auto_banned: true,
+          email_sent: true,
+          violation_count: 7,
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.findAll('thead th')).toHaveLength(8)
+    expect(wrapper.text()).toContain('global-key')
+    expect(wrapper.text()).toContain('default-group')
+    expect(wrapper.text()).not.toContain('hidden-user@example.com')
+    expect(wrapper.text()).not.toContain('UID 42')
+    expect(wrapper.text()).not.toContain('admin.riskControl.table.user')
+    expect(wrapper.text()).not.toContain('admin.riskControl.table.actionMeta')
+    expect(wrapper.text()).not.toContain('admin.riskControl.unbanUser')
+    expect(wrapper.text()).not.toContain('admin.riskControl.autoBanned')
+    expect(wrapper.text()).not.toContain('admin.riskControl.emailSent')
+
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.response').trigger('click')
+
+    expect(wrapper.text()).not.toContain('admin.riskControl.emailOnHit')
+    expect(wrapper.text()).not.toContain('admin.riskControl.autoBan')
+    expect(wrapper.text()).not.toContain('admin.riskControl.cyberPolicyExcludeBan')
+    expect(wrapper.text()).not.toContain('admin.riskControl.banThreshold')
+    expect(wrapper.text()).not.toContain('admin.riskControl.violationWindowHours')
+
+    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+    await flushPromises()
+
+    const payload = updateConfig.mock.calls.at(-1)?.[0] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('email_on_hit')
+    expect(payload).not.toHaveProperty('auto_ban_enabled')
+    expect(payload).not.toHaveProperty('cyber_policy_exclude_from_ban_count')
+    expect(payload).not.toHaveProperty('ban_threshold')
+    expect(payload).not.toHaveProperty('violation_window_hours')
   })
 })

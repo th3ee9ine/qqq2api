@@ -482,6 +482,75 @@ func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, param
 	return outKeys, paginationResultFromTotal(int64(total), params), nil
 }
 
+// apiKeyGlobalQuery is the panel-facing query.  user_id is retained in the
+// schema only as a legacy foreign key; it must not constrain the global API
+// Key manager.
+func (r *apiKeyRepository) apiKeyGlobalQuery(filters service.APIKeyListFilters) *dbent.APIKeyQuery {
+	q := r.activeQuery()
+	if filters.Search != "" {
+		q = q.Where(apikey.Or(
+			apikey.NameContainsFold(filters.Search),
+			apikey.KeyContainsFold(filters.Search),
+		))
+	}
+	if filters.Status != "" {
+		q = q.Where(apikey.StatusEQ(filters.Status))
+	}
+	if filters.GroupID != nil {
+		if *filters.GroupID == 0 {
+			q = q.Where(apikey.GroupIDIsNil())
+		} else {
+			q = q.Where(apikey.GroupIDEQ(*filters.GroupID))
+		}
+	}
+	return q
+}
+
+// ListAll lists every non-deleted API Key for the global administrator panel.
+func (r *apiKeyRepository) ListAll(ctx context.Context, params pagination.PaginationParams, filters service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
+	q := r.apiKeyGlobalQuery(filters)
+	total, err := q.Count(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	keysQuery := q.WithGroup().Offset(params.Offset()).Limit(params.Limit())
+	for _, order := range apiKeyListOrder(params) {
+		keysQuery = keysQuery.Order(order)
+	}
+	keys, err := keysQuery.All(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	outKeys := make([]service.APIKey, 0, len(keys))
+	for i := range keys {
+		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
+	}
+	if err := r.attachLastUsedIPs(ctx, outKeys); err != nil {
+		return nil, nil, err
+	}
+	return outKeys, paginationResultFromTotal(int64(total), params), nil
+}
+
+// ListAllUnpaginated supports the current-concurrency sort, which must sort
+// the complete global set before applying pagination in the service layer.
+func (r *apiKeyRepository) ListAllUnpaginated(ctx context.Context, filters service.APIKeyListFilters) ([]service.APIKey, error) {
+	keys, err := r.apiKeyGlobalQuery(filters).
+		WithGroup().
+		Order(dbent.Asc(apikey.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	outKeys := make([]service.APIKey, 0, len(keys))
+	for i := range keys {
+		outKeys = append(outKeys, *apiKeyEntityToService(keys[i]))
+	}
+	if err := r.attachLastUsedIPs(ctx, outKeys); err != nil {
+		return nil, err
+	}
+	return outKeys, nil
+}
+
 func (r *apiKeyRepository) ListAllByUserID(ctx context.Context, userID int64, filters service.APIKeyListFilters) ([]service.APIKey, error) {
 	keys, err := r.apiKeyListByUserIDQuery(userID, filters).
 		WithGroup().
@@ -597,6 +666,23 @@ func (r *apiKeyRepository) VerifyOwnership(ctx context.Context, userID int64, ap
 
 	ids, err := r.client.APIKey.Query().
 		Where(apikey.UserIDEQ(userID), apikey.IDIn(apiKeyIDs...), apikey.DeletedAtIsNil()).
+		IDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// VerifyGlobalIDs returns the existing, non-deleted IDs from a system-wide
+// API Key selection. user_id is a legacy storage detail and is deliberately
+// not part of this query.
+func (r *apiKeyRepository) VerifyGlobalIDs(ctx context.Context, apiKeyIDs []int64) ([]int64, error) {
+	if len(apiKeyIDs) == 0 {
+		return []int64{}, nil
+	}
+
+	ids, err := r.client.APIKey.Query().
+		Where(apikey.IDIn(apiKeyIDs...), apikey.DeletedAtIsNil()).
 		IDs(ctx)
 	if err != nil {
 		return nil, err

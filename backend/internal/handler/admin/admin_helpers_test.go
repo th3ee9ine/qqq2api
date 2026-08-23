@@ -204,11 +204,53 @@ func TestOpsAlertRuleValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "High error rate", validated.Name)
 
+	withSupportedFilters := make(map[string]json.RawMessage, len(raw)+1)
+	for key, value := range raw {
+		withSupportedFilters[key] = value
+	}
+	withSupportedFilters["filters"] = json.RawMessage(`{"platform":"openai","group_id":3,"region":"us"}`)
+	_, err = validateOpsAlertRulePayload(withSupportedFilters)
+	require.NoError(t, err)
+
+	for _, key := range []string{"user_id", "user_email", "user_query", "username"} {
+		t.Run("reject filter "+key, func(t *testing.T) {
+			withUnsupportedFilter := make(map[string]json.RawMessage, len(raw)+1)
+			for field, value := range raw {
+				withUnsupportedFilter[field] = value
+			}
+			withUnsupportedFilter["filters"] = json.RawMessage(`{"` + key + `":"hidden"}`)
+			_, err := validateOpsAlertRulePayload(withUnsupportedFilter)
+			require.ErrorContains(t, err, "is not supported")
+		})
+	}
+
+	invalidFilters := make(map[string]json.RawMessage, len(raw)+1)
+	for key, value := range raw {
+		invalidFilters[key] = value
+	}
+	invalidFilters["filters"] = json.RawMessage(`[]`)
+	_, err = validateOpsAlertRulePayload(invalidFilters)
+	require.ErrorContains(t, err, "filters must be an object")
+
 	_, err = validateOpsAlertRulePayload(map[string]json.RawMessage{})
 	require.Error(t, err)
 
 	require.True(t, isPercentOrRateMetric("error_rate"))
 	require.False(t, isPercentOrRateMetric("concurrency_queue_depth"))
+}
+
+func TestRejectOpsUserIdentityFilters(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, key := range []string{"user_id", "user_email", "user_query"} {
+		t.Run(key, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/?"+key+"=value", nil)
+
+			require.True(t, rejectOpsUserIdentityFilters(c))
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+		})
+	}
 }
 
 func TestOpsWSHelpers(t *testing.T) {

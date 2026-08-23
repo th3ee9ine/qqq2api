@@ -982,13 +982,7 @@ func IsUpstreamBillingProbeIdentity(platform, accountType string) bool {
 	if accountType != AccountTypeAPIKey {
 		return false
 	}
-	switch platform {
-	case PlatformOpenAI, PlatformAnthropic, PlatformGemini, PlatformAntigravity, PlatformGrok,
-		PlatformKimi, PlatformZhipu, PlatformDeepseek:
-		return true
-	default:
-		return false
-	}
+	return IsActiveAccountPlatform(platform)
 }
 
 func isUpstreamBillingProbeAccount(account *Account) bool {

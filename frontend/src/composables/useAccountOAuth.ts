@@ -13,8 +13,6 @@ export type AuthInputMethod =
   | 'codex_session'
   | 'agent_identity'
   | 'codex_pat'
-  | 'sso_cookie'
-  | 'email_password'
 
 export interface OAuthState {
   authUrl: string

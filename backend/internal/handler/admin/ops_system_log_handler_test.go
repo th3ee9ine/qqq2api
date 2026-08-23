@@ -67,16 +67,18 @@ func TestOpsSystemLogHandler_ListUnavailable(t *testing.T) {
 	}
 }
 
-func TestOpsSystemLogHandler_ListInvalidUserID(t *testing.T) {
+func TestOpsSystemLogHandler_ListRejectsUserIdentityFilters(t *testing.T) {
 	svc := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	h := NewOpsHandler(svc)
 	r := newOpsSystemLogTestRouter(h, false)
 
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/logs?user_id=abc", nil)
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d, want 400", w.Code)
+	for _, query := range []string{"user_id=7", "user_email=user%40example.com", "user_query=user"} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/logs?"+query, nil)
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("query=%q status=%d, want 400", query, w.Code)
+		}
 	}
 }
 
@@ -184,6 +186,26 @@ func TestOpsSystemLogHandler_CleanupInvalidPayload(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status=%d, want 400", w.Code)
+	}
+}
+
+func TestOpsSystemLogHandler_CleanupRejectsUserIdentityFilters(t *testing.T) {
+	repo := &opsSystemLogCaptureRepo{}
+	svc := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewOpsHandler(svc)
+	r := newOpsSystemLogTestRouter(h, true)
+
+	for _, field := range []string{"user_id", "user_email", "user_query"} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/logs/cleanup", bytes.NewBufferString(`{"`+field+`":"hidden"}`))
+		req.Header.Set("Content-Type", "application/json")
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("field=%q status=%d, want 400", field, w.Code)
+		}
+	}
+	if repo.cleanupFilter != nil {
+		t.Fatalf("repository must not receive rejected user identity filters: %+v", repo.cleanupFilter)
 	}
 }
 

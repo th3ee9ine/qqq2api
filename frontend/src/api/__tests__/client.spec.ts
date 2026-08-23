@@ -155,7 +155,7 @@ describe('API Client', () => {
       expect(config.headers.get('X-Admin-UI-Request')).toBe('1')
     })
 
-    it('普通用户页面调用共享 API 时不带 Admin UI 标记', async () => {
+    it('非管理路由调用共享 API 时不带 Admin UI 标记', async () => {
       const adapter = vi.fn().mockResolvedValue({
         status: 200,
         data: { code: 0, data: {} },
@@ -171,7 +171,7 @@ describe('API Client', () => {
       expect(config.headers.get('X-Admin-UI-Request')).toBeFalsy()
     })
 
-    it('用户侧 timing API 自动带 User UI 标记', async () => {
+    it('管理员会话 timing API 保留兼容标记', async () => {
       const adapter = vi.fn().mockResolvedValue({
         status: 200,
         data: { code: 0, data: {} },
@@ -188,24 +188,7 @@ describe('API Client', () => {
       expect(config.headers.get('X-Admin-UI-Request')).toBeFalsy()
     })
 
-    it('支付用户 API 带 User UI 标记，公开支付 API 不带', async () => {
-      const adapter = vi.fn().mockResolvedValue({
-        status: 200,
-        data: { code: 0, data: {} },
-        headers: {},
-        config: {},
-        statusText: 'OK',
-      })
-      apiClient.defaults.adapter = adapter
-
-      await apiClient.get('/payment/plans')
-      expect(adapter.mock.calls[0][0].headers.get('X-User-UI-Request')).toBe('1')
-
-      await apiClient.post('/payment/public/orders/verify', {})
-      expect(adapter.mock.calls[1][0].headers.get('X-User-UI-Request')).toBeFalsy()
-    })
-
-    it('管理页调用共享 API 时同时带 Admin 与 User UI 标记', async () => {
+    it('管理页调用全局密钥 API 时同时带 Admin 与兼容 timing 标记', async () => {
       window.history.replaceState({}, '', '/admin/dashboard')
       const adapter = vi.fn().mockResolvedValue({
         status: 200,

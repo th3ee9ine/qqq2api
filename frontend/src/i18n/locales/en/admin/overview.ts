@@ -38,7 +38,6 @@ export default {
       metricTokens: 'By Tokens',
       metricActualCost: 'By Actual Cost',
       tokenUsageTrend: 'Token Usage Trend',
-      userUsageTrend: 'User Usage Trend (Top 12)',
       model: 'Model',
       group: 'Group',
       noGroup: 'No Group',
@@ -50,15 +49,6 @@ export default {
       accountCost: 'Cost',
       noDataAvailable: 'No data available',
       recentUsage: 'Recent Usage',
-      viewModelDistribution: 'Model Distribution',
-      viewSpendingRanking: 'User Spending Ranking',
-      spendingRankingTitle: 'User Spending Ranking',
-      spendingRankingUser: 'User',
-      spendingRankingRequests: 'Requests',
-      spendingRankingTokens: 'Tokens',
-      spendingRankingSpend: 'Spend',
-      spendingRankingOther: 'Others',
-      spendingRankingUsage: 'Usage',
       spendShort: 'Spend',
       requestsShort: 'Req',
       tokensShort: 'Tok',
@@ -812,7 +802,6 @@ export default {
         usage: 'Usage',
         status: 'Status',
         actions: 'Actions',
-        billingType: 'Billing Type',
         userName: 'Username',
         userEmail: 'Email',
         userNotes: 'Notes',
@@ -903,9 +892,6 @@ export default {
       createFirstGroup: 'Create your first group to organize API keys.',
       creating: 'Creating...',
       updating: 'Updating...',
-      limitDay: 'd',
-      limitWeek: 'w',
-      limitMonth: 'mo',
       groupCreated: 'Group created successfully',
       groupUpdated: 'Group updated successfully',
       groupDeleted: 'Group deleted successfully',
@@ -955,57 +941,15 @@ export default {
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
-      deleteConfirmSubscription:
-        "Are you sure you want to delete subscription group '{name}'? This will invalidate all API keys bound to this subscription and delete all related subscription records. This action cannot be undone.",
-      subscription: {
-        title: 'Subscription Settings',
-        type: 'Billing Type',
-        typeHint:
-          'Standard billing deducts from user balance. Subscription mode uses quota limits instead.',
-        typeNotEditable: 'Billing type cannot be changed after group creation.',
-        standard: 'Standard (Balance)',
-        subscription: 'Subscription (Quota)',
-        dailyLimit: 'Daily Limit (USD)',
-        weeklyLimit: 'Weekly Limit (USD)',
-        monthlyLimit: 'Monthly Limit (USD)',
-        defaultValidityDays: 'Default Validity (Days)',
-        validityHint: 'Number of days the subscription is valid when assigned to a user',
-        noLimit: 'No limit'
-      },
       imagePricing: {
         title: 'Image Generation Pricing',
         description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
         allowImageGeneration: 'Allow image generation for this group',
-        allowBatchImageGeneration: 'Allow batch image generation for this group',
         independentMultiplier: 'Use independent image multiplier',
         imageMultiplier: 'Image multiplier',
-        batchDiscountMultiplier: 'Batch image discount',
-        batchHoldMultiplier: 'Batch hold price ratio',
-        batchSectionHint: 'Batch image settings only apply to batch jobs: settlement applies the batch discount, and the upfront hold is normal image price × batch hold price ratio. Reference images also create upstream input-token usage, so a batch image discount above 0.5 is recommended.',
-        batchDisabledHint: 'Enable image generation for this group before enabling batch image generation.',
-        batchGeminiOnlyHint: 'Batch image generation is currently available only for Gemini groups.',
         modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
         finalPricePreview: 'Final per-image price preview',
         notConfigured: 'Not configured'
-      },
-      videoPricing: {
-        title: 'Video Generation Pricing',
-        description:
-          'Configure Grok video generation prices in USD per second of output video. Leave empty to use the default per-second rates (grok-imagine-video: $0.05/s 480p, $0.07/s 720p; video-1.5: $0.08/s 480p, $0.14/s 720p, $0.25/s 1080p).',
-        modelOverridesTitle: 'Per-model video price overrides',
-        modelOverridesDescription: 'Each populated cell overrides the flat resolution price for that model family. Preview and legacy aliases for video-1.5 use the same family; empty cells fall back to the flat resolution price.',
-        independentMultiplier: 'Use independent video multiplier',
-        videoMultiplier: 'Video multiplier',
-        modeHint:
-          'Videos are billed per second: per-second price × duration (1-15s, default 8s). By default the current effective group multiplier applies; independent mode uses the video multiplier instead.',
-        finalPricePreview: 'Final per-second price preview',
-        notConfigured: 'Not configured'
-      },
-      explicitPricing: {
-        title: 'Grok Search & Voice Pricing',
-        description: 'Optional per-group prices for web_search (per 1k calls) and Voice realtime / TTS / STT (USD). Leave empty if unused.',
-        searchPricePer1k: 'Search price per 1k calls (USD)',
-        pricePlaceholder: 'optional'
       },
       modelPricing: {
         title: 'Per-model group pricing',
@@ -1014,27 +958,12 @@ export default {
         longContextHint: 'When checked, channel intervals or official preset tiers apply. Otherwise the first tier is used unless the account explicitly enables long-context billing.',
         add: 'Add model price'
       },
-      voicePricing: {
-        title: 'Grok Voice Pricing',
-        description: 'Optional per-group prices for Voice realtime / TTS / STT (USD). Leave empty to leave unpriced.',
-        audioRealtimePerMin: 'Realtime price per minute (USD)',
-        audioTtsPerMillionChars: 'TTS price per million chars (USD)',
-        audioSttPerHour: 'STT price per hour (USD)',
-        pricePlaceholder: 'optional'
-      },
       webSearchPricing: {
         title: 'Codex Web Search Pricing',
         pricePerCall: 'Price per search call (USD)',
         pricePerCallHint:
           'Leave empty to use the default $0.01 per call (official pricing: $10 per 1,000 calls); 0 means free. The group rate multiplier is applied on top.',
         finalPricePreview: 'Per-call price after current multiplier: {price}'
-      },
-      peakRate: {
-        enable: 'Enable peak rate multiplier',
-        peakStart: 'Peak start',
-        peakEnd: 'Peak end',
-        peakMultiplier: 'Peak multiplier',
-        multiplierHint: 'Applies to token billing multiplier; image tokens in token billing are also affected. 0 means peak token requests are billed at 0x.'
       },
       profitControl: {
         enable: 'Enable profit control',
@@ -1073,7 +1002,7 @@ export default {
         endpoint: 'Endpoint',
         targetPlatform: 'Target Platform',
         upstreamModel: 'Upstream Model',
-        upstreamModelHint: 'Leave empty to pass the original requested model through: under prefix match each matched model forwards verbatim (e.g. deepseek-v4-flash and deepseek-v4-pro each forwarded as-is); set a value to forward every matched request to that fixed model.',
+        upstreamModelHint: 'Leave empty to pass the original requested model through; set a value to forward every matched request to that fixed model.',
         notes: 'Notes',
         enabled: 'Enabled',
         preview: 'Preview',
@@ -1095,8 +1024,7 @@ export default {
           responses: 'Responses',
           chatCompletions: 'Chat Completions',
           embeddings: 'Embeddings',
-          images: 'Images',
-          gemini: 'Gemini Native'
+          images: 'Images'
         },
         match: {
           exact: 'Exact',
@@ -1179,12 +1107,6 @@ export default {
         searchAccountPlaceholder: 'Search accounts...',
         accountsHint: 'Select accounts to prioritize for this model pattern'
       },
-      mcpXml: {
-        title: 'MCP XML Protocol Injection',
-        tooltip: 'When enabled, if the request contains MCP tools, an XML format call protocol prompt will be injected into the system prompt. Disable this to avoid interference with certain clients.',
-        enabled: 'Enabled',
-        disabled: 'Disabled'
-      },
       claudeMaxSimulation: {
         title: 'Claude Max Usage Simulation',
         tooltip:
@@ -1192,14 +1114,6 @@ export default {
         enabled: 'Enabled (simulate 1h cache)',
         disabled: 'Disabled',
         hint: 'Only token categories in usage billing logs are adjusted. No per-request mapping state is persisted.'
-      },
-      supportedScopes: {
-        title: 'Supported Model Families',
-        tooltip: 'Select the model families this group supports. Unchecked families will not be routed to this group.',
-        claude: 'Claude',
-        geminiText: 'Gemini Text',
-        geminiImage: 'Gemini Image',
-        hint: 'Select at least one model family'
       }
     },
 
