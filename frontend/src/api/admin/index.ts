@@ -21,6 +21,7 @@ import riskControlAPI from './riskControl'
 import adminComplianceAPI from './compliance'
 import auditAPI from './audit'
 import imageStorageAPI from './imageStorage'
+import pluginsAPI from './plugins'
 
 /**
  * Unified admin API object for convenient access
@@ -43,7 +44,8 @@ export const adminAPI = {
   riskControl: riskControlAPI,
   compliance: adminComplianceAPI,
   audit: auditAPI,
-  imageStorage: imageStorageAPI
+  imageStorage: imageStorageAPI,
+  plugins: pluginsAPI
 }
 
 export {
@@ -64,7 +66,8 @@ export {
   riskControlAPI,
   adminComplianceAPI,
   auditAPI,
-  imageStorageAPI
+  imageStorageAPI,
+  pluginsAPI
 }
 
 export default adminAPI
@@ -79,3 +82,9 @@ export type {
   ImageStorageConfigResponse,
   ImageStorageTestResponse,
 } from './imageStorage'
+export type {
+  PluginInstallation,
+  PluginCompatibility,
+  PluginUISession,
+  PluginTestResult
+} from './plugins'

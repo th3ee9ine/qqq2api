@@ -14,12 +14,47 @@ import (
 func TestGeneratedWireIncludesStandaloneImageStorageHandler(t *testing.T) {
 	source, err := os.ReadFile("wire_gen.go")
 	require.NoError(t, err)
-	require.Contains(t, string(source), "admin.NewImageStorageHandler(imageStorageSettingService)")
-	require.Contains(t, string(source), "accountHandler, imageStorageHandler, oAuthHandler")
-	require.NotContains(t, string(source), "admin.NewBackupHandler")
-	require.NotContains(t, string(source), "service.NewSubscriptionService")
-	require.NotContains(t, string(source), "service.ProvidePaymentService")
-	require.NotContains(t, string(source), "service.ProvideUserPlatformQuotaUsageFlusher")
+	generated := string(source)
+
+	for _, retained := range []string{
+		"admin.NewModelPricingHandler(billingService)",
+		"admin.NewImageStorageHandler(imageStorageSettingService)",
+		"accountHandler, imageStorageHandler, oAuthHandler",
+		"service.NewPluginManager(",
+		"admin.NewPluginHandler(pluginManager)",
+		"service.ProvideOpenAIQuotaAutoResetService(",
+		"service.ProvideOllamaCloudUsageService(",
+	} {
+		require.Contains(t, generated, retained)
+	}
+
+	for _, retired := range []string{
+		"admin.NewUserHandler",
+		"admin.NewRedeemHandler",
+		"admin.NewPromoCodeHandler",
+		"admin.NewAnnouncementHandler",
+		"admin.NewSubscriptionHandler",
+		"admin.NewPaymentHandler",
+		"admin.NewBackupHandler",
+		"admin.NewDataManagementHandler",
+		"admin.NewChannelHandler",
+		"admin.NewChannelMonitorHandler",
+		"admin.NewGeminiOAuthHandler",
+		"admin.NewAntigravityOAuthHandler",
+		"admin.NewGrokOAuthHandler",
+		"admin.NewCNProviderHandler",
+		"handler.NewModelPlazaHandler",
+		"service.NewSubscriptionService",
+		"service.ProvideSubscriptionExpiryService",
+		"service.ProvidePaymentService",
+		"service.NewModelPlazaService",
+		"service.NewGeminiOAuthService",
+		"service.NewAntigravityOAuthService",
+		"service.NewGrokOAuthService",
+		"service.ProvideUserPlatformQuotaUsageFlusher",
+	} {
+		require.NotContains(t, generated, retired)
+	}
 }
 
 func TestProvideServiceBuildInfo(t *testing.T) {
@@ -88,7 +123,9 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // upstreamBillingProbe
 		nil, // ollamaCloudUsage
 		nil, // auditLog
+		nil, // openAIAutoReset
 		nil, // promptAudit
+		nil, // pluginManager
 	)
 
 	require.NotPanics(t, func() {

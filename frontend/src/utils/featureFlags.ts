@@ -93,6 +93,11 @@ function defineFlag<K extends keyof PublicSettings>(
  * public-settings-driven switch; see the "Adding a new flag" checklist above.
  */
 export const FeatureFlags = {
+  pluginManagement: defineFlag({
+    key: 'plugin_management_enabled',
+    mode: 'opt-in',
+    label: 'Plugin Management',
+  }),
   riskControl: defineFlag({
     key: 'risk_control_enabled',
     mode: 'opt-in',
