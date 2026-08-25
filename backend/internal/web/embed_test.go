@@ -603,6 +603,43 @@ func TestFrontendServer_Middleware(t *testing.T) {
 		assert.JSONEq(t, `{"ok":true}`, w.Body.String())
 	})
 
+	t.Run("skips_bare_gateway_alias_post_routes", func(t *testing.T) {
+		for _, path := range []string{
+			"/messages/count_tokens",
+			"/chat/completions",
+			"/embeddings",
+		} {
+			t.Run(path, func(t *testing.T) {
+				provider := &mockSettingsProvider{
+					settings: map[string]string{"test": "value"},
+				}
+
+				server, err := NewFrontendServer(provider)
+				require.NoError(t, err)
+
+				router := gin.New()
+				router.Use(server.Middleware())
+				nextCalled := false
+				router.POST(path, func(c *gin.Context) {
+					nextCalled = true
+					c.JSON(http.StatusOK, gin.H{"route": path})
+				})
+
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"test"}`))
+				req.Header.Set("Content-Type", "application/json")
+				router.ServeHTTP(w, req)
+
+				assert.True(t, nextCalled, "next handler should be called for bare gateway alias")
+				assert.Equal(t, http.StatusOK, w.Code)
+				assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+				assert.NotContains(t, w.Header().Get("Content-Type"), "text/html")
+				assert.JSONEq(t, `{"route":"`+path+`"}`, w.Body.String())
+				assert.Zero(t, provider.called, "SPA settings provider should not be called")
+			})
+		}
+	})
+
 	t.Run("serves_index_for_spa_routes", func(t *testing.T) {
 		provider := &mockSettingsProvider{
 			settings: map[string]string{"test": "value"},
@@ -650,11 +687,11 @@ func TestFrontendServer_Middleware(t *testing.T) {
 
 		// Request for existing static file
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Contains(t, w.Header().Get("Content-Type"), "image/svg+xml")
 		assert.Empty(t, w.Header().Get("Cache-Control"))
 
 		entries, err := fs.ReadDir(server.distFS, "assets")
@@ -735,11 +772,11 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 		router.Use(middleware)
 
 		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/logo.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/logo.svg", nil)
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Contains(t, w.Header().Get("Content-Type"), "image/png")
+		assert.Contains(t, w.Header().Get("Content-Type"), "image/svg+xml")
 	})
 
 	t.Run("serves_index_html_for_root", func(t *testing.T) {
@@ -809,6 +846,37 @@ func TestServeEmbeddedFrontend(t *testing.T) {
 				router.ServeHTTP(w, req)
 
 				assert.True(t, nextCalled, "next handler should be called for API route")
+			})
+		}
+	})
+
+	t.Run("skips_bare_gateway_alias_post_routes", func(t *testing.T) {
+		middleware := ServeEmbeddedFrontend()
+
+		for _, path := range []string{
+			"/messages/count_tokens",
+			"/chat/completions",
+			"/embeddings",
+		} {
+			t.Run(path, func(t *testing.T) {
+				nextCalled := false
+				router := gin.New()
+				router.Use(middleware)
+				router.POST(path, func(c *gin.Context) {
+					nextCalled = true
+					c.JSON(http.StatusOK, gin.H{"route": path})
+				})
+
+				w := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"test"}`))
+				req.Header.Set("Content-Type", "application/json")
+				router.ServeHTTP(w, req)
+
+				assert.True(t, nextCalled, "next handler should be called for bare gateway alias")
+				assert.Equal(t, http.StatusOK, w.Code)
+				assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+				assert.NotContains(t, w.Header().Get("Content-Type"), "text/html")
+				assert.JSONEq(t, `{"route":"`+path+`"}`, w.Body.String())
 			})
 		}
 	})

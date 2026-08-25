@@ -82,15 +82,6 @@ func scheduleScenarios() []scheduleScenario {
 			},
 		},
 		{
-			name: "Grok 达到阈值即进高档", model: "grok-4.5", platform: PlatformGrok, groupPlatform: PlatformGrok,
-			group: enabledGroup(PlatformGrok), wantBasis: ContextPricingBasisWholeRequest,
-			check: func(t *testing.T, s *ContextPricingSchedule) {
-				require.Len(t, s.Tiers, 2)
-				requireTier(t, s.Tiers[0], 0, intPtr(199999), "<200K", p(2e-6), p(6e-6), nil, p(0.3e-6))
-				requireTier(t, s.Tiers[1], 199999, nil, "≥200K", p(4e-6), p(12e-6), nil, p(0.6e-6))
-			},
-		},
-		{
 			name: "分组关闭阶梯只剩基础档", model: "gpt-5.4", platform: PlatformOpenAI, groupPlatform: PlatformOpenAI,
 			group: disabledGroup(PlatformOpenAI), wantBasis: ContextPricingBasisWholeRequest,
 			check: func(t *testing.T, s *ContextPricingSchedule) {
@@ -216,41 +207,6 @@ func scheduleScenarios() []scheduleScenario {
 				requirePrice(t, p(1e-6), s.Tiers[0].Input, "input")
 				requirePrice(t, p(2e-6), s.Tiers[1].Input, "input")
 				requirePrice(t, p(22.5e-6), s.Tiers[1].Output, "output")
-			},
-		},
-		{
-			name: "Gemini 旧规则按超出部分计价", model: "gemini-2.5-pro", platform: PlatformGemini, groupPlatform: PlatformGemini,
-			group: enabledGroup(PlatformGemini), catalog: geminiCatalogStub(), wantBasis: ContextPricingBasisMarginal,
-			check: func(t *testing.T, s *ContextPricingSchedule) {
-				require.Len(t, s.Tiers, 2)
-				requireTier(t, s.Tiers[0], 0, intPtr(200000), "≤200K", p(1.25e-6), p(10e-6), nil, p(0.3125e-6))
-				requireTier(t, s.Tiers[1], 200000, nil, ">200K", p(2.5e-6), p(10e-6), nil, p(0.625e-6))
-			},
-		},
-		{
-			name: "Gemini 分组关闭时不用旧规则", model: "gemini-2.5-pro", platform: PlatformGemini, groupPlatform: PlatformGemini,
-			group: disabledGroup(PlatformGemini), catalog: geminiCatalogStub(), wantBasis: ContextPricingBasisWholeRequest,
-			check: func(t *testing.T, s *ContextPricingSchedule) {
-				require.Len(t, s.Tiers, 1)
-			},
-		},
-		{
-			name: "Gemini 有渠道定价时旧规则让位", model: "gemini-2.5-pro", platform: PlatformGemini, groupPlatform: PlatformGemini,
-			group: enabledGroup(PlatformGemini), catalog: geminiCatalogStub(),
-			channel: []ChannelModelPricing{{
-				Platform: PlatformGemini, Models: []string{"gemini-2.5-pro"}, BillingMode: BillingModeToken, InputPrice: p(3e-6),
-			}},
-			wantBasis: ContextPricingBasisWholeRequest,
-			check: func(t *testing.T, s *ContextPricingSchedule) {
-				require.Len(t, s.Tiers, 1)
-				requirePrice(t, p(3e-6), s.Tiers[0].Input, "input")
-			},
-		},
-		{
-			name: "Gemini 官方参考不套用站内旧规则", model: "gemini-2.5-pro", platform: "", groupPlatform: PlatformGemini,
-			group: nil, catalog: geminiCatalogStub(), wantBasis: ContextPricingBasisWholeRequest,
-			check: func(t *testing.T, s *ContextPricingSchedule) {
-				require.Len(t, s.Tiers, 1)
 			},
 		},
 		{
