@@ -88,17 +88,16 @@ func TestAPIKeyAuthGlobalKeyIgnoresTechnicalOwnerStatus(t *testing.T) {
 	}
 }
 
-func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
+func TestAPIKeyAuthGlobalKeySkipsOwnerSubscriptionChecks(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	limit := 1.0
 	group := &service.Group{
 		ID:               42,
-		Name:             "sub",
+		Name:             "global-openai",
 		Status:           service.StatusActive,
+		Platform:         service.PlatformOpenAI,
 		Hydrated:         true,
 		SubscriptionType: service.SubscriptionTypeSubscription,
-		DailyLimitUSD:    &limit,
 	}
 	user := &service.User{
 		ID:          7,
@@ -127,50 +126,15 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		},
 	}
 
-	t.Run("standard_mode_skips_owner_subscription_maintenance", func(t *testing.T) {
+	t.Run("standard_mode_does_not_load_owner_subscription", func(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeStandard}
-		cfg.SubscriptionMaintenance.WorkerCount = 1
-		cfg.SubscriptionMaintenance.QueueSize = 1
-
 		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
 
-		past := time.Now().Add(-48 * time.Hour)
-		sub := &service.UserSubscription{
-			ID:                 55,
-			UserID:             user.ID,
-			GroupID:            group.ID,
-			Status:             service.SubscriptionStatusActive,
-			ExpiresAt:          time.Now().Add(24 * time.Hour),
-			DailyWindowStart:   &past,
-			WeeklyWindowStart:  &past,
-			MonthlyWindowStart: &past,
-			DailyUsageUSD:      0,
-		}
-		maintenanceCalled := make(chan struct{}, 1)
+		subscriptionCalls := 0
 		subscriptionRepo := &stubUserSubscriptionRepo{
-			getByID: func(ctx context.Context, id int64) (*service.UserSubscription, error) {
-				clone := *sub
-				return &clone, nil
-			},
-			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
-				clone := *sub
-				return &clone, nil
-			},
-			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
-			activateWindow: func(ctx context.Context, id int64, dailyStart, periodicStart time.Time) error { return nil },
-			resetDaily: func(ctx context.Context, id int64, start time.Time) error {
-				sub.DailyWindowStart = &start
-				sub.DailyUsageUSD = 0
-				maintenanceCalled <- struct{}{}
-				return nil
-			},
-			resetWeekly: func(ctx context.Context, id int64, start time.Time) error {
-				sub.WeeklyWindowStart = &start
-				return nil
-			},
-			resetMonthly: func(ctx context.Context, id int64, start time.Time) error {
-				sub.MonthlyWindowStart = &start
-				return nil
+			getActive: func(context.Context, int64, int64) (*service.UserSubscription, error) {
+				subscriptionCalls++
+				return nil, service.ErrSubscriptionNotFound
 			},
 		}
 		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
@@ -184,66 +148,13 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
-		select {
-		case <-maintenanceCalled:
-			t.Fatalf("global API key must not load or maintain an owner subscription")
-		default:
-			// expected
-		}
+		require.Zero(t, subscriptionCalls)
 	})
 
-	t.Run("standard_mode_revalidates_cas_loser_from_database", func(t *testing.T) {
-		cfg := &config.Config{RunMode: config.RunModeStandard}
-		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-
-		past := time.Now().Add(-48 * time.Hour)
-		current := time.Now()
-		stale := &service.UserSubscription{
-			ID:                 56,
-			UserID:             user.ID,
-			GroupID:            group.ID,
-			Status:             service.SubscriptionStatusActive,
-			ExpiresAt:          current.Add(24 * time.Hour),
-			DailyWindowStart:   &past,
-			WeeklyWindowStart:  &past,
-			MonthlyWindowStart: &past,
-			DailyUsageUSD:      10,
-		}
-		fresh := *stale
-		fresh.DailyWindowStart = &current
-		fresh.WeeklyWindowStart = &current
-		fresh.MonthlyWindowStart = &current
-		fresh.DailyUsageUSD = 2
-
-		subscriptionRepo := &stubUserSubscriptionRepo{
-			getActive: func(context.Context, int64, int64) (*service.UserSubscription, error) {
-				clone := *stale
-				return &clone, nil
-			},
-			getByID: func(context.Context, int64) (*service.UserSubscription, error) {
-				clone := fresh
-				return &clone, nil
-			},
-			resetDaily:   func(context.Context, int64, time.Time) error { return nil },
-			resetWeekly:  func(context.Context, int64, time.Time) error { return nil },
-			resetMonthly: func(context.Context, int64, time.Time) error { return nil },
-		}
-		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
-		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
-
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/t", nil)
-		req.Header.Set("x-api-key", apiKey.Key)
-		router.ServeHTTP(w, req)
-
-		require.Equal(t, http.StatusOK, w.Code)
-	})
-
-	t.Run("simple_mode_bypasses_quota_check", func(t *testing.T) {
+	t.Run("simple_mode_uses_the_same_global_key", func(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeSimple}
 		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-		subscriptionService := service.NewSubscriptionService(nil, &stubUserSubscriptionRepo{}, nil, nil, cfg)
-		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
+		router := newAuthTestRouter(apiKeyService, nil, cfg)
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -256,8 +167,7 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 	t.Run("simple_mode_accepts_lowercase_bearer", func(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeSimple}
 		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-		subscriptionService := service.NewSubscriptionService(nil, &stubUserSubscriptionRepo{}, nil, nil, cfg)
-		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
+		router := newAuthTestRouter(apiKeyService, nil, cfg)
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -265,46 +175,6 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
-	})
-
-	t.Run("standard_mode_enforces_quota_check", func(t *testing.T) {
-		cfg := &config.Config{RunMode: config.RunModeStandard}
-		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-
-		now := time.Now()
-		sub := &service.UserSubscription{
-			ID:               55,
-			UserID:           user.ID,
-			GroupID:          group.ID,
-			Status:           service.SubscriptionStatusActive,
-			ExpiresAt:        now.Add(24 * time.Hour),
-			DailyWindowStart: &now,
-			DailyUsageUSD:    10,
-		}
-		subscriptionRepo := &stubUserSubscriptionRepo{
-			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
-				if userID != sub.UserID || groupID != sub.GroupID {
-					return nil, service.ErrSubscriptionNotFound
-				}
-				clone := *sub
-				return &clone, nil
-			},
-			updateStatus:   func(ctx context.Context, subscriptionID int64, status string) error { return nil },
-			activateWindow: func(ctx context.Context, id int64, dailyStart, periodicStart time.Time) error { return nil },
-			resetDaily:     func(ctx context.Context, id int64, start time.Time) error { return nil },
-			resetWeekly:    func(ctx context.Context, id int64, start time.Time) error { return nil },
-			resetMonthly:   func(ctx context.Context, id int64, start time.Time) error { return nil },
-		}
-		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
-		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
-
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/t", nil)
-		req.Header.Set("x-api-key", apiKey.Key)
-		router.ServeHTTP(w, req)
-
-		require.Equal(t, http.StatusOK, w.Code)
-		require.NotContains(t, w.Body.String(), "USAGE_LIMIT_EXCEEDED")
 	})
 }
 
@@ -371,23 +241,23 @@ func TestAPIKeyAuthSetsGroupContext(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestAPIKeyAuthRejectsExclusiveGroupWhenUserNoLongerAllowed(t *testing.T) {
+func TestAPIKeyAuthGlobalKeyDoesNotUseOwnerExclusiveGroupEntitlements(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	group := &service.Group{
 		ID:          202,
 		Name:        "exclusive",
 		Status:      service.StatusActive,
+		Platform:    service.PlatformAnthropic,
 		IsExclusive: true,
 		Hydrated:    true,
 	}
 	user := &service.User{
-		ID:            7,
-		Role:          service.RoleUser,
-		Status:        service.StatusActive,
-		Balance:       10,
-		Concurrency:   3,
-		AllowedGroups: []int64{},
+		ID:          7,
+		Role:        service.RoleUser,
+		Status:      service.StatusActive,
+		Balance:     10,
+		Concurrency: 3,
 	}
 	apiKey := &service.APIKey{
 		ID:     100,
@@ -1199,6 +1069,7 @@ func TestAPIKeyAuthBillingInfoSkipsBillingAndSideEffects(t *testing.T) {
 		ID:               42,
 		Name:             "subscription",
 		Status:           service.StatusActive,
+		Platform:         service.PlatformOpenAI,
 		Hydrated:         true,
 		SubscriptionType: service.SubscriptionTypeSubscription,
 	}
@@ -1315,7 +1186,7 @@ func TestAPIKeyAuthUsageStillTouchesLastUsed(t *testing.T) {
 	require.Equal(t, 1, touchCalls)
 }
 
-func TestAPIKeyAuthAllowsBalanceBelowMinimumReserve(t *testing.T) {
+func TestAPIKeyAuthGlobalKeyIgnoresLegacyOwnerMinimumBalanceReserve(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	user := &service.User{
@@ -1354,12 +1225,12 @@ func TestAPIKeyAuthAllowsBalanceBelowMinimumReserve(t *testing.T) {
 	req.Header.Set("x-api-key", apiKey.Key)
 	router.ServeHTTP(w, req)
 
-	// 鉴权层保持历史语义：MinimumBalanceReserve 只用于 billing-cache 预检，
-	// 0 < balance < reserve 不得被鉴权中间件硬 403（存量部署静默行为变更）。
+	// The legacy owner's balance is not an authentication boundary for a
+	// system-wide API key, including when it is below MinimumBalanceReserve.
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestAPIKeyAuthRejectsExhaustedBalance(t *testing.T) {
+func TestAPIKeyAuthGlobalKeyIgnoresLegacyOwnerZeroBalance(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	user := &service.User{

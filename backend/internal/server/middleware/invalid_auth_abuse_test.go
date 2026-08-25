@@ -90,8 +90,8 @@ func TestInvalidAuthAbuseDoesNotCountValidOrOperationalFailures(t *testing.T) {
 	req := httpRequest(t, "/t", "", "")
 	req.Header.Set("x-goog-api-key", "valid-key")
 	r.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, uint64(1), svc.InvalidAuthAbuseHealth().Recorded)
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Equal(t, uint64(2), svc.InvalidAuthAbuseHealth().Recorded)
 }
 
 func TestNormalizeIngressRejectIPGroupsIPv6By64(t *testing.T) {

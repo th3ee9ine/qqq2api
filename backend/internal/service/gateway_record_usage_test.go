@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -111,8 +112,7 @@ func TestGatewayServiceRecordUsage_BillingUsesDetachedContext(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
-	require.Equal(t, 1, userRepo.deductCalls)
-	require.NoError(t, userRepo.lastCtxErr)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 	require.NoError(t, quotaSvc.lastQuotaCtxErr)
 }
@@ -292,59 +292,6 @@ func TestGatewayServiceRecordUsage_EmptyImageSizeDefaultsBeforeBillingAndPersist
 	require.InDelta(t, 0.19, usageRepo.lastLog.ActualCost, 1e-12)
 }
 
-func TestGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *testing.T) {
-	groupID := int64(902)
-	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
-	userRepo := &openAIRecordUsageUserRepoStub{}
-	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
-	svc.resolver = newOpenAITokenImageChannelPricingResolverForTest(t, groupID, "gemini-image")
-
-	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
-		Result: &ForwardResult{
-			RequestID:  "gateway_peak_image_tokens",
-			Model:      "gemini-image",
-			ImageCount: 1,
-			Usage: ClaudeUsage{
-				InputTokens:       1000,
-				OutputTokens:      600,
-				ImageOutputTokens: 100,
-			},
-			Duration: time.Second,
-		},
-		APIKey: &APIKey{
-			ID:      802,
-			GroupID: i64p(groupID),
-			Group: &Group{
-				ID:                 groupID,
-				RateMultiplier:     1.0,
-				SubscriptionType:   SubscriptionTypeSubscription,
-				PeakRateEnabled:    true,
-				PeakStart:          "00:00",
-				PeakEnd:            "23:59",
-				PeakRateMultiplier: 3.0,
-			},
-		},
-		User:    &User{ID: 602},
-		Account: &Account{ID: 702},
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, usageRepo.lastLog)
-	require.NotNil(t, usageRepo.lastLog.BillingMode)
-	require.Equal(t, string(BillingModeToken), *usageRepo.lastLog.BillingMode)
-	require.Equal(t, 3.0, usageRepo.lastLog.RateMultiplier)
-
-	textInput := 1000 * 3e-6
-	textOutput := 500 * 15e-6
-	imageOutput := 100 * 15e-6
-	expectedActual := (textInput + textOutput + imageOutput) * 3.0
-
-	require.InDelta(t, textInput+textOutput+imageOutput, usageRepo.lastLog.TotalCost, 1e-12)
-	require.InDelta(t, imageOutput, usageRepo.lastLog.ImageOutputCost, 1e-12)
-	require.InDelta(t, expectedActual, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, expectedActual, userRepo.lastAmount, 1e-12)
-}
-
 func TestGatewayServiceRecordUsage_TimePricingUsesPricingAt(t *testing.T) {
 	groupID := int64(904)
 	requestStart := time.Date(2024, time.January, 2, 2, 0, 0, 0, time.UTC) // 上海 10:00
@@ -452,7 +399,7 @@ func TestGatewayServiceRecordUsage_UsageLogWriteErrorDoesNotSkipBilling(t *testi
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
-	require.Equal(t, 1, userRepo.deductCalls)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 }
 
@@ -489,8 +436,7 @@ func TestGatewayServiceRecordUsageWithLongContext_BillingUsesDetachedContext(t *
 
 	require.NoError(t, err)
 	require.Equal(t, 1, usageRepo.calls)
-	require.Equal(t, 1, userRepo.deductCalls)
-	require.NoError(t, userRepo.lastCtxErr)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 	require.Equal(t, 1, quotaSvc.quotaCalls)
 	require.NoError(t, quotaSvc.lastQuotaCtxErr)
 }
@@ -693,4 +639,27 @@ func TestGatewayServiceRecordUsage_ReasoningEffortNil(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.Nil(t, usageRepo.lastLog.ReasoningEffort)
+}
+
+func TestFinalizePostUsageBilling_GlobalKeyDoesNotQueueUserBilling(t *testing.T) {
+	for _, subscriptionBilling := range []bool{false, true} {
+		t.Run(fmt.Sprintf("subscription=%t", subscriptionBilling), func(t *testing.T) {
+			cacheService := &BillingCacheService{cacheWriteChan: make(chan cacheWriteTask, 4)}
+			deps := &billingDeps{
+				billingCacheService: cacheService,
+				deferredService:     &DeferredService{},
+			}
+			params := &postUsageBillingParams{
+				Cost:               &CostBreakdown{ActualCost: 1, TotalCost: 1},
+				User:               &User{ID: 10},
+				APIKey:             &APIKey{ID: 20},
+				Account:            &Account{ID: 30},
+				IsSubscriptionBill: subscriptionBilling,
+			}
+
+			finalizePostUsageBilling(context.Background(), params, deps, &UsageBillingApplyResult{Applied: true})
+
+			require.Len(t, cacheService.cacheWriteChan, 0, "global API keys must not queue wallet or subscription cache mutations")
+		})
+	}
 }

@@ -124,6 +124,9 @@ func TestAccountIsSchedulable_TempUnschedulable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.account.Platform == "" {
+				tt.account.Platform = PlatformAnthropic
+			}
 			got := tt.account.IsSchedulable()
 			require.Equal(t, tt.want, got)
 		})
@@ -371,6 +374,9 @@ func TestAccount_TempUnschedulableUntil(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.account.Platform == "" {
+				tt.account.Platform = PlatformAnthropic
+			}
 			got := tt.account.IsSchedulable()
 			require.Equal(t, tt.schedulable, got)
 		})

@@ -148,6 +148,11 @@
             :to="dashboardPath"
             class="inline-flex items-center gap-1.5 rounded-full bg-gray-900 py-1 pl-1 pr-2.5 transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
           >
+            <span
+              class="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-primary-400 to-primary-600 text-[10px] font-semibold text-white"
+            >
+              {{ adminInitial }}
+            </span>
             <span class="text-xs font-medium text-white">{{ t('home.dashboard') }}</span>
             <svg
               class="h-3 w-3 text-gray-400"
@@ -247,7 +252,7 @@
           >
             <Icon name="key" size="sm" class="text-primary-500" />
             <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
-              t('home.features.unifiedGateway')
+              t('home.tags.subscriptionToApi')
             }}</span>
           </div>
           <div
@@ -316,7 +321,7 @@
             </p>
           </div>
 
-          <!-- Feature 3: Billing & Quota -->
+          <!-- Feature 3: Unified Management -->
           <div
             class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
           >
@@ -385,21 +390,6 @@
             <span
               class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
               >{{ t('home.providers.supported') }}</span
-            >
-          </div>
-          <!-- More - Coming Soon -->
-          <div
-            class="flex items-center gap-2 rounded-xl border border-gray-200/50 bg-white/40 px-5 py-3 opacity-60 backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/40"
-          >
-            <div
-              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-gray-500 to-gray-600"
-            >
-              <span class="text-xs font-bold text-white">+</span>
-            </div>
-            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.more') }}</span>
-            <span
-              class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-dark-700 dark:text-dark-400"
-              >{{ t('home.providers.soon') }}</span
             >
           </div>
         </div>
@@ -478,6 +468,10 @@ const isAuthenticated = computed(() => authStore.isAuthenticated)
 // the environment credentials.  Keep every authenticated home CTA pointed at
 // the admin dashboard; legacy user dashboard URLs are retired.
 const dashboardPath = '/admin/dashboard'
+const adminInitial = computed(() => {
+  const email = authStore.user?.email?.trim()
+  return email ? email.charAt(0).toUpperCase() : 'A'
+})
 
 // Current year for footer
 const currentYear = computed(() => new Date().getFullYear())

@@ -138,25 +138,11 @@
             <span
               :class="[
                 'inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium',
-                value === 'anthropic'
-                  ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                  : value === 'openai'
-                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                    : value === 'antigravity'
-                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                      : value === 'grok'
-                        ? 'bg-zinc-200 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-100'
-                        : value === 'kimi'
-                          ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-400'
-                          : value === 'zhipu'
-                            ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-                            : value === 'deepseek'
-                              ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
-                              : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                groupPlatformBadgeClass(value),
               ]"
             >
-              <PlatformIcon :platform="value" size="xs" />
-              {{ t("admin.groups.platforms." + value) }}
+              <PlatformIcon :platform="groupPlatformIcon(value)" size="xs" />
+              {{ groupPlatformLabel(value) }}
             </span>
           </template>
 
@@ -2875,24 +2861,10 @@
                 <span
                   :class="[
                     'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
-                    group.platform === 'anthropic'
-                      ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                      : group.platform === 'openai'
-                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                        : group.platform === 'antigravity'
-                          ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                          : group.platform === 'grok'
-                            ? 'bg-zinc-200 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-100'
-                            : group.platform === 'kimi'
-                              ? 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-400'
-                              : group.platform === 'zhipu'
-                                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-                                : group.platform === 'deepseek'
-                                  ? 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
-                                  : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                    groupPlatformBadgeClass(group.platform),
                   ]"
                 >
-                  {{ t("admin.groups.platforms." + group.platform) }}
+                  {{ groupPlatformLabel(group.platform) }}
                 </span>
               </div>
             </div>
@@ -3031,7 +3003,7 @@
                     </td>
                     <td class="px-3 py-2">
                       <div class="flex items-center gap-1.5 text-gray-900 dark:text-white">
-                        <PlatformIcon :platform="route.target_platform" size="xs" />
+                        <PlatformIcon :platform="groupPlatformIcon(route.target_platform)" size="xs" />
                         <span>{{ formatCompositePlatform(route.target_platform) }}</span>
                       </div>
                       <div class="mt-1 break-all text-xs text-gray-500 dark:text-gray-400">
@@ -3746,10 +3718,32 @@ const canCopyAccountsFromGroup = (targetPlatform: GroupPlatform, sourcePlatform:
 const isSupportedConcretePlatform = (platform: string) =>
   platform === "anthropic" || platform === "openai";
 
+const isSupportedGroupPlatform = (platform: string) =>
+  isSupportedConcretePlatform(platform) || platform === "composite";
+
+const groupPlatformBadgeClass = (platform: string) => {
+  if (platform === "anthropic") {
+    return "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400";
+  }
+  if (platform === "openai") {
+    return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400";
+  }
+  if (platform === "composite") {
+    return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400";
+  }
+  return "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300";
+};
+
+const groupPlatformIcon = (platform: string): GroupPlatform | undefined =>
+  isSupportedGroupPlatform(platform) ? platform as GroupPlatform : undefined;
+
+const groupPlatformLabel = (platform: string) =>
+  isSupportedGroupPlatform(platform)
+    ? t("admin.groups.platforms." + platform)
+    : t("admin.accounts.upstreamBilling.unsupported");
+
 const isSupportedGroup = (group: AdminGroup) =>
-  group.platform === "anthropic" ||
-  group.platform === "openai" ||
-  group.platform === "composite";
+  isSupportedGroupPlatform(group.platform);
 
 const copyAccountsGroupLabel = (g: AdminGroup) => {
   const count = g.account_count || 0;
@@ -4933,7 +4927,7 @@ const formatCompositeEndpoint = (endpoint: CompositeRouteEndpoint) =>
 
 const formatCompositePlatform = (platform: string) => {
   if (!platform) return "—";
-  return t(`admin.groups.platforms.${platform}`);
+  return groupPlatformLabel(platform);
 };
 
 const compositeRouteSourceLabel = (source: string) => {

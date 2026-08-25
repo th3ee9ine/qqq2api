@@ -203,6 +203,48 @@ describe('admin AccountsView select all filtered results', () => {
     expect(wrapper.get('[data-test="all-results-selected"]').text()).toBe('false')
   })
 
+  it('selects every retained platform across pages from the default all-platform view', async () => {
+    const anthropicAccounts = makeAccounts(23).map(account => ({ ...account, platform: 'anthropic' }))
+    const openAIAccounts = makeAccounts(22).map((account, index) => ({
+      ...account,
+      id: index + 101,
+      platform: 'openai'
+    }))
+
+    listAccounts.mockImplementation(async (_page: number, pageSize: number, filters: Record<string, unknown>) => {
+      if (pageSize === 1000) {
+        const items = filters.platform === 'anthropic' ? anthropicAccounts : openAIAccounts
+        return { items, total: items.length, page: 1, page_size: 1000, pages: 1 }
+      }
+      return {
+        items: anthropicAccounts.slice(0, 20),
+        total: anthropicAccounts.length + openAIAccounts.length,
+        page: 1,
+        page_size: 20,
+        pages: 3
+      }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-test="select-all-results"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="selected-count"]').text()).toBe('45')
+    expect(wrapper.get('[data-test="all-results-selected"]').text()).toBe('true')
+    expect(listAccounts).toHaveBeenCalledWith(1, 1000, expect.objectContaining({
+      platform: 'anthropic',
+      lite: '1',
+      include_scheduler_score: '0'
+    }))
+    expect(listAccounts).toHaveBeenCalledWith(1, 1000, expect.objectContaining({
+      platform: 'openai',
+      lite: '1',
+      include_scheduler_score: '0'
+    }))
+  })
+
   it('keeps the original page selection when loading all results fails', async () => {
     const currentPage = makeAccounts(20)
     listAccounts.mockImplementation(async (_page: number, pageSize: number) => {

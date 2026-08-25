@@ -488,7 +488,6 @@ func TestSchedulerRebuildBatchKeepsMixedAndDifferentKeysIndependent(t *testing.T
 		{GroupID: groupID, Platform: PlatformAnthropic, Mode: SchedulerModeForced},
 		{GroupID: groupID, Platform: PlatformAnthropic, Mode: SchedulerModeMixed},
 		{GroupID: groupID + 1, Platform: PlatformAnthropic, Mode: SchedulerModeSingle},
-		{GroupID: groupID, Platform: PlatformGemini, Mode: SchedulerModeForced},
 		{GroupID: 0, Platform: PlatformOpenAI, Mode: SchedulerModeSingle},
 		{GroupID: -1, Platform: PlatformOpenAI, Mode: SchedulerModeForced},
 	}
@@ -497,10 +496,8 @@ func TestSchedulerRebuildBatchKeepsMixedAndDifferentKeysIndependent(t *testing.T
 	svc := newBatchQueryTestService(cache, repo, config.RunModeStandard)
 
 	require.NoError(t, svc.rebuildBuckets(context.Background(), buckets, "test"))
-	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformAnthropic}))
-	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformAnthropic, mixed: true}))
+	require.Equal(t, 2, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformAnthropic}))
 	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID + 1, platform: PlatformAnthropic}))
-	require.Equal(t, 1, repo.callCount(batchAccountQueryKey{groupID: groupID, platform: PlatformGemini}))
 	require.Equal(t, 2, repo.callCount(batchAccountQueryKey{platform: PlatformOpenAI}), "group0 and a negative historical group must not share")
 	for _, bucket := range buckets {
 		locks, attempts, version, _ := cache.bucketState(bucket)
@@ -530,7 +527,7 @@ func TestSchedulerRebuildBatchDoesNotCacheMixedOrHistoricalQueries(t *testing.T)
 		{
 			name:   "mixed",
 			bucket: SchedulerBucket{GroupID: 204, Platform: PlatformAnthropic, Mode: SchedulerModeMixed},
-			key:    batchAccountQueryKey{groupID: 204, platform: PlatformAnthropic, mixed: true},
+			key:    batchAccountQueryKey{groupID: 204, platform: PlatformAnthropic},
 		},
 		{
 			name:   "historical",

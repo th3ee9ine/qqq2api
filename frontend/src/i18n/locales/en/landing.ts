@@ -14,17 +14,17 @@ export default {
     heroSubtitle: 'One Key, All AI Models',
     heroDescription: 'Access Claude and GPT through one shared API key',
     tags: {
-      subscriptionToApi: 'Subscription to API',
+      subscriptionToApi: 'Global API Key',
       stickySession: 'Session Persistence',
-      realtimeBilling: 'Pay As You Go'
+      realtimeBilling: 'Smart Routing'
     },
     // Pain points section
     painPoints: {
       title: 'Sound Familiar?',
       items: {
         expensive: {
-          title: 'High Subscription Costs',
-          desc: 'Paying for multiple AI subscriptions that add up every month'
+          title: 'Scattered Integrations',
+          desc: 'Claude and OpenAI accounts and access methods are costly to maintain separately'
         },
         complex: {
           title: 'Account Chaos',
@@ -35,8 +35,8 @@ export default {
           desc: 'Single accounts hitting rate limits and disrupting your workflow'
         },
         noControl: {
-          title: 'No Usage Control',
-          desc: "Can't track where your money goes or limit team member usage"
+          title: 'Scattered Status',
+          desc: 'Account health, limits, and request status lack one unified view'
         }
       }
     },
@@ -50,27 +50,27 @@ export default {
       unifiedGatewayDesc: 'Get a single API key to call all connected AI models. No separate applications needed.',
       multiAccount: 'Always Reliable',
       multiAccountDesc: 'Smart routing across multiple upstream accounts with automatic failover. Say goodbye to errors.',
-      balanceQuota: 'Pay What You Use',
-      balanceQuotaDesc: 'Usage-based billing with quota limits. Full visibility into team consumption.'
+      balanceQuota: 'Unified Management',
+      balanceQuotaDesc: 'Manage Claude and OpenAI upstream accounts, the global API key, and request status in one place.'
     },
     // Comparison section
     comparison: {
       title: 'Why Choose Us?',
       headers: {
         feature: 'Comparison',
-        official: 'Official Subscriptions',
+        official: 'Separate Integrations',
         us: 'Our Platform'
       },
       items: {
         pricing: {
-          feature: 'Pricing',
-          official: 'Fixed monthly fee, pay even if unused',
-          us: 'Pay only for what you use'
+          feature: 'Key Management',
+          official: 'Configure each platform separately',
+          us: 'One global API key'
         },
         models: {
           feature: 'Model Selection',
-          official: 'Single provider only',
-          us: 'Switch between models freely'
+          official: 'Maintain separate APIs',
+          us: 'Unified Claude and GPT access'
         },
         management: {
           feature: 'Account Management',
@@ -83,9 +83,9 @@ export default {
           us: 'Multi-account pool, auto-failover'
         },
         control: {
-          feature: 'Usage Control',
-          official: 'Not available',
-          us: 'Quotas & detailed analytics'
+          feature: 'Runtime Status',
+          official: 'Check each service separately',
+          us: 'Centralized monitoring and testing'
         }
       }
     },
@@ -93,15 +93,14 @@ export default {
       title: 'Supported AI Models',
       description: 'One API, Multiple Choices',
       supported: 'Supported',
-      soon: 'Soon',
       claude: 'Claude',
-      more: 'More'
+      openai: 'OpenAI'
     },
     // CTA section
     cta: {
       title: 'Ready to Get Started?',
-      description: 'Sign up now and get free trial credits to experience seamless AI access',
-      button: 'Sign Up Free'
+      description: 'Use the administrator credentials configured through environment variables',
+      button: 'Administrator Login'
     },
     footer: {
       allRightsReserved: 'All rights reserved.'

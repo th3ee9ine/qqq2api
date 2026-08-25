@@ -16,10 +16,6 @@ const messages: Record<string, string> = {
   'usage.ws': 'WS',
   'usage.stream': 'Stream',
   'usage.sync': 'Sync',
-  'admin.usage.billingType': 'Billing Type',
-  'admin.usage.allBillingTypes': 'All Billing Types',
-  'admin.usage.billingTypeBalance': 'Balance',
-  'admin.usage.billingTypeSubscription': 'Subscription',
   'admin.usage.billingMode': 'Billing Mode',
   'admin.usage.allBillingModes': 'All Billing Modes',
   'admin.usage.billingModeToken': 'Token',
@@ -154,5 +150,16 @@ describe('UsageFilters — model options come from prop (no dup request)', () =>
 
     const opts = (wrapper.vm as any).modelOptions as Array<{ value: string | null; label: string }>
     expect(opts.map((o) => o.value)).toEqual([null, 'claude-3', 'gpt-4o'])
+  })
+})
+
+describe('UsageFilters — retained system-wide dimensions', () => {
+  it('does not expose retired subscription billing or video modes', () => {
+    const wrapper = mountFilters()
+
+    expect(wrapper.text()).not.toContain('Billing Type')
+    expect(wrapper.text()).not.toContain('Subscription')
+    expect((wrapper.vm as any).billingModeOptions.map((option: { value: string | null }) => option.value))
+      .toEqual([null, 'token', 'per_request', 'image'])
   })
 })

@@ -199,6 +199,18 @@ const routes: RouteRecordRaw[] = [
       requiresRiskControl: true
     }
   },
+  {
+    path: '/admin/usage',
+    name: 'AdminUsage',
+    component: () => import('@/views/admin/UsageView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Usage Records',
+      titleKey: 'admin.usage.title',
+      descriptionKey: 'admin.usage.description'
+    }
+  },
   // ==================== 404 Not Found ====================
   {
     path: '/:pathMatch(.*)*',
@@ -247,7 +259,6 @@ const DISABLED_FEATURE_PATHS = [
   '/admin/channels/monitor',
   '/admin/users',
   '/admin/redeem',
-  '/admin/usage',
   '/admin/affiliates',
   '/model-plaza',
   '/redeem',

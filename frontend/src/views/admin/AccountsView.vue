@@ -88,6 +88,18 @@
                           {{ t('admin.accounts.dataActions') }}
                         </div>
                       </div>
+                      <button class="account-tools-menu-item" @click="openSyncFromCrs">
+                        <span class="account-tools-menu-icon bg-blue-50 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300">
+                          <Icon name="sync" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.accounts.syncFromCrs') }}</span>
+                      </button>
+                      <button class="account-tools-menu-item" @click="openImportData">
+                        <span class="account-tools-menu-icon bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-300">
+                          <Icon name="upload" size="sm" />
+                        </span>
+                        <span class="flex-1 text-left">{{ t('admin.accounts.dataImport') }}</span>
+                      </button>
                       <button class="account-tools-menu-item" @click="openExportDataDialogFromMenu">
                         <span class="account-tools-menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
                           <Icon name="download" size="sm" />
@@ -257,12 +269,6 @@
                   :plan-type="getAccountPlanType(row)"
                   :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
                   :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at" />
-                <span
-                  v-if="getAntigravityTierLabel(row)"
-                  :class="['inline-block rounded px-1.5 py-0.5 text-[10px] font-medium', getAntigravityTierClass(row)]"
-                >
-                  {{ getAntigravityTierLabel(row) }}
-                </span>
               </div>
               <div
                 v-if="getOpenAICompactMeta(row)"
@@ -460,6 +466,8 @@
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
+    <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
       :show="showBulkEdit"
       :account-ids="selIds"
@@ -504,11 +512,12 @@ import DataTable from '@/components/common/DataTable.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, TempUnschedStatusModal } from '@/components/account'
+import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrsModal, TempUnschedStatusModal } from '@/components/account'
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
+import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
 import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
@@ -583,6 +592,8 @@ const selTypes = computed<AccountType[]>(() => {
 })
 const showCreate = ref(false)
 const showEdit = ref(false)
+const showSync = ref(false)
+const showImportData = ref(false)
 const showExportDataDialog = ref(false)
 const includeProxyOnExport = ref(true)
 const showBulkEdit = ref(false)
@@ -1110,8 +1121,13 @@ const clearSelection = () => {
   clearSelectedIds()
 }
 
-const isSupportedAccount = (account: Account) =>
-  account.platform === 'anthropic' || account.platform === 'openai'
+const RETAINED_ACCOUNT_PLATFORMS = ['anthropic', 'openai'] as const
+type RetainedAccountPlatform = (typeof RETAINED_ACCOUNT_PLATFORMS)[number]
+
+const isSupportedAccountPlatform = (platform: unknown): platform is RetainedAccountPlatform =>
+  typeof platform === 'string' && RETAINED_ACCOUNT_PLATFORMS.includes(platform as RetainedAccountPlatform)
+
+const isSupportedAccount = (account: Account) => isSupportedAccountPlatform(account.platform)
 
 const supportedVisibleAccounts = computed(() => accounts.value.filter(isSupportedAccount))
 const retiredVisibleAccountIds = computed(() => new Set(
@@ -1276,6 +1292,8 @@ const isAnyModalOpen = computed(() => {
   return (
     showCreate.value ||
     showEdit.value ||
+    showSync.value ||
+    showImportData.value ||
     showExportDataDialog.value ||
     showBulkEdit.value ||
     showTempUnsched.value ||
@@ -1431,6 +1449,16 @@ const toggleAccountToolsDropdown = () => {
   showAccountToolsDropdown.value = nextVisible
 }
 
+const openSyncFromCrs = () => {
+  closeAccountToolsDropdown()
+  showSync.value = true
+}
+
+const openImportData = () => {
+  closeAccountToolsDropdown()
+  showImportData.value = true
+}
+
 const openExportDataDialogFromMenu = () => {
   closeAccountToolsDropdown()
   openExportDataDialog()
@@ -1480,108 +1508,14 @@ const { pause: pauseAutoRefresh, resume: resumeAutoRefresh } = useIntervalFn(
   { immediate: false }
 )
 
-const GROK_QUOTA_SIGNAL_MAX_AGE_MS = 24 * 60 * 60 * 1000
-const GROK_QUOTA_SIGNAL_MAX_FUTURE_SKEW_MS = 5 * 60 * 1000
-
 function firstNonBlankString(...values: unknown[]): string | undefined {
   return values.find((value): value is string => (
     typeof value === 'string' && value.trim().length > 0
   ))
 }
 
-function normalizeGrokPlanKey(value: unknown): string {
-  if (typeof value !== 'string') return ''
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '')
-}
-
-function grokPersistedQuotaSnapshot(extra: Record<string, any>): Record<string, any> | undefined {
-  const usage = extra.grok_usage_snapshot
-  if (usage && typeof usage === 'object' && !Array.isArray(usage)) {
-    return usage as Record<string, any>
-  }
-  const legacy = extra.grok_quota_snapshot
-  if (legacy && typeof legacy === 'object' && !Array.isArray(legacy)) {
-    return legacy as Record<string, any>
-  }
-  return undefined
-}
-
-function isGrokQuotaTimestampFresh(raw: unknown): boolean {
-  const value = String(raw || '').trim()
-  if (!value) return false
-  const observedAt = Date.parse(value)
-  if (!Number.isFinite(observedAt)) return false
-  const age = Date.now() - observedAt
-  return age <= GROK_QUOTA_SIGNAL_MAX_AGE_MS && age >= -GROK_QUOTA_SIGNAL_MAX_FUTURE_SKEW_MS
-}
-
-function isGrok45ResponsesQuotaModel(model: unknown): boolean {
-  const value = String(model || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^(x-ai|xai)\//, '')
-  return value === 'grok-4.5' || value.startsWith('grok-4.5-')
-}
-
-function grokQuotaLooksHeavy(snapshot: Record<string, any> | undefined): boolean {
-  const req = Number(snapshot?.requests?.limit ?? 0)
-  const tok = Number(snapshot?.tokens?.limit ?? 0)
-  return req >= 8300 || tok >= 53_000_000
-}
-
-function grok45ResponsesPlanIsHeavy(snapshot: Record<string, any> | undefined): boolean {
-  if (!snapshot) return false
-  const hint = normalizeGrokPlanKey(snapshot.plan_from_45_responses)
-  if (hint === 'supergrokheavy' && isGrokQuotaTimestampFresh(snapshot.plan_from_45_responses_at)) {
-    return true
-  }
-  const observedAt = snapshot.last_headers_seen_at || snapshot.updated_at
-  return (
-    isGrok45ResponsesQuotaModel(snapshot.model) &&
-    isGrokQuotaTimestampFresh(observedAt) &&
-    grokQuotaLooksHeavy(snapshot)
-  )
-}
-
-// JWT / unambiguous credentials outrank snapshots. SuperGrokPro is ambiguous
-// (covers SuperGrok and Heavy). 8300/53M only upgrades when the window came
-// from grok-4.5 Responses (or a carried 4.5 hint).
 function getAccountPlanType(row: any): string | undefined {
   if (!row) return undefined
-  if (row.platform === 'grok') {
-    const extra = (row.extra || {}) as Record<string, any>
-    const billing = extra.grok_billing_snapshot as Record<string, any> | undefined
-    const usage = extra.grok_usage_snapshot as Record<string, any> | undefined
-    const legacyQuota = extra.grok_quota_snapshot as Record<string, any> | undefined
-    const quota = grokPersistedQuotaSnapshot(extra)
-    const cred = firstNonBlankString(row.credentials?.subscription_tier)
-    const credKey = normalizeGrokPlanKey(cred)
-    if (credKey && credKey !== 'supergrokpro') {
-      return cred
-    }
-    if (
-      grok45ResponsesPlanIsHeavy(quota) &&
-      (credKey === 'supergrokpro' ||
-        normalizeGrokPlanKey(billing?.plan) === 'supergrok' ||
-        normalizeGrokPlanKey(billing?.plan) === 'supergrokpro')
-    ) {
-      return 'SuperGrok Heavy'
-    }
-    if (credKey === 'supergrokpro') {
-      return firstNonBlankString(billing?.plan) || 'SuperGrok'
-    }
-    return firstNonBlankString(
-      billing?.plan,
-      usage?.subscription_tier,
-      legacyQuota?.subscription_tier,
-      extra.subscription_tier,
-      row.credentials?.plan_type,
-      row.parent_plan_type
-    )
-  }
   return firstNonBlankString(row.credentials?.plan_type, row.parent_plan_type)
 }
 
@@ -1589,30 +1523,6 @@ function getOpenAIAuthMode(row: any): string | undefined {
   if (!row || row.platform !== 'openai' || row.type !== 'oauth') return undefined
   const authMode = row.credentials?.auth_mode
   return typeof authMode === 'string' && authMode.trim() ? authMode : undefined
-}
-
-// Antigravity 订阅等级辅助函数
-function getAntigravityTierFromRow(row: any): string | null {
-  if (row.platform !== 'antigravity') return null
-  const extra = row.extra as Record<string, unknown> | undefined
-  if (!extra) return null
-  const lca = extra.load_code_assist as Record<string, unknown> | undefined
-  if (!lca) return null
-  const paid = lca.paidTier as Record<string, unknown> | undefined
-  if (paid && typeof paid.id === 'string') return paid.id
-  const current = lca.currentTier as Record<string, unknown> | undefined
-  if (current && typeof current.id === 'string') return current.id
-  return null
-}
-
-function getAntigravityTierLabel(row: any): string | null {
-  const tier = getAntigravityTierFromRow(row)
-  switch (tier) {
-    case 'free-tier': return t('admin.accounts.tier.free')
-    case 'g1-pro-tier': return t('admin.accounts.tier.pro')
-    case 'g1-ultra-tier': return t('admin.accounts.tier.ultra')
-    default: return null
-  }
 }
 
 // 账号显示邮箱:优先账号自身(extra/credentials),影子账号回退母账号 parent_email。
@@ -1673,16 +1583,6 @@ function getOpenAICompactTitle(row: any): string {
   const label = getOpenAICompactMeta(row)?.label || ''
   if (!checkedAt) return label
   return `${label} | ${t('admin.accounts.openai.compactLastChecked')}: ${formatDateTime(new Date(checkedAt))}`
-}
-
-function getAntigravityTierClass(row: any): string {
-  const tier = getAntigravityTierFromRow(row)
-  switch (tier) {
-    case 'free-tier': return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
-    case 'g1-pro-tier': return 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-300'
-    case 'g1-ultra-tier': return 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-300'
-    default: return ''
-  }
 }
 
 // All available columns
@@ -1991,21 +1891,31 @@ const buildBulkEditFilterSnapshot = () => {
   }
 }
 
+const fetchRetainedAccountIDs = async (filters: ReturnType<typeof buildBulkEditFilterSnapshot>) => {
+  const requestedPlatform = filters.platform
+  const platforms: RetainedAccountPlatform[] = requestedPlatform
+    ? (isSupportedAccountPlatform(requestedPlatform) ? [requestedPlatform] : [])
+    : [...RETAINED_ACCOUNT_PLATFORMS]
+
+  const idGroups = await Promise.all(platforms.map(platform => fetchAllAccountIds(
+    (page, pageSize, requestFilters) => adminAPI.accounts.list(page, pageSize, requestFilters),
+    { ...filters, platform }
+  )))
+
+  return {
+    ids: Array.from(new Set(idGroups.flat())),
+    platforms: platforms.filter((_, index) => idGroups[index]?.length)
+  }
+}
+
 const handleSelectAllResults = async () => {
   if (selectingAllResults.value || pagination.total === 0) return
-  if (params.platform !== 'anthropic' && params.platform !== 'openai') {
-    selectPage()
-    return
-  }
 
   const requestVersion = ++selectionRequestVersion.value
   const filters = buildBulkEditFilterSnapshot()
   selectingAllResults.value = true
   try {
-    const ids = await fetchAllAccountIds(
-      (page, pageSize, requestFilters) => adminAPI.accounts.list(page, pageSize, requestFilters),
-      filters
-    )
+    const { ids } = await fetchRetainedAccountIDs(filters)
     if (requestVersion !== selectionRequestVersion.value) return
 
     setSelectedIds(ids)
@@ -2039,7 +1949,28 @@ const openBulkEditSelected = () => {
 
 const openBulkEditFiltered = async () => {
   const filters = buildBulkEditFilterSnapshot()
-  if (filters.platform !== 'anthropic' && filters.platform !== 'openai') return
+  if (filters.platform && !isSupportedAccountPlatform(filters.platform)) return
+
+  if (!filters.platform) {
+    const { ids, platforms } = await fetchRetainedAccountIDs(filters)
+    if (ids.length === 0) return
+
+    const previews = await Promise.all(platforms.map(platform =>
+      adminAPI.accounts.list(1, 100, { ...filters, platform })
+    ))
+    const { selectedTypes } = collectSelectionMetadata(previews.flatMap(preview => preview.items))
+
+    setSelectedIds(ids)
+    bulkEditTarget.value = {
+      mode: 'selected',
+      accountIds: ids,
+      selectedPlatforms: platforms,
+      selectedTypes
+    }
+    showBulkEdit.value = true
+    return
+  }
+
   const preview = await adminAPI.accounts.list(1, 100, filters)
   const { selectedPlatforms, selectedTypes } = collectSelectionMetadata(preview.items)
   bulkEditTarget.value = {
@@ -2190,6 +2121,10 @@ const handleAccountUpdated = (updatedAccount: Account) => {
   patchAccountInList(updatedAccount)
   enterAutoRefreshSilentWindow()
 }
+const handleDataImported = () => {
+  showImportData.value = false
+  reload()
+}
 const formatExportTimestamp = () => {
   const now = new Date()
   const pad2 = (value: number) => String(value).padStart(2, '0')
@@ -2324,12 +2259,6 @@ const privacyResultMessageKey = (account: Account): { type: 'success' | 'error';
       default:
         return { type: 'error', key: 'admin.accounts.privacyFailed' }
     }
-  }
-  if (account.platform === 'antigravity') {
-    if (mode === 'privacy_set') {
-      return { type: 'success', key: 'admin.accounts.privacyAntigravitySet' }
-    }
-    return { type: 'error', key: 'admin.accounts.privacyAntigravityFailed' }
   }
   return { type: 'error', key: 'admin.accounts.privacyFailed' }
 }

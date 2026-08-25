@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, listTLSProfilesMock, getWebSearchEmulationConfigMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
+  listTLSProfilesMock: vi.fn(),
+  getWebSearchEmulationConfigMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
@@ -31,11 +33,11 @@ vi.mock('@/api/admin', () => ({
       checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
-      getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
+      getWebSearchEmulationConfig: getWebSearchEmulationConfigMock,
       getSettings: vi.fn().mockResolvedValue({})
     },
     tlsFingerprintProfiles: {
-      list: vi.fn().mockResolvedValue([])
+      list: listTLSProfilesMock
     }
   }
 }))
@@ -69,6 +71,14 @@ const ModelWhitelistSelectorStub = defineComponent({
     modelValue: {
       type: Array,
       default: () => []
+    },
+    platform: {
+      type: String,
+      default: ''
+    },
+    accountId: {
+      type: Number,
+      default: undefined
     }
   },
   emits: ['update:modelValue'],
@@ -77,7 +87,7 @@ const ModelWhitelistSelectorStub = defineComponent({
       <button
         type="button"
         data-testid="rewrite-to-snapshot"
-        @click="$emit('update:modelValue', ['gpt-5.2-2025-12-11'])"
+        @click="$emit('update:modelValue', [platform === 'anthropic' ? 'claude-sonnet-4-5-20250929' : 'gpt-5.2-2025-12-11'])"
       >
         rewrite
       </button>
@@ -134,6 +144,30 @@ const GroupSelectorStub = defineComponent({
       </button>
     </div>
   `
+})
+
+const ProxySelectorStub = defineComponent({
+  name: 'ProxySelector',
+  props: {
+    modelValue: {
+      type: [Number, null],
+      default: null
+    }
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <div>
+      <span data-testid="proxy-selector-value">{{ modelValue ?? 'none' }}</span>
+      <button type="button" data-testid="clear-proxy" @click="$emit('update:modelValue', null)">
+        clear
+      </button>
+    </div>
+  `
+})
+
+const OllamaCloudUsageSettingsStub = defineComponent({
+  name: 'OllamaCloudUsageSettings',
+  template: '<div data-testid="ollama-cloud-usage-settings" />'
 })
 
 function buildAccount() {
@@ -212,6 +246,44 @@ function buildVertexAccount() {
   } as any
 }
 
+function buildBedrockAccount() {
+  return {
+    id: 3,
+    name: 'Bedrock Claude',
+    notes: '',
+    platform: 'anthropic',
+    type: 'bedrock',
+    credentials: {
+      auth_mode: 'sigv4',
+      aws_access_key_id: 'AKIA-EXISTING',
+      aws_region: 'eu-west-1',
+      aws_force_global: 'true',
+      model_mapping: {
+        'claude-3': 'claude-3'
+      },
+      pool_mode: true,
+      pool_mode_retry_count: 4
+    },
+    credentials_status: {
+      has_aws_secret_access_key: true,
+      has_aws_session_token: true
+    },
+    extra: {
+      quota_limit: 10,
+      quota_daily_limit: 2,
+      quota_weekly_limit: 5
+    },
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
 function buildOpenAISetupTokenAccount() {
   return {
     ...buildAccount(),
@@ -236,9 +308,10 @@ function mountModal(account = buildAccount()) {
         BaseDialog: BaseDialogStub,
         Select: SelectStub,
         Icon: true,
-        ProxySelector: true,
+        ProxySelector: ProxySelectorStub,
         GroupSelector: GroupSelectorStub,
-        ModelWhitelistSelector: ModelWhitelistSelectorStub
+        ModelWhitelistSelector: ModelWhitelistSelectorStub,
+        OllamaCloudUsageSettings: OllamaCloudUsageSettingsStub
       }
     }
   })
@@ -247,6 +320,23 @@ function mountModal(account = buildAccount()) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    listTLSProfilesMock.mockReset().mockResolvedValue([{ id: 7, name: 'Chrome profile' }])
+    getWebSearchEmulationConfigMock.mockReset().mockResolvedValue({ enabled: false, providers: [] })
+  })
+
+  it('keeps the original Ollama Cloud usage settings for eligible OpenAI-compatible accounts', () => {
+    const account = buildAccount()
+    account.ollama_cloud_usage = {
+      account_id: account.id,
+      eligible: true,
+      configured: false,
+      auto_refresh_enabled: false,
+      encryption_key_configured: true
+    }
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get('[data-testid="ollama-cloud-usage-settings"]').exists()).toBe(true)
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
@@ -301,6 +391,23 @@ describe('EditAccountModal', () => {
     })
   })
 
+  it('sends zero when clearing an existing proxy assignment', async () => {
+    const account = buildAccount()
+    account.proxy_id = 9
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue({ ...account, proxy_id: null })
+
+    const wrapper = mountModal(account)
+    expect(wrapper.get('[data-testid="proxy-selector-value"]').text()).toBe('9')
+    await wrapper.get('[data-testid="clear-proxy"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.proxy_id).toBe(0)
+  })
+
   it('submits OpenAI compact mode and compact-only model mapping', async () => {
     const account = buildAccount()
     account.extra = {
@@ -325,6 +432,63 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_compact_mode).toBe('force_on')
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.compact_model_mapping).toEqual({
       'gpt-5.4': 'gpt-5.4-openai-compact'
+    })
+  })
+
+  it('adds an OpenAI model-mapping preset while editing', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="edit-model-restriction-mapping"]').trigger('click')
+    await wrapper.get('[data-testid="edit-model-preset-gpt-5.4"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toMatchObject({
+      'gpt-5.4': 'gpt-5.4'
+    })
+  })
+
+  it('shows Anthropic API-key web-search controls only when globally configured', async () => {
+    getWebSearchEmulationConfigMock.mockResolvedValueOnce({
+      enabled: true,
+      providers: [{ name: 'provider' }]
+    })
+    const account = buildAccount()
+    account.platform = 'anthropic'
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="edit-anthropic-web-search-mode"]').exists()).toBe(true)
+    })
+  })
+
+  it('preserves the random TLS fingerprint profile for Claude OAuth accounts', async () => {
+    const account = buildAccount()
+    account.platform = 'anthropic'
+    account.type = 'oauth'
+    account.credentials = { access_token: 'claude-access-token' }
+    account.extra = {
+      enable_tls_fingerprint: true,
+      tls_fingerprint_profile_id: -1
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    await vi.waitFor(() => {
+      expect(wrapper.findAll('[data-testid="edit-tls-fingerprint-profile-select"] option')).toHaveLength(3)
+    })
+
+    expect(wrapper.get('[data-testid="edit-tls-fingerprint-profile-select"]').element).toHaveProperty('value', '-1')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
+      enable_tls_fingerprint: true,
+      tls_fingerprint_profile_id: -1
     })
   })
 
@@ -984,6 +1148,29 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
   })
 
+  it('shows and saves the model whitelist for a Vertex SA account', async () => {
+    const account = buildVertexAccount()
+    account.credentials.model_mapping = {
+      'claude-sonnet-4-5': 'claude-sonnet-4-5'
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.get('[data-testid="model-whitelist-value"]').text()).toBe('claude-sonnet-4-5')
+    expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('accountId')).toBe(2)
+    await wrapper.get('[data-testid="rewrite-to-snapshot"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
+      'claude-sonnet-4-5-20250929': 'claude-sonnet-4-5-20250929'
+    })
+  })
+
   it('blocks Vertex SA save when neither credentials_status nor legacy json indicates existence', async () => {
     const account = buildVertexAccount()
     account.credentials = {
@@ -1002,6 +1189,107 @@ describe('EditAccountModal', () => {
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
 
     expect(updateAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('edits Anthropic Bedrock SigV4 fields while preserving redacted secrets', async () => {
+    const account = buildBedrockAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    const sigV4Auth = wrapper.get('[data-testid="edit-bedrock-auth-sigv4"]')
+    expect(sigV4Auth.classes()).toEqual(
+      expect.arrayContaining(['mr-2', 'text-primary-600', 'focus:ring-primary-500'])
+    )
+    expect(sigV4Auth.element.parentElement?.classList).toContain('items-center')
+    expect(sigV4Auth.element.nextElementSibling?.classList).toContain('dark:text-gray-300')
+
+    expect(wrapper.get('[data-testid="edit-bedrock-region"]').element).toHaveProperty('value', 'eu-west-1')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-bedrock-force-global"]').element.checked).toBe(true)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-bedrock-secret-access-key"]').element.value).toBe('')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="edit-bedrock-session-token"]').element.value).toBe('')
+
+    await wrapper.get('[data-testid="edit-bedrock-region"]').setValue('us-west-2')
+    await wrapper.get<HTMLInputElement>('[data-testid="edit-bedrock-force-global"]').setValue(false)
+    await wrapper.get('[data-testid="edit-quota-limit"]').setValue('20')
+    await wrapper.get('[data-testid="edit-quota-daily-limit"]').setValue('4')
+    await wrapper.get('[data-testid="edit-quota-weekly-limit"]').setValue('8')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload?.credentials?.auth_mode).toBe('sigv4')
+    expect(payload?.credentials?.aws_access_key_id).toBe('AKIA-EXISTING')
+    expect(payload?.credentials?.aws_region).toBe('us-west-2')
+    expect(payload?.credentials).not.toHaveProperty('aws_force_global')
+    expect(payload?.credentials).not.toHaveProperty('aws_secret_access_key')
+    expect(payload?.credentials).not.toHaveProperty('aws_session_token')
+    expect(payload?.credentials?.model_mapping).toEqual({ 'claude-3': 'claude-3' })
+    expect(payload?.credentials?.pool_mode).toBe(true)
+    expect(payload?.credentials?.pool_mode_retry_count).toBe(4)
+    expect(payload?.extra?.quota_limit).toBe(20)
+    expect(payload?.extra?.quota_daily_limit).toBe(4)
+    expect(payload?.extra?.quota_weekly_limit).toBe(8)
+  })
+
+  it('switches Anthropic Bedrock to API-key mode and serializes the replacement key', async () => {
+    const account = buildBedrockAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-bedrock-auth-apikey"]').setValue(true)
+    await wrapper.get('[data-testid="edit-bedrock-api-key"]').setValue('bedrock-key-rotated')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload?.credentials?.auth_mode).toBe('apikey')
+    expect(payload?.credentials?.api_key).toBe('bedrock-key-rotated')
+    expect(payload?.credentials).not.toHaveProperty('aws_access_key_id')
+    expect(payload?.credentials).not.toHaveProperty('aws_secret_access_key')
+    expect(payload?.credentials).not.toHaveProperty('aws_session_token')
+  })
+
+  it('loads and updates the active-platform account scheduling threshold override', async () => {
+    const account = buildAccount()
+    account.credentials.account_scheduling_threshold = 80
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.get('[data-testid="account-scheduling-threshold-section"]').exists()).toBe(true)
+    const enabled = wrapper.get<HTMLInputElement>('[data-testid="account-scheduling-threshold-override-enabled"]')
+    expect(enabled.element.checked).toBe(true)
+    expect(wrapper.get<HTMLInputElement>('[data-testid="account-scheduling-threshold-override-value"]').element.value).toBe('80')
+
+    await wrapper.get('[data-testid="account-scheduling-threshold-override-value"]').setValue('75')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.account_scheduling_threshold).toBe(75)
+  })
+
+  it('clears an existing account scheduling threshold override when disabled', async () => {
+    const account = buildAccount()
+    account.credentials.account_scheduling_threshold = 80
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    await wrapper.get<HTMLInputElement>('[data-testid="account-scheduling-threshold-override-enabled"]').setValue(false)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.account_scheduling_threshold).toBeNull()
   })
 
 })

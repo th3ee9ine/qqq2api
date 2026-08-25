@@ -95,6 +95,16 @@ type SyncFromCRSResult struct {
 	Items   []SyncFromCRSItemResult `json:"items"`
 }
 
+func retiredCRSSyncItem(crsAccountID, kind, name string) SyncFromCRSItemResult {
+	return SyncFromCRSItemResult{
+		CRSAccountID: crsAccountID,
+		Kind:         kind,
+		Name:         name,
+		Action:       "skipped",
+		Error:        "platform is retired",
+	}
+}
+
 type crsLoginResponse struct {
 	Success  bool   `json:"success"`
 	Token    string `json:"token"`
@@ -290,6 +300,12 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			Kind:         src.Kind,
 			Name:         src.Name,
 		}
+		if IsRetiredPlatform(src.Platform) {
+			item = retiredCRSSyncItem(src.ID, src.Kind, src.Name)
+			result.Skipped++
+			result.Items = append(result.Items, item)
+			continue
+		}
 
 		targetType := strings.TrimSpace(src.AuthType)
 		if targetType == "" {
@@ -459,6 +475,12 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			Kind:         src.Kind,
 			Name:         src.Name,
 		}
+		if IsRetiredPlatform(src.Platform) {
+			item = retiredCRSSyncItem(src.ID, src.Kind, src.Name)
+			result.Skipped++
+			result.Items = append(result.Items, item)
+			continue
+		}
 
 		apiKey, _ := src.Credentials["api_key"].(string)
 		if strings.TrimSpace(apiKey) == "" {
@@ -580,6 +602,12 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			CRSAccountID: src.ID,
 			Kind:         src.Kind,
 			Name:         src.Name,
+		}
+		if IsRetiredPlatform(src.Platform) {
+			item = retiredCRSSyncItem(src.ID, src.Kind, src.Name)
+			result.Skipped++
+			result.Items = append(result.Items, item)
+			continue
 		}
 
 		accessToken, _ := src.Credentials["access_token"].(string)
@@ -743,6 +771,12 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			Kind:         src.Kind,
 			Name:         src.Name,
 		}
+		if IsRetiredPlatform(src.Platform) {
+			item = retiredCRSSyncItem(src.ID, src.Kind, src.Name)
+			result.Skipped++
+			result.Items = append(result.Items, item)
+			continue
+		}
 
 		apiKey, _ := src.Credentials["api_key"].(string)
 		if strings.TrimSpace(apiKey) == "" {
@@ -881,15 +915,9 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		result.Items = append(result.Items, item)
 	}
 
-	// Gemini OAuth -> sub2api gemini oauth
+	// Retired Gemini OAuth entries are reported but never created or updated.
 	for _, src := range exported.Data.GeminiOAuthAccounts {
-		item := SyncFromCRSItemResult{
-			CRSAccountID: src.ID,
-			Kind:         src.Kind,
-			Name:         src.Name,
-		}
-		item.Action = "skipped"
-		item.Error = "platform is retired"
+		item := retiredCRSSyncItem(src.ID, src.Kind, src.Name)
 		result.Skipped++
 		result.Items = append(result.Items, item)
 		continue
@@ -1022,15 +1050,9 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		result.Items = append(result.Items, item)
 	}
 
-	// Gemini API Key -> sub2api gemini apikey
+	// Retired Gemini API-key entries are reported but never created or updated.
 	for _, src := range exported.Data.GeminiAPIKeyAccounts {
-		item := SyncFromCRSItemResult{
-			CRSAccountID: src.ID,
-			Kind:         src.Kind,
-			Name:         src.Name,
-		}
-		item.Action = "skipped"
-		item.Error = "platform is retired"
+		item := retiredCRSSyncItem(src.ID, src.Kind, src.Name)
 		result.Skipped++
 		result.Items = append(result.Items, item)
 		continue
@@ -1572,6 +1594,9 @@ func (s *CRSSyncService) PreviewFromCRS(ctx context.Context, input SyncFromCRSIn
 	}
 
 	for _, src := range exported.Data.ClaudeAccounts {
+		if IsRetiredPlatform(src.Platform) {
+			continue
+		}
 		authType := strings.TrimSpace(src.AuthType)
 		if authType == "" {
 			authType = AccountTypeOAuth
@@ -1579,12 +1604,21 @@ func (s *CRSSyncService) PreviewFromCRS(ctx context.Context, input SyncFromCRSIn
 		classify(src.ID, src.Kind, src.Name, PlatformAnthropic, authType)
 	}
 	for _, src := range exported.Data.ClaudeConsoleAccounts {
+		if IsRetiredPlatform(src.Platform) {
+			continue
+		}
 		classify(src.ID, src.Kind, src.Name, PlatformAnthropic, AccountTypeAPIKey)
 	}
 	for _, src := range exported.Data.OpenAIOAuthAccounts {
+		if IsRetiredPlatform(src.Platform) {
+			continue
+		}
 		classify(src.ID, src.Kind, src.Name, PlatformOpenAI, AccountTypeOAuth)
 	}
 	for _, src := range exported.Data.OpenAIResponsesAccounts {
+		if IsRetiredPlatform(src.Platform) {
+			continue
+		}
 		classify(src.ID, src.Kind, src.Name, PlatformOpenAI, AccountTypeAPIKey)
 	}
 	return result, nil

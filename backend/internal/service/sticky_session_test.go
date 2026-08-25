@@ -122,8 +122,8 @@ func TestShouldClearStickySession(t *testing.T) {
 		{
 			name: "overloaded account",
 			account: &Account{
-				Status:       StatusActive,
-				Schedulable:  true,
+				Status:        StatusActive,
+				Schedulable:   true,
 				OverloadUntil: &future,
 			},
 			requestedModel: "",
@@ -143,6 +143,9 @@ func TestShouldClearStickySession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.account != nil && tt.account.Platform == "" {
+				tt.account.Platform = PlatformAnthropic
+			}
 			require.Equal(t, tt.want, shouldClearStickySession(tt.account, tt.requestedModel))
 		})
 	}

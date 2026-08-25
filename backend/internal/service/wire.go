@@ -41,12 +41,13 @@ func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 	return NewEmailQueueService(emailService, 3)
 }
 
-// ProvideAuthService wires the optional captcha providers into AuthService while
-// keeping NewAuthService's public constructor compatible with existing tests.
+// ProvideAuthService wires the administrator-only authentication runtime.
+// Registration-only dependencies (redeem codes, promo codes, subscriptions,
+// affiliates, and new-user platform quotas) are intentionally left nil because
+// none of their routes exist in this deployment.
 func ProvideAuthService(
 	entClient *dbent.Client,
 	userRepo UserRepository,
-	redeemRepo RedeemCodeRepository,
 	refreshTokenCache RefreshTokenCache,
 	cfg *config.Config,
 	settingService *SettingService,
@@ -55,25 +56,21 @@ func ProvideAuthService(
 	tencentCaptchaService *TencentCaptchaService,
 	aliyunCaptchaService *AliyunCaptchaService,
 	emailQueueService *EmailQueueService,
-	promoService *PromoService,
-	defaultSubAssigner DefaultSubscriptionAssigner,
-	affiliateService *AffiliateService,
-	userPlatformQuotaRepo UserPlatformQuotaRepository,
 ) *AuthService {
 	svc := NewAuthService(
 		entClient,
 		userRepo,
-		redeemRepo,
+		nil,
 		refreshTokenCache,
 		cfg,
 		settingService,
 		emailService,
 		turnstileService,
 		emailQueueService,
-		promoService,
-		defaultSubAssigner,
-		affiliateService,
-		userPlatformQuotaRepo,
+		nil,
+		nil,
+		nil,
+		nil,
 	)
 	svc.SetTencentCaptchaService(tencentCaptchaService)
 	svc.SetAliyunCaptchaService(aliyunCaptchaService)
@@ -581,17 +578,16 @@ func ProvideAPIKeyAuthCacheInvalidator(apiKeyService *APIKeyService) APIKeyAuthC
 func ProvideImageStorageSettingService(
 	settingRepo SettingRepository,
 	encryptor SecretEncryptor,
-	backup *BackupService,
 	factory ImageStorageFactory,
 	cfg *config.Config,
 ) *ImageStorageSettingService {
 	if cfg.ImageStorage.Enabled && !cfg.ImageStorage.Active() {
 		// 列出具体缺失的键。若这些键其实已在环境变量里设过，说明它们没被读进来，
 		// 请确认 setDefaults 中已为其注册默认值（见 config.setEnvReachableDefaults）。
-		logger.L().Warn("image_storage.enabled is true in config but object storage is not fully configured; configure it in the admin UI or complete the config file",
+		logger.L().Warn("image_storage.enabled is true in config but object storage is not fully configured; complete the image_storage config or environment variables",
 			zap.Strings("missing_keys", cfg.ImageStorage.MissingCredentialKeys()))
 	}
-	return NewImageStorageSettingService(settingRepo, encryptor, backup, factory, cfg.ImageStorage)
+	return NewImageStorageSettingService(settingRepo, encryptor, factory, cfg.ImageStorage, cfg.Totp.EncryptionKeyConfigured)
 }
 
 // ProvideImageTaskService 构造异步图片任务服务。
@@ -601,22 +597,6 @@ func ProvideImageStorageSettingService(
 // 启用状态由 settings 服务在运行时解析，因此后台改开关后无需重启即可生效。
 func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService) *ImageTaskService {
 	return NewImageTaskServiceWithResolver(store, settings.Resolver(), defaultImageTaskTTL, defaultImageTaskExecutionTimeout)
-}
-
-// ProvideBackupService creates and starts BackupService
-func ProvideBackupService(
-	settingRepo SettingRepository,
-	cfg *config.Config,
-	encryptor SecretEncryptor,
-	storeFactory BackupObjectStoreFactory,
-	dumper DBDumper,
-	lockCache LeaderLockCache,
-	db *sql.DB,
-) *BackupService {
-	svc := NewBackupService(settingRepo, cfg, encryptor, storeFactory, dumper)
-	svc.SetLeaderLock(lockCache, db)
-	svc.Start()
-	return svc
 }
 
 // ProvideOpsService constructs OpsService and wires the SettingService-backed quota
@@ -729,11 +709,60 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+// ProvideAdminService wires only the dependencies used by the retained
+// administrator surfaces. User creation, redemption, subscription assignment,
+// and affiliate accrual methods remain source-compatible but are unreachable
+// and intentionally receive nil collaborators.
+func ProvideAdminService(
+	userRepo UserRepository,
+	groupRepo AdminGroupRepository,
+	accountRepo AdminAccountRepository,
+	proxyRepo ProxyRepository,
+	apiKeyRepo APIKeyRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	userRPMCache UserRPMCache,
+	billingCacheService *BillingCacheService,
+	proxyProber ProxyExitInfoProber,
+	proxyLatencyCache ProxyLatencyCache,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	entClient *dbent.Client,
+	settingService *SettingService,
+	privacyClientFactory PrivacyClientFactory,
+	runtimeBlocker AccountRuntimeBlocker,
+	compositeRouteRepo CompositeModelRouteRepository,
+	compositeResolver *CompositeRouteResolver,
+	channelCacheInvalidator ChannelCacheInvalidator,
+) AdminService {
+	return NewAdminService(
+		userRepo,
+		groupRepo,
+		accountRepo,
+		proxyRepo,
+		apiKeyRepo,
+		nil,
+		userGroupRateRepo,
+		userRPMCache,
+		billingCacheService,
+		proxyProber,
+		proxyLatencyCache,
+		authCacheInvalidator,
+		entClient,
+		settingService,
+		nil,
+		nil,
+		privacyClientFactory,
+		runtimeBlocker,
+		nil,
+		compositeRouteRepo,
+		compositeResolver,
+		channelCacheInvalidator,
+	)
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
 	ProvideAuthService,
-	NewPasskeyService,
 	NewUserService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
@@ -742,15 +771,12 @@ var ProviderSet = wire.NewSet(
 	NewCompositeRouteResolver,
 	NewAccountService,
 	NewProxyService,
-	NewRedeemService,
-	NewPromoService,
 	NewUsageService,
 	NewDashboardService,
 	ProvidePricingService,
 	NewBillingService,
 	ProvideBillingCacheService,
-	NewAnnouncementService,
-	NewAdminService,
+	ProvideAdminService,
 	NewGatewayService,
 	ProvideOpenAIGatewayService,
 	ProvideImageStorageSettingService,
@@ -770,8 +796,6 @@ var ProviderSet = wire.NewSet(
 	ProvideUpstreamBillingProbeService,
 	ProvideOllamaCloudUsageService,
 	ProvideSettingService,
-	NewDataManagementService,
-	ProvideBackupService,
 	ProvideOpsSystemLogSink,
 	ProvideOpsService,
 	ProvideOpsIngressRejectAggregator,
@@ -787,8 +811,6 @@ var ProviderSet = wire.NewSet(
 	NewTurnstileService,
 	NewTencentCaptchaService,
 	NewAliyunCaptchaService,
-	NewSubscriptionService,
-	wire.Bind(new(DefaultSubscriptionAssigner), new(*SubscriptionService)),
 	ProvideConcurrencyService,
 	ProvideUserMessageQueueService,
 	NewUsageRecordWorkerPool,
@@ -800,12 +822,10 @@ var ProviderSet = wire.NewSet(
 	ProvideAccountExpiryService,
 	ProvideOpenAICodexVersionSyncService,
 	ProvideProxyExpiryService,
-	ProvideSubscriptionExpiryService,
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,
 	ProvideUsageCleanupService,
 	ProvideDeferredService,
-	NewUserAttributeService,
 	NewUsageCache,
 	NewTotpService,
 	NewErrorPassthroughService,
@@ -821,15 +841,10 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
 	NewModelPricingResolver,
 	NewContentModerationService,
-	NewAffiliateService,
-	ProvidePaymentConfigService,
-	ProvidePaymentService,
-	ProvidePaymentOrderExpiryService,
 	ProvideBalanceNotifyService,
 	ProvideChannelMonitorService,
 	ProvideChannelMonitorV2Service,
 	NewChannelMonitorRequestTemplateService,
-	ProvideUserPlatformQuotaUsageFlusher,
 )
 
 // ProvideUserPlatformQuotaUsageFlusher 创建并启动 UserPlatformQuotaUsageFlusher。

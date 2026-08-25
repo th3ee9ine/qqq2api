@@ -10,6 +10,9 @@ const {
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
   getAdminApiKey,
+  getImageStorageConfig,
+  updateImageStorageConfig,
+  testImageStorageConnection,
   getOverloadCooldownSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
@@ -38,6 +41,9 @@ const {
   getWebSearchEmulationConfig: vi.fn(),
   updateWebSearchEmulationConfig: vi.fn(),
   getAdminApiKey: vi.fn(),
+  getImageStorageConfig: vi.fn(),
+  updateImageStorageConfig: vi.fn(),
+  testImageStorageConnection: vi.fn(),
   getOverloadCooldownSettings: vi.fn(),
   getRateLimit429CooldownSettings: vi.fn(),
   updateRateLimit429CooldownSettings: vi.fn(),
@@ -93,6 +99,11 @@ vi.mock("@/api", () => ({
       getStreamTimeoutSettings,
       getRectifierSettings,
       getBetaPolicySettings,
+    },
+    imageStorage: {
+      getConfig: getImageStorageConfig,
+      updateConfig: updateImageStorageConfig,
+      testConnection: testImageStorageConnection,
     },
     accounts: {
       getUpstreamBillingProbeSettings,
@@ -550,7 +561,6 @@ function mountView() {
         OpenAIFastPolicyUserSelector: {
           template: '<div data-testid="openai-fast-policy-user-selector" />',
         },
-        BackupSettings: true,
       },
     },
   });
@@ -583,6 +593,9 @@ describe("admin SettingsView", () => {
     getWebSearchEmulationConfig.mockReset();
     updateWebSearchEmulationConfig.mockReset();
     getAdminApiKey.mockReset();
+    getImageStorageConfig.mockReset();
+    updateImageStorageConfig.mockReset();
+    testImageStorageConnection.mockReset();
     getOverloadCooldownSettings.mockReset();
     getRateLimit429CooldownSettings.mockReset();
     updateRateLimit429CooldownSettings.mockReset();
@@ -621,6 +634,28 @@ describe("admin SettingsView", () => {
     getAdminApiKey.mockResolvedValue({
       exists: false,
       masked_key: "",
+    });
+    const imageStorageConfig = {
+      enabled: true,
+      endpoint: "https://s3.example.com",
+      region: "auto",
+      bucket: "generated-images",
+      access_key_id: "access-key",
+      secret_access_key: "",
+      prefix: "images/",
+      public_base_url: "https://cdn.example.com",
+      force_path_style: true,
+      presign_expiry_hours: 24,
+      max_download_bytes: 33554432,
+    };
+    getImageStorageConfig.mockResolvedValue({
+      config: imageStorageConfig,
+      secret_configured: true,
+    });
+    updateImageStorageConfig.mockImplementation(async (payload) => payload);
+    testImageStorageConnection.mockResolvedValue({
+      ok: true,
+      message: "connected",
     });
     getOverloadCooldownSettings.mockResolvedValue({
       enabled: true,
@@ -684,6 +719,138 @@ describe("admin SettingsView", () => {
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({ compact_home_enabled: true }),
     );
+  });
+
+  it("does not expose the legacy user-mode switch in the administrator-only console", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("admin.settings.site.backendMode");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("backend_mode_enabled");
+  });
+
+  it("keeps the retained settings tabs in their original visual order", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+
+    const tabs = wrapper.findAll('[role="tab"]');
+    expect(tabs.map((tab) => tab.text())).toEqual([
+      "admin.settings.tabs.general",
+      "admin.settings.tabs.features",
+      "admin.settings.tabs.security",
+      "admin.settings.tabs.gateway",
+    ]);
+    expect(tabs.map((tab) => tab.get("icon-stub").attributes("name"))).toEqual([
+      "home",
+      "bolt",
+      "shield",
+      "server",
+    ]);
+    expect(tabs[0]?.classes()).toContain("settings-tab-active");
+    expect(wrapper.get(".settings-tabs-shell").classes()).toContain("settings-tabs-shell");
+
+    await tabs[3]?.trigger("click");
+    expect(tabs[0]?.classes()).not.toContain("settings-tab-active");
+    expect(tabs[3]?.classes()).toContain("settings-tab-active");
+  });
+
+  it("submits account quota notification recipients and removes blank rows", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      account_quota_notify_enabled: true,
+      account_quota_notify_emails: [
+        { email: "ops@example.com", disabled: false, verified: true },
+        { email: "   ", disabled: true, verified: false },
+      ],
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        account_quota_notify_enabled: true,
+        account_quota_notify_emails: [
+          { email: "ops@example.com", disabled: false, verified: true },
+        ],
+      }),
+    );
+  });
+
+  it("loads, tests, and saves standalone image storage settings", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const card = wrapper.get('[data-testid="image-storage-settings"]');
+    expect((card.get('#image-storage-endpoint').element as HTMLInputElement).value).toBe(
+      "https://s3.example.com",
+    );
+    expect((card.get('#image-storage-secret-key').element as HTMLInputElement).placeholder).toContain(
+      "admin.settings.imageStorage.secretConfigured",
+    );
+
+    await card.get('#image-storage-bucket').setValue("new-images");
+    await card.get('#image-storage-secret-key').setValue("replacement-secret");
+    await card.get('[data-testid="image-storage-test"]').trigger("click");
+    await flushPromises();
+
+    expect(testImageStorageConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bucket: "new-images",
+        secret_access_key: "replacement-secret",
+      }),
+    );
+
+    await card.get('[data-testid="image-storage-save"]').trigger("click");
+    await flushPromises();
+
+    expect(updateImageStorageConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabled: true,
+        endpoint: "https://s3.example.com",
+        bucket: "new-images",
+        secret_access_key: "replacement-secret",
+      }),
+    );
+    expect((card.get('#image-storage-secret-key').element as HTMLInputElement).value).toBe("");
+  });
+
+  it("matches the settings card controls and loading treatment for image storage", async () => {
+    let resolveConnectionTest!: (value: { ok: boolean; message: string }) => void;
+    testImageStorageConnection.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveConnectionTest = resolve;
+      }),
+    );
+
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const card = wrapper.get('[data-testid="image-storage-settings"]');
+    expect(card.classes()).toContain("card");
+    expect(card.get('[data-testid="image-storage-force-path-style"]').classes()).toContain(
+      "toggle-stub",
+    );
+    expect(card.get('#image-storage-public-url').element.parentElement?.classList).toContain(
+      "md:col-span-2",
+    );
+
+    const testButton = card.get('[data-testid="image-storage-test"]');
+    await testButton.trigger("click");
+    expect(testButton.attributes("disabled")).toBeDefined();
+    expect(testButton.find(".animate-spin").exists()).toBe(true);
+    expect(testButton.text()).toContain("admin.settings.imageStorage.testing");
+
+    resolveConnectionTest({ ok: true, message: "connected" });
+    await flushPromises();
+    expect(testButton.find(".animate-spin").exists()).toBe(false);
   });
 
   it("renders panel rate limit card and saves settings", async () => {

@@ -125,6 +125,26 @@ describe('feature route guard', () => {
     expect(next).toHaveBeenCalledWith('/admin/dashboard')
   })
 
+  it('registers system-wide admin usage as an administrator-only route', async () => {
+    const usageRoute = routerHarness.routes.find((route) => route.path === '/admin/usage')
+
+    expect(usageRoute).toMatchObject({
+      name: 'AdminUsage',
+      meta: {
+        requiresAuth: true,
+        requiresAdmin: true,
+        titleKey: 'admin.usage.title',
+        descriptionKey: 'admin.usage.description',
+      },
+    })
+
+    const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/usage')
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith()
+  })
+
   it.each([
     ['risk control', { requiresRiskControl: true }, '/admin/risk-control'],
   ])('does not treat a failed %s settings load as explicitly disabled', async (_name, meta, path) => {

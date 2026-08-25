@@ -86,7 +86,7 @@ func TestCalculateCostUnified_PerRequestMode(t *testing.T) {
 	// Set up a ChannelService with a per-request pricing channel
 	cs := newTestChannelServiceWithCache(t, &channelCache{
 		pricingByGroupModel: map[channelModelKey]*ChannelModelPricing{
-			{groupID: 1, model: "claude-sonnet-4"}: {
+			{groupID: 1, platform: PlatformAnthropic, model: "claude-sonnet-4"}: {
 				BillingMode:     BillingModePerRequest,
 				PerRequestPrice: testPtrFloat64(0.05),
 			},
@@ -94,7 +94,7 @@ func TestCalculateCostUnified_PerRequestMode(t *testing.T) {
 		channelByGroupID: map[int64]*Channel{
 			1: {ID: 1, Status: StatusActive},
 		},
-		groupPlatform:           map[int64]string{1: ""},
+		groupPlatform:           map[int64]string{1: PlatformAnthropic},
 		wildcardByGroupPlatform: map[channelGroupPlatformKey][]*wildcardPricingEntry{},
 		mappingByGroupModel:     map[channelModelKey]string{},
 		wildcardMappingByGP:     map[channelGroupPlatformKey][]*wildcardMappingEntry{},
@@ -128,7 +128,7 @@ func TestCalculateCostUnified_PerRequestMode(t *testing.T) {
 func TestCalculateCostUnified_ImageMode(t *testing.T) {
 	cs := newTestChannelServiceWithCache(t, &channelCache{
 		pricingByGroupModel: map[channelModelKey]*ChannelModelPricing{
-			{groupID: 2, model: "gemini-image"}: {
+			{groupID: 2, platform: PlatformOpenAI, model: "gpt-image-1"}: {
 				BillingMode:     BillingModeImage,
 				PerRequestPrice: testPtrFloat64(0.10),
 			},
@@ -136,7 +136,7 @@ func TestCalculateCostUnified_ImageMode(t *testing.T) {
 		channelByGroupID: map[int64]*Channel{
 			2: {ID: 2, Status: StatusActive},
 		},
-		groupPlatform:           map[int64]string{2: ""},
+		groupPlatform:           map[int64]string{2: PlatformOpenAI},
 		wildcardByGroupPlatform: map[channelGroupPlatformKey][]*wildcardPricingEntry{},
 		mappingByGroupModel:     map[channelModelKey]string{},
 		wildcardMappingByGP:     map[channelGroupPlatformKey][]*wildcardMappingEntry{},
@@ -152,7 +152,7 @@ func TestCalculateCostUnified_ImageMode(t *testing.T) {
 
 	input := CostInput{
 		Ctx:            context.Background(),
-		Model:          "gemini-image",
+		Model:          "gpt-image-1",
 		GroupID:        &groupID,
 		Tokens:         UsageTokens{},
 		RequestCount:   2,

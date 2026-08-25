@@ -25,7 +25,7 @@ function makeAccount(overrides: Partial<Account>): Account {
   return {
     id: 1,
     name: 'account',
-    platform: 'antigravity',
+    platform: 'anthropic',
     type: 'oauth',
     proxy_id: null,
     concurrency: 1,
@@ -102,17 +102,17 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).not.toContain('claude-sonnet-5')
   })
 
-  it('Grok 账号额度限流时显示自动恢复时间而非临时不可调度', () => {
+  it('账号额度限流时显示自动恢复时间而非临时不可调度', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {
         account: makeAccount({
           id: 5,
-          name: 'grok-free-1',
-          platform: 'grok',
+          name: 'openai-oauth-1',
+          platform: 'openai',
           rate_limited_at: '2026-07-11T12:00:00Z',
           rate_limit_reset_at: '2099-07-11T13:00:00Z',
           temp_unschedulable_until: '2099-07-11T12:30:00Z',
-          temp_unschedulable_reason: 'legacy grok rate limited'
+          temp_unschedulable_reason: 'legacy rate limited'
         })
       },
       global: {

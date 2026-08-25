@@ -6091,34 +6091,284 @@
             </div>
           </div>
 
-        <!-- Legacy per-user usage visibility setting is no longer exposed. -->
-        <div v-if="false" class="card" aria-hidden="true">
-          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-              {{ t('admin.settings.usageRecords.title') }}
-            </h2>
-            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              {{ t('admin.settings.usageRecords.description') }}
-            </p>
-          </div>
-          <div class="space-y-4 p-6">
-            <!-- User error requests visibility -->
-            <div class="flex items-center justify-between">
-              <div>
-                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t('admin.settings.user_error_view.label') }}
-                </label>
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.user_error_view.description') }}
-                </p>
+          <!-- Async image task object storage (independent from data backup). -->
+          <div class="card" data-testid="image-storage-settings">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.imageStorage.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.imageStorage.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div
+                v-if="imageStorageLoading"
+                class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400"
+              >
+                <div
+                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
+                ></div>
+                {{ t("common.loading") }}
               </div>
-              <label class="toggle">
-                <input v-model="form.allow_user_view_error_requests" type="checkbox" />
-                <span class="toggle-slider"></span>
-              </label>
+              <div
+                v-else-if="imageStorageLoadError"
+                class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+              >
+                {{ imageStorageLoadError }}
+              </div>
+              <template v-else>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.imageStorage.enabled") }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.imageStorage.enabledHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="imageStorageForm.enabled"
+                    data-testid="image-storage-enabled"
+                  />
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="input-label" for="image-storage-endpoint">
+                      {{ t("admin.settings.imageStorage.endpoint") }}
+                    </label>
+                    <input
+                      id="image-storage-endpoint"
+                      v-model="imageStorageForm.endpoint"
+                      class="input w-full font-mono text-sm"
+                      placeholder="https://<account_id>.r2.cloudflarestorage.com"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-region">
+                      {{ t("admin.settings.imageStorage.region") }}
+                    </label>
+                    <input
+                      id="image-storage-region"
+                      v-model="imageStorageForm.region"
+                      class="input w-full font-mono text-sm"
+                      placeholder="auto"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-bucket">
+                      {{ t("admin.settings.imageStorage.bucket") }}
+                    </label>
+                    <input
+                      id="image-storage-bucket"
+                      v-model="imageStorageForm.bucket"
+                      class="input w-full font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-prefix">
+                      {{ t("admin.settings.imageStorage.prefix") }}
+                    </label>
+                    <input
+                      id="image-storage-prefix"
+                      v-model="imageStorageForm.prefix"
+                      class="input w-full font-mono text-sm"
+                      placeholder="images/"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-access-key">
+                      {{ t("admin.settings.imageStorage.accessKeyId") }}
+                    </label>
+                    <input
+                      id="image-storage-access-key"
+                      v-model="imageStorageForm.access_key_id"
+                      class="input w-full font-mono text-sm"
+                      autocomplete="off"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-secret-key">
+                      {{ t("admin.settings.imageStorage.secretAccessKey") }}
+                    </label>
+                    <input
+                      id="image-storage-secret-key"
+                      v-model="imageStorageForm.secret_access_key"
+                      type="password"
+                      class="input w-full font-mono text-sm"
+                      autocomplete="new-password"
+                      :placeholder="
+                        imageStorageSecretConfigured
+                          ? t('admin.settings.imageStorage.secretConfigured')
+                          : ''
+                      "
+                    />
+                  </div>
+                  <div class="md:col-span-2">
+                    <label class="input-label" for="image-storage-public-url">
+                      {{ t("admin.settings.imageStorage.publicBaseUrl") }}
+                    </label>
+                    <input
+                      id="image-storage-public-url"
+                      v-model="imageStorageForm.public_base_url"
+                      type="url"
+                      class="input w-full font-mono text-sm"
+                      :placeholder="
+                        t('admin.settings.imageStorage.publicBaseUrlPlaceholder')
+                      "
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-presign-expiry">
+                      {{ t("admin.settings.imageStorage.presignExpiryHours") }}
+                    </label>
+                    <input
+                      id="image-storage-presign-expiry"
+                      v-model.number="imageStorageForm.presign_expiry_hours"
+                      type="number"
+                      min="1"
+                      step="1"
+                      class="input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-max-download">
+                      {{ t("admin.settings.imageStorage.maxDownloadBytes") }}
+                    </label>
+                    <input
+                      id="image-storage-max-download"
+                      v-model.number="imageStorageForm.max_download_bytes"
+                      type="number"
+                      min="1"
+                      step="1"
+                      class="input w-full"
+                    />
+                    <p class="input-hint">
+                      {{ t("admin.settings.imageStorage.maxDownloadBytesHint") }}
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  class="flex items-center justify-between gap-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.imageStorage.forcePathStyle") }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.imageStorage.forcePathStyleHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="imageStorageForm.force_path_style"
+                    data-testid="image-storage-force-path-style"
+                  />
+                </div>
+
+                <div class="flex flex-wrap justify-end gap-2 border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    :disabled="imageStorageTesting || imageStorageSaving"
+                    data-testid="image-storage-test"
+                    @click="testImageStorageConnection"
+                  >
+                    <svg
+                      v-if="imageStorageTesting"
+                      class="mr-1 h-4 w-4 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                      ></circle>
+                      <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    {{
+                      imageStorageTesting
+                        ? t("admin.settings.imageStorage.testing")
+                        : t("admin.settings.imageStorage.testConnection")
+                    }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="imageStorageSaving || imageStorageTesting"
+                    data-testid="image-storage-save"
+                    @click="saveImageStorageConfig"
+                  >
+                    <svg
+                      v-if="imageStorageSaving"
+                      class="mr-1 h-4 w-4 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                      ></circle>
+                      <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    {{
+                      imageStorageSaving
+                        ? t("common.saving")
+                        : t("common.save")
+                    }}
+                  </button>
+                </div>
+              </template>
             </div>
           </div>
-        </div>
+
+          <!-- Legacy per-user usage visibility setting is no longer exposed. -->
+          <div v-if="false" class="card" aria-hidden="true">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t('admin.settings.usageRecords.title') }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t('admin.settings.usageRecords.description') }}
+              </p>
+            </div>
+            <div class="space-y-4 p-6">
+              <!-- User error requests visibility -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('admin.settings.user_error_view.label') }}
+                  </label>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.user_error_view.description') }}
+                  </p>
+                </div>
+                <label class="toggle">
+                  <input v-model="form.allow_user_view_error_requests" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
         </div>
         <!-- /Tab: Gateway — Claude Code, Scheduling -->
 
@@ -6137,22 +6387,7 @@
               </p>
             </div>
             <div class="space-y-6 p-6">
-              <!-- Backend Mode -->
-              <div
-                class="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20"
-              >
-                <div>
-                  <h3 class="text-sm font-medium text-gray-900 dark:text-white">
-                    {{ t("admin.settings.site.backendMode") }}
-                  </h3>
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.site.backendModeDescription") }}
-                  </p>
-	                </div>
-	                <Toggle v-model="form.backend_mode_enabled" />
-	              </div>
-
-	              <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+              <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
                 <div>
                   <label
                     class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
@@ -8527,13 +8762,8 @@
         </div>
         <!-- /Tab: Email -->
 
-        <!-- Tab: Backup -->
-        <div v-show="activeTab === 'backup'">
-          <BackupSettings />
-        </div>
-
         <!-- Save Button -->
-        <div v-show="activeTab !== 'backup'" class="flex justify-end">
+        <div class="flex justify-end">
           <button
             type="submit"
             :disabled="saving || loadFailed"
@@ -8635,6 +8865,7 @@ import type {
   WebSearchProviderConfig,
   WebSearchTestResult,
 } from "@/api/admin/settings";
+import type { ImageStorageConfig } from "@/api/admin/imageStorage";
 import type {
   AdminGroup,
   LoginAgreementDocument,
@@ -8653,7 +8884,6 @@ import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import Toggle from "@/components/common/Toggle.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
-import BackupSettings from "@/views/admin/BackupView.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
 import { useClipboard } from "@/composables/useClipboard";
 import {
@@ -8708,15 +8938,13 @@ type SettingsTab =
   | "general"
   | "features"
   | "security"
-  | "gateway"
-  | "backup";
+  | "gateway";
 const activeTab = ref<SettingsTab>("general");
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
   { key: "features" as SettingsTab, icon: "bolt" as const },
   { key: "security" as SettingsTab, icon: "shield" as const },
   { key: "gateway" as SettingsTab, icon: "server" as const },
-  { key: "backup" as SettingsTab, icon: "database" as const },
 ];
 
 const settingsTabKeyboardActions = {
@@ -8790,6 +9018,25 @@ const adminApiKeyMasked = ref("");
 const adminApiKeyOperating = ref(false);
 const newAdminApiKey = ref("");
 const subscriptionGroups = ref<AdminGroup[]>([]);
+
+const imageStorageLoading = ref(true);
+const imageStorageSaving = ref(false);
+const imageStorageTesting = ref(false);
+const imageStorageLoadError = ref("");
+const imageStorageSecretConfigured = ref(false);
+const imageStorageForm = reactive<ImageStorageConfig>({
+  enabled: false,
+  endpoint: "",
+  region: "auto",
+  bucket: "",
+  access_key_id: "",
+  secret_access_key: "",
+  prefix: "images/",
+  public_base_url: "",
+  force_path_style: false,
+  presign_expiry_hours: 24,
+  max_download_bytes: 33554432,
+});
 
 // Upstream billing probe state
 const upstreamBillingProbeLoading = ref(true);
@@ -9394,7 +9641,7 @@ const form = reactive<SettingsForm>({
   default_user_rpm_limit: 0,
   site_name: "Sub2API",
   site_logo: "",
-  site_subtitle: "Subscription to API Conversion Platform",
+  site_subtitle: "Claude Code & OpenAI API Gateway",
   api_base_url: "",
   contact_info: "",
   doc_url: "",
@@ -10616,7 +10863,6 @@ async function loadSettings() {
     form.account_scheduling_thresholds = normalizeAccountSchedulingThresholdsMap(
       settings.account_scheduling_thresholds,
     );
-    form.backend_mode_enabled = settings.backend_mode_enabled;
     form.default_subscriptions = normalizeDefaultSubscriptionSettings(
       settings.default_subscriptions,
     );
@@ -10842,7 +11088,6 @@ async function saveSettings() {
       doc_url: form.doc_url,
       home_content: form.home_content,
       compact_home_enabled: form.compact_home_enabled,
-      backend_mode_enabled: form.backend_mode_enabled,
       hide_ccs_import_button: form.hide_ccs_import_button,
       table_default_page_size: form.table_default_page_size,
       table_page_size_options: form.table_page_size_options,
@@ -10923,6 +11168,10 @@ async function saveSettings() {
         form.openai_advanced_scheduler_weight_previous_response.trim(),
       openai_advanced_scheduler_weight_session_sticky:
         form.openai_advanced_scheduler_weight_session_sticky.trim(),
+      account_quota_notify_enabled: form.account_quota_notify_enabled,
+      account_quota_notify_emails: (
+        form.account_quota_notify_emails || []
+      ).filter((entry) => entry.email.trim() !== ""),
     };
 
     // 仅当 openai_fast_policy_settings 已成功从后端加载时才回写，
@@ -11085,6 +11334,139 @@ async function sendTestEmail() {
     );
   } finally {
     sendingTestEmail.value = false;
+  }
+}
+
+function normalizeImageStorageConfig(
+  config?: Partial<ImageStorageConfig> | null,
+): ImageStorageConfig {
+  return {
+    enabled: config?.enabled === true,
+    endpoint: typeof config?.endpoint === "string" ? config.endpoint : "",
+    region:
+      typeof config?.region === "string" && config.region.trim()
+        ? config.region
+        : "auto",
+    bucket: typeof config?.bucket === "string" ? config.bucket : "",
+    access_key_id:
+      typeof config?.access_key_id === "string" ? config.access_key_id : "",
+    secret_access_key: "",
+    prefix:
+      typeof config?.prefix === "string" && config.prefix.trim()
+        ? config.prefix
+        : "images/",
+    public_base_url:
+      typeof config?.public_base_url === "string"
+        ? config.public_base_url
+        : "",
+    force_path_style: config?.force_path_style === true,
+    presign_expiry_hours:
+      typeof config?.presign_expiry_hours === "number" &&
+      Number.isFinite(config.presign_expiry_hours) &&
+      config.presign_expiry_hours > 0
+        ? Math.trunc(config.presign_expiry_hours)
+        : 24,
+    max_download_bytes:
+      typeof config?.max_download_bytes === "number" &&
+      Number.isFinite(config.max_download_bytes) &&
+      config.max_download_bytes > 0
+        ? Math.trunc(config.max_download_bytes)
+        : 33554432,
+  };
+}
+
+function buildImageStoragePayload(): ImageStorageConfig {
+  const presignExpiryHours = Number(imageStorageForm.presign_expiry_hours);
+  const maxDownloadBytes = Number(imageStorageForm.max_download_bytes);
+  return {
+    enabled: imageStorageForm.enabled,
+    endpoint: imageStorageForm.endpoint.trim(),
+    region: imageStorageForm.region.trim() || "auto",
+    bucket: imageStorageForm.bucket.trim(),
+    access_key_id: imageStorageForm.access_key_id.trim(),
+    secret_access_key: imageStorageForm.secret_access_key?.trim() || "",
+    prefix: imageStorageForm.prefix.trim() || "images/",
+    public_base_url: imageStorageForm.public_base_url.trim(),
+    force_path_style: imageStorageForm.force_path_style,
+    presign_expiry_hours:
+      Number.isFinite(presignExpiryHours) && presignExpiryHours > 0
+        ? Math.trunc(presignExpiryHours)
+        : 24,
+    max_download_bytes:
+      Number.isFinite(maxDownloadBytes) && maxDownloadBytes > 0
+        ? Math.trunc(maxDownloadBytes)
+        : 33554432,
+  };
+}
+
+async function loadImageStorageConfig() {
+  imageStorageLoading.value = true;
+  imageStorageLoadError.value = "";
+  try {
+    const response = await adminAPI.imageStorage.getConfig();
+    Object.assign(imageStorageForm, normalizeImageStorageConfig(response.config));
+    imageStorageSecretConfigured.value = response.secret_configured === true;
+  } catch (error: unknown) {
+    imageStorageLoadError.value = extractApiErrorMessage(
+      error,
+      t("admin.settings.imageStorage.loadFailed"),
+    );
+  } finally {
+    imageStorageLoading.value = false;
+  }
+}
+
+async function saveImageStorageConfig() {
+  imageStorageSaving.value = true;
+  const payload = buildImageStoragePayload();
+  const suppliedSecret = Boolean(payload.secret_access_key);
+  try {
+    const updated = await settingsStepUp.run(() =>
+      adminAPI.imageStorage.updateConfig(payload),
+    );
+    Object.assign(imageStorageForm, normalizeImageStorageConfig(updated));
+    imageStorageSecretConfigured.value =
+      imageStorageSecretConfigured.value || suppliedSecret;
+    appStore.showSuccess(t("admin.settings.imageStorage.saved"));
+  } catch (error: unknown) {
+    if (isStepUpCancelled(error)) return;
+    if (isStepUpBlocked(error)) {
+      appStore.showError(
+        stepUpBlockReason(error) === "STEP_UP_ADMIN_API_KEY_FORBIDDEN"
+          ? t("stepUp.adminApiKeyForbidden")
+          : t("stepUp.notEnabled"),
+      );
+      return;
+    }
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.imageStorage.saveFailed")),
+    );
+  } finally {
+    imageStorageSaving.value = false;
+  }
+}
+
+async function testImageStorageConnection() {
+  imageStorageTesting.value = true;
+  try {
+    const result = await adminAPI.imageStorage.testConnection(
+      buildImageStoragePayload(),
+    );
+    if (result.ok) {
+      appStore.showSuccess(
+        result.message || t("admin.settings.imageStorage.testSuccess"),
+      );
+    } else {
+      appStore.showError(
+        result.message || t("admin.settings.imageStorage.testFailed"),
+      );
+    }
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(error, t("admin.settings.imageStorage.testFailed")),
+    );
+  } finally {
+    imageStorageTesting.value = false;
   }
 }
 
@@ -11957,6 +12339,7 @@ async function handleDeleteProvider() {
 onMounted(() => {
   loadSettings();
   loadAdminApiKey();
+  loadImageStorageConfig();
   loadUpstreamBillingProbeSettings();
   loadOllamaCloudUsageSettings();
   loadOverloadCooldownSettings();

@@ -111,16 +111,19 @@
                 <div v-if="rule.platforms.length === 0" class="text-xs text-gray-500 dark:text-gray-400">
                   {{ t('admin.errorPassthrough.allPlatforms') }}
                 </div>
+                <div v-else-if="visibleRulePlatforms(rule).length === 0" class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.accounts.upstreamBilling.unsupported') }}
+                </div>
                 <div v-else class="flex flex-wrap gap-1">
                   <span
-                    v-for="platform in rule.platforms.slice(0, 2)"
+                    v-for="platform in visibleRulePlatforms(rule).slice(0, 2)"
                     :key="platform"
                     class="badge badge-primary text-xs"
                   >
                     {{ platform }}
                   </span>
-                  <span v-if="rule.platforms.length > 2" class="text-xs text-gray-500">
-                    +{{ rule.platforms.length - 2 }}
+                  <span v-if="visibleRulePlatforms(rule).length > 2" class="text-xs text-gray-500">
+                    +{{ visibleRulePlatforms(rule).length - 2 }}
                   </span>
                 </div>
               </td>
@@ -487,6 +490,9 @@ const matchModeOptions = computed(() => [
 ])
 
 const platformOptions = CONCRETE_PLATFORM_OPTIONS
+const supportedPlatformValues = new Set<string>(platformOptions.map(option => option.value))
+const visibleRulePlatforms = (rule: ErrorPassthroughRule) =>
+  rule.platforms.filter(platform => supportedPlatformValues.has(platform))
 
 // Load rules when dialog opens
 watch(() => props.show, (newVal) => {
@@ -536,7 +542,7 @@ const handleEdit = (rule: ErrorPassthroughRule) => {
   form.enabled = rule.enabled
   form.priority = rule.priority
   form.match_mode = rule.match_mode
-  form.platforms = [...rule.platforms]
+  form.platforms = visibleRulePlatforms(rule)
   form.passthrough_code = rule.passthrough_code
   form.response_code = rule.response_code
   form.passthrough_body = rule.passthrough_body
@@ -592,7 +598,7 @@ const handleSubmit = async () => {
       error_codes: errorCodes,
       keywords: keywords,
       match_mode: form.match_mode,
-      platforms: form.platforms,
+      platforms: form.platforms.filter(platform => supportedPlatformValues.has(platform)),
       passthrough_code: form.passthrough_code,
       response_code: form.passthrough_code ? null : form.response_code,
       passthrough_body: form.passthrough_body,

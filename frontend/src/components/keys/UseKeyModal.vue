@@ -330,7 +330,8 @@ const clientTabs = computed((): TabConfig[] => {
       ]
     case 'composite':
       return [
-        { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon }
+        { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
       ]
     default:
       return []
@@ -403,7 +404,9 @@ const currentFiles = computed((): FileConfig[] => {
   const apiBase = `${baseRoot}/v1`
 
   if (activeClientTab.value === 'opencode') {
-    return [generateOpenCodeConfig(props.platform === 'openai' ? 'openai' : 'anthropic', apiBase, apiKey)]
+    // The original composite-group OpenCode guide uses the OpenAI provider,
+    // while Anthropic groups use the Anthropic provider.
+    return [generateOpenCodeConfig(props.platform === 'anthropic' ? 'anthropic' : 'openai', apiBase, apiKey)]
   }
   if (props.platform === 'openai') {
     if (activeClientTab.value === 'claude') {

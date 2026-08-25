@@ -150,9 +150,9 @@ Pin image release tags or digests in `.env` before using this workflow for persi
 umask 077
 mkdir -p backups
 
-# Logical PostgreSQL backup.
-container exec sub2api-apple sh -c \
-  'PGPASSWORD="$DATABASE_PASSWORD" pg_dump -h "$DATABASE_HOST" -U "$DATABASE_USER" "$DATABASE_DBNAME"' \
+# Logical PostgreSQL backup (run the client in the database container).
+container exec sub2api-apple-postgres sh -c \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -h 127.0.0.1 -U "$POSTGRES_USER" "$POSTGRES_DB"' \
   > backups/sub2api.sql
 
 # Application configuration and local files.

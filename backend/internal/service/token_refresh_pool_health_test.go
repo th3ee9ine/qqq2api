@@ -949,20 +949,3 @@ func TestTokenRefreshService_LateSuccessPastAttemptDeadlineIsRejected(t *testing
 	require.Zero(t, setErrorCalls)
 	require.Equal(t, 1, setTempUnschedCalls)
 }
-
-func TestTokenRefreshService_NonRetryableGrokFailureInvalidatesTokenCache(t *testing.T) {
-	repo := &poolHealthAccountRepo{}
-	invalidator := &reconcileInvalidator{}
-	refresher := &poolHealthRefresher{err: errors.New("invalid_grant: revoked")}
-	svc := newPoolHealthService(repo, refresher, config.TokenRefreshConfig{MaxRetries: 1})
-	svc.cacheInvalidator = invalidator
-	account := grokPoolAccount(77)
-
-	err := svc.refreshWithRetry(context.Background(), &account, refresher, nil, time.Hour)
-
-	require.Error(t, err)
-	_, _, setErrorCalls, setTempUnschedCalls := repo.snapshot()
-	require.Equal(t, 1, setErrorCalls)
-	require.Zero(t, setTempUnschedCalls)
-	require.Equal(t, 1, invalidator.count())
-}

@@ -27,7 +27,7 @@ func TestAdminService_CreateCompositeGroupCopiesAccountsFromConcreteGroups(t *te
 		createID: 99,
 		getByIDByID: map[int64]*Group{
 			10: {ID: 10, Platform: PlatformOpenAI},
-			20: {ID: 20, Platform: PlatformGemini},
+			20: {ID: 20, Platform: PlatformAnthropic},
 		},
 		getAccountIDsByGroupIDsFn: func(groupIDs []int64) ([]int64, error) {
 			copiedFrom = append([]int64{}, groupIDs...)
@@ -71,7 +71,7 @@ func TestAdminService_UpdateCompositeGroupCopiesAccountsFromConcreteGroups(t *te
 	groupRepo := &groupRepoStubForAdmin{
 		getByIDByID: map[int64]*Group{
 			10: {ID: 10, Platform: PlatformOpenAI},
-			20: {ID: 20, Platform: PlatformGrok},
+			20: {ID: 20, Platform: PlatformAnthropic},
 			99: {ID: 99, Platform: PlatformComposite, RateMultiplier: 1, SubscriptionType: SubscriptionTypeStandard},
 		},
 		deleteAccountGroupsByGroupIDFn: func(groupID int64) (int64, error) {
@@ -136,7 +136,7 @@ func TestAdminService_CreateAccountAllowsCompositeGroupAssignment(t *testing.T) 
 func TestAdminService_UpdateAccountAllowsCompositeGroupAssignment(t *testing.T) {
 	accountRepo := &accountRepoStubForBulkUpdate{
 		getByIDAccounts: map[int64]*Account{
-			7: {ID: 7, Platform: PlatformGemini, Type: AccountTypeAPIKey, Status: StatusActive, Extra: map[string]any{}},
+			7: {ID: 7, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Extra: map[string]any{}},
 		},
 	}
 	groupRepo := &groupRepoStubForAdmin{
@@ -170,16 +170,9 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 			},
 			{
 				ID:       2,
-				Platform: PlatformGemini,
+				Platform: PlatformAnthropic,
 				Credentials: map[string]any{
-					"model_mapping": map[string]any{"gemini-custom": "gemini-2.5-flash"},
-				},
-			},
-			{
-				ID:       3,
-				Platform: PlatformKimi,
-				Credentials: map[string]any{
-					"model_mapping": map[string]any{"kimi-custom": "kimi-k2"},
+					"model_mapping": map[string]any{"claude-custom": "claude-sonnet-4-6"},
 				},
 			},
 		},
@@ -195,20 +188,15 @@ func TestAdminService_CompositeModelsListCandidatesIncludeConcreteAccountMapping
 
 	require.NoError(t, err)
 	require.Contains(t, candidates, "gpt-custom")
-	require.Contains(t, candidates, "gemini-custom")
-	require.Contains(t, candidates, "kimi-custom")
+	require.Contains(t, candidates, "claude-custom")
 	require.Contains(t, candidates, "gpt-5.5")
-	require.Contains(t, candidates, "gemini-2.5-flash")
+	require.Contains(t, candidates, "claude-sonnet-4-6")
 }
 
-// 独立 CN 分组的模型列表候选沿用 default 分支的 Claude 默认列表；
-// composite 支持不得改变独立分组的候选语义。
-func TestAdminService_CNProviderModelsListCandidatesKeepClaudeDefaults(t *testing.T) {
+func TestAdminService_AnthropicModelsListCandidatesKeepClaudeDefaults(t *testing.T) {
 	want := make([]string, 0, len(claude.DefaultModels))
 	for _, model := range claude.DefaultModels {
 		want = append(want, model.ID)
 	}
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
-		require.Equal(t, want, defaultModelsListCandidateIDs(platform), "platform=%s", platform)
-	}
+	require.Equal(t, want, defaultModelsListCandidateIDs(PlatformAnthropic))
 }

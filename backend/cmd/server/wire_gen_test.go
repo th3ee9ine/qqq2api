@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -9,6 +10,17 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGeneratedWireIncludesStandaloneImageStorageHandler(t *testing.T) {
+	source, err := os.ReadFile("wire_gen.go")
+	require.NoError(t, err)
+	require.Contains(t, string(source), "admin.NewImageStorageHandler(imageStorageSettingService)")
+	require.Contains(t, string(source), "accountHandler, imageStorageHandler, oAuthHandler")
+	require.NotContains(t, string(source), "admin.NewBackupHandler")
+	require.NotContains(t, string(source), "service.NewSubscriptionService")
+	require.NotContains(t, string(source), "service.ProvidePaymentService")
+	require.NotContains(t, string(source), "service.ProvideUserPlatformQuotaUsageFlusher")
+}
 
 func TestProvideServiceBuildInfo(t *testing.T) {
 	in := handler.BuildInfo{
@@ -38,7 +50,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	accountExpirySvc := service.NewAccountExpiryService(nil, time.Second)
 	codexVersionSyncSvc := service.NewOpenAICodexVersionSyncService(nil, nil, nil, time.Second)
 	proxyExpirySvc := service.NewProxyExpiryService(nil, time.Second)
-	subscriptionExpirySvc := service.NewSubscriptionExpiryService(nil, time.Second)
 	pricingSvc := service.NewPricingService(cfg, nil)
 	emailQueueSvc := service.NewEmailQueueService(nil, 1)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
@@ -64,21 +75,16 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		accountExpirySvc,
 		codexVersionSyncSvc,
 		proxyExpirySvc,
-		subscriptionExpirySvc,
 		&service.UsageCleanupService{},
 		idempotencyCleanupSvc,
 		pricingSvc,
 		emailQueueSvc,
 		billingCacheSvc,
 		&service.UsageRecordWorkerPool{},
-		&service.SubscriptionService{},
 		oauthSvc,
 		openAIOAuthSvc,
 		nil, // openAIGateway
 		nil, // scheduledTestRunner
-		nil, // backupSvc
-		nil, // paymentOrderExpiry
-		nil, // quotaFlusher
 		nil, // upstreamBillingProbe
 		nil, // ollamaCloudUsage
 		nil, // auditLog

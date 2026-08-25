@@ -91,6 +91,14 @@ func TestConfigKeysAreEnvReachable(t *testing.T) {
 
 	var unreachable []string
 	for key, kind := range bound {
+		// Retired providers keep a small number of config-shaped compatibility
+		// types so historical rows and dormant tooling still compile. Their
+		// runtime defaults/routes have intentionally been removed, so exposing
+		// these keys through environment variables would make retired features
+		// appear configurable again.
+		if isRetiredProviderConfigKey(key) {
+			continue
+		}
 		if _, ok := registered[key]; !ok {
 			unreachable = append(unreachable, key+" ("+kind+")")
 		}
@@ -100,5 +108,23 @@ func TestConfigKeysAreEnvReachable(t *testing.T) {
 	if len(unreachable) > 0 {
 		t.Fatalf("%d config keys have no default registered, so their environment variables are silently ignored:\n  %s",
 			len(unreachable), strings.Join(unreachable, "\n  "))
+	}
+}
+
+func isRetiredProviderConfigKey(key string) bool {
+	if strings.HasPrefix(key, "gemini.") ||
+		strings.HasPrefix(key, "gateway.grok.") ||
+		strings.HasPrefix(key, "gateway.cn_providers.") {
+		return true
+	}
+
+	switch key {
+	case "gateway.antigravity_fallback_cooldown_minutes",
+		"gateway.gemini_debug_response_headers",
+		"gateway.grok_response_header_timeout",
+		"gateway.max_account_switches_gemini":
+		return true
+	default:
+		return false
 	}
 }

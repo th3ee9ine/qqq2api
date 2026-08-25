@@ -72,7 +72,8 @@ func TestGatewayServiceRecordUsage_ResponseModelBillsCheaperResponseModel(t *tes
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.InDelta(t, cheaperCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, cheaperCost.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 	require.True(t, usageRepo.lastLog.ActualCost > 0, "cost must not be zero")
 	// 审计链完整保留：请求/发送模型不因计费切换被改写，响应模型与 mismatch 记录在案。
 	require.Equal(t, pricier, usageRepo.lastLog.Model)
@@ -112,7 +113,8 @@ func TestGatewayServiceRecordUsage_ResponseModelRejectsPricierResponseModel(t *t
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.InDelta(t, cheaperCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, cheaperCost.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 }
 
 func TestGatewayServiceRecordUsage_ResponseModelSafeFallbacks(t *testing.T) {
@@ -176,7 +178,8 @@ func TestGatewayServiceRecordUsage_ResponseModelSafeFallbacks(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, usageRepo.lastLog)
 			require.InDelta(t, pricierCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-			require.InDelta(t, pricierCost.ActualCost, userRepo.lastAmount, 1e-12)
+			require.Zero(t, userRepo.lastAmount)
+			require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 		})
 	}
 }
@@ -213,7 +216,8 @@ func TestOpenAIGatewayServiceRecordUsage_ResponseModelBillsCheaperResponseModel(
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.InDelta(t, cheaperCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, cheaperCost.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 	require.True(t, usageRepo.lastLog.ActualCost > 0, "cost must not be zero")
 	// 审计链完整保留。
 	require.Equal(t, pricier, usageRepo.lastLog.Model)
@@ -253,7 +257,8 @@ func TestOpenAIGatewayServiceRecordUsage_ResponseModelRejectsPricierResponseMode
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.InDelta(t, cheaperCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, cheaperCost.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ResponseModelSafeFallbacks(t *testing.T) {
@@ -318,7 +323,8 @@ func TestOpenAIGatewayServiceRecordUsage_ResponseModelSafeFallbacks(t *testing.T
 			require.NoError(t, err)
 			require.NotNil(t, usageRepo.lastLog)
 			require.InDelta(t, pricierCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-			require.InDelta(t, pricierCost.ActualCost, userRepo.lastAmount, 1e-12)
+			require.Zero(t, userRepo.lastAmount)
+			require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 		})
 	}
 }
@@ -416,7 +422,8 @@ func TestGatewayServiceRecordUsage_ResponseModelRejectsUnidentifiedFamilyName(t 
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.InDelta(t, baselineCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, baselineCost.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ResponseModelRejectsUnidentifiedFamilyName(t *testing.T) {
@@ -455,7 +462,8 @@ func TestOpenAIGatewayServiceRecordUsage_ResponseModelRejectsUnidentifiedFamilyN
 	require.NoError(t, err)
 	require.NotNil(t, usageRepo.lastLog)
 	require.InDelta(t, baselineCost.ActualCost, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, baselineCost.ActualCost, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 }
 
 // --- 成本准入的三条不变式 ---
@@ -544,7 +552,8 @@ func TestGatewayServiceRecordUsage_ResponseModelSkippedForSearchSurchargedReques
 	require.NotNil(t, usageRepo.lastLog)
 	want := pricierCost.ActualCost + searchCost.ActualCost
 	require.InDelta(t, want, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, want, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ResponseModelSkippedForSearchSurchargedRequest(t *testing.T) {
@@ -584,7 +593,8 @@ func TestOpenAIGatewayServiceRecordUsage_ResponseModelSkippedForSearchSurcharged
 	require.NotNil(t, usageRepo.lastLog)
 	want := pricierCost.ActualCost + searchCost.ActualCost
 	require.InDelta(t, want, usageRepo.lastLog.ActualCost, 1e-12)
-	require.InDelta(t, want, userRepo.lastAmount, 1e-12)
+	require.Zero(t, userRepo.lastAmount)
+	require.Equal(t, 0, userRepo.deductCalls, "global API keys must not charge a user wallet")
 }
 
 // --- 渠道配置透传 ---

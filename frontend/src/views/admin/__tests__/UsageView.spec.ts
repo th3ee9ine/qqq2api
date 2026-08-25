@@ -4,7 +4,7 @@ import { defineComponent } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { list, exportList, getStats, getSnapshotV2, getModelStats, listErrorLogs, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
+const { list, exportList, getStats, getSnapshotV2, getModelStats, listErrorLogs, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -18,6 +18,7 @@ const { list, exportList, getStats, getSnapshotV2, getModelStats, listErrorLogs,
     getSnapshotV2: vi.fn(),
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
+    routeQuery: {} as Record<string, string>,
 		aoaToSheet: vi.fn(() => ({})),
 		sheetAddAoa: vi.fn(),
 		saveAs: vi.fn(),
@@ -34,6 +35,8 @@ const messages: Record<string, string> = {
 	'usage.sentUpstreamModel': 'Sent upstream model',
 	'usage.upstreamResponseModel': 'Upstream response model',
 	'usage.upstreamModelMismatch': 'Upstream model mismatch',
+	'usage.actualCost': 'Actual cost',
+	'usage.userBilled': 'User billed',
 	'common.yes': 'Yes',
 	'common.no': 'No',
 }
@@ -93,6 +96,10 @@ vi.mock('@/utils/format', () => ({
   formatReasoningEffort: (value: string | null | undefined) => value ?? '-',
 }))
 
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: routeQuery }),
+}))
+
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
   return {
@@ -141,6 +148,48 @@ const mountRouteFilteredUsageView = () => mount(UsageView, {
     ModelDistributionChart: true, GroupDistributionChart: true,
     EndpointDistributionChart: true,
   } },
+})
+
+describe('admin UsageView retained route filters', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
+    list.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockReset().mockResolvedValue({
+      total_requests: 0,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      total_cache_tokens: 0,
+      total_tokens: 0,
+      total_cost: 0,
+      total_actual_cost: 0,
+      average_duration_ms: 0,
+    })
+    getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
+    getModelStats.mockReset().mockResolvedValue({ models: [] })
+  })
+
+  afterEach(() => {
+    Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
+    vi.useRealTimers()
+  })
+
+  it('preserves routed date ranges without restoring the retired user filter', async () => {
+    routeQuery.start_date = '2026-08-01'
+    routeQuery.end_date = '2026-08-07'
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    expect((wrapper.vm as any).startDate).toBe('2026-08-01')
+    expect((wrapper.vm as any).endDate).toBe('2026-08-07')
+    expect(list).toHaveBeenCalledWith(
+      expect.objectContaining({ start_date: '2026-08-01', end_date: '2026-08-07' }),
+      expect.anything(),
+    )
+    expect(list.mock.calls[0]?.[0]).not.toHaveProperty('user_id')
+  })
 })
 
 describe('admin UsageView distribution metric toggles', () => {
@@ -482,6 +531,8 @@ describe('admin UsageView model audit export', () => {
 			'Upstream response model',
 			'Upstream model mismatch',
 		])
+		expect(headers).toContain('Actual cost')
+		expect(headers).not.toContain('User billed')
 		const row = sheetAddAoa.mock.calls[0][1][0]
 		expect(row.slice(3, 7)).toEqual(['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.4', 'Yes'])
 		expect(saveAs).toHaveBeenCalledTimes(1)

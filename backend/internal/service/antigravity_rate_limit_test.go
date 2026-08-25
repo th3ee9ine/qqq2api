@@ -296,27 +296,6 @@ func TestHandleUpstreamError_503_EmptyBody(t *testing.T) {
 	require.Empty(t, repo.rateCalls)
 }
 
-func TestAccountIsSchedulableForModel_AntigravityRateLimits(t *testing.T) {
-	now := time.Now()
-	future := now.Add(10 * time.Minute)
-
-	account := &Account{
-		ID:          1,
-		Name:        "acc",
-		Platform:    PlatformAntigravity,
-		Status:      StatusActive,
-		Schedulable: true,
-	}
-
-	account.RateLimitResetAt = &future
-	require.False(t, account.IsSchedulableForModel("claude-sonnet-4-5"))
-	require.False(t, account.IsSchedulableForModel("gemini-3-flash"))
-
-	account.RateLimitResetAt = nil
-	require.True(t, account.IsSchedulableForModel("claude-sonnet-4-5"))
-	require.True(t, account.IsSchedulableForModel("gemini-3-flash"))
-}
-
 func buildGeminiRateLimitBody(delay string) []byte {
 	return []byte(fmt.Sprintf(`{"error":{"message":"too many requests","details":[{"metadata":{"quotaResetDelay":%q}}]}}`, delay))
 }

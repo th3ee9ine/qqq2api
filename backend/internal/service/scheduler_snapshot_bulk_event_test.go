@@ -92,7 +92,7 @@ func schedulerBucketsForTest(groupIDs []int64, platforms ...string) []SchedulerB
 				SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeSingle},
 				SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeForced},
 			)
-			if platform == PlatformAnthropic || platform == PlatformGemini {
+			if platform == PlatformAnthropic {
 				buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeMixed})
 			}
 		}
@@ -112,21 +112,6 @@ func TestSchedulerBulkAccountEventScopesOpenAIRebuildToFreshPlatform(t *testing.
 	set, deleted := cache.accountWrites()
 	require.Equal(t, []int64{1}, set)
 	require.Empty(t, deleted)
-}
-
-func TestSchedulerBulkAccountEventScopesCNRebuildToFreshPlatform(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
-		t.Run(platform, func(t *testing.T) {
-			cache := newBulkEventSnapshotCache()
-			repo := newBulkEventAccountRepo(&Account{ID: 1, Platform: platform, GroupIDs: []int64{12}})
-			svc := newBulkEventTestService(cache, repo)
-
-			err := svc.handleBulkAccountEvent(context.Background(), bulkEventPayload([]int64{1}, []int64{11}), make(map[batchSeenKey]struct{}))
-
-			require.NoError(t, err)
-			require.ElementsMatch(t, schedulerBucketsForTest([]int64{11, 12}, platform), cache.capturedBuckets())
-		})
-	}
 }
 
 func TestSchedulerBulkAccountEventRebuildsOpenAIUngroupedBucket(t *testing.T) {
@@ -158,7 +143,7 @@ func TestSchedulerBulkAccountEventDoesNotCrossCurrentGroupsBetweenPlatforms(t *t
 	cache := newBulkEventSnapshotCache()
 	repo := newBulkEventAccountRepo(
 		&Account{ID: 9, Platform: PlatformOpenAI, GroupIDs: []int64{61}},
-		&Account{ID: 10, Platform: PlatformGrok, GroupIDs: []int64{62}},
+		&Account{ID: 10, Platform: PlatformAnthropic, GroupIDs: []int64{62}},
 	)
 	svc := newBulkEventTestService(cache, repo)
 
@@ -167,7 +152,7 @@ func TestSchedulerBulkAccountEventDoesNotCrossCurrentGroupsBetweenPlatforms(t *t
 	require.NoError(t, err)
 	want := append(
 		schedulerBucketsForTest([]int64{61, 63}, PlatformOpenAI),
-		schedulerBucketsForTest([]int64{62, 63}, PlatformGrok)...,
+		schedulerBucketsForTest([]int64{62, 63}, PlatformAnthropic)...,
 	)
 	require.ElementsMatch(t, want, cache.capturedBuckets())
 }
@@ -181,21 +166,6 @@ func TestSchedulerBulkAccountEventUsesGroupZeroInSimpleMode(t *testing.T) {
 
 	require.NoError(t, err)
 	require.ElementsMatch(t, schedulerBucketsForTest([]int64{0}, PlatformOpenAI), cache.capturedBuckets())
-}
-
-func TestSchedulerBulkAccountEventConservativelyExpandsAntigravityPlatforms(t *testing.T) {
-	cache := newBulkEventSnapshotCache()
-	// fresh 值可能已经关闭 mixed_scheduling，兼容平台仍要重建以清理旧快照。
-	repo := newBulkEventAccountRepo(&Account{ID: 2, Platform: PlatformAntigravity, GroupIDs: []int64{22}})
-	svc := newBulkEventTestService(cache, repo)
-
-	err := svc.handleBulkAccountEvent(context.Background(), bulkEventPayload([]int64{2}, []int64{21}), make(map[batchSeenKey]struct{}))
-
-	require.NoError(t, err)
-	require.ElementsMatch(t,
-		schedulerBucketsForTest([]int64{21, 22}, PlatformAnthropic, PlatformGemini, PlatformAntigravity),
-		cache.capturedBuckets(),
-	)
 }
 
 func TestSchedulerBulkAccountEventMissingAccountFallsBackToAllPlatforms(t *testing.T) {
@@ -213,7 +183,7 @@ func TestSchedulerBulkAccountEventMissingAccountFallsBackToAllPlatforms(t *testi
 	require.Equal(t, []int64{4}, deleted)
 }
 
-func TestSchedulerBulkAccountEventUnknownPlatformFallsBackToAllPlatforms(t *testing.T) {
+func TestSchedulerBulkAccountEventUnknownPlatformDoesNotRebuild(t *testing.T) {
 	cache := newBulkEventSnapshotCache()
 	repo := newBulkEventAccountRepo(&Account{ID: 5, GroupIDs: []int64{42}})
 	svc := newBulkEventTestService(cache, repo)
@@ -221,6 +191,5 @@ func TestSchedulerBulkAccountEventUnknownPlatformFallsBackToAllPlatforms(t *test
 	err := svc.handleBulkAccountEvent(context.Background(), bulkEventPayload([]int64{5}, []int64{41}), make(map[batchSeenKey]struct{}))
 
 	require.NoError(t, err)
-	platforms := schedulerSnapshotPlatforms()
-	require.ElementsMatch(t, schedulerBucketsForTest([]int64{41, 42}, platforms[:]...), cache.capturedBuckets())
+	require.Empty(t, cache.capturedBuckets())
 }

@@ -465,14 +465,14 @@ func TestBuildSchedulerMetadataAccount_KeepsQuotaStateForCachedAccounts(t *testi
 			extra: map[string]any{"quota_limit": 10.0, "quota_used": 10.0}, quotaExceeded: true,
 		},
 		{
-			name: "gemini api key rolling daily quota exhausted", platform: service.PlatformGemini, typ: service.AccountTypeAPIKey,
+			name: "openai api key rolling daily quota exhausted", platform: service.PlatformOpenAI, typ: service.AccountTypeAPIKey,
 			extra: map[string]any{
 				"quota_daily_limit": 20.0, "quota_daily_used": 20.0,
 				"quota_daily_start": activeStart, "quota_daily_reset_mode": "rolling",
 			}, quotaExceeded: true,
 		},
 		{
-			name: "gemini api key expired rolling daily window", platform: service.PlatformGemini, typ: service.AccountTypeAPIKey,
+			name: "openai api key expired rolling daily window", platform: service.PlatformOpenAI, typ: service.AccountTypeAPIKey,
 			extra: map[string]any{
 				"quota_daily_limit": 20.0, "quota_daily_used": 20.0,
 				"quota_daily_start": expiredDailyStart, "quota_daily_reset_mode": "rolling",
@@ -529,13 +529,13 @@ func TestBuildSchedulerMetadataAccount_KeepsQuotaStateForCachedAccounts(t *testi
 func TestBuildSchedulerMetadataAccount_KeepsModelRateLimits(t *testing.T) {
 	account := service.Account{
 		ID:       90,
-		Platform: service.PlatformAntigravity,
+		Platform: service.PlatformOpenAI,
 		Extra: map[string]any{
 			"model_rate_limits": map[string]any{
-				"gemini-3-flash": map[string]any{
+				"gpt-5.3-codex": map[string]any{
 					"rate_limit_reset_at": "2026-05-30T10:10:00Z",
 				},
-				"antigravity:gemini": map[string]any{
+				"openai:gpt-5.3-codex": map[string]any{
 					"rate_limit_reset_at": "2026-05-30T10:10:00Z",
 				},
 			},
@@ -547,8 +547,8 @@ func TestBuildSchedulerMetadataAccount_KeepsModelRateLimits(t *testing.T) {
 
 	limits, ok := got.Extra["model_rate_limits"].(map[string]any)
 	require.True(t, ok)
-	require.Contains(t, limits, "gemini-3-flash")
-	require.Contains(t, limits, "antigravity:gemini")
+	require.Contains(t, limits, "gpt-5.3-codex")
+	require.Contains(t, limits, "openai:gpt-5.3-codex")
 	require.Nil(t, got.Extra["unused_large_field"])
 }
 

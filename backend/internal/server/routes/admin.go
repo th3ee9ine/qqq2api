@@ -36,6 +36,9 @@ func RegisterAdminRoutes(
 		// 分组管理
 		registerGroupRoutes(admin, h)
 
+		// 分组编辑器使用的只读模型默认定价查询
+		registerModelPricingRoutes(admin, h)
+
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
 
@@ -46,13 +49,7 @@ func RegisterAdminRoutes(
 		registerProxyRoutes(admin, h, stepUpAuth)
 
 		// 系统设置
-		registerSettingsRoutes(admin, h)
-
-		// 数据管理
-		registerDataManagementRoutes(admin, h, stepUpAuth)
-
-		// 数据库备份恢复
-		registerBackupRoutes(admin, h, stepUpAuth)
+		registerSettingsRoutes(admin, h, stepUpAuth)
 
 		// 运维监控（Ops）
 		registerOpsRoutes(admin, h)
@@ -69,6 +66,9 @@ func RegisterAdminRoutes(
 		// TLS 指纹模板管理
 		registerTLSFingerprintProfileRoutes(admin, h)
 
+		// API Key 管理（系统级 API Key 的分组绑定）
+		registerAdminAPIKeyRoutes(admin, h)
+
 		// 定时测试计划
 		registerScheduledTestRoutes(admin, h)
 
@@ -80,6 +80,22 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+// registerModelPricingRoutes intentionally exposes only the read-only lookup
+// needed by group pricing. Channel list/create/update/delete routes stay retired.
+func registerModelPricingRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	admin.GET("/channels/model-pricing", h.Admin.ModelPricing.GetDefaultPricing)
+}
+
+// registerAdminAPIKeyRoutes registers the administrator-only API key controls.
+// API keys are system-wide; this route only changes their optional group
+// binding and does not reintroduce any per-user API-key surface.
+func registerAdminAPIKeyRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	apiKeys := admin.Group("/api-keys")
+	{
+		apiKeys.PUT("/:id", h.Admin.APIKey.UpdateGroup)
 	}
 }
 
@@ -363,11 +379,16 @@ func registerProxyRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth
 	}
 }
 
-func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
 	adminSettings := admin.Group("/settings")
 	{
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
+		// Standalone object storage for asynchronous OpenAI image tasks. This is
+		// deliberately separate from the removed database-backup subsystem.
+		adminSettings.GET("/image-storage", h.Admin.ImageStorage.Get)
+		adminSettings.PUT("/image-storage", gin.HandlerFunc(stepUpAuth), h.Admin.ImageStorage.Update)
+		adminSettings.POST("/image-storage/test", h.Admin.ImageStorage.TestConnection)
 		// Admin API Key 管理
 		adminSettings.GET("/admin-api-key", h.Admin.Setting.GetAdminAPIKey)
 		adminSettings.POST("/admin-api-key/regenerate", h.Admin.Setting.RegenerateAdminAPIKey)
@@ -395,62 +416,6 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		adminSettings.PUT("/web-search-emulation", h.Admin.Setting.UpdateWebSearchEmulationConfig)
 		adminSettings.POST("/web-search-emulation/test", h.Admin.Setting.TestWebSearchEmulation)
 		adminSettings.POST("/web-search-emulation/reset-usage", h.Admin.Setting.ResetWebSearchUsage)
-	}
-}
-
-func registerDataManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
-	dataManagement := admin.Group("/data-management")
-	{
-		dataManagement.GET("/agent/health", h.Admin.DataManagement.GetAgentHealth)
-		dataManagement.GET("/config", h.Admin.DataManagement.GetConfig)
-		dataManagement.PUT("/config", h.Admin.DataManagement.UpdateConfig)
-		dataManagement.GET("/sources/:source_type/profiles", h.Admin.DataManagement.ListSourceProfiles)
-		dataManagement.POST("/sources/:source_type/profiles", h.Admin.DataManagement.CreateSourceProfile)
-		dataManagement.PUT("/sources/:source_type/profiles/:profile_id", h.Admin.DataManagement.UpdateSourceProfile)
-		dataManagement.DELETE("/sources/:source_type/profiles/:profile_id", h.Admin.DataManagement.DeleteSourceProfile)
-		dataManagement.POST("/sources/:source_type/profiles/:profile_id/activate", h.Admin.DataManagement.SetActiveSourceProfile)
-		dataManagement.POST("/s3/test", h.Admin.DataManagement.TestS3)
-		dataManagement.GET("/s3/profiles", h.Admin.DataManagement.ListS3Profiles)
-		// 修改 S3 目标可将数据备份外泄——要求 step-up 2FA
-		dataManagement.POST("/s3/profiles", gin.HandlerFunc(stepUpAuth), h.Admin.DataManagement.CreateS3Profile)
-		dataManagement.PUT("/s3/profiles/:profile_id", gin.HandlerFunc(stepUpAuth), h.Admin.DataManagement.UpdateS3Profile)
-		dataManagement.DELETE("/s3/profiles/:profile_id", h.Admin.DataManagement.DeleteS3Profile)
-		dataManagement.POST("/s3/profiles/:profile_id/activate", gin.HandlerFunc(stepUpAuth), h.Admin.DataManagement.SetActiveS3Profile)
-		dataManagement.POST("/backups", gin.HandlerFunc(stepUpAuth), h.Admin.DataManagement.CreateBackupJob)
-		dataManagement.GET("/backups", h.Admin.DataManagement.ListBackupJobs)
-		dataManagement.GET("/backups/:job_id", h.Admin.DataManagement.GetBackupJob)
-	}
-}
-
-func registerBackupRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
-	backup := admin.Group("/backups")
-	{
-		// S3 存储配置
-		backup.GET("/s3-config", h.Admin.Backup.GetS3Config)
-		// 修改 S3 目标可将数据库备份外泄——要求 step-up 2FA
-		backup.PUT("/s3-config", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.UpdateS3Config)
-		backup.POST("/s3-config/test", h.Admin.Backup.TestS3Connection)
-
-		// 异步生图对象存储配置（与备份共用 S3 客户端，可直接复用备份凭证）
-		backup.GET("/image-storage", h.Admin.Backup.GetImageStorageConfig)
-		// 同 S3 配置：改写对象存储目标可将生成内容导向外部账号——要求 step-up 2FA
-		backup.PUT("/image-storage", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.UpdateImageStorageConfig)
-		backup.POST("/image-storage/test", h.Admin.Backup.TestImageStorageConnection)
-
-		// 定时备份配置
-		backup.GET("/schedule", h.Admin.Backup.GetSchedule)
-		backup.PUT("/schedule", h.Admin.Backup.UpdateSchedule)
-
-		// 备份操作
-		backup.POST("", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.CreateBackup)
-		backup.GET("", h.Admin.Backup.ListBackups)
-		backup.GET("/:id", h.Admin.Backup.GetBackup)
-		backup.DELETE("/:id", h.Admin.Backup.DeleteBackup)
-		// 备份下载链接可直接取走整库数据——要求 step-up 2FA
-		backup.GET("/:id/download-url", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.GetDownloadURL)
-
-		// 恢复操作：整库覆盖可回滚安全设置（含 step-up 开关本身）——要求 step-up 2FA
-		backup.POST("/:id/restore", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.RestoreBackup)
 	}
 }
 

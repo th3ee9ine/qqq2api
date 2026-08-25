@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
 )
 
@@ -377,60 +376,4 @@ func TestEvaluateAccountSchedulingThreshold_UnsupportedPlatformsDoNotPause(t *te
 			require.Zero(t, decision.ThresholdPercent)
 		})
 	}
-}
-
-func TestEvaluateAccountSchedulingThreshold_GrokUsesConfiguredThresholds(t *testing.T) {
-	t.Parallel()
-
-	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
-	wantUntil := now.Add(2 * time.Hour)
-	account := &Account{
-		Platform: PlatformGrok,
-		Extra: map[string]any{
-			"grok_sched_utilization": 92.0,
-			"grok_sched_reset_at":    wantUntil.Format(time.RFC3339),
-		},
-	}
-
-	decision := EvaluateAccountSchedulingThreshold(account, map[string]int{
-		PlatformGrok: 90,
-	}, now)
-
-	require.True(t, decision.ShouldPause)
-	require.Equal(t, PlatformGrok, decision.Platform)
-	require.Equal(t, 90, decision.ThresholdPercent)
-	require.Equal(t, "grok", decision.Scope)
-	require.Equal(t, 92.0, decision.UsedPercent)
-	require.NotNil(t, decision.Until)
-	require.True(t, wantUntil.Equal(*decision.Until))
-}
-
-func TestEvaluateAccountSchedulingThreshold_GrokUsesOnlyHeaderQuotaWindow(t *testing.T) {
-	t.Parallel()
-	// Billing seven_day/thirty_day must not drive pause; only grok_sched_* may.
-	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
-	weeklyEnd := now.Add(3 * time.Hour)
-	weeklyPct := 99.0
-	headerUntil := now.Add(2 * time.Hour)
-	account := &Account{
-		Platform: PlatformGrok,
-		Extra: map[string]any{
-			"grok_sched_utilization": 50.0, // below threshold
-			"grok_sched_reset_at":    headerUntil.Format(time.RFC3339),
-			grokBillingExtraKey: &xai.BillingSummary{
-				UsagePercent: &weeklyPct,
-				PeriodEnd:    weeklyEnd.Format(time.RFC3339),
-			},
-		},
-	}
-	decision := EvaluateAccountSchedulingThreshold(account, map[string]int{PlatformGrok: 90}, now)
-	require.False(t, decision.ShouldPause, "high billing % alone must not pause under scheduling windows")
-
-	account.Extra["grok_sched_utilization"] = 95.0
-	decision = EvaluateAccountSchedulingThreshold(account, map[string]int{PlatformGrok: 90}, now)
-	require.True(t, decision.ShouldPause)
-	require.Equal(t, "grok", decision.Scope)
-	require.Equal(t, "quota", decision.Window)
-	require.NotNil(t, decision.Until)
-	require.True(t, headerUntil.Equal(*decision.Until))
 }

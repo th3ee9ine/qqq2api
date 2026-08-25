@@ -66,6 +66,21 @@ func TestGatewayRoutesOpenAIResponsesCompactPathIsRegistered(t *testing.T) {
 	}
 }
 
+func TestGatewayRoutesClaudeCodePathsAreRegistered(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformAnthropic)
+	registered := make(map[string]bool)
+	for _, route := range router.Routes() {
+		registered[route.Method+" "+route.Path] = true
+	}
+	for _, route := range []string{
+		"POST /v1/messages",
+		"POST /v1/messages/count_tokens",
+		"GET /v1/models",
+	} {
+		require.True(t, registered[route], route)
+	}
+}
+
 func TestGatewayRoutesOpenAIAlphaSearchPathsAreRegistered(t *testing.T) {
 	router := newGatewayRoutesTestRouter()
 	registered := make(map[string]bool)

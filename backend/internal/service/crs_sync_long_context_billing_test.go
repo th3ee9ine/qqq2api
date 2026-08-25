@@ -128,6 +128,62 @@ func TestCRSSyncOpenAILongContextBilling(t *testing.T) {
 	}
 }
 
+func TestCRSSyncSkipsRetiredGeminiCollections(t *testing.T) {
+	repo := newCRSLongContextAccountRepo()
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.URL.Path == "/web/auth/login" {
+			_, _ = response.Write([]byte(`{"success":true,"token":"admin-token"}`))
+			return
+		}
+		require.Equal(t, "/admin/sync/export-accounts", request.URL.Path)
+		require.NoError(t, json.NewEncoder(response).Encode(map[string]any{
+			"success": true,
+			"data": map[string]any{
+				"claudeAccounts": []map[string]any{
+					{"kind": "claude", "id": "retired-in-claude", "name": "Retired in Claude", "platform": "antigravity", "authType": "oauth", "credentials": map[string]any{"access_token": "legacy"}},
+				},
+				"claudeConsoleAccounts": []map[string]any{
+					{"kind": "claude-console", "id": "retired-in-console", "name": "Retired in Console", "platform": "deepseek", "credentials": map[string]any{"api_key": "legacy"}},
+				},
+				"openaiOAuthAccounts": []map[string]any{
+					{"kind": "openai-oauth", "id": "retired-in-openai-oauth", "name": "Retired in OpenAI OAuth", "platform": "grok", "credentials": map[string]any{"access_token": "legacy"}},
+				},
+				"openaiResponsesAccounts": []map[string]any{
+					{"kind": "openai-responses", "id": "retired-in-openai-api", "name": "Retired in OpenAI API", "platform": "kimi", "credentials": map[string]any{"api_key": "legacy"}},
+				},
+				"geminiOAuthAccounts": []map[string]any{
+					{"kind": "gemini-oauth", "id": "retired-oauth", "name": "Gemini OAuth", "credentials": map[string]any{"refresh_token": "legacy"}},
+				},
+				"geminiApiKeyAccounts": []map[string]any{
+					{"kind": "gemini-api-key", "id": "retired-apikey", "name": "Gemini API Key", "credentials": map[string]any{"api_key": "legacy"}},
+				},
+			},
+		}))
+	}))
+	t.Cleanup(server.Close)
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	syncService := NewCRSSyncService(repo, nil, nil, nil, nil, cfg)
+	result, err := syncService.SyncFromCRS(context.Background(), SyncFromCRSInput{
+		BaseURL:  server.URL,
+		Username: "admin",
+		Password: "password",
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Created)
+	require.Zero(t, result.Updated)
+	require.Equal(t, 6, result.Skipped)
+	require.Zero(t, result.Failed)
+	require.Len(t, result.Items, 6)
+	for _, item := range result.Items {
+		require.Equal(t, "skipped", item.Action)
+		require.Equal(t, "platform is retired", item.Error)
+	}
+	require.Empty(t, repo.accounts)
+}
+
 func runCRSOpenAILongContextSync(t *testing.T, repo AccountRepository, source crsOpenAILongContextSource) *SyncFromCRSResult {
 	t.Helper()
 	account := map[string]any{

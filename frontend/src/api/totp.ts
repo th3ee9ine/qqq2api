@@ -81,7 +81,7 @@ export interface TotpStepUpResponse {
 
 /**
  * Verify a TOTP code to grant the current session a short-lived step-up
- * (sudo) window for sensitive operations (account export, DB backup download...).
+ * (sudo) window for sensitive operations (account/proxy export, etc.).
  * @param code - 6-digit TOTP code
  */
 export async function stepUp(code: string): Promise<TotpStepUpResponse> {

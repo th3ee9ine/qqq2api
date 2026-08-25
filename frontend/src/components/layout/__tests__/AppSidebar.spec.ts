@@ -42,7 +42,51 @@ describe('AppSidebar scroll position persistence', () => {
   })
 })
 
+describe('AppSidebar administrator navigation', () => {
+  it('links to the system-wide usage records page', () => {
+    expect(componentSource).toContain("{ path: '/admin/usage', label: t('nav.usage'), icon: 'chart' }")
+  })
+
+  it('keeps the original retained navigation visuals and ordering', () => {
+    expect(componentSource).toContain("{ path: '/admin/groups', label: t('nav.groups'), icon: 'folder'")
+    expect(componentSource).toContain('name="chevronDoubleLeft"')
+    expect(componentSource).toContain('name="chevronDoubleRight"')
+    expect(componentSource).toContain(':aria-hidden="sidebarCollapsed ? \'true\' : \'false\'"')
+    expect(componentSource).toContain(":data-tour=\"item.path === '/keys' ? 'sidebar-my-keys' : undefined\"")
+
+    const usageIndex = componentSource.indexOf("path: '/admin/usage'")
+    const keysIndex = componentSource.indexOf("path: '/keys'")
+    const settingsIndex = componentSource.indexOf("path: '/admin/settings'")
+    expect(usageIndex).toBeGreaterThan(-1)
+    expect(keysIndex).toBeGreaterThan(usageIndex)
+    expect(settingsIndex).toBeGreaterThan(keysIndex)
+  })
+
+  it('does not restore retired self-service navigation', () => {
+    for (const path of [
+      '/admin/users',
+      '/admin/subscriptions',
+      '/admin/channels',
+      '/admin/announcements',
+      '/admin/redeem',
+      '/admin/promo-codes',
+      '/subscriptions',
+      '/redeem',
+      '/profile'
+    ]) {
+      expect(componentSource).not.toContain(`path: '${path}'`)
+    }
+  })
+})
+
 describe('AppSidebar header styles', () => {
+  it('keeps the original collapse animation styles', () => {
+    expect(componentSource).toContain('.sidebar-header-collapsed {')
+    expect(componentSource).toContain('.sidebar-brand-collapsed {')
+    expect(componentSource).toContain('.sidebar-link-collapsed {')
+    expect(componentSource).toContain('.sidebar-label-collapsed {')
+  })
+
   it('does not clip the version badge dropdown', () => {
     const sidebarHeaderBlockMatch = styleSource.match(/\.sidebar-header\s*\{[\s\S]*?\n {2}\}/)
     const sidebarBrandBlockMatch = componentSource.match(/\.sidebar-brand\s*\{[\s\S]*?\n\}/)

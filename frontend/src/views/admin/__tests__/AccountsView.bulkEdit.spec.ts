@@ -117,8 +117,8 @@ const PaginationStub = {
 }
 
 const BulkEditAccountModalStub = {
-  props: ['show', 'target'],
-  template: '<div data-test="bulk-edit-modal" :data-show="String(show)" :data-target-mode="target?.mode ?? \'\'"></div>'
+  props: ['show', 'target', 'accountIds'],
+  template: '<div data-test="bulk-edit-modal" :data-show="String(show)" :data-target-mode="target?.mode ?? \'\'" :data-account-count="String(accountIds.length)"></div>'
 }
 
 const AccountTableFiltersStub = {
@@ -213,6 +213,85 @@ describe('admin AccountsView bulk edit scope', () => {
 
     expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-show')).toBe('true')
     expect(wrapper.get('[data-test="bulk-edit-modal"]').attributes('data-target-mode')).toBe('filtered')
+  })
+
+  it('bulk-edits all retained accounts from the default all-platform view without including retired platforms', async () => {
+    const anthropic = {
+      id: 7,
+      name: 'claude',
+      platform: 'anthropic',
+      type: 'bedrock',
+      status: 'active',
+      schedulable: true,
+      created_at: '2026-08-26T00:00:00Z',
+      updated_at: '2026-08-26T00:00:00Z'
+    }
+    const openai = {
+      ...anthropic,
+      id: 11,
+      name: 'codex',
+      platform: 'openai',
+      type: 'oauth'
+    }
+    listAccounts.mockImplementation(async (_page: number, pageSize: number, filters: Record<string, unknown>) => {
+      if (pageSize === 1000) {
+        const items = filters.platform === 'anthropic' ? [anthropic] : [openai]
+        return { items, total: 1, page: 1, page_size: 1000, pages: 1 }
+      }
+      if (filters.platform === 'anthropic') {
+        return { items: [anthropic], total: 1, page: 1, page_size: 100, pages: 1 }
+      }
+      if (filters.platform === 'openai') {
+        return { items: [openai], total: 1, page: 1, page_size: 100, pages: 1 }
+      }
+      return { items: [anthropic, openai], total: 2, page: 1, page_size: 20, pages: 1 }
+    })
+
+    const wrapper = mount(AccountsView, {
+      global: {
+        stubs: {
+          AppLayout: { template: '<div><slot /></div>' },
+          TablePageLayout: { template: '<div><slot name="table" /></div>' },
+          DataTable: DataTableStub,
+          Pagination: true,
+          ConfirmDialog: true,
+          AccountTableActions: true,
+          AccountTableFilters: true,
+          AccountBulkActionsBar: AccountBulkActionsBarStub,
+          AccountActionMenu: true,
+          ImportDataModal: true,
+          ReAuthAccountModal: true,
+          AccountTestModal: true,
+          AccountStatsModal: true,
+          ScheduledTestsPanel: true,
+          SyncFromCrsModal: true,
+          TempUnschedStatusModal: true,
+          ErrorPassthroughRulesModal: true,
+          TLSFingerprintProfilesModal: true,
+          CreateAccountModal: true,
+          EditAccountModal: true,
+          BulkEditAccountModal: BulkEditAccountModalStub,
+          PlatformTypeBadge: true,
+          AccountCapacityCell: true,
+          AccountStatusIndicator: true,
+          AccountTodayStatsCell: true,
+          AccountGroupsCell: true,
+          AccountUsageCell: true,
+          Icon: true
+        }
+      }
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-test="edit-filtered"]').trigger('click')
+    await flushPromises()
+
+    const modal = wrapper.get('[data-test="bulk-edit-modal"]')
+    expect(modal.attributes('data-show')).toBe('true')
+    expect(modal.attributes('data-target-mode')).toBe('selected')
+    expect(modal.attributes('data-account-count')).toBe('2')
+    expect(listAccounts).toHaveBeenCalledWith(1, 1000, expect.objectContaining({ platform: 'anthropic' }))
+    expect(listAccounts).toHaveBeenCalledWith(1, 1000, expect.objectContaining({ platform: 'openai' }))
   })
 
   it('renders the created_at column by default', async () => {

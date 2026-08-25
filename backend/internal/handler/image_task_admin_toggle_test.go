@@ -66,14 +66,10 @@ func TestAsyncImageEnablesWithoutRestart(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	repo := &toggleSettingRepo{values: map[string]string{}}
-	// A fixed encryption key is required to persist a new S3 secret (#4524).
-	backup := service.NewBackupService(repo, &config.Config{
-		Totp: config.TotpConfig{EncryptionKeyConfigured: true},
-	}, passthroughEncryptor{}, nil, nil)
 	factory := func(context.Context, *config.ImageStorageConfig) (service.ImageStorage, error) {
 		return noopImageStorage{}, nil
 	}
-	settings := service.NewImageStorageSettingService(repo, passthroughEncryptor{}, backup, factory, config.ImageStorageConfig{})
+	settings := service.NewImageStorageSettingService(repo, passthroughEncryptor{}, factory, config.ImageStorageConfig{}, true)
 
 	store := &asyncImageMemoryStore{tasks: make(map[string]*service.ImageTaskRecord)}
 	tasks := service.NewImageTaskServiceWithResolver(store, settings.Resolver(), time.Hour, time.Minute)

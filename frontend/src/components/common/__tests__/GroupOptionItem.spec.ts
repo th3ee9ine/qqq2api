@@ -41,4 +41,18 @@ describe('GroupOptionItem description layout', () => {
     expect(descriptionElement?.classes()).toContain('line-clamp-3')
     expect(wrapper.find('[title]').attributes('title')).toBe(description)
   })
+
+  it('keeps the original composite-group rate pill palette', () => {
+    const wrapper = mount(GroupOptionItem, {
+      props: {
+        name: 'Composite group',
+        platform: 'composite',
+        rateMultiplier: 1.5,
+      },
+    })
+
+    const ratePill = wrapper.find('.bg-violet-50')
+    expect(ratePill.exists()).toBe(true)
+    expect(ratePill.classes()).toContain('text-violet-700')
+  })
 })

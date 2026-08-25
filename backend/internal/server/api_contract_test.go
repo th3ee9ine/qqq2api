@@ -40,179 +40,6 @@ func TestAPIContracts(t *testing.T) {
 		wantJSON   string
 	}{
 		{
-			name:       "GET /api/v1/auth/me",
-			method:     http.MethodGet,
-			path:       "/api/v1/auth/me",
-			wantStatus: http.StatusOK,
-			wantJSON: `{
-				"code": 0,
-				"message": "success",
-				"data": {
-					"id": 1,
-					"email": "alice@example.com",
-					"email_bound": true,
-					"username": "alice",
-						"role": "user",
-						"balance": 12.5,
-						"frozen_balance": 0,
-						"concurrency": 5,
-					"rpm_limit": 0,
-					"status": "active",
-					"allowed_groups": null,
-					"created_at": "2025-01-02T03:04:05Z",
-					"updated_at": "2025-01-02T03:04:05Z",
-					"balance_notify_enabled": false,
-					"balance_notify_threshold_type": "",
-					"balance_notify_threshold": null,
-					"balance_notify_extra_emails": null,
-					"total_recharged": 0,
-					"linuxdo_bound": false,
-					"oidc_bound": false,
-					"wechat_bound": false,
-					"dingtalk_bound": false,
-					"identities": {
-						"email": {
-							"provider": "email",
-							"provider_key": "email",
-							"bound": true,
-							"bound_count": 1,
-							"can_bind": false,
-							"can_unbind": false,
-							"display_name": "alice@example.com",
-							"subject_hint": "a***e@example.com",
-							"note_key": "profile.authBindings.notes.emailManagedFromProfile",
-							"note": "Primary account email is managed from the profile form."
-						},
-						"linuxdo": {
-							"provider": "linuxdo",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/linuxdo/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"oidc": {
-							"provider": "oidc",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/oidc/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"wechat": {
-							"provider": "wechat",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/wechat/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"dingtalk": {
-							"provider": "dingtalk",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/dingtalk/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						}
-					},
-					"identity_bindings": {
-						"email": {
-							"provider": "email",
-							"provider_key": "email",
-							"bound": true,
-							"bound_count": 1,
-							"can_bind": false,
-							"can_unbind": false,
-							"display_name": "alice@example.com",
-							"subject_hint": "a***e@example.com",
-							"note_key": "profile.authBindings.notes.emailManagedFromProfile",
-							"note": "Primary account email is managed from the profile form."
-						},
-						"linuxdo": {
-							"provider": "linuxdo",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/linuxdo/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"oidc": {
-							"provider": "oidc",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/oidc/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"wechat": {
-							"provider": "wechat",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/wechat/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"dingtalk": {
-							"provider": "dingtalk",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/dingtalk/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						}
-					},
-					"auth_bindings": {
-						"email": {
-							"provider": "email",
-							"provider_key": "email",
-							"bound": true,
-							"bound_count": 1,
-							"can_bind": false,
-							"can_unbind": false,
-							"display_name": "alice@example.com",
-							"subject_hint": "a***e@example.com",
-							"note_key": "profile.authBindings.notes.emailManagedFromProfile",
-							"note": "Primary account email is managed from the profile form."
-						},
-						"linuxdo": {
-							"provider": "linuxdo",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/linuxdo/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"oidc": {
-							"provider": "oidc",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/oidc/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"wechat": {
-							"provider": "wechat",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/wechat/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						},
-						"dingtalk": {
-							"provider": "dingtalk",
-							"bound": false,
-							"bound_count": 0,
-							"can_bind": true,
-							"can_unbind": false,
-							"bind_start_path": "/api/v1/auth/oauth/dingtalk/bind/start?intent=bind_current_user&redirect=%2Fsettings%2Fprofile"
-						}
-					},
-					"run_mode": "standard"
-				}
-			}`,
-		},
-		{
 			name:   "POST /api/v1/keys",
 			method: http.MethodPost,
 			path:   "/api/v1/keys",
@@ -226,7 +53,6 @@ func TestAPIContracts(t *testing.T) {
 				"message": "success",
 				"data": {
 					"id": 100,
-					"user_id": 1,
 					"key": "sk_custom_1234567890",
 					"name": "Key One",
 					"group_id": null,
@@ -259,7 +85,7 @@ func TestAPIContracts(t *testing.T) {
 				t.Helper()
 				deps.apiKeyRepo.MustSeed(&service.APIKey{
 					ID:        100,
-					UserID:    1,
+					UserID:    99,
 					Key:       "sk_custom_1234567890",
 					Name:      "Key One",
 					Status:    service.StatusActive,
@@ -277,7 +103,6 @@ func TestAPIContracts(t *testing.T) {
 					"items": [
 						{
 							"id": 100,
-							"user_id": 1,
 							"key": "sk_custom_1234567890",
 							"name": "Key One",
 							"group_id": null,
@@ -401,97 +226,6 @@ func TestAPIContracts(t *testing.T) {
 			}`,
 		},
 		{
-			name: "GET /api/v1/subscriptions",
-			setup: func(t *testing.T, deps *contractDeps) {
-				t.Helper()
-				// 普通用户订阅接口不应包含 assigned_* / notes 等管理员字段。
-				deps.userSubRepo.SetByUserID(1, []service.UserSubscription{
-					{
-						ID:              501,
-						UserID:          1,
-						GroupID:         10,
-						StartsAt:        deps.now,
-						ExpiresAt:       time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC), // 使用未来日期避免 normalizeSubscriptionStatus 标记为过期
-						Status:          service.SubscriptionStatusActive,
-						DailyUsageUSD:   1.23,
-						WeeklyUsageUSD:  2.34,
-						MonthlyUsageUSD: 3.45,
-						AssignedBy:      ptr(int64(999)),
-						AssignedAt:      deps.now,
-						Notes:           "admin-note",
-						CreatedAt:       deps.now,
-						UpdatedAt:       deps.now,
-					},
-				})
-			},
-			method:     http.MethodGet,
-			path:       "/api/v1/subscriptions",
-			wantStatus: http.StatusOK,
-			wantJSON: `{
-				"code": 0,
-				"message": "success",
-				"data": [
-					{
-						"id": 501,
-						"user_id": 1,
-						"group_id": 10,
-						"starts_at": "2025-01-02T03:04:05Z",
-						"expires_at": "2099-01-02T03:04:05Z",
-						"status": "active",
-						"daily_window_start": null,
-						"weekly_window_start": null,
-						"monthly_window_start": null,
-						"daily_usage_usd": 1.23,
-						"weekly_usage_usd": 2.34,
-						"monthly_usage_usd": 3.45,
-						"created_at": "2025-01-02T03:04:05Z",
-						"updated_at": "2025-01-02T03:04:05Z"
-					}
-				]
-			}`,
-		},
-		{
-			name: "GET /api/v1/redeem/history",
-			setup: func(t *testing.T, deps *contractDeps) {
-				t.Helper()
-				// 普通用户兑换历史不应包含 notes 等内部字段。
-				deps.redeemRepo.SetByUser(1, []service.RedeemCode{
-					{
-						ID:        900,
-						Code:      "CODE-123",
-						Type:      service.RedeemTypeBalance,
-						Value:     1.25,
-						Status:    service.StatusUsed,
-						UsedBy:    ptr(int64(1)),
-						UsedAt:    ptr(deps.now),
-						Notes:     "internal-note",
-						CreatedAt: deps.now,
-					},
-				})
-			},
-			method:     http.MethodGet,
-			path:       "/api/v1/redeem/history",
-			wantStatus: http.StatusOK,
-			wantJSON: `{
-				"code": 0,
-				"message": "success",
-				"data": [
-					{
-						"id": 900,
-						"code": "CODE-123",
-						"type": "balance",
-						"value": 1.25,
-						"status": "used",
-						"used_by": 1,
-						"used_at": "2025-01-02T03:04:05Z",
-						"created_at": "2025-01-02T03:04:05Z",
-						"group_id": null,
-						"validity_days": 0
-					}
-				]
-			}`,
-		},
-		{
 			name: "GET /api/v1/usage/stats",
 			setup: func(t *testing.T, deps *contractDeps) {
 				t.Helper()
@@ -584,7 +318,6 @@ func TestAPIContracts(t *testing.T) {
 					"items": [
 						{
 							"id": 1,
-							"user_id": 1,
 							"api_key_id": 100,
 							"account_id": 200,
 								"request_id": "req_123",
@@ -1153,7 +886,7 @@ func TestAPIContracts(t *testing.T) {
 					"google_oauth_frontend_redirect_url": "/auth/oauth/callback",
 					"site_name": "Sub2API",
 					"site_logo": "",
-					"site_subtitle": "Subscription to API Conversion Platform",
+					"site_subtitle": "Claude Code & OpenAI API Gateway",
 					"api_base_url": "",
 					"api_key_acl_trust_forwarded_ip": false,
 					"forwarded_client_ip_headers": [],
@@ -1398,7 +1131,6 @@ type contractDeps struct {
 	userSubRepo *stubUserSubscriptionRepo
 	usageRepo   *stubUsageLogRepo
 	settingRepo *stubSettingRepo
-	redeemRepo  *stubRedeemCodeRepo
 }
 
 func newContractDeps(t *testing.T) *contractDeps {
@@ -1421,6 +1153,16 @@ func newContractDeps(t *testing.T) *contractDeps {
 				CreatedAt:     now,
 				UpdatedAt:     now,
 			},
+			2: {
+				ID:          2,
+				Email:       "admin@example.com",
+				Username:    "admin",
+				Role:        service.RoleAdmin,
+				Concurrency: 5,
+				Status:      service.StatusActive,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			},
 		},
 	}
 
@@ -1430,7 +1172,6 @@ func newContractDeps(t *testing.T) *contractDeps {
 	userSubRepo := &stubUserSubscriptionRepo{}
 	accountRepo := stubAccountRepo{}
 	proxyRepo := stubProxyRepo{}
-	redeemRepo := &stubRedeemCodeRepo{}
 
 	cfg := &config.Config{
 		Default: config.DefaultConfig{
@@ -1445,17 +1186,11 @@ func newContractDeps(t *testing.T) *contractDeps {
 	usageRepo := newStubUsageLogRepo()
 	usageService := service.NewUsageService(usageRepo, userRepo, nil, nil)
 
-	subscriptionService := service.NewSubscriptionService(groupRepo, userSubRepo, nil, nil, cfg)
-	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionService)
-
-	redeemService := service.NewRedeemService(redeemRepo, userRepo, subscriptionService, nil, nil, nil, nil, nil)
-	redeemHandler := handler.NewRedeemHandler(redeemService)
-
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, nil, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil)
@@ -1497,14 +1232,6 @@ func newContractDeps(t *testing.T) *contractDeps {
 	v1Usage.GET("/usage", usageHandler.List)
 	v1Usage.GET("/usage/stats", usageHandler.Stats)
 
-	v1Subs := v1.Group("")
-	v1Subs.Use(jwtAuth)
-	v1Subs.GET("/subscriptions", subscriptionHandler.List)
-
-	v1Redeem := v1.Group("")
-	v1Redeem.Use(jwtAuth)
-	v1Redeem.GET("/redeem/history", redeemHandler.GetHistory)
-
 	v1Admin := v1.Group("/admin")
 	v1Admin.Use(adminAuth)
 	v1Admin.GET("/settings", adminSettingHandler.GetSettings)
@@ -1519,7 +1246,6 @@ func newContractDeps(t *testing.T) *contractDeps {
 		userSubRepo: userSubRepo,
 		usageRepo:   usageRepo,
 		settingRepo: settingRepo,
-		redeemRepo:  redeemRepo,
 	}
 }
 
@@ -1839,7 +1565,16 @@ func (s *stubAccountRepo) GetByID(ctx context.Context, id int64) (*service.Accou
 }
 
 func (s *stubAccountRepo) GetByIDs(ctx context.Context, ids []int64) ([]*service.Account, error) {
-	return nil, errors.New("not implemented")
+	accounts := make([]*service.Account, 0, len(ids))
+	for _, id := range ids {
+		accounts = append(accounts, &service.Account{
+			ID:       id,
+			Platform: service.PlatformAnthropic,
+			Type:     service.AccountTypeAPIKey,
+			Status:   service.StatusActive,
+		})
+	}
+	return accounts, nil
 }
 
 func (s *stubAccountRepo) ExistsByID(ctx context.Context, id int64) (bool, error) {
@@ -2416,6 +2151,46 @@ func (r *stubApiKeyRepo) ListByUserID(ctx context.Context, userID int64, params 
 		PageSize: pageSize,
 		Pages:    pages,
 	}, nil
+}
+
+func (r *stubApiKeyRepo) ListAll(_ context.Context, params pagination.PaginationParams, _ service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
+	keys := r.listAllUnpaginatedForContract()
+	start := params.Offset()
+	if start > len(keys) {
+		start = len(keys)
+	}
+	end := start + params.Limit()
+	if end > len(keys) {
+		end = len(keys)
+	}
+
+	total := int64(len(keys))
+	pageSize := params.Limit()
+	pages := int(math.Ceil(float64(total) / float64(pageSize)))
+	if pages < 1 {
+		pages = 1
+	}
+	return append([]service.APIKey(nil), keys[start:end]...), &pagination.PaginationResult{
+		Total: total, Page: params.Page, PageSize: pageSize, Pages: pages,
+	}, nil
+}
+
+func (r *stubApiKeyRepo) ListAllUnpaginated(_ context.Context, _ service.APIKeyListFilters) ([]service.APIKey, error) {
+	return r.listAllUnpaginatedForContract(), nil
+}
+
+func (r *stubApiKeyRepo) listAllUnpaginatedForContract() []service.APIKey {
+	ids := make([]int64, 0, len(r.byID))
+	for id := range r.byID {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] > ids[j] })
+
+	out := make([]service.APIKey, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, *r.byID[id])
+	}
+	return out
 }
 
 func (r *stubApiKeyRepo) VerifyOwnership(ctx context.Context, userID int64, apiKeyIDs []int64) ([]int64, error) {

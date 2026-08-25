@@ -12,34 +12,23 @@ import (
 // ProvideAdminHandlers creates the AdminHandlers struct
 func ProvideAdminHandlers(
 	dashboardHandler *admin.DashboardHandler,
-	userHandler *admin.UserHandler,
 	groupHandler *admin.GroupHandler,
+	modelPricingHandler *admin.ModelPricingHandler,
 	accountHandler *admin.AccountHandler,
-	announcementHandler *admin.AnnouncementHandler,
-	dataManagementHandler *admin.DataManagementHandler,
-	backupHandler *admin.BackupHandler,
+	imageStorageHandler *admin.ImageStorageHandler,
 	oauthHandler *admin.OAuthHandler,
 	openaiOAuthHandler *admin.OpenAIOAuthHandler,
 	proxyHandler *admin.ProxyHandler,
-	redeemHandler *admin.RedeemHandler,
-	promoHandler *admin.PromoHandler,
 	settingHandler *admin.SettingHandler,
 	opsHandler *admin.OpsHandler,
 	systemHandler *admin.SystemHandler,
-	subscriptionHandler *admin.SubscriptionHandler,
 	usageHandler *admin.UsageHandler,
-	userAttributeHandler *admin.UserAttributeHandler,
 	errorPassthroughHandler *admin.ErrorPassthroughHandler,
 	tlsFingerprintProfileHandler *admin.TLSFingerprintProfileHandler,
 	apiKeyHandler *admin.AdminAPIKeyHandler,
 	scheduledTestHandler *admin.ScheduledTestHandler,
-	channelHandler *admin.ChannelHandler,
-	channelMonitorHandler *admin.ChannelMonitorHandler,
-	channelMonitorTemplateHandler *admin.ChannelMonitorRequestTemplateHandler,
 	contentModerationHandler *admin.ContentModerationHandler,
 	promptAuditHandler *securityaudit.PromptAdminHandler,
-	paymentHandler *admin.PaymentHandler,
-	affiliateHandler *admin.AffiliateHandler,
 	complianceHandler *admin.ComplianceHandler,
 	auditLogHandler *admin.AuditLogHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
@@ -48,37 +37,26 @@ func ProvideAdminHandlers(
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	return &AdminHandlers{
-		Dashboard:              dashboardHandler,
-		User:                   userHandler,
-		Group:                  groupHandler,
-		Account:                accountHandler,
-		Announcement:           announcementHandler,
-		DataManagement:         dataManagementHandler,
-		Backup:                 backupHandler,
-		OAuth:                  oauthHandler,
-		OpenAIOAuth:            openaiOAuthHandler,
-		Proxy:                  proxyHandler,
-		Redeem:                 redeemHandler,
-		Promo:                  promoHandler,
-		Setting:                settingHandler,
-		Ops:                    opsHandler,
-		System:                 systemHandler,
-		Subscription:           subscriptionHandler,
-		Usage:                  usageHandler,
-		UserAttribute:          userAttributeHandler,
-		ErrorPassthrough:       errorPassthroughHandler,
-		TLSFingerprintProfile:  tlsFingerprintProfileHandler,
-		APIKey:                 apiKeyHandler,
-		ScheduledTest:          scheduledTestHandler,
-		Channel:                channelHandler,
-		ChannelMonitor:         channelMonitorHandler,
-		ChannelMonitorTemplate: channelMonitorTemplateHandler,
-		ContentModeration:      contentModerationHandler,
-		PromptAudit:            promptAuditHandler,
-		Payment:                paymentHandler,
-		Affiliate:              affiliateHandler,
-		Compliance:             complianceHandler,
-		AuditLog:               auditLogHandler,
+		Dashboard:             dashboardHandler,
+		Group:                 groupHandler,
+		ModelPricing:          modelPricingHandler,
+		Account:               accountHandler,
+		ImageStorage:          imageStorageHandler,
+		OAuth:                 oauthHandler,
+		OpenAIOAuth:           openaiOAuthHandler,
+		Proxy:                 proxyHandler,
+		Setting:               settingHandler,
+		Ops:                   opsHandler,
+		System:                systemHandler,
+		Usage:                 usageHandler,
+		ErrorPassthrough:      errorPassthroughHandler,
+		TLSFingerprintProfile: tlsFingerprintProfileHandler,
+		APIKey:                apiKeyHandler,
+		ScheduledTest:         scheduledTestHandler,
+		ContentModeration:     contentModerationHandler,
+		PromptAudit:           promptAuditHandler,
+		Compliance:            complianceHandler,
+		AuditLog:              auditLogHandler,
 	}
 }
 
@@ -123,6 +101,19 @@ func ProvideOpenAIGatewayHandler(
 	return h
 }
 
+// ProvideAuthHandler builds the administrator-only login handler. Optional
+// registration, redemption, and user-profile services stay detached so their
+// removed routes cannot keep those feature graphs alive at runtime.
+func ProvideAuthHandler(
+	cfg *config.Config,
+	authService *service.AuthService,
+	userService *service.UserService,
+	settingService *service.SettingService,
+	totpService *service.TotpService,
+) *AuthHandler {
+	return NewAuthHandler(cfg, authService, userService, settingService, nil, nil, totpService, nil)
+}
+
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService
 func ProvideSystemHandler(updateService *service.UpdateService, lockService *service.SystemOperationLockService) *admin.SystemHandler {
 	return admin.NewSystemHandler(updateService, lockService)
@@ -136,8 +127,8 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 }
 
 // ProvideAdminSettingHandler creates admin.SettingHandler with notification template APIs.
-func ProvideAdminSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, aliyunCaptchaService *service.AliyunCaptchaService, opsService *service.OpsService, paymentConfigService *service.PaymentConfigService, paymentService *service.PaymentService, userAttributeService *service.UserAttributeService, notificationEmailService *service.NotificationEmailService, totpService *service.TotpService, userService *service.UserService) *admin.SettingHandler {
-	h := admin.NewSettingHandler(settingService, emailService, turnstileService, opsService, paymentConfigService, paymentService, userAttributeService)
+func ProvideAdminSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, aliyunCaptchaService *service.AliyunCaptchaService, opsService *service.OpsService, notificationEmailService *service.NotificationEmailService, totpService *service.TotpService, userService *service.UserService) *admin.SettingHandler {
+	h := admin.NewSettingHandler(settingService, emailService, turnstileService, opsService, nil, nil, nil)
 	h.SetNotificationEmailService(notificationEmailService)
 	h.SetAliyunCaptchaService(aliyunCaptchaService)
 	h.SetStepUpDeps(totpService, userService)
@@ -147,104 +138,60 @@ func ProvideAdminSettingHandler(settingService *service.SettingService, emailSer
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
 	authHandler *AuthHandler,
-	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
 	usageHandler *UsageHandler,
-	redeemHandler *RedeemHandler,
-	subscriptionHandler *SubscriptionHandler,
-	announcementHandler *AnnouncementHandler,
-	channelMonitorUserHandler *ChannelMonitorUserHandler,
-	channelMonitorV2Handler *ChannelMonitorV2Handler,
 	adminHandlers *AdminHandlers,
 	gatewayHandler *GatewayHandler,
 	openaiGatewayHandler *OpenAIGatewayHandler,
 	settingHandler *SettingHandler,
 	totpHandler *TotpHandler,
-	passkeyHandler *PasskeyHandler,
-	paymentHandler *PaymentHandler,
-	paymentWebhookHandler *PaymentWebhookHandler,
-	availableChannelHandler *AvailableChannelHandler,
-	modelPlazaHandler *ModelPlazaHandler,
 	asyncImageHandler *AsyncImageHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
 ) *Handlers {
 	return &Handlers{
-		Auth:             authHandler,
-		User:             userHandler,
-		APIKey:           apiKeyHandler,
-		Usage:            usageHandler,
-		Redeem:           redeemHandler,
-		Subscription:     subscriptionHandler,
-		Announcement:     announcementHandler,
-		ChannelMonitor:   channelMonitorUserHandler,
-		ChannelMonitorV2: channelMonitorV2Handler,
-		Admin:            adminHandlers,
-		Gateway:          gatewayHandler,
-		OpenAIGateway:    openaiGatewayHandler,
-		Setting:          settingHandler,
-		Totp:             totpHandler,
-		Passkey:          passkeyHandler,
-		Payment:          paymentHandler,
-		PaymentWebhook:   paymentWebhookHandler,
-		AvailableChannel: availableChannelHandler,
-		ModelPlaza:       modelPlazaHandler,
-		AsyncImage:       asyncImageHandler,
+		Auth:          authHandler,
+		APIKey:        apiKeyHandler,
+		Usage:         usageHandler,
+		Admin:         adminHandlers,
+		Gateway:       gatewayHandler,
+		OpenAIGateway: openaiGatewayHandler,
+		Setting:       settingHandler,
+		Totp:          totpHandler,
+		AsyncImage:    asyncImageHandler,
 	}
 }
 
 // ProviderSet is the Wire provider set for all handlers
 var ProviderSet = wire.NewSet(
 	// Top-level handlers
-	NewAuthHandler,
-	NewUserHandler,
+	ProvideAuthHandler,
 	NewAPIKeyHandler,
 	NewUsageHandler,
-	NewRedeemHandler,
-	NewSubscriptionHandler,
-	NewAnnouncementHandler,
-	NewChannelMonitorUserHandler,
-	NewChannelMonitorV2Handler,
 	ProvideGatewayHandler,
 	ProvideOpenAIGatewayHandler,
 	NewTotpHandler,
-	NewPasskeyHandler,
 	ProvideSettingHandler,
-	NewPaymentHandler,
-	NewPaymentWebhookHandler,
-	NewAvailableChannelHandler,
-	NewModelPlazaHandler,
 	NewAsyncImageHandler,
 
 	// Admin handlers
 	admin.NewDashboardHandler,
-	admin.NewUserHandler,
 	admin.NewGroupHandler,
+	admin.NewModelPricingHandler,
 	admin.ProvideAccountHandler,
-	admin.NewAnnouncementHandler,
-	admin.NewDataManagementHandler,
-	admin.NewBackupHandler,
+	admin.NewImageStorageHandler,
 	admin.NewOAuthHandler,
 	admin.NewOpenAIOAuthHandler,
 	admin.NewProxyHandler,
-	admin.NewRedeemHandler,
-	admin.NewPromoHandler,
 	ProvideAdminSettingHandler,
 	admin.NewOpsHandler,
 	ProvideSystemHandler,
-	admin.NewSubscriptionHandler,
 	admin.NewUsageHandler,
-	admin.NewUserAttributeHandler,
 	admin.NewErrorPassthroughHandler,
 	admin.NewTLSFingerprintProfileHandler,
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,
-	admin.NewChannelHandler,
-	admin.NewChannelMonitorHandler,
-	admin.NewChannelMonitorRequestTemplateHandler,
 	admin.NewContentModerationHandler,
-	admin.NewPaymentHandler,
-	admin.NewAffiliateHandler,
 	admin.NewComplianceHandler,
 	admin.NewAuditLogHandler,
 

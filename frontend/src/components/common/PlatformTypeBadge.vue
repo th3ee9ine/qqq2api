@@ -3,7 +3,7 @@
     <!-- Row 1: Platform + Type -->
     <div class="inline-flex items-center overflow-hidden rounded-md">
       <span :class="['inline-flex items-center gap-1 px-2 py-1', platformClass]">
-        <PlatformIcon :platform="platform" size="xs" />
+        <PlatformIcon :platform="badgePlatform" size="xs" />
         <span>{{ platformLabel }}</span>
       </span>
       <span :class="['inline-flex items-center gap-1 px-1.5 py-1', typeClass]">
@@ -33,13 +33,6 @@
     <!-- Row 2: Plan type + Privacy mode (only if either exists) -->
     <div v-if="planLabel || privacyBadge" class="inline-flex items-center overflow-hidden rounded-md">
       <span v-if="planLabel" :class="['inline-flex items-center gap-1 px-1.5 py-1', planBadgeClass]">
-        <Icon
-          v-if="planIconName"
-          :name="planIconName"
-          size="xs"
-          data-testid="grok-plan-icon"
-          aria-hidden="true"
-        />
         <span>{{ planLabel }}</span>
       </span>
       <span
@@ -80,15 +73,15 @@ interface Props {
 
 const props = defineProps<Props>()
 
+const isSupportedPlatform = computed(() =>
+  props.platform === 'anthropic' || props.platform === 'openai'
+)
+const badgePlatform = computed(() => isSupportedPlatform.value ? props.platform : undefined)
+
 const platformLabel = computed(() => {
   if (props.platform === 'anthropic') return 'Anthropic'
   if (props.platform === 'openai') return 'OpenAI'
-  if (props.platform === 'antigravity') return 'Antigravity'
-  if (props.platform === 'grok') return 'Grok'
-  if (props.platform === 'kimi') return 'Kimi'
-  if (props.platform === 'zhipu') return 'Zhipu GLM'
-  if (props.platform === 'deepseek') return 'DeepSeek'
-  return 'Gemini'
+  return t('admin.accounts.upstreamBilling.unsupported')
 })
 
 const normalizedAuthMode = computed(() =>
@@ -121,7 +114,7 @@ const normalizedPlanType = computed(() =>
 )
 
 const planLabel = computed(() => {
-  if (!normalizedPlanType.value) return ''
+  if (!isSupportedPlatform.value || !normalizedPlanType.value) return ''
   switch (normalizedPlanType.value) {
     case 'plus':
       return 'Plus'
@@ -132,38 +125,12 @@ const planLabel = computed(() => {
       return 'Pro'
     case 'free':
     case 'basic':
-      return props.platform === 'grok' ? 'Grok Free' : 'Free'
-    case 'supergrok':
-      return 'SuperGrok'
-    case 'supergroklite':
-      return 'SuperGrok Lite'
-    case 'supergrokplus':
-      return 'SuperGrok Plus'
-    case 'supergrokheavy':
-      return 'SuperGrok Heavy'
-    case 'heavy':
-      return 'Heavy'
-    case 'xbasic':
-      return 'X Basic'
+      return 'Free'
     case 'abnormal':
       return t('admin.accounts.subscriptionAbnormal')
     default:
       return props.planType
   }
-})
-
-const planIconName = computed<'bolt' | null>(() => {
-  if (props.platform !== 'grok') return null
-  // Historical paid Grok tiers use the generic bolt mark.
-  if (
-    normalizedPlanType.value === 'supergrok' ||
-    normalizedPlanType.value === 'supergrokheavy' ||
-    normalizedPlanType.value === 'heavy' ||
-    normalizedPlanType.value.includes('heavy')
-  ) {
-    return 'bolt'
-  }
-  return null
 })
 
 const platformClass = computed(() => {
@@ -173,22 +140,7 @@ const platformClass = computed(() => {
   if (props.platform === 'openai') {
     return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
   }
-  if (props.platform === 'antigravity') {
-    return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-  }
-  if (props.platform === 'grok') {
-    return 'bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300'
-  }
-  if (props.platform === 'kimi') {
-    return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-400'
-  }
-  if (props.platform === 'zhipu') {
-    return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-  }
-  if (props.platform === 'deepseek') {
-    return 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
-  }
-  return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+  return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
 })
 
 const typeClass = computed(() => {
@@ -198,49 +150,21 @@ const typeClass = computed(() => {
   if (props.platform === 'openai') {
     return 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
   }
-  if (props.platform === 'antigravity') {
-    return 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400'
-  }
-  if (props.platform === 'grok') {
-    return 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300'
-  }
-  if (props.platform === 'kimi') {
-    return 'bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-400'
-  }
-  if (props.platform === 'zhipu') {
-    return 'bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400'
-  }
-  if (props.platform === 'deepseek') {
-    return 'bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-400'
-  }
-  return 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+  return 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-300'
 })
 
 const planBadgeClass = computed(() => {
   if (normalizedPlanType.value === 'abnormal') {
     return 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
   }
-  // Free stays muted gray; paid Grok tiers get distinct colors.
+  // Free plans stay muted gray.
   if (
     normalizedPlanType.value === 'free' ||
-    normalizedPlanType.value === 'basic' ||
-    normalizedPlanType.value === 'xbasic'
+    normalizedPlanType.value === 'basic'
   ) {
     return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
   }
-  if (props.platform === 'grok' && normalizedPlanType.value) {
-    // Heavy / SuperGrok Heavy → purple
-    if (normalizedPlanType.value.includes('heavy')) {
-      return 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-300'
-    }
-    // SuperGrok → cyan
-    if (normalizedPlanType.value.includes('supergrok')) {
-      return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
-    }
-    // Any other non-free Grok plan (future tiers) → amber so it still stands out
-    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-  }
-  // OpenAI / other paid plan labels: keep readable distinction from free gray
+  // OpenAI paid plan labels: keep readable distinction from free gray
   if (normalizedPlanType.value === 'plus') {
     return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
   }
@@ -255,11 +179,10 @@ const planBadgeClass = computed(() => {
 
 // Subscription expiration label (non-free only)
 const expiresLabel = computed(() => {
-  if (!props.subscriptionExpiresAt || !props.planType) return ''
+  if (!isSupportedPlatform.value || !props.subscriptionExpiresAt || !props.planType) return ''
   if (
     normalizedPlanType.value === 'free' ||
-    normalizedPlanType.value === 'basic' ||
-    normalizedPlanType.value === 'xbasic'
+    normalizedPlanType.value === 'basic'
   ) return ''
   try {
     const d = new Date(props.subscriptionExpiresAt)
@@ -273,11 +196,10 @@ const expiresLabel = computed(() => {
   }
 })
 
-// Privacy badge — shows different states for OpenAI/Antigravity OAuth privacy setting
+// Privacy badge for OpenAI OAuth privacy setting.
 const privacyBadge = computed(() => {
   if (props.type !== 'oauth' || !props.privacyMode) return null
-  // 支持 OpenAI 和 Antigravity 平台
-  if (props.platform !== 'openai' && props.platform !== 'antigravity') return null
+  if (props.platform !== 'openai') return null
 
   const shieldCheck = 'M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z'
   const shieldX = 'M12 9v3.75m0-10.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285zM12 18h.008v.008H12V18z'
@@ -289,11 +211,6 @@ const privacyBadge = computed(() => {
       return { label: 'CF', icon: shieldX, title: t('admin.accounts.privacyCfBlocked'), class: 'bg-yellow-100 text-yellow-600 dark:bg-yellow-900/30 dark:text-yellow-400' }
     case 'training_set_failed':
       return { label: 'Fail', icon: shieldX, title: t('admin.accounts.privacyFailed'), class: 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400' }
-    // Antigravity states
-    case 'privacy_set':
-      return { label: 'Private', icon: shieldCheck, title: t('admin.accounts.privacyAntigravitySet'), class: 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400' }
-    case 'privacy_set_failed':
-      return { label: 'Fail', icon: shieldX, title: t('admin.accounts.privacyAntigravityFailed'), class: 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400' }
     default:
       return null
   }

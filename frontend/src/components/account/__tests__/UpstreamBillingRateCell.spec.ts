@@ -268,8 +268,8 @@ describe('UpstreamBillingRateCell', () => {
     await wrapper.get('[data-testid="upstream-billing-probe"]').trigger('click')
     expect(wrapper.emitted('probe')).toHaveLength(1)
 
-    // 已退役平台不得暴露探测操作。
-    await wrapper.setProps({ account: makeAccount({ platform: 'grok' }) })
+    // 未知平台不得暴露探测操作。
+    await wrapper.setProps({ account: makeAccount({ platform: 'unsupported' as Account['platform'] }) })
     expect(wrapper.find('[data-testid="upstream-billing-probe"]').exists()).toBe(false)
     expect(wrapper.emitted('probe')).toHaveLength(1)
 

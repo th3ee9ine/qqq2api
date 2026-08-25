@@ -23,7 +23,7 @@ type s3ClientParams struct {
 // newS3Client 构造一个 S3 兼容客户端，兼容 AWS S3 / Cloudflare R2 / 阿里云 OSS / MinIO。
 //
 // 通过 SwapComputePayloadSHA256ForUnsignedPayloadMiddleware + RequestChecksumCalculationWhenRequired
-// 规避阿里云 OSS 不兼容 s3manager 分片签名的问题（backup 与 image storage 共用此构造）。
+// 规避阿里云 OSS 不兼容分片签名的问题（图片对象存储共用此构造）。
 func newS3Client(ctx context.Context, p s3ClientParams) (*s3.Client, error) {
 	region := p.Region
 	if region == "" {

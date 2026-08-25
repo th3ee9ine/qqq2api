@@ -10,6 +10,7 @@ const {
   getPublicSettings,
   getDashboardApiKeysUsage,
   getAvailableGroups,
+  updateKey,
   showError,
   showSuccess,
   copyToClipboard,
@@ -20,6 +21,7 @@ const {
   getPublicSettings: vi.fn(),
   getDashboardApiKeysUsage: vi.fn(),
   getAvailableGroups: vi.fn(),
+  updateKey: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
   copyToClipboard: vi.fn(),
@@ -57,7 +59,7 @@ vi.mock('@/api', () => ({
   keysAPI: {
     list: listKeys,
     create: vi.fn(),
-    update: vi.fn(),
+    update: updateKey,
     delete: vi.fn(),
     toggleStatus: vi.fn(),
   },
@@ -262,6 +264,7 @@ describe('user KeysView column settings', () => {
     getPublicSettings.mockReset()
     getDashboardApiKeysUsage.mockReset()
     getAvailableGroups.mockReset()
+    updateKey.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
     copyToClipboard.mockReset()
@@ -278,6 +281,7 @@ describe('user KeysView column settings', () => {
     getPublicSettings.mockResolvedValue({})
     getDashboardApiKeysUsage.mockResolvedValue({ stats: {} })
     getAvailableGroups.mockResolvedValue([])
+    updateKey.mockResolvedValue(createApiKey())
     isCurrentStep.mockReturnValue(false)
   })
 
@@ -433,5 +437,23 @@ describe('user KeysView column settings', () => {
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
+  })
+
+  it('binds a global API key to the selected group', async () => {
+    const wrapper = await mountView()
+    const key = createApiKey()
+
+    await (wrapper.vm as any).changeGroup(key, 42)
+
+    expect(updateKey).toHaveBeenCalledWith(key.id, { group_id: 42 })
+  })
+
+  it('unbinds a global API key by sending group_id zero', async () => {
+    const wrapper = await mountView()
+    const key = { ...createApiKey(), group_id: 42 }
+
+    await (wrapper.vm as any).changeGroup(key, null)
+
+    expect(updateKey).toHaveBeenCalledWith(key.id, { group_id: 0 })
   })
 })

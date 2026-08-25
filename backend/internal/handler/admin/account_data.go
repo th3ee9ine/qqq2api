@@ -112,6 +112,24 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 		return
 	}
 
+	// Data import only accepts the active account platforms. Apply the same
+	// allowlist to exports so a legacy/retired row cannot be carried into a new
+	// installation through an account data bundle (including explicit-ID exports).
+	skippedUnsupported := 0
+	activeAccounts := make([]service.Account, 0, len(accounts))
+	for i := range accounts {
+		if !service.IsActiveAccountPlatform(accounts[i].Platform) ||
+			!isSupportedDataAccountType(accounts[i].Platform, accounts[i].Type) {
+			skippedUnsupported++
+			continue
+		}
+		activeAccounts = append(activeAccounts, accounts[i])
+	}
+	accounts = activeAccounts
+	if skippedUnsupported > 0 {
+		slog.Info("export_skipped_unsupported_accounts", "count", skippedUnsupported)
+	}
+
 	// 排除 spark 影子账号:影子不持凭据,通用凭据型导出无法表达父子链接、导入侧又强制 credentials
 	// 非空——若混入会产出无法还原的坏备份(导入即失败)。影子的独立调度配置(priority/并发/分组/
 	// status,管理员可单独调)随之不进备份,还原后需在重建的影子上重新调优;前端按 skipped_shadows
@@ -396,11 +414,13 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		}
 	}
 
-	// 收集需要异步设置隐私的 Antigravity OAuth 账号
-	var privacyAccounts []*service.Account
-
 	for i := range dataPayload.Accounts {
 		item := dataPayload.Accounts[i]
+		// Keep persisted platform/type identifiers canonical even when importing a
+		// hand-edited bundle. CreateAccount's platform policy is case-insensitive,
+		// but storing a mixed-case identifier would break downstream exact matches.
+		item.Platform = strings.ToLower(strings.TrimSpace(item.Platform))
+		item.Type = strings.ToLower(strings.TrimSpace(item.Type))
 		if err := validateDataAccount(item); err != nil {
 			result.AccountFailed++
 			result.Errors = append(result.Errors, DataImportError{
@@ -446,7 +466,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			SkipDefaultGroupBind: skipDefaultGroupBind,
 		}
 
-		created, err := h.adminService.CreateAccount(ctx, accountInput)
+		_, err := h.adminService.CreateAccount(ctx, accountInput)
 		if err != nil {
 			result.AccountFailed++
 			result.Errors = append(result.Errors, DataImportError{
@@ -456,29 +476,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			})
 			continue
 		}
-		// 收集 Antigravity OAuth 账号，稍后异步设置隐私
-		if created.Platform == service.PlatformAntigravity && created.Type == service.AccountTypeOAuth {
-			privacyAccounts = append(privacyAccounts, created)
-		}
-		h.scheduleGrokImportProbe(created)
 		result.AccountCreated++
-	}
-
-	// 异步设置 Antigravity 隐私，避免大量导入时阻塞请求
-	if len(privacyAccounts) > 0 {
-		adminSvc := h.adminService
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("import_antigravity_privacy_panic", "recover", r)
-				}
-			}()
-			bgCtx := context.Background()
-			for _, acc := range privacyAccounts {
-				adminSvc.ForceAntigravityPrivacy(bgCtx, acc)
-			}
-			slog.Info("import_antigravity_privacy_done", "count", len(privacyAccounts))
-		}()
 	}
 
 	return result, nil
@@ -688,10 +686,11 @@ func validateDataAccount(item DataAccount) error {
 	if len(item.Credentials) == 0 {
 		return errors.New("account credentials is required")
 	}
-	switch item.Type {
-	case service.AccountTypeOAuth, service.AccountTypeSetupToken, service.AccountTypeAPIKey, service.AccountTypeUpstream:
-	default:
-		return fmt.Errorf("account type is invalid: %s", item.Type)
+	if !service.IsActiveAccountPlatform(item.Platform) {
+		return fmt.Errorf("account platform is unsupported: %s", item.Platform)
+	}
+	if !isSupportedDataAccountType(item.Platform, item.Type) {
+		return fmt.Errorf("account type is invalid for platform %s: %s", item.Platform, item.Type)
 	}
 	if item.RateMultiplier != nil && *item.RateMultiplier < 0 {
 		return errors.New("rate_multiplier must be >= 0")
@@ -703,6 +702,32 @@ func validateDataAccount(item DataAccount) error {
 		return errors.New("priority must be >= 0")
 	}
 	return nil
+}
+
+func isSupportedDataAccountType(platform, accountType string) bool {
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	accountType = strings.ToLower(strings.TrimSpace(accountType))
+
+	switch platform {
+	case service.PlatformAnthropic:
+		switch accountType {
+		case service.AccountTypeOAuth,
+			service.AccountTypeSetupToken,
+			service.AccountTypeAPIKey,
+			service.AccountTypeBedrock,
+			service.AccountTypeServiceAccount:
+			return true
+		}
+	case service.PlatformOpenAI:
+		switch accountType {
+		case service.AccountTypeOAuth,
+			service.AccountTypeSetupToken,
+			service.AccountTypeAPIKey:
+			return true
+		}
+	}
+
+	return false
 }
 
 func defaultProxyName(name string) string {

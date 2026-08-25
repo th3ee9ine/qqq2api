@@ -108,6 +108,43 @@ func TestAPIKeyUpdate_DeclaresUsageColumnsOnExplicitReset(t *testing.T) {
 	require.Equal(t, []APIKeyUpdateFields{{QuotaUsed: true, RateLimitUsage: true}}, repo.updateFields)
 }
 
+func TestAPIKeyUpdate_ZeroGroupIDUnbindsWithoutGroupLookup(t *testing.T) {
+	existingGroupID := int64(42)
+	zeroGroupID := int64(0)
+	svc, repo := newUpdateFieldsAPIKeyService(&APIKey{
+		ID: 1, UserID: 7, Key: "sk-test", Status: StatusActive, GroupID: &existingGroupID,
+		Group: &Group{ID: existingGroupID, Name: "old", Platform: PlatformAnthropic},
+	})
+
+	updated, err := svc.Update(context.Background(), 1, 7, UpdateAPIKeyRequest{GroupID: &zeroGroupID})
+
+	require.NoError(t, err)
+	require.Nil(t, updated.GroupID)
+	require.Nil(t, updated.Group)
+	require.Equal(t, []APIKeyUpdateFields{{GroupID: true}}, repo.updateFields)
+}
+
+func TestAPIKeyUpdate_PositiveGroupIDRefreshesLoadedGroup(t *testing.T) {
+	existingGroupID := int64(42)
+	targetGroupID := int64(43)
+	targetGroup := &Group{
+		ID: targetGroupID, Name: "target", Platform: PlatformAnthropic, Status: StatusActive,
+	}
+	svc, repo := newUpdateFieldsAPIKeyService(&APIKey{
+		ID: 1, UserID: 7, Key: "sk-test", Status: StatusActive, GroupID: &existingGroupID,
+		Group: &Group{ID: existingGroupID, Name: "old", Platform: PlatformAnthropic},
+	})
+	svc.groupRepo = &groupRepoStubForGroupUpdate{group: targetGroup}
+
+	updated, err := svc.Update(context.Background(), 1, 7, UpdateAPIKeyRequest{GroupID: &targetGroupID})
+
+	require.NoError(t, err)
+	require.NotNil(t, updated.GroupID)
+	require.Equal(t, targetGroupID, *updated.GroupID)
+	require.Equal(t, targetGroup, updated.Group)
+	require.Equal(t, []APIKeyUpdateFields{{GroupID: true}}, repo.updateFields)
+}
+
 // 配额扩容会顺带把 quota_exhausted 复活为 active，此时必须声明 status。
 func TestAPIKeyUpdate_DeclaresStatusWhenReactivated(t *testing.T) {
 	quota := 500.0

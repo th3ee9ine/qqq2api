@@ -1,10 +1,11 @@
 /**
  * Shared group-pricing DTOs.
  *
- * Channel management endpoints were retired. These types remain because group
- * pricing uses the same persisted schema.
+ * Channel management endpoints were retired. These types and the read-only
+ * default-price lookup remain because group pricing uses the same schema.
  */
 
+import { apiClient } from '../client'
 import type { BillingMode } from '@/constants/channel'
 
 export type { BillingMode } from '@/constants/channel'
@@ -54,3 +55,29 @@ export interface ChannelModelPricing {
   intervals: PricingInterval[]
   time_pricing: ChannelTimePricing | null
 }
+
+export type ModelDefaultPricingPlatform = 'anthropic' | 'openai'
+
+export interface ModelDefaultPricing {
+  found: boolean
+  input_price?: number
+  output_price?: number
+  cache_write_price?: number
+  cache_read_price?: number
+  image_input_price?: number
+  image_output_price?: number
+}
+
+/** Read-only default pricing lookup used by the group pricing editor. */
+export async function getModelDefaultPricing(
+  model: string,
+  platform: ModelDefaultPricingPlatform
+): Promise<ModelDefaultPricing> {
+  const { data } = await apiClient.get<ModelDefaultPricing>('/admin/channels/model-pricing', {
+    params: { model, platform }
+  })
+  return data
+}
+
+const channelsAPI = { getModelDefaultPricing }
+export default channelsAPI

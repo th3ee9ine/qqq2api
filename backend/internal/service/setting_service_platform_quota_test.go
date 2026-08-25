@@ -84,13 +84,8 @@ func TestGetDefaultPlatformQuotas_ReturnsAllowedPlatforms(t *testing.T) {
 	if v := got["openai"].MonthlyLimitUSD; v == nil || *v != zero {
 		t.Errorf("openai monthly want 0 (explicit disable), got %v", v)
 	}
-	// gemini 无配置 → weekly = nil
-	if v := got["gemini"].WeeklyLimitUSD; v != nil {
-		t.Errorf("gemini weekly want nil (not configured), got %v", *v)
-	}
-	// antigravity 无配置 → daily = nil
-	if v := got["antigravity"].DailyLimitUSD; v != nil {
-		t.Errorf("antigravity daily want nil (not configured), got %v", *v)
+	if len(got) != 2 {
+		t.Errorf("only active platforms should be returned, got %v", got)
 	}
 }
 

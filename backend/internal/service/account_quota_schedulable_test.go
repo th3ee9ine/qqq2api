@@ -117,6 +117,9 @@ func TestAccountIsSchedulable_QuotaExceeded(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// This table isolates quota behavior; use an active platform so the
+			// platform-retirement guard is not the reason scheduling is rejected.
+			tt.account.Platform = PlatformAnthropic
 			require.Equal(t, tt.want, tt.account.IsSchedulable())
 		})
 	}

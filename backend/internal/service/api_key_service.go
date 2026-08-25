@@ -936,19 +936,25 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 	}
 
 	if req.GroupID != nil {
-		group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
-		if err != nil {
-			return nil, fmt.Errorf("get group: %w", err)
-		}
+		if *req.GroupID == 0 {
+			apiKey.GroupID = nil
+			apiKey.Group = nil
+		} else {
+			group, err := s.groupRepo.GetByID(ctx, *req.GroupID)
+			if err != nil {
+				return nil, fmt.Errorf("get group: %w", err)
+			}
 
-		if group == nil || !group.IsActive() {
-			return nil, ErrGroupNotAllowed
-		}
-		if err := requireActiveGroupPlatform(group.Platform); err != nil {
-			return nil, err
-		}
+			if group == nil || !group.IsActive() {
+				return nil, ErrGroupNotAllowed
+			}
+			if err := requireActiveGroupPlatform(group.Platform); err != nil {
+				return nil, err
+			}
 
-		apiKey.GroupID = req.GroupID
+			apiKey.GroupID = req.GroupID
+			apiKey.Group = group
+		}
 		fields.GroupID = true
 	}
 

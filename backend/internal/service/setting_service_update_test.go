@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -552,17 +551,6 @@ func TestSettingService_GetAllSettings_OpenAIAdvancedSchedulerEffectiveValuesUse
 	require.Equal(t, "11", settings.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky)
 }
 
-func TestSettingService_UpdateSettings_AntigravityUserAgentVersion(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
-	svc := NewSettingService(repo, &config.Config{})
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		AntigravityUserAgentVersion: "1.23.2",
-	})
-	require.NoError(t, err)
-	require.Equal(t, "1.23.2", repo.updates[SettingKeyAntigravityUserAgentVersion])
-}
-
 func TestSettingService_InitializeDefaultSettingsPersistsConfiguredForwardedClientIPHeaders(t *testing.T) {
 	repo := &forwardedIPMigrationRepoStub{values: map[string]string{}}
 	cfg := &config.Config{}
@@ -823,30 +811,6 @@ func TestSettingService_LoadForwardedClientIPSettingsWriteFailureUsesComputedMod
 			require.Equal(t, test.wantEnabled, cfg.TrustForwardedIPForAPIKeyACL())
 		})
 	}
-}
-
-func TestSettingService_GetAntigravityUserAgentVersion_Precedence(t *testing.T) {
-	t.Run("后台设置优先", func(t *testing.T) {
-		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{
-			SettingKeyAntigravityUserAgentVersion: "1.24.0",
-		}}, &config.Config{})
-
-		require.Equal(t, "1.24.0", svc.GetAntigravityUserAgentVersion(context.Background()))
-	})
-
-	t.Run("空值回退配置默认值", func(t *testing.T) {
-		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{
-			SettingKeyAntigravityUserAgentVersion: "",
-		}}, &config.Config{})
-
-		require.Equal(t, antigravity.GetDefaultUserAgentVersion(), svc.GetAntigravityUserAgentVersion(context.Background()))
-	})
-
-	t.Run("缺失回退配置默认值", func(t *testing.T) {
-		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{}}, &config.Config{})
-
-		require.Equal(t, antigravity.GetDefaultUserAgentVersion(), svc.GetAntigravityUserAgentVersion(context.Background()))
-	})
 }
 
 func TestSettingService_UpdateSettings_RejectsInvalidPaymentVisibleMethodSource(t *testing.T) {

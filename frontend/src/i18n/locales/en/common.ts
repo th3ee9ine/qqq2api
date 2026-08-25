@@ -209,8 +209,8 @@ export default {
 
   // Auth
   auth: {
-    welcomeBack: 'Welcome Back',
-    signInToAccount: 'Sign in to your account to continue',
+    welcomeBack: 'Administrator Login',
+    signInToAccount: 'Continue with the administrator credentials configured through environment variables',
     signIn: 'Sign In',
     signingIn: 'Signing in...',
     passkeySignIn: 'Sign in with a passkey',

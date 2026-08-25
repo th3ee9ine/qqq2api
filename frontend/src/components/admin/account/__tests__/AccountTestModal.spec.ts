@@ -150,4 +150,160 @@ describe('AccountTestModal', () => {
       mode: 'compact'
     })
   })
+
+  it('defaults to a text model when image and text models are both available', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-image-1', display_name: 'GPT Image 1' },
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' }
+    ])
+    const wrapper = mountModal()
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect((wrapper.vm as any).selectedModelId).toBe('gpt-5.4')
+  })
+
+  it('restores the Claude model-first test flow and omits OpenAI mode from the request', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'claude-haiku-4-5', display_name: 'Claude Haiku 4.5' },
+      { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6' }
+    ])
+    const wrapper = mountModal({
+      id: 7,
+      name: 'Claude OAuth',
+      platform: 'anthropic',
+      type: 'oauth',
+      status: 'active'
+    })
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect((wrapper.vm as any).selectedModelId).toBe('claude-sonnet-4-6')
+    expect(wrapper.text()).not.toContain('admin.accounts.openai.testMode')
+    expect(wrapper.text()).toContain('admin.accounts.testModel')
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({
+      model_id: 'claude-sonnet-4-6',
+      prompt: ''
+    })
+  })
+
+  it('keeps the baseline empty selector state when model loading fails', async () => {
+    getAvailableModels.mockRejectedValue(new Error('models unavailable'))
+    const wrapper = mountModal()
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('common.error')
+    expect((wrapper.vm as any).selectedModelId).toBe('')
+  })
+
+  it('does not send a stale image prompt after switching back to a text model', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-image-1', display_name: 'GPT Image 1' },
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' }
+    ])
+    const wrapper = mountModal()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    ;(wrapper.vm as any).selectedModelId = 'gpt-image-1'
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'gpt-5.4'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body).prompt).toBe('')
+  })
+
+  it('closes without loading models for a retired platform account', async () => {
+    const wrapper = mountModal({
+      id: 88,
+      name: 'Retired',
+      platform: 'grok',
+      type: 'oauth',
+      status: 'active'
+    })
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    expect(getAvailableModels).not.toHaveBeenCalled()
+  })
+
+  it('uses the backend SSE error field as the visible failure message', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"error","error":"upstream rejected credentials"}\n'
+      ])
+    ) as any
+    const wrapper = mountModal()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect((wrapper.vm as any).status).toBe('error')
+    expect((wrapper.vm as any).errorMessage).toBe('upstream rejected credentials')
+  })
+
+  it('keeps OpenAI compact status events in the visible test output', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"status","text":"Compacting conversation context"}\n',
+        'data: {"type":"test_complete","success":true}\n'
+      ])
+    ) as any
+    const wrapper = mountModal()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    ;(wrapper.vm as any).testMode = 'compact'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect((wrapper.vm as any).outputLines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: 'Compacting conversation context' })
+    ]))
+    expect(wrapper.text()).toContain('Compacting conversation context')
+  })
+
+  it('renders image events when an OpenAI image model is selected', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' },
+      { id: 'gpt-image-1', display_name: 'GPT Image 1' }
+    ])
+    global.fetch = vi.fn().mockResolvedValue(
+      createStreamResponse([
+        'data: {"type":"image","image_url":"data:image/png;base64,aW1hZ2U=","mime_type":"image/png"}\n',
+        'data: {"type":"test_complete","success":true}\n'
+      ])
+    ) as any
+    const wrapper = mountModal()
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    ;(wrapper.vm as any).selectedModelId = 'gpt-image-1'
+    await flushPromises()
+
+    expect((wrapper.vm as any).testPrompt).toBe(
+      'Generate a cute orange cat astronaut sticker on a clean pastel background.'
+    )
+
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    expect((wrapper.vm as any).generatedImages).toEqual([
+      { url: 'data:image/png;base64,aW1hZ2U=', mimeType: 'image/png' }
+    ])
+    expect(wrapper.get('img').attributes('src')).toBe('data:image/png;base64,aW1hZ2U=')
+  })
 })

@@ -3,27 +3,17 @@
 package handler
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
-	middleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
-
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
 )
 
-// 目标：严格验证“antigravity 账号通过 /v1/messages 提供 Claude 服务时”，
-// 当账号 credentials.intercept_warmup_requests=true 且请求为 Warmup 时，
-// 后端会在转发上游前直接拦截并返回 mock 响应（不依赖上游）。
+// Shared lightweight fixtures for active Claude gateway tests. The retired
+// Antigravity warmup scenarios that originally lived here have been removed.
 
 type fakeSchedulerCache struct {
 	accounts []*service.Account
@@ -213,172 +203,4 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 		billingCacheSvc.Stop()
 	}
 	return h, cleanup
-}
-
-func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_MixedSchedulingV1(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	groupID := int64(2001)
-	accountID := int64(1001)
-
-	group := &service.Group{
-		ID:       groupID,
-		Hydrated: true,
-		Platform: service.PlatformAnthropic, // /v1/messages（Claude兼容）入口
-		Status:   service.StatusActive,
-	}
-
-	account := &service.Account{
-		ID:       accountID,
-		Name:     "ag-1",
-		Platform: service.PlatformAntigravity,
-		Type:     service.AccountTypeOAuth,
-		Credentials: map[string]any{
-			"access_token":              "tok_xxx",
-			"intercept_warmup_requests": true,
-		},
-		Extra: map[string]any{
-			"mixed_scheduling": true, // 关键：允许被 anthropic 分组混合调度选中
-		},
-		Concurrency:   1,
-		Priority:      1,
-		Status:        service.StatusActive,
-		Schedulable:   true,
-		AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
-	}
-
-	h, cleanup := newTestGatewayHandler(t, group, []*service.Account{account})
-	defer cleanup()
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-
-	body := []byte(`{
-		"model": "claude-sonnet-4-5",
-		"max_tokens": 256,
-		"messages": [{"role":"user","content":[{"type":"text","text":"Warmup"}]}]
-	}`)
-	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(context.WithValue(req.Context(), ctxkey.Group, group))
-	c.Request = req
-
-	apiKey := &service.APIKey{
-		ID:      3001,
-		UserID:  4001,
-		GroupID: &groupID,
-		Status:  service.StatusActive,
-		User: &service.User{
-			ID:          4001,
-			Concurrency: 10,
-			Balance:     100,
-		},
-		Group: group,
-	}
-
-	c.Set(string(middleware.ContextKeyAPIKey), apiKey)
-	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.UserID, Concurrency: 10})
-
-	h.Messages(c)
-
-	require.Equal(t, 200, rec.Code)
-
-	// 断言：确实选中了 antigravity 账号（不是纯函数测试，而是从 Handler 里验证调度结果）
-	selected, ok := c.Get(opsAccountIDKey)
-	require.True(t, ok)
-	require.Equal(t, accountID, selected)
-
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.True(t, strings.HasPrefix(resp["id"].(string), "msg_01"))
-	require.Equal(t, "claude-sonnet-4-5", resp["model"])
-
-	content, ok := resp["content"].([]any)
-	require.True(t, ok)
-	require.Len(t, content, 1)
-	first, ok := content[0].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "New Conversation", first["text"])
-}
-
-func TestGatewayHandlerMessages_InterceptWarmup_AntigravityAccount_ForcePlatform(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	groupID := int64(2002)
-	accountID := int64(1002)
-
-	group := &service.Group{
-		ID:       groupID,
-		Hydrated: true,
-		Platform: service.PlatformAntigravity,
-		Status:   service.StatusActive,
-	}
-
-	account := &service.Account{
-		ID:       accountID,
-		Name:     "ag-2",
-		Platform: service.PlatformAntigravity,
-		Type:     service.AccountTypeOAuth,
-		Credentials: map[string]any{
-			"access_token":              "tok_xxx",
-			"intercept_warmup_requests": true,
-		},
-		Concurrency:   1,
-		Priority:      1,
-		Status:        service.StatusActive,
-		Schedulable:   true,
-		AccountGroups: []service.AccountGroup{{AccountID: accountID, GroupID: groupID}},
-	}
-
-	h, cleanup := newTestGatewayHandler(t, group, []*service.Account{account})
-	defer cleanup()
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-
-	body := []byte(`{
-		"model": "claude-sonnet-4-5",
-		"max_tokens": 256,
-		"messages": [{"role":"user","content":[{"type":"text","text":"Warmup"}]}]
-	}`)
-	req := httptest.NewRequest("POST", "/antigravity/v1/messages", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	// 模拟 routes/gateway.go 里的 ForcePlatform 中间件效果：
-	// - 写入 request.Context（Service读取）
-	// - 写入 gin.Context（Handler快速读取）
-	ctx := context.WithValue(req.Context(), ctxkey.Group, group)
-	ctx = context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformAntigravity)
-	req = req.WithContext(ctx)
-	c.Request = req
-	c.Set(string(middleware.ContextKeyForcePlatform), service.PlatformAntigravity)
-
-	apiKey := &service.APIKey{
-		ID:      3002,
-		UserID:  4002,
-		GroupID: &groupID,
-		Status:  service.StatusActive,
-		User: &service.User{
-			ID:          4002,
-			Concurrency: 10,
-			Balance:     100,
-		},
-		Group: group,
-	}
-
-	c.Set(string(middleware.ContextKeyAPIKey), apiKey)
-	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.UserID, Concurrency: 10})
-
-	h.Messages(c)
-
-	require.Equal(t, 200, rec.Code)
-
-	selected, ok := c.Get(opsAccountIDKey)
-	require.True(t, ok)
-	require.Equal(t, accountID, selected)
-
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-	require.True(t, strings.HasPrefix(resp["id"].(string), "msg_01"))
-	require.Equal(t, "claude-sonnet-4-5", resp["model"])
 }

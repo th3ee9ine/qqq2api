@@ -29,11 +29,11 @@
         <legend class="input-label">{{ t('admin.accounts.oauth.authMethod') }}</legend>
         <div class="mt-2 flex gap-4">
           <label class="flex cursor-pointer items-center">
-            <input v-model="addMethod" type="radio" value="oauth" class="mr-2 text-primary-600" />
+            <input v-model="addMethod" type="radio" value="oauth" class="mr-2 text-primary-600 focus:ring-primary-500" />
             <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.accounts.types.oauth') }}</span>
           </label>
           <label class="flex cursor-pointer items-center">
-            <input v-model="addMethod" type="radio" value="setup-token" class="mr-2 text-primary-600" />
+            <input v-model="addMethod" type="radio" value="setup-token" class="mr-2 text-primary-600 focus:ring-primary-500" />
             <span class="text-sm text-gray-700 dark:text-gray-300">{{ t('admin.accounts.setupTokenLongLived') }}</span>
           </label>
         </div>
@@ -57,7 +57,7 @@
         @generate-url="handleGenerateUrl"
         @cookie-auth="handleCookieAuth"
         @validate-refresh-token="handleOpenAIRefreshToken"
-        @validate-mobile-refresh-token="handleOpenAIRefreshToken"
+        @validate-mobile-refresh-token="handleOpenAIMobileRefreshToken"
       />
     </div>
 
@@ -71,6 +71,26 @@
           class="btn btn-primary"
           @click="handleExchangeCode"
         >
+          <svg
+            v-if="currentLoading"
+            class="-ml-1 mr-2 h-4 w-4 animate-spin"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle
+              class="opacity-25"
+              cx="12"
+              cy="12"
+              r="10"
+              stroke="currentColor"
+              stroke-width="4"
+            />
+            <path
+              class="opacity-75"
+              fill="currentColor"
+              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+            />
+          </svg>
           {{ currentLoading ? t('admin.accounts.oauth.verifying') : t('admin.accounts.oauth.completeAuth') }}
         </button>
       </div>
@@ -145,23 +165,35 @@ async function handleGenerateUrl() {
 
 async function applyOpenAITokens(tokenInfo: OpenAITokenInfo) {
   if (!props.account || !isOpenAI.value) return
-  const updated = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
-    type: 'oauth',
-    credentials: openaiOAuth.buildCredentials(tokenInfo),
-    extra: openaiOAuth.buildExtraInfo(tokenInfo)
-  })
-  appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-  emit('reauthorized', updated)
-  handleClose()
+  try {
+    const updated = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+      type: 'oauth',
+      credentials: openaiOAuth.buildCredentials(tokenInfo),
+      extra: openaiOAuth.buildExtraInfo(tokenInfo)
+    })
+    appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+    emit('reauthorized', updated)
+    handleClose()
+  } catch (error: any) {
+    openaiOAuth.error.value = error?.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    appStore.showError(openaiOAuth.error.value)
+  }
 }
 
-async function handleOpenAIRefreshToken(value: string) {
+const OPENAI_MOBILE_RT_CLIENT_ID = 'app_LlGpXReQgckcGGUo2JrYvtJK'
+
+async function handleOpenAIRefreshToken(value: string, clientId?: string) {
   if (!props.account || !isOpenAI.value) return
   const refreshToken = value.split('\n').map(item => item.trim()).find(Boolean)
   if (!refreshToken) return
-  const tokenInfo = await openaiOAuth.validateRefreshToken(refreshToken, props.account.proxy_id)
-  if (tokenInfo) await applyOpenAITokens(tokenInfo)
+  const tokenInfo = await openaiOAuth.validateRefreshToken(refreshToken, props.account.proxy_id, clientId)
+  if (!tokenInfo) return
+  if (clientId && !tokenInfo.client_id) tokenInfo.client_id = clientId
+  await applyOpenAITokens(tokenInfo)
 }
+
+const handleOpenAIMobileRefreshToken = (value: string) =>
+  handleOpenAIRefreshToken(value, OPENAI_MOBILE_RT_CLIENT_ID)
 
 async function handleExchangeCode() {
   if (!props.account || !supported.value) return
@@ -174,6 +206,7 @@ async function handleExchangeCode() {
     return
   }
   claudeOAuth.loading.value = true
+  claudeOAuth.error.value = ''
   try {
     const endpoint = addMethod.value === 'oauth'
       ? '/admin/accounts/exchange-code'
@@ -191,6 +224,9 @@ async function handleExchangeCode() {
     appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
     emit('reauthorized', updated)
     handleClose()
+  } catch (error: any) {
+    claudeOAuth.error.value = error?.response?.data?.detail || t('admin.accounts.oauth.authFailed')
+    appStore.showError(claudeOAuth.error.value)
   } finally {
     claudeOAuth.loading.value = false
   }
@@ -198,15 +234,20 @@ async function handleExchangeCode() {
 
 async function handleCookieAuth(sessionKey: string) {
   if (!props.account || !isAnthropic.value || !sessionKey.trim()) return
-  const tokenInfo = await claudeOAuth.cookieAuth(addMethod.value, sessionKey, props.account.proxy_id)
-  if (!tokenInfo) return
-  const updated = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
-    type: addMethod.value,
-    credentials: tokenInfo as Record<string, unknown>,
-    extra: claudeOAuth.buildExtraInfo(tokenInfo)
-  })
-  appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
-  emit('reauthorized', updated)
-  handleClose()
+  try {
+    const tokenInfo = await claudeOAuth.cookieAuth(addMethod.value, sessionKey, props.account.proxy_id)
+    if (!tokenInfo) return
+    const updated = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+      type: addMethod.value,
+      credentials: tokenInfo as Record<string, unknown>,
+      extra: claudeOAuth.buildExtraInfo(tokenInfo)
+    })
+    appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+    emit('reauthorized', updated)
+    handleClose()
+  } catch (error: any) {
+    claudeOAuth.error.value = error?.response?.data?.detail || t('admin.accounts.oauth.cookieAuthFailed')
+    appStore.showError(claudeOAuth.error.value)
+  }
 }
 </script>

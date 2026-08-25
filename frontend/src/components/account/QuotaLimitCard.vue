@@ -16,6 +16,7 @@ const props = withDefaults(defineProps<{
   weeklyResetDay: number | null
   weeklyResetHour: number | null
   resetTimezone: string | null
+  testIdPrefix?: string
   quotaNotifyGlobalEnabled?: boolean
   quotaNotifyDailyEnabled?: boolean | null
   quotaNotifyDailyThreshold?: number | null
@@ -37,6 +38,7 @@ const props = withDefaults(defineProps<{
   quotaNotifyTotalEnabled: null,
   quotaNotifyTotalThreshold: null,
   quotaNotifyTotalThresholdType: null,
+  testIdPrefix: '',
 })
 
 const emit = defineEmits<{
@@ -182,6 +184,7 @@ const dailyFixedHint = computed(() =>
           :hour-options="hourOptions"
           :day-options="dayOptions"
           :timezone-options="timezoneOptions"
+          :test-id="props.testIdPrefix ? `${props.testIdPrefix}-quota-daily-limit` : undefined"
           @update:limit="emit('update:dailyLimit', $event)"
           @update:notify-enabled="emit('update:quotaNotifyDailyEnabled', $event)"
           @update:notify-threshold="emit('update:quotaNotifyDailyThreshold', $event)"
@@ -209,6 +212,7 @@ const dailyFixedHint = computed(() =>
           :hour-options="hourOptions"
           :day-options="dayOptions"
           :timezone-options="timezoneOptions"
+          :test-id="props.testIdPrefix ? `${props.testIdPrefix}-quota-weekly-limit` : undefined"
           @update:limit="emit('update:weeklyLimit', $event)"
           @update:notify-enabled="emit('update:quotaNotifyWeeklyEnabled', $event)"
           @update:notify-threshold="emit('update:quotaNotifyWeeklyThreshold', $event)"
@@ -236,6 +240,7 @@ const dailyFixedHint = computed(() =>
           hint-fixed=""
           :hour-options="hourOptions"
           :day-options="dayOptions"
+          :test-id="props.testIdPrefix ? `${props.testIdPrefix}-quota-limit` : undefined"
           @update:limit="emit('update:totalLimit', $event)"
           @update:notify-enabled="emit('update:quotaNotifyTotalEnabled', $event)"
           @update:notify-threshold="emit('update:quotaNotifyTotalThreshold', $event)"

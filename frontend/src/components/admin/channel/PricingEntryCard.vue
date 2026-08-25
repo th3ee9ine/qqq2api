@@ -265,8 +265,9 @@ import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'
 import TimePricingSection from './TimePricingSection.vue'
 import type { PricingFormEntry, IntervalFormEntry } from './types'
-import { getPlatformTagClass } from './types'
+import { perTokenToMTok, getPlatformTagClass } from './types'
 import type { BillingMode } from '@/api/admin/channels'
+import channelsAPI from '@/api/admin/channels'
 
 const { t } = useI18n()
 
@@ -347,8 +348,41 @@ function removeInterval(idx: number) {
   emit('update', { ...props.entry, intervals })
 }
 
-function onModelsUpdate(newModels: string[]) {
+async function onModelsUpdate(newModels: string[]) {
+  const oldModels = props.entry.models
   emit('update', { ...props.entry, models: newModels })
+
+  // Default-price lookup is retained only for the supported Claude/OpenAI
+  // group platforms. Composite and retired provider entries stay manual.
+  const platform = props.platform
+  if (platform !== 'anthropic' && platform !== 'openai') return
+
+  // Only fill when a model was added and the entry has no existing token price.
+  const addedModels = newModels.filter(model => !oldModels.includes(model))
+  if (addedModels.length === 0) return
+
+  const entry = props.entry
+  const hasPrice = entry.input_price != null || entry.output_price != null ||
+                   entry.cache_write_price != null || entry.cache_read_price != null
+  if (hasPrice) return
+
+  try {
+    const result = await channelsAPI.getModelDefaultPricing(addedModels[0], platform)
+    if (result.found) {
+      emit('update', {
+        ...props.entry,
+        models: newModels,
+        input_price: perTokenToMTok(result.input_price ?? null),
+        output_price: perTokenToMTok(result.output_price ?? null),
+        cache_write_price: perTokenToMTok(result.cache_write_price ?? null),
+        cache_read_price: perTokenToMTok(result.cache_read_price ?? null),
+        image_input_price: perTokenToMTok(result.image_input_price ?? null),
+        image_output_price: perTokenToMTok(result.image_output_price ?? null),
+      })
+    }
+  } catch {
+    // Lookup failure must not prevent the model tag from being added.
+  }
 }
 </script>
 

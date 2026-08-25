@@ -259,7 +259,7 @@ func TestAdminServiceBulkUpdateAccountsRejectsMalformedOpenAILongContextBillingV
 }
 
 func TestAdminServiceBulkUpdateAccountsRejectsOpenAILongContextKeyForNonOpenAIAccounts(t *testing.T) {
-	repo := &longContextBillingRepoStub{account: &Account{ID: 1, Platform: PlatformGrok}}
+	repo := &longContextBillingRepoStub{account: &Account{ID: 1, Platform: PlatformAnthropic}}
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
@@ -276,7 +276,7 @@ func TestAdminServiceBulkUpdateAccountsRejectsOpenAILongContextKeyForNonOpenAIAc
 
 func TestAdminServiceBulkUpdateAccountsRejectsMalformedValueForMixedTargetsIncludingOpenAI(t *testing.T) {
 	repo := &longContextBillingRepoStub{accounts: []*Account{
-		{ID: 1, Platform: PlatformGrok},
+		{ID: 1, Platform: PlatformAnthropic},
 		{ID: 2, Platform: PlatformOpenAI},
 	}}
 	svc := &adminServiceImpl{accountRepo: repo}

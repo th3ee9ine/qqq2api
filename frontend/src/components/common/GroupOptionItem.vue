@@ -130,10 +130,11 @@ const ratePillClass = computed(() => {
       return 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
     case 'openai':
       return 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400'
-    case 'gemini':
-      return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400'
-    default: // antigravity and others
+    case 'composite':
+      // Preserve the original composite-group rate pill styling.
       return 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-400'
+    default:
+      return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300'
   }
 })
 </script>

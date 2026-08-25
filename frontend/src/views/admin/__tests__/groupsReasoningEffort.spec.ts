@@ -28,12 +28,7 @@ describe("groupsReasoningEffort", () => {
       ).toEqual(expected);
       expect(supportsReasoningEffortPolicyPlatform(platform)).toBe(true);
     }
-    for (const platform of [
-      "anthropic",
-      "gemini",
-      "antigravity",
-      "grok",
-    ] as const) {
+    for (const platform of ["anthropic"] as const) {
       expect(reasoningEffortOptionsForPlatform(platform)).toEqual([]);
       expect(supportsReasoningEffortPolicyPlatform(platform)).toBe(false);
     }
@@ -59,7 +54,7 @@ describe("groupsReasoningEffort", () => {
     expect(normalizeReasoningEffortForPlatform("composite", " MAX ")).toBe(
       "max",
     );
-    expect(normalizeReasoningEffortForPlatform("grok", "max")).toBe("");
+    expect(normalizeReasoningEffortForPlatform("anthropic", "max")).toBe("");
     expect(normalizeReasoningEffortForPlatform("openai", "none")).toBe("");
   });
 
