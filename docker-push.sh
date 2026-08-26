@@ -13,7 +13,7 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
-echo "==> Building and pushing $REPO:$VERSION (linux/amd64 + linux/arm64)"
+echo "==> Building and pushing ${REPO}:${VERSION} and ${REPO}:latest (linux/amd64 + linux/arm64)"
 
 HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" \
 docker buildx build \
@@ -21,9 +21,9 @@ docker buildx build \
   --build-arg "VERSION=$VERSION" \
   --build-arg "http_proxy=$HOST_PROXY" \
   --build-arg "https_proxy=$HOST_PROXY" \
-  -t "$REPO:$VERSION" \
-  -t "$REPO:latest" \
+  -t "${REPO}:${VERSION}" \
+  -t "${REPO}:latest" \
   --push \
   "$PROJECT_DIR"
 
-echo "==> Done: $REPO:$VERSION (amd64 + arm64)"
+echo "==> Done: ${REPO}:${VERSION} and ${REPO}:latest (amd64 + arm64)"
