@@ -18,8 +18,9 @@ const (
 
 // Role constants
 const (
-	RoleAdmin = domain.RoleAdmin
-	RoleUser  = domain.RoleUser
+	RoleAdmin        = domain.RoleAdmin
+	RoleAccountAdmin = domain.RoleAccountAdmin
+	RoleUser         = domain.RoleUser
 )
 
 // Affiliate rebate settings

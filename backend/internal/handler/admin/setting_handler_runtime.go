@@ -439,7 +439,11 @@ func (h *SettingHandler) GetWebSearchEmulationConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, service.PopulateWebSearchUsage(c.Request.Context(), cfg))
+	if isAccountAdminRequest(c) {
+		response.Success(c, accountAdminWebSearchConfig(cfg))
+		return
+	}
+	response.Success(c, service.SanitizeWebSearchConfig(c.Request.Context(), cfg))
 }
 
 // UpdateWebSearchEmulationConfig 更新 Web Search 模拟配置
@@ -462,7 +466,7 @@ func (h *SettingHandler) UpdateWebSearchEmulationConfig(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, service.PopulateWebSearchUsage(c.Request.Context(), updated))
+	response.Success(c, service.SanitizeWebSearchConfig(c.Request.Context(), updated))
 }
 
 // ResetWebSearchUsage 重置指定 provider 的配额用量

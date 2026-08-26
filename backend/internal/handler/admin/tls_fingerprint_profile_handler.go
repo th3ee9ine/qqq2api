@@ -59,6 +59,10 @@ func (h *TLSFingerprintProfileHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	if isAccountAdminRequest(c) {
+		response.Success(c, accountAdminTLSProfileOptions(profiles))
+		return
+	}
 	response.Success(c, profiles)
 }
 

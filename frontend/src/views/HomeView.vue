@@ -464,10 +464,8 @@ const githubUrl = 'https://github.com/Wei-Shaw/sub2api'
 
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
-// The panel has one authenticated subject: the administrator created from
-// the environment credentials.  Keep every authenticated home CTA pointed at
-// the admin dashboard; legacy user dashboard URLs are retired.
-const dashboardPath = '/admin/dashboard'
+// Route each panel role to the first page it is allowed to use.
+const dashboardPath = computed(() => authStore.panelHomePath)
 const adminInitial = computed(() => {
   const email = authStore.user?.email?.trim()
   return email ? email.charAt(0).toUpperCase() : 'A'

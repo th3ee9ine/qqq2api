@@ -1,9 +1,9 @@
 /**
- * Authentication API for the single-administrator control panel.
+ * Authentication API for the administrator control panel.
  *
  * Registration, password recovery, passkeys and end-user OAuth/SSO are
- * intentionally absent. The only interactive sign-in is the administrator
- * account created from ADMIN_EMAIL / ADMIN_PASSWORD, with optional TOTP.
+ * intentionally absent. Interactive sign-in supports the configured super
+ * administrator and restricted account administrators, with optional TOTP.
  */
 
 import { apiClient } from './client'

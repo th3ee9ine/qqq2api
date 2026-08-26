@@ -80,8 +80,8 @@ func jwtAuth(
 			AbortWithError(c, 401, "USER_INACTIVE", "User account is not active")
 			return
 		}
-		if !authService.IsConfiguredAdmin(c.Request.Context(), user) {
-			AbortWithError(c, 403, "ADMIN_ONLY_MODE", "Administrator access is restricted to the configured account")
+		if !authService.CanAccessAdminPanel(c.Request.Context(), user) {
+			AbortWithError(c, 403, "ADMIN_ONLY_MODE", "A panel administrator account is required")
 			return
 		}
 

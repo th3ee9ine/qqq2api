@@ -4,6 +4,7 @@
  */
 
 import 'vue-router'
+import type { PanelPermission } from '@/utils/accessControl'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -18,6 +19,12 @@ declare module 'vue-router' {
      * @default false
      */
     requiresAdmin?: boolean
+
+    /**
+     * Fine-grained permission for restricted panel operators. Super
+     * administrators implicitly hold every panel permission.
+     */
+    requiredPermission?: PanelPermission
 
     /**
      * Page title for this route

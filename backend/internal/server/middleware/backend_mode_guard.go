@@ -16,7 +16,7 @@ import (
 func BackendModeUserGuard(settingService *service.SettingService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		role, _ := GetUserRoleFromContext(c)
-		if role == service.RoleAdmin {
+		if role == service.RoleAdmin || role == service.RoleAccountAdmin {
 			c.Next()
 			return
 		}

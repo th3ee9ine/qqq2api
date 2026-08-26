@@ -146,3 +146,34 @@ func TestAdminService_CreateUser_AssignsDefaultSubscriptions(t *testing.T) {
 	require.Equal(t, int64(5), assigner.calls[0].GroupID)
 	require.Equal(t, 30, assigner.calls[0].ValidityDays)
 }
+
+func TestAdminService_CreateUser_AccountAdminSkipsDefaultSubscriptions(t *testing.T) {
+	repo := &userRepoStub{nextID: 22}
+	assigner := &defaultSubscriptionAssignerStub{}
+	cfg := &config.Config{
+		Default: config.DefaultConfig{
+			UserBalance:     0,
+			UserConcurrency: 1,
+		},
+	}
+	settingService := NewSettingService(&settingRepoStub{values: map[string]string{
+		SettingKeyDefaultSubscriptions: `[{"group_id":5,"validity_days":30}]`,
+	}}, cfg)
+	svc := &adminServiceImpl{
+		userRepo:           repo,
+		settingService:     settingService,
+		defaultSubAssigner: assigner,
+	}
+
+	user, err := svc.CreateUser(context.Background(), &CreateUserInput{
+		Email:    "account-admin@test.com",
+		Password: "password",
+		Role:     RoleAccountAdmin,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Equal(t, RoleAccountAdmin, user.Role)
+	require.Len(t, repo.created, 1)
+	require.Empty(t, assigner.calls, "account administrators must not receive billable default subscriptions")
+}

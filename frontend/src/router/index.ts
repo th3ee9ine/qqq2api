@@ -142,7 +142,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/AccountsView.vue'),
     meta: {
       requiresAuth: true,
-      requiresAdmin: true,
+      requiredPermission: 'accounts.manage',
       title: 'Account Management',
       titleKey: 'admin.accounts.title',
       descriptionKey: 'admin.accounts.description'
@@ -166,7 +166,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/ProxiesView.vue'),
     meta: {
       requiresAuth: true,
-      requiresAdmin: true,
+      requiredPermission: 'proxies.manage',
       title: 'Proxy Management',
       titleKey: 'admin.proxies.title',
       descriptionKey: 'admin.proxies.description'
@@ -182,6 +182,18 @@ const routes: RouteRecordRaw[] = [
       title: 'System Settings',
       titleKey: 'admin.settings.title',
       descriptionKey: 'admin.settings.description'
+    }
+  },
+  {
+    path: '/admin/account-admins',
+    name: 'AdminAccountAdmins',
+    component: () => import('@/views/admin/AccountAdminsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Account Administrators',
+      titleKey: 'admin.accountAdmins.title',
+      descriptionKey: 'admin.accountAdmins.description'
     }
   },
   {
@@ -277,8 +289,8 @@ const DISABLED_FEATURE_PATHS = [
   '/monitor',
 ]
 
-// The panel is intentionally single-admin. Keep legacy URLs recognizable so
-// old bookmarks fail closed instead of rendering the removed user surface.
+// Keep retired self-service URLs recognizable so old bookmarks fail closed
+// instead of rendering the removed end-user surface.
 const REMOVED_USER_PATHS = [
   '/dashboard',
   '/usage',
@@ -317,7 +329,7 @@ function isPathInList(path: string, prefixes: string[]): boolean {
 }
 
 function adminOrLoginRedirect(authStore: ReturnType<typeof useAuthStore>): string {
-  return authStore.isAuthenticated && authStore.isAdmin ? '/admin/dashboard' : '/login'
+  return authStore.isAuthenticated ? authStore.panelHomePath : '/login'
 }
 
 router.beforeEach(async (to, _from, next) => {
@@ -344,6 +356,7 @@ router.beforeEach(async (to, _from, next) => {
   // Check if route requires authentication
   const requiresAuth = to.meta.requiresAuth !== false // Default to true
   const requiresAdmin = to.meta.requiresAdmin === true
+  const requiredPermission = to.meta.requiredPermission
 
   // Removed user and self-service authentication pages are redirected before
   // their lazy components can load. This also handles legacy deep links.
@@ -356,7 +369,7 @@ router.beforeEach(async (to, _from, next) => {
     try {
       const status = await getSetupStatus()
       if (!status.needs_setup) {
-        next(resolveCompletedSetupRedirectPath(authStore.isAuthenticated, authStore.isAdmin))
+        next(resolveCompletedSetupRedirectPath(authStore.isAuthenticated, authStore.user?.role))
         return
       }
     } catch {
@@ -370,8 +383,7 @@ router.beforeEach(async (to, _from, next) => {
     if (authStore.isAuthenticated && to.path === '/login') {
       // A stale legacy non-admin token must not expose a panel route. Leave the
       // login form reachable so the administrator can sign in again.
-      if (authStore.isAdmin) next('/admin/dashboard')
-      else next()
+      next(authStore.panelHomePath)
       return
     }
     // Backend mode: block public pages for unauthenticated users (except login, key-usage, setup)
@@ -396,16 +408,20 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
-  // Every protected panel route now belongs to the administrator. This is
-  // deliberately independent of the legacy backend_mode setting.
-  if (!authStore.isAdmin) {
+  // Ordinary users and unknown roles must never enter the management panel.
+  if (!authStore.isPanelOperator) {
     next('/login')
     return
   }
 
   // Check admin requirement
   if (requiresAdmin && !authStore.isAdmin) {
-    next('/login')
+    next(authStore.panelHomePath)
+    return
+  }
+
+  if (requiredPermission && !authStore.hasPermission(requiredPermission)) {
+    next(authStore.panelHomePath)
     return
   }
 
@@ -451,9 +467,9 @@ router.beforeEach(async (to, _from, next) => {
     }
   }
 
-  // Backend mode: admin gets full access, non-admin blocked
+  // Backend mode: authenticated panel operators may use their permitted routes.
   if (appStore.backendModeEnabled) {
-    if (authStore.isAuthenticated && authStore.isAdmin) {
+    if (authStore.isAuthenticated && authStore.isPanelOperator) {
       next()
       return
     }

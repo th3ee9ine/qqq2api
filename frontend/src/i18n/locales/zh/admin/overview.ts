@@ -114,6 +114,44 @@ export default {
       }
     },
 
+    accountAdmins: {
+      title: '账号管理员',
+      description: '创建和维护仅可管理账号与 IP 的受限管理员',
+      create: '创建账号管理员',
+      edit: '编辑账号管理员',
+      identity: '账号管理员',
+      role: '角色',
+      email: '邮箱',
+      emailPlaceholder: '请输入登录邮箱',
+      username: '用户名',
+      usernamePlaceholder: '请输入用户名（选填）',
+      password: '密码',
+      passwordPlaceholder: '请输入至少 6 位密码',
+      passwordEditPlaceholder: '留空则保持原密码',
+      passwordHint: '账号管理员登录后仅能访问账号管理和 IP 管理。',
+      notes: '备注',
+      notesPlaceholder: '请输入仅超级管理员可见的备注（选填）',
+      searchPlaceholder: '搜索邮箱、用户名或备注',
+      allStatuses: '全部状态',
+      lastActive: '最后活跃时间',
+      createdAt: '创建时间',
+      enable: '启用',
+      disable: '禁用',
+      enabled: '账号管理员已启用',
+      disabled: '账号管理员已禁用',
+      empty: '暂无账号管理员',
+      emptyHint: '创建账号管理员以委派账号和 IP 维护工作。',
+      deleteTitle: '删除账号管理员',
+      deleteConfirm: '确定要删除账号管理员“{email}”吗？此操作无法撤销。',
+      created: '账号管理员创建成功',
+      updated: '账号管理员更新成功',
+      deleted: '账号管理员删除成功',
+      loadFailed: '加载账号管理员列表失败',
+      createFailed: '创建账号管理员失败',
+      updateFailed: '更新账号管理员失败',
+      deleteFailed: '删除账号管理员失败'
+    },
+
     // Users Management
     users: {
       title: '用户管理',
@@ -241,7 +279,8 @@ export default {
       failedToLoadApiKeys: '加载用户 API 密钥失败',
       deleteConfirm: "确定要删除用户 '{email}' 吗？此操作无法撤销。",
       roles: {
-        admin: '管理员',
+        admin: '超级管理员',
+        account_admin: '账号管理员',
         user: '用户'
       },
       form: {

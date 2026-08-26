@@ -155,10 +155,10 @@ func (h *AuthHandler) ensureBackendModeAllowsUser(ctx context.Context, user *ser
 	if user == nil {
 		return infraerrors.Unauthorized("INVALID_USER", "user not found")
 	}
-	// This deployment is intentionally single-admin.  The administrator row
-	// created from ADMIN_EMAIL/ADMIN_PASSWORD remains the only interactive
-	// login identity; regular user accounts are no longer a supported surface.
-	if h != nil && h.authService != nil && h.authService.IsConfiguredAdmin(ctx, user) {
+	// Only panel operators may authenticate interactively. Ordinary user
+	// self-service remains disabled; account administrators are restricted by
+	// the authorization middleware after login.
+	if h != nil && h.authService != nil && h.authService.CanAccessAdminPanel(ctx, user) {
 		return nil
 	}
 	return service.ErrAdminOnlyMode
@@ -647,8 +647,8 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 
 	// Refresh tokens are interactive authentication as well.  Keep the
 	// administrator session working, but do not revive a legacy user session.
-	if result.UserRole != service.RoleAdmin {
-		response.Forbidden(c, "Only the administrator account can sign in.")
+	if result.UserRole != service.RoleAdmin && result.UserRole != service.RoleAccountAdmin {
+		response.Forbidden(c, "Only a panel administrator account can sign in.")
 		return
 	}
 

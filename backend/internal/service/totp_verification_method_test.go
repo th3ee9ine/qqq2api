@@ -64,6 +64,15 @@ func TestGetVerificationMethodAdminAlwaysPassword(t *testing.T) {
 	require.Equal(t, "password", method.Method)
 }
 
+func TestGetVerificationMethodAccountAdminAlwaysPassword(t *testing.T) {
+	accountAdmin := &User{ID: 3, Email: "operator@example.com", Role: RoleAccountAdmin}
+	svc, _ := newTotpVMService(t, accountAdmin, true)
+
+	method, err := svc.GetVerificationMethod(context.Background(), accountAdmin.ID)
+	require.NoError(t, err)
+	require.Equal(t, "password", method.Method)
+}
+
 func TestGetVerificationMethodRegularUserFollowsEmailVerifySetting(t *testing.T) {
 	user := &User{ID: 2, Email: "user@example.com", Role: RoleUser}
 
@@ -93,6 +102,16 @@ func TestTotpDisableAdminUsesPasswordEvenWithEmailVerifyEnabled(t *testing.T) {
 
 	// 密码正确 → 成功停用；全程不需要邮箱验证码（emailService 为 nil，走到邮箱分支会 panic）。
 	err = svc.Disable(context.Background(), admin.ID, "", "correct-password")
+	require.NoError(t, err)
+	require.True(t, userRepo.disableCalled)
+}
+
+func TestTotpDisableAccountAdminUsesPasswordEvenWithEmailVerifyEnabled(t *testing.T) {
+	accountAdmin := &User{ID: 3, Email: "operator@example.com", Role: RoleAccountAdmin, TotpEnabled: true}
+	require.NoError(t, accountAdmin.SetPassword("correct-password"))
+	svc, userRepo := newTotpVMService(t, accountAdmin, true)
+
+	err := svc.Disable(context.Background(), accountAdmin.ID, "", "correct-password")
 	require.NoError(t, err)
 	require.True(t, userRepo.disableCalled)
 }

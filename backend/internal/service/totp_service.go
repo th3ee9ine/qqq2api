@@ -142,11 +142,11 @@ func (s *TotpService) GetStatus(ctx context.Context, userID int64) (*TotpStatus,
 }
 
 // usesEmailVerification 判断 TOTP 启用/停用时的身份校验方式。
-// 管理员一律使用密码校验：管理员账号的邮箱常为占位地址收不到验证码，
+// 面板管理员一律使用密码校验：管理员账号的邮箱常为占位地址收不到验证码，
 // 且管理员凭证失守时攻击者往往同时控制通知邮箱，邮箱验证码不构成有效防线。
 // 普通用户维持原有行为：开启邮箱验证时用邮箱验证码，否则用密码。
 func (s *TotpService) usesEmailVerification(ctx context.Context, user *User) bool {
-	return user.Role != RoleAdmin && s.settingService.IsEmailVerifyEnabled(ctx)
+	return !user.IsPanelOperator() && s.settingService.IsEmailVerifyEnabled(ctx)
 }
 
 // verifyIdentity 按 usesEmailVerification 的结果校验邮箱验证码或密码。

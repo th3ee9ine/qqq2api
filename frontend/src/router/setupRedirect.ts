@@ -1,7 +1,17 @@
-export function resolveCompletedSetupRedirectPath(isAuthenticated: boolean, isAdmin: boolean): string {
+import type { UserRole } from '@/types'
+import { defaultPanelPath } from '@/utils/accessControl'
+
+export function resolveCompletedSetupRedirectPath(
+  isAuthenticated: boolean,
+  roleOrIsAdmin: UserRole | boolean | null | undefined,
+): string {
   if (!isAuthenticated) {
     return '/login'
   }
 
-  return isAdmin ? '/admin/dashboard' : '/dashboard'
+  // Keep the boolean form compatible with callers/tests that predate roles.
+  if (typeof roleOrIsAdmin === 'boolean') {
+    return roleOrIsAdmin ? '/admin/dashboard' : '/login'
+  }
+  return defaultPanelPath(roleOrIsAdmin)
 }

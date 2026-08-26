@@ -11,6 +11,7 @@ type AdminHandlers struct {
 	Group                 *admin.GroupHandler
 	ModelPricing          *admin.ModelPricingHandler
 	Account               *admin.AccountHandler
+	AccountAdmin          *admin.AccountAdminHandler
 	ImageStorage          *admin.ImageStorageHandler
 	OAuth                 *admin.OAuthHandler
 	OpenAIOAuth           *admin.OpenAIOAuthHandler

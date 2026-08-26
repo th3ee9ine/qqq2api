@@ -9,6 +9,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +19,10 @@ func TestPluginManagementRoutesRequireAdminAndMutationsRequireStepUp(t *testing.
 	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{
 		Plugin: adminhandler.NewPluginHandler(nil),
 	}}
-	pass := func(c *gin.Context) { c.Next() }
+	pass := func(c *gin.Context) {
+		c.Set(string(servermiddleware.ContextKeyUserRole), service.RoleAdmin)
+		c.Next()
+	}
 
 	t.Run("management is behind admin authentication", func(t *testing.T) {
 		router := gin.New()

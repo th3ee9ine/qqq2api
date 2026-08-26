@@ -45,3 +45,29 @@ func TestAuthServiceConfiguredAdminLegacyFallbackUsesFirstAdmin(t *testing.T) {
 		ID: 2, Email: "other-admin@example.com", Role: RoleAdmin,
 	}))
 }
+
+func TestAuthServiceCanAccessAdminPanel(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.Default.AdminEmail = "super-admin@example.com"
+	svc := NewAuthService(nil, &configuredAdminRepo{}, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	for _, tt := range []struct {
+		name string
+		user *User
+		want bool
+	}{
+		{name: "nil user", user: nil, want: false},
+		{name: "configured super administrator", user: &User{ID: 1, Email: "SUPER-ADMIN@example.com", Role: RoleAdmin}, want: true},
+		{name: "account administrator", user: &User{ID: 2, Email: "operator@example.com", Role: RoleAccountAdmin}, want: true},
+		{name: "unconfigured administrator", user: &User{ID: 3, Email: "other-admin@example.com", Role: RoleAdmin}, want: false},
+		{name: "ordinary user with configured email", user: &User{ID: 4, Email: "super-admin@example.com", Role: RoleUser}, want: false},
+		{name: "ordinary user", user: &User{ID: 5, Email: "user@example.com", Role: RoleUser}, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tt.want, svc.CanAccessAdminPanel(context.Background(), tt.user))
+		})
+	}
+}

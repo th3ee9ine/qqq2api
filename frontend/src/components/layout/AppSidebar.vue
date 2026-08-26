@@ -32,7 +32,7 @@
     <!-- Navigation -->
     <nav ref="sidebarNavRef" class="sidebar-nav scrollbar-hide">
       <!-- Administrator navigation. User/self-service sections were removed. -->
-      <div v-if="isAdmin" class="sidebar-section">
+      <div v-if="isPanelOperator" class="sidebar-section">
         <template v-for="item in adminNavItems" :key="item.path">
           <!-- Collapsible group (has children) -->
           <template v-if="item.children?.length">
@@ -151,6 +151,7 @@ import Icon, { type IconName } from '@/components/icons/Icon.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { sanitizeUrl } from '@/utils/url'
 import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
+import type { PanelPermission } from '@/utils/accessControl'
 
 interface NavItem {
   path: string
@@ -159,6 +160,7 @@ interface NavItem {
   iconSvg?: string
   hideInSimpleMode?: boolean
   featureFlag?: () => boolean | undefined
+  requiredPermission?: PanelPermission
   children?: NavItem[]
   expandOnly?: boolean
 }
@@ -174,9 +176,10 @@ const onboardingStore = useOnboardingStore()
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
 const mobileOpen = computed(() => appStore.mobileOpen)
 const isAdmin = computed(() => authStore.isAdmin)
+const isPanelOperator = computed(() => authStore.isPanelOperator)
 const sidebarNavRef = ref<HTMLElement | null>(null)
 const isDark = ref(document.documentElement.classList.contains('dark'))
-const homePath = '/admin/dashboard'
+const homePath = computed(() => authStore.panelHomePath)
 const siteName = computed(() => appStore.siteName)
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
 const siteVersion = computed(() => appStore.siteVersion)
@@ -189,9 +192,10 @@ const baseAdminNavItems = computed<NavItem[]>(() => [
   { path: '/admin/dashboard', label: t('nav.dashboard'), icon: 'grid' },
   { path: '/admin/ops', label: t('nav.ops'), icon: 'chart', featureFlag: flagOpsMonitoring },
   { path: '/admin/groups', label: t('nav.groups'), icon: 'folder', hideInSimpleMode: true },
-  { path: '/admin/accounts', label: t('nav.accounts'), icon: 'globe' },
+  { path: '/admin/accounts', label: t('nav.accounts'), icon: 'globe', requiredPermission: 'accounts.manage' },
   { path: '/admin/plugins', label: t('nav.plugins'), icon: 'cube', featureFlag: flagPluginManagement },
-  { path: '/admin/proxies', label: t('nav.proxies'), icon: 'server' },
+  { path: '/admin/proxies', label: t('nav.proxies'), icon: 'server', requiredPermission: 'proxies.manage' },
+  { path: '/admin/account-admins', label: t('nav.accountAdmins'), icon: 'users' },
   {
     path: '/admin/security-audit', label: t('nav.securityAudit'), icon: 'shield', expandOnly: true, featureFlag: flagRiskControl,
     children: [
@@ -207,6 +211,9 @@ const baseAdminNavItems = computed<NavItem[]>(() => [
 
 const adminNavItems = computed(() => {
   const filter = (items: NavItem[]): NavItem[] => items
+    .filter((item) => item.requiredPermission
+      ? authStore.hasPermission(item.requiredPermission)
+      : authStore.isAdmin)
     .filter((item) => item.featureFlag?.() !== false)
     .filter((item) => !authStore.isSimpleMode || !item.hideInSimpleMode)
     .map((item) => item.children ? { ...item, children: filter(item.children) } : item)

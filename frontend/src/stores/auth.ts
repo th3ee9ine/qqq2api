@@ -1,11 +1,20 @@
 /**
- * Authentication state for the single administrator control panel.
+ * Authentication state for super administrators and restricted account
+ * administrators.
  */
 
 import { defineStore } from 'pinia'
 import { computed, readonly, ref } from 'vue'
 import { authAPI, isTotp2FARequired, type LoginResponse } from '@/api'
 import type { AuthResponse, LoginRequest, User } from '@/types'
+import {
+  defaultPanelPath,
+  hasPanelPermission,
+  isAccountAdminRole,
+  isPanelRole,
+  isSuperAdminRole,
+  type PanelPermission,
+} from '@/utils/accessControl'
 
 const AUTH_TOKEN_KEY = 'auth_token'
 const AUTH_USER_KEY = 'auth_user'
@@ -15,8 +24,8 @@ const RETIRED_PENDING_AUTH_SESSION_KEY = 'pending_auth_session'
 const AUTO_REFRESH_INTERVAL = 60 * 1000
 const TOKEN_REFRESH_BUFFER = 120 * 1000
 
-function isAdministrator(user: User | null | undefined): user is User {
-  return user?.role === 'admin'
+function isPanelOperator(user: User | null | undefined): user is User {
+  return isPanelRole(user?.role)
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -28,9 +37,17 @@ export const useAuthStore = defineStore('auth', () => {
   let refreshIntervalId: ReturnType<typeof setInterval> | null = null
   let tokenRefreshTimeoutId: ReturnType<typeof setTimeout> | null = null
 
-  const isAuthenticated = computed(() => Boolean(token.value && isAdministrator(user.value)))
-  const isAdmin = computed(() => isAdministrator(user.value))
+  const isAuthenticated = computed(() => Boolean(token.value && isPanelOperator(user.value)))
+  // Keep isAdmin narrowly scoped to the configured super administrator.
+  const isAdmin = computed(() => isSuperAdminRole(user.value?.role))
+  const isAccountAdmin = computed(() => isAccountAdminRole(user.value?.role))
+  const isPanelOperatorRole = computed(() => isPanelOperator(user.value))
+  const panelHomePath = computed(() => defaultPanelPath(user.value?.role))
   const isSimpleMode = computed(() => runMode.value === 'simple')
+
+  function hasPermission(permission: PanelPermission): boolean {
+    return hasPanelPermission(user.value?.role, permission)
+  }
 
   function stopAutoRefresh(): void {
     if (refreshIntervalId) {
@@ -104,7 +121,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function setAuthFromResponse(response: AuthResponse): void {
-    if (!isAdministrator(response.user)) {
+    if (!isPanelOperator(response.user)) {
       clearAuth()
       throw new Error('Administrator account required')
     }
@@ -138,7 +155,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const parsedUser = JSON.parse(savedUser) as User
-      if (!isAdministrator(parsedUser)) {
+      if (!isPanelOperator(parsedUser)) {
         clearAuth()
         return
       }
@@ -207,7 +224,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     try {
       const response = await authAPI.getCurrentUser()
-      if (!isAdministrator(response.data)) {
+      if (!isPanelOperator(response.data)) {
         clearAuth()
         throw new Error('Administrator account required')
       }
@@ -230,6 +247,10 @@ export const useAuthStore = defineStore('auth', () => {
     runMode: readonly(runMode),
     isAuthenticated,
     isAdmin,
+    isAccountAdmin,
+    isPanelOperator: isPanelOperatorRole,
+    panelHomePath,
+    hasPermission,
     isSimpleMode,
     login,
     login2FA,

@@ -114,6 +114,44 @@ export default {
       }
     },
 
+    accountAdmins: {
+      title: 'Account Administrators',
+      description: 'Create and maintain restricted administrators for accounts and proxy IPs',
+      create: 'Create Account Administrator',
+      edit: 'Edit Account Administrator',
+      identity: 'Account Administrator',
+      role: 'Role',
+      email: 'Email',
+      emailPlaceholder: 'Enter the sign-in email',
+      username: 'Username',
+      usernamePlaceholder: 'Enter a username (optional)',
+      password: 'Password',
+      passwordPlaceholder: 'Enter at least 6 characters',
+      passwordEditPlaceholder: 'Leave blank to keep the current password',
+      passwordHint: 'Account administrators can only access Accounts and Proxies after signing in.',
+      notes: 'Notes',
+      notesPlaceholder: 'Notes visible only to super administrators (optional)',
+      searchPlaceholder: 'Search email, username, or notes',
+      allStatuses: 'All statuses',
+      lastActive: 'Last active',
+      createdAt: 'Created',
+      enable: 'Enable',
+      disable: 'Disable',
+      enabled: 'Account administrator enabled',
+      disabled: 'Account administrator disabled',
+      empty: 'No account administrators',
+      emptyHint: 'Create an account administrator to delegate account and proxy IP maintenance.',
+      deleteTitle: 'Delete Account Administrator',
+      deleteConfirm: 'Delete account administrator “{email}”? This action cannot be undone.',
+      created: 'Account administrator created',
+      updated: 'Account administrator updated',
+      deleted: 'Account administrator deleted',
+      loadFailed: 'Failed to load account administrators',
+      createFailed: 'Failed to create account administrator',
+      updateFailed: 'Failed to update account administrator',
+      deleteFailed: 'Failed to delete account administrator'
+    },
+
     // Users
     users: {
       title: 'User Management',
@@ -352,7 +390,8 @@ export default {
       createdAt: 'Created',
       totalRecharged: 'Total Recharged',
       roles: {
-        admin: 'Admin',
+        admin: 'Super Administrator',
+        account_admin: 'Account Administrator',
         user: 'User'
       },
       // Settings Dropdowns

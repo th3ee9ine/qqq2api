@@ -18,8 +18,9 @@ func TestGeneratedWireIncludesStandaloneImageStorageHandler(t *testing.T) {
 
 	for _, retained := range []string{
 		"admin.NewModelPricingHandler(billingService)",
+		"admin.NewAccountAdminHandler(adminService)",
 		"admin.NewImageStorageHandler(imageStorageSettingService)",
-		"accountHandler, imageStorageHandler, oAuthHandler",
+		"accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler",
 		"service.NewPluginManager(",
 		"admin.NewPluginHandler(pluginManager)",
 		"service.ProvideOpenAIQuotaAutoResetService(",

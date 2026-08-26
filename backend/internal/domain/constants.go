@@ -12,8 +12,13 @@ const (
 
 // Role constants
 const (
+	// RoleAdmin is the configured super administrator. Keep the persisted value
+	// for backwards compatibility with existing installations.
 	RoleAdmin = "admin"
-	RoleUser  = "user"
+	// RoleAccountAdmin is a restricted panel operator that may maintain upstream
+	// accounts and proxy IPs, but cannot access system administration features.
+	RoleAccountAdmin = "account_admin"
+	RoleUser         = "user"
 )
 
 // Platform constants

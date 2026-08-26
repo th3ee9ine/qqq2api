@@ -115,24 +115,26 @@
                         </span>
                       </button>
 
-                      <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
-                      <div class="px-2 py-2">
-                        <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
-                          {{ t('admin.accounts.toolActions') }}
+                      <template v-if="authStore.isAdmin">
+                        <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
+                        <div class="px-2 py-2">
+                          <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                            {{ t('admin.accounts.toolActions') }}
+                          </div>
                         </div>
-                      </div>
-                      <button class="account-tools-menu-item" @click="openErrorPassthrough">
-                        <span class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
-                          <Icon name="shield" size="sm" />
-                        </span>
-                        <span class="flex-1 text-left">{{ t('admin.errorPassthrough.title') }}</span>
-                      </button>
-                      <button class="account-tools-menu-item" @click="openTLSFingerprintProfiles">
-                        <span class="account-tools-menu-icon bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200">
-                          <Icon name="lock" size="sm" />
-                        </span>
-                        <span class="flex-1 text-left">{{ t('admin.tlsFingerprintProfiles.title') }}</span>
-                      </button>
+                        <button class="account-tools-menu-item" @click="openErrorPassthrough">
+                          <span class="account-tools-menu-icon bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
+                            <Icon name="shield" size="sm" />
+                          </span>
+                          <span class="flex-1 text-left">{{ t('admin.errorPassthrough.title') }}</span>
+                        </button>
+                        <button class="account-tools-menu-item" @click="openTLSFingerprintProfiles">
+                          <span class="account-tools-menu-icon bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                            <Icon name="lock" size="sm" />
+                          </span>
+                          <span class="flex-1 text-left">{{ t('admin.tlsFingerprintProfiles.title') }}</span>
+                        </button>
+                      </template>
 
                       <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
                       <div class="px-2 py-2">

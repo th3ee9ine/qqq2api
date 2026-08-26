@@ -40,7 +40,15 @@ const authResponse = {
   user: { ...administrator },
 }
 
-describe('single-administrator auth store', () => {
+const accountAdministrator = {
+  ...administrator,
+  id: 2,
+  username: 'account-operator',
+  email: 'operator@example.com',
+  role: 'account_admin' as const,
+}
+
+describe('administrator auth store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     localStorage.clear()
@@ -64,6 +72,25 @@ describe('single-administrator auth store', () => {
     expect(store.token).toBe('admin-access-token')
     expect(store.user).toEqual(administrator)
     expect(localStorage.getItem('auth_token')).toBe('admin-access-token')
+  })
+
+  it('stores a restricted account administrator session without granting super-admin access', async () => {
+    mockLogin.mockResolvedValue({
+      ...authResponse,
+      user: accountAdministrator,
+    })
+    const store = useAuthStore()
+
+    await store.login({ email: accountAdministrator.email, password: 'secret' })
+
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.isAdmin).toBe(false)
+    expect(store.isAccountAdmin).toBe(true)
+    expect(store.isPanelOperator).toBe(true)
+    expect(store.panelHomePath).toBe('/admin/accounts')
+    expect(store.hasPermission('accounts.manage')).toBe(true)
+    expect(store.hasPermission('proxies.manage')).toBe(true)
+    expect(store.hasPermission('super_admin')).toBe(false)
   })
 
   it('rejects a non-administrator response and clears stale credentials', async () => {
@@ -122,7 +149,7 @@ describe('single-administrator auth store', () => {
     expect(localStorage.getItem('refresh_token')).toBeNull()
   })
 
-  it('restores only an administrator session and drops retired pending auth state', () => {
+  it('restores a super-administrator session and drops retired pending auth state', () => {
     localStorage.setItem('auth_token', 'saved-token')
     localStorage.setItem('auth_user', JSON.stringify(administrator))
     localStorage.setItem('pending_auth_session', JSON.stringify({ provider: 'oidc' }))
@@ -132,6 +159,18 @@ describe('single-administrator auth store', () => {
 
     expect(store.isAuthenticated).toBe(true)
     expect(localStorage.getItem('pending_auth_session')).toBeNull()
+  })
+
+  it('restores a persisted account administrator session', () => {
+    localStorage.setItem('auth_token', 'saved-operator-token')
+    localStorage.setItem('auth_user', JSON.stringify(accountAdministrator))
+    const store = useAuthStore()
+
+    store.checkAuth()
+
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.isAccountAdmin).toBe(true)
+    expect(store.isAdmin).toBe(false)
   })
 
   it('removes a persisted non-administrator session', () => {

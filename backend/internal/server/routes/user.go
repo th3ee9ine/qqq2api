@@ -11,8 +11,8 @@ import (
 // RegisterUserRoutes registers the small authenticated surface that remains
 // after removing user self-service.  The function name is retained so the
 // router wiring and rolling upgrades do not need a flag day: API Keys are
-// global system resources, while TOTP endpoints are kept only for the single
-// administrator's security setup.
+// global system resources, while TOTP endpoints are kept for panel operators'
+// own security setup.
 func RegisterUserRoutes(
 	v1 *gin.RouterGroup,
 	h *handler.Handlers,
@@ -32,6 +32,7 @@ func RegisterUserRoutes(
 		// Global API Key management.  There is deliberately no user filter or
 		// ownership check in the service/repository layer.
 		keys := authenticated.Group("/keys")
+		keys.Use(middleware.AdminOnly())
 		{
 			keys.GET("", h.APIKey.List)
 			keys.GET("/:id", h.APIKey.GetByID)
@@ -43,14 +44,15 @@ func RegisterUserRoutes(
 		// The group picker is needed by the global API Key page.  It returns all
 		// active groups rather than a per-user entitlement list.
 		groups := authenticated.Group("/groups")
+		groups.Use(middleware.AdminOnly())
 		groups.GET("/available", h.APIKey.GetAvailableGroups)
 
 		// Keep the existing daily usage URL as a compatibility alias for the
 		// global key page.  It is key-scoped, not user-scoped.
 		user := authenticated.Group("/user")
-		user.GET("/api-keys/:id/usage/daily", panelRateLimiter.Heavy(), h.Usage.GetMyAPIKeyDailyUsage)
+		user.GET("/api-keys/:id/usage/daily", middleware.AdminOnly(), panelRateLimiter.Heavy(), h.Usage.GetMyAPIKeyDailyUsage)
 
-		// TOTP is the administrator's security mechanism, not a user profile
+		// TOTP is a panel operator security mechanism, not a user profile
 		// feature.  The legacy URL is retained so existing admin settings and
 		// step-up dialogs continue to work.
 		totp := user.Group("/totp")

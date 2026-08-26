@@ -47,6 +47,21 @@ describe('AppSidebar administrator navigation', () => {
     expect(componentSource).toContain("{ path: '/admin/usage', label: t('nav.usage'), icon: 'chart' }")
   })
 
+  it('marks only account and proxy navigation as available to restricted operators', () => {
+    expect(componentSource).toContain("path: '/admin/accounts'")
+    expect(componentSource).toContain("requiredPermission: 'accounts.manage'")
+    expect(componentSource).toContain("path: '/admin/proxies'")
+    expect(componentSource).toContain("requiredPermission: 'proxies.manage'")
+    expect(componentSource).toContain("path: '/admin/account-admins'")
+    expect(componentSource).toContain(': authStore.isAdmin)')
+
+    const restrictedOperatorPaths = Array.from(
+      componentSource.matchAll(/\{ path: '([^']+)'[^\n]*requiredPermission: '[^']+'/g),
+      (match) => match[1],
+    )
+    expect(restrictedOperatorPaths).toEqual(['/admin/accounts', '/admin/proxies'])
+  })
+
   it('keeps the original retained navigation visuals and ordering', () => {
     expect(componentSource).toContain("{ path: '/admin/groups', label: t('nav.groups'), icon: 'folder'")
     expect(componentSource).toContain('name="chevronDoubleLeft"')

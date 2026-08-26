@@ -26,6 +26,10 @@ func RegisterAdminRoutes(
 	admin.Use(panelRateLimiter.Global())
 	// 审计中间件挂在认证之后：所有管理面变更类操作 + 敏感读取入审计日志
 	admin.Use(gin.HandlerFunc(auditLog))
+	// Restricted account administrators share the authentication entry point,
+	// but are limited to account and proxy/IP maintenance at the API boundary.
+	// Keep this after the audit middleware so denied mutation attempts are logged.
+	admin.Use(middleware.AccountAdminScope())
 	{
 		// 仪表盘
 		registerDashboardRoutes(admin, h)
@@ -38,6 +42,9 @@ func RegisterAdminRoutes(
 
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
+
+		// 账号管理员管理（AccountAdminScope 保证仅超级管理员可访问）
+		registerAccountAdminRoutes(admin, h, stepUpAuth)
 
 		// OpenAI OAuth
 		registerOpenAIOAuthRoutes(admin, h)
@@ -80,6 +87,17 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerAccountAdminRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
+	operators := admin.Group("/account-admins")
+	operators.Use(middleware.AdminOnly())
+	{
+		operators.GET("", h.Admin.AccountAdmin.List)
+		operators.POST("", gin.HandlerFunc(stepUpAuth), h.Admin.AccountAdmin.Create)
+		operators.PUT("/:id", gin.HandlerFunc(stepUpAuth), h.Admin.AccountAdmin.Update)
+		operators.DELETE("/:id", gin.HandlerFunc(stepUpAuth), h.Admin.AccountAdmin.Delete)
 	}
 }
 

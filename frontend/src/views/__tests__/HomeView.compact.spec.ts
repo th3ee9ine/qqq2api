@@ -15,6 +15,7 @@ const { appStore, authStore } = vi.hoisted(() => ({
   authStore: {
     isAuthenticated: false,
     isAdmin: false,
+    panelHomePath: '/admin/dashboard',
     user: null as { email?: string } | null,
     checkAuth: vi.fn(),
   },
@@ -63,6 +64,7 @@ describe('HomeView compact mode', () => {
   beforeEach(() => {
     authStore.isAuthenticated = false
     authStore.isAdmin = false
+    authStore.panelHomePath = '/admin/dashboard'
     authStore.user = null
     authStore.checkAuth.mockClear()
     appStore.fetchPublicSettings.mockClear()
@@ -122,6 +124,13 @@ describe('HomeView compact mode', () => {
     expect(compactDestination(wrapper)).toBe('/admin/dashboard')
     expect(authStore.checkAuth).toHaveBeenCalledOnce()
     expect(appStore.fetchPublicSettings).not.toHaveBeenCalled()
+  })
+
+  it('links account administrators to account management', () => {
+    authStore.isAuthenticated = true
+    authStore.panelHomePath = '/admin/accounts'
+
+    expect(compactDestination(mountHome({ compact_home_enabled: true }))).toBe('/admin/accounts')
   })
 
   it('does not expose the removed model plaza entry', () => {

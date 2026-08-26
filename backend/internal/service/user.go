@@ -68,6 +68,17 @@ func (u *User) IsAdmin() bool {
 	return u.Role == RoleAdmin
 }
 
+// IsAccountAdmin reports whether the user is a restricted account operator.
+func (u *User) IsAccountAdmin() bool {
+	return u.Role == RoleAccountAdmin
+}
+
+// IsPanelOperator reports whether the user may sign in to the control panel.
+// Route-level authorization still decides which panel resources are available.
+func (u *User) IsPanelOperator() bool {
+	return u.IsAdmin() || u.IsAccountAdmin()
+}
+
 func (u *User) IsActive() bool {
 	return u.Status == StatusActive
 }

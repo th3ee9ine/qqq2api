@@ -19,6 +19,7 @@ func TestBackendModeUserGuardRequiresAdministrator(t *testing.T) {
 		wantStatus int
 	}{
 		{name: "administrator allowed", role: service.RoleAdmin, wantStatus: http.StatusOK},
+		{name: "account administrator allowed", role: service.RoleAccountAdmin, wantStatus: http.StatusOK},
 		{name: "ordinary user blocked", role: service.RoleUser, wantStatus: http.StatusForbidden},
 		{name: "missing role blocked", wantStatus: http.StatusForbidden},
 	} {

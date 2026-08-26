@@ -13,7 +13,7 @@ import (
 )
 
 // RegisterAuthRoutes registers the deliberately small authentication surface
-// used by the single-administrator deployment. Password login (plus its TOTP
+// used by the administrator panel. Password login (plus its TOTP
 // continuation), refresh, and logout remain available; registration,
 // password recovery, passkeys, OAuth, promo/invitation validation, and all
 // other self-service flows are no longer routable.

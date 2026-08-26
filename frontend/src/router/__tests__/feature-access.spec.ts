@@ -15,6 +15,11 @@ const authStore = vi.hoisted(() => ({
   checkAuth: vi.fn(),
   isAuthenticated: true,
   isAdmin: false,
+  isAccountAdmin: false,
+  isPanelOperator: true,
+  panelHomePath: '/admin/dashboard',
+  user: { role: 'admin' },
+  hasPermission: vi.fn(() => true),
   isSimpleMode: false,
   hasPendingAuthSession: false,
 }))
@@ -101,6 +106,11 @@ describe('feature route guard', () => {
   beforeEach(() => {
     authStore.isAuthenticated = true
     authStore.isAdmin = true
+    authStore.isAccountAdmin = false
+    authStore.isPanelOperator = true
+    authStore.panelHomePath = '/admin/dashboard'
+    authStore.user = { role: 'admin' }
+    authStore.hasPermission.mockReturnValue(true)
     authStore.isSimpleMode = false
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
@@ -135,6 +145,45 @@ describe('feature route guard', () => {
 
     expect(next).toHaveBeenCalledOnce()
     expect(next).toHaveBeenCalledWith()
+  })
+
+  it.each([
+    ['/admin/accounts', 'accounts.manage'],
+    ['/admin/proxies', 'proxies.manage'],
+  ])('allows an account administrator to access %s', async (path, permission) => {
+    authStore.isAdmin = false
+    authStore.isAccountAdmin = true
+    authStore.panelHomePath = '/admin/accounts'
+    authStore.user = { role: 'account_admin' }
+    authStore.hasPermission.mockImplementation((value: string) => value === permission)
+
+    const route = routerHarness.routes.find((item) => item.path === path)
+    expect(route?.meta?.requiredPermission).toBe(permission)
+
+    const { navigation, next } = runGuard({ requiredPermission: permission }, path)
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('keeps account-administrator management exclusive to super administrators', async () => {
+    authStore.isAdmin = false
+    authStore.isAccountAdmin = true
+    authStore.panelHomePath = '/admin/accounts'
+    authStore.user = { role: 'account_admin' }
+
+    const route = routerHarness.routes.find((item) => item.path === '/admin/account-admins')
+    expect(route).toMatchObject({
+      name: 'AdminAccountAdmins',
+      meta: { requiresAuth: true, requiresAdmin: true },
+    })
+
+    const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/account-admins')
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/admin/accounts')
   })
 
   it.each([

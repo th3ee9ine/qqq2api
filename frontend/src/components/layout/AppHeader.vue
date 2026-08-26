@@ -56,7 +56,7 @@
                 <div class="text-xs text-gray-500 dark:text-dark-400">{{ user.email }}</div>
               </div>
               <div class="py-1">
-                <router-link to="/keys" class="dropdown-item" @click="closeDropdown">
+                <router-link v-if="authStore.isAdmin" to="/keys" class="dropdown-item" @click="closeDropdown">
                   <Icon name="key" size="sm" />
                   {{ t('nav.apiKeys') }}
                 </router-link>

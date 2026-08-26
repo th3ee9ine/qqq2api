@@ -274,7 +274,6 @@ func (h *GroupHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-
 	outGroups := make([]dto.AdminGroup, 0, len(groups))
 	for i := range groups {
 		outGroups = append(outGroups, *dto.GroupFromServiceAdmin(&groups[i]))
@@ -417,6 +416,12 @@ func parsePositiveIDParam(c *gin.Context, name string) (int64, bool) {
 func (h *GroupHandler) GetAll(c *gin.Context) {
 	platform := c.Query("platform")
 	includeInactive := c.Query("include_inactive") == "true"
+	restrictedAccountAdmin := isAccountAdminRequest(c)
+	if restrictedAccountAdmin {
+		// Disabled groups are relevant only to the super-administrator API-key
+		// filter and must not be exposed through the account-form lookup.
+		includeInactive = false
+	}
 
 	var groups []service.Group
 	var err error
@@ -431,6 +436,10 @@ func (h *GroupHandler) GetAll(c *gin.Context) {
 
 	if err != nil {
 		response.ErrorFrom(c, err)
+		return
+	}
+	if restrictedAccountAdmin {
+		response.Success(c, accountAdminGroupOptions(groups))
 		return
 	}
 

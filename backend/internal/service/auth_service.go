@@ -175,6 +175,20 @@ func (s *AuthService) IsConfiguredAdmin(ctx context.Context, user *User) bool {
 	return err == nil && legacyAdmin != nil && legacyAdmin.ID == user.ID
 }
 
+// CanAccessAdminPanel reports whether a user may establish an interactive
+// control-panel session. The configured RoleAdmin remains the sole super
+// administrator, while RoleAccountAdmin identities are intentionally allowed
+// to sign in and are constrained by route-level authorization.
+func (s *AuthService) CanAccessAdminPanel(ctx context.Context, user *User) bool {
+	if user == nil {
+		return false
+	}
+	if user.IsAccountAdmin() {
+		return true
+	}
+	return s.IsConfiguredAdmin(ctx, user)
+}
+
 func (s *AuthService) SetTencentCaptchaService(tencentCaptchaService *TencentCaptchaService) {
 	s.tencentCaptchaService = tencentCaptchaService
 }
@@ -582,7 +596,7 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 	if !user.IsActive() {
 		return "", nil, ErrUserNotActive
 	}
-	if !s.IsConfiguredAdmin(ctx, user) {
+	if !s.CanAccessAdminPanel(ctx, user) {
 		return "", nil, ErrAdminOnlyMode
 	}
 
@@ -1711,7 +1725,7 @@ func (s *AuthService) RefreshTokenPair(ctx context.Context, refreshToken string)
 		_ = s.refreshTokenCache.DeleteTokenFamily(ctx, data.FamilyID)
 		return nil, ErrUserNotActive
 	}
-	if !s.IsConfiguredAdmin(ctx, user) {
+	if !s.CanAccessAdminPanel(ctx, user) {
 		_ = s.refreshTokenCache.DeleteTokenFamily(ctx, data.FamilyID)
 		return nil, ErrAdminOnlyMode
 	}

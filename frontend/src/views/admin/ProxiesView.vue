@@ -885,6 +885,7 @@
       @close="showImportData = false"
       @imported="handleDataImported"
     />
+    <TotpStepUpDialog :controller="proxyExportStepUp" />
 
     <BaseDialog
       :show="showQualityReportDialog"
@@ -1032,12 +1033,20 @@ import { useClipboard } from '@/composables/useClipboard'
 import { useSwipeSelect } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
+import {
+  isStepUpBlocked,
+  isStepUpCancelled,
+  stepUpBlockReason,
+  useStepUp,
+} from '@/composables/useStepUp'
 import { formatDateTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
+const proxyExportStepUp = useStepUp()
 
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false },
@@ -1983,12 +1992,14 @@ const handleExportData = async () => {
   if (exportingData.value) return
   exportingData.value = true
   try {
-    const dataPayload = await adminAPI.proxies.exportData(
-      selectedCount.value > 0
-        ? { ids: Array.from(selectedProxyIds.value) }
-        : {
-            filters: buildProxyQueryFilters()
-          }
+    const dataPayload = await proxyExportStepUp.run(() =>
+      adminAPI.proxies.exportData(
+        selectedCount.value > 0
+          ? { ids: Array.from(selectedProxyIds.value) }
+          : {
+              filters: buildProxyQueryFilters()
+            }
+      )
     )
     const timestamp = formatExportTimestamp()
     const filename = `sub2api-proxy-${timestamp}.json`
@@ -2001,7 +2012,17 @@ const handleExportData = async () => {
     URL.revokeObjectURL(url)
     appStore.showSuccess(t('admin.proxies.dataExported'))
   } catch (error: any) {
-    appStore.showError(error?.message || t('admin.proxies.dataExportFailed'))
+    if (isStepUpCancelled(error)) {
+      // User cancelled the verification dialog; no error toast is needed.
+    } else if (isStepUpBlocked(error)) {
+      appStore.showError(
+        stepUpBlockReason(error) === 'STEP_UP_ADMIN_API_KEY_FORBIDDEN'
+          ? t('stepUp.adminApiKeyForbidden')
+          : t('stepUp.notEnabled')
+      )
+    } else {
+      appStore.showError(error?.message || t('admin.proxies.dataExportFailed'))
+    }
   } finally {
     exportingData.value = false
     showExportDataDialog.value = false

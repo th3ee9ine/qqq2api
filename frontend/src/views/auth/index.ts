@@ -1,2 +1,2 @@
-/** Single-administrator authentication view. */
+/** Administrator authentication view. */
 export { default as LoginView } from './LoginView.vue'
