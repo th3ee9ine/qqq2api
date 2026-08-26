@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -103,6 +104,21 @@ func TestLiveAttestationErrorIsExplicit(t *testing.T) {
 
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 	require.Contains(t, recorder.Body.String(), "Sub2API runs on macOS")
+}
+
+func TestLiveAdmissionErrorReturnsRetryAfter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+
+	(&OpenAIGatewayHandler{}).writeLiveCreateError(context, &service.OpenAIOAuthAdmissionError{
+		Reason:     "bounded_queue_full",
+		RetryAfter: 1500 * time.Millisecond,
+	})
+
+	require.Equal(t, http.StatusTooManyRequests, recorder.Code)
+	require.Equal(t, "2", recorder.Header().Get("Retry-After"))
+	require.Contains(t, recorder.Body.String(), "rate_limit_error")
 }
 
 func jsonPathString(t *testing.T, raw json.RawMessage, keys ...string) string {

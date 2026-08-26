@@ -270,6 +270,10 @@ func (s *OpenAIGatewayService) SelectAccountForTokenCount(
 	platform string,
 ) (*Account, error) {
 	ctx = WithOpenAIProfitControlSuppressed(ctx)
+	// Token counting may reuse an existing sticky binding for protocol/model
+	// consistency, but it must not create, refresh, or delete durable session
+	// affinity because it is not a generation request.
+	ctx = withOpenAIStickySessionWriteSuppressed(ctx)
 	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
 	return s.selectAccountForModelWithExclusions(
 		ctx,
@@ -389,6 +393,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if account == nil {
 		return "account_nil"
+	}
+	if retryTarget := openAISameAccountRetryTarget(ctx); retryTarget > 0 && account.ID != retryTarget {
+		return "same_account_retry_mismatch"
 	}
 	if account.Platform != platform || !account.IsOpenAICompatible() {
 		return "platform_mismatch"

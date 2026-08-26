@@ -426,7 +426,7 @@ export default {
       },
       upstreamBillingProbe: {
         title: '上游倍率自动探测',
-        description: '定期获取 API Key 账号所连接上游 Sub2API 站点声明的计费倍率；只有另行开启“同步上游声明倍率”的账号才会更新账号倍率。',
+        description: '定期获取 API Key 账号所连接的兼容上游网关所声明的计费倍率；只有另行开启“同步上游声明倍率”的账号才会更新账号倍率。',
         enabled: '启用全局自动探测',
         enabledHint: '开启后，仅对账号自身已启用自动检测的账号执行定时探测；关闭后停止所有定时探测，手动探测不受影响。',
         intervalMinutes: '探测周期（分钟）',
@@ -969,9 +969,9 @@ export default {
         title: '429 默认回避',
         description: '配置上游返回 429 且没有明确重置时间时的默认账号回避策略',
         enabled: '启用 429 默认回避',
-        enabledHint: '收到无重置时间的 429 时暂停该账号调度，冷却后自动恢复',
+        enabledHint: '收到无重置时间的 429 时暂停该账号调度，冷却后自动恢复；OpenAI 账号始终至少回避 30 秒',
         cooldownSeconds: '回避时长（秒）',
-        cooldownSecondsHint: '默认回避持续时间（1-7200 秒）；上游返回明确 reset 时仍优先使用上游时间',
+        cooldownSecondsHint: '默认回避持续时间（1-7200 秒）；OpenAI 取该值与 30 秒的较大值，更长的上游 reset 仍优先',
         saved: '429 默认回避设置保存成功',
         saveFailed: '保存 429 默认回避设置失败'
       },

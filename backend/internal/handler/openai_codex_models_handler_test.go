@@ -264,6 +264,24 @@ func TestCodexModelsHonorsAccountSwitchLimit(t *testing.T) {
 	}
 }
 
+func TestCodexModelsOAuthFailureAllowsOnlyOneAlternate(t *testing.T) {
+	handler, upstream, groupID := newCodexModelsOAuthFailoverTestHandler(4, 3)
+	upstream.statuses = map[int64]int{
+		1: http.StatusTooManyRequests,
+		2: http.StatusBadGateway,
+		3: http.StatusServiceUnavailable,
+		4: http.StatusGatewayTimeout,
+	}
+	recorder := performCodexModelsRequest(t, handler, groupID)
+
+	if got, want := upstream.calls(), []int64{1, 2}; !equalInt64Slices(got, want) {
+		t.Fatalf("OAuth manifest request walked beyond one alternate: got %v, want %v", got, want)
+	}
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+	}
+}
+
 func newCodexModelsFailoverTestHandler(firstStatus int) (*OpenAIGatewayHandler, *codexModelsFailoverHTTPUpstream, int64) {
 	return newCodexModelsFailoverTestHandlerWithAccountCount(firstStatus, 2, 3)
 }
@@ -289,6 +307,37 @@ func newCodexModelsFailoverTestHandlerWithAccountCount(firstStatus, accountCount
 		})
 	}
 	upstream := &codexModelsFailoverHTTPUpstream{firstStatus: firstStatus}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	gatewayService := service.NewOpenAIGatewayService(
+		codexModelsFailoverAccountRepo{accounts: accounts},
+		nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil,
+		upstream,
+		nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	return &OpenAIGatewayHandler{gatewayService: gatewayService, maxAccountSwitches: maxSwitches}, upstream, groupID
+}
+
+func newCodexModelsOAuthFailoverTestHandler(accountCount, maxSwitches int) (*OpenAIGatewayHandler, *codexModelsFailoverHTTPUpstream, int64) {
+	gin.SetMode(gin.TestMode)
+	groupID := int64(42)
+	accounts := make([]service.Account, 0, accountCount)
+	for i := 1; i <= accountCount; i++ {
+		accounts = append(accounts, service.Account{
+			ID:          int64(i),
+			Name:        fmt.Sprintf("oauth-%d", i),
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			Priority:    i - 1,
+			Concurrency: 1,
+			Credentials: map[string]any{
+				"access_token":       fmt.Sprintf("oauth-token-%d", i),
+				"chatgpt_account_id": fmt.Sprintf("acct-%d", i),
+			},
+		})
+	}
+	upstream := &codexModelsFailoverHTTPUpstream{firstStatus: http.StatusServiceUnavailable}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	gatewayService := service.NewOpenAIGatewayService(
 		codexModelsFailoverAccountRepo{accounts: accounts},

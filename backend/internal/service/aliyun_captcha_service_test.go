@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -164,6 +165,9 @@ func TestAliyunCaptchaServiceValidateCredentials(t *testing.T) {
 		err := svc.ValidateCredentials(context.Background(), "id", "sk", "scene", "sgp")
 		require.NoError(t, err)
 		require.Equal(t, "captcha.ap-southeast-1.aliyuncs.com", spy.lastCred.Endpoint)
+		require.Len(t, spy.lastParam, 48)
+		require.NotContains(t, strings.ToLower(spy.lastParam), "sub2api")
+		require.NotContains(t, strings.ToLower(spy.lastParam), "qqq2api")
 	})
 }
 

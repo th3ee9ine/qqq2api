@@ -160,6 +160,27 @@ func TestBuildCodexSparkWindowExtraUpdates_NoBengalfox(t *testing.T) {
 	require.Nil(t, buildCodexSparkWindowExtraUpdates(usage, time.Now()))
 }
 
+func TestBuildCodexPrimaryWindowExtraUpdates(t *testing.T) {
+	now := time.Now().UTC()
+	usage := &OpenAIQuotaUsage{RateLimit: &OpenAIRateLimit{
+		PrimaryWindow: &OpenAIRateLimitWindow{
+			UsedPercent:        0.31,
+			LimitWindowSeconds: 5 * 60 * 60,
+			ResetAfterSeconds:  900,
+		},
+		SecondaryWindow: &OpenAIRateLimitWindow{
+			UsedPercent:        0.62,
+			LimitWindowSeconds: 7 * 24 * 60 * 60,
+			ResetAfterSeconds:  3600,
+		},
+	}}
+
+	updates := buildCodexPrimaryWindowExtraUpdates(usage, now)
+	require.InDelta(t, 0.31, updates["codex_5h_used_percent"], 1e-9)
+	require.InDelta(t, 0.62, updates["codex_7d_used_percent"], 1e-9)
+	require.Equal(t, now.Format(time.RFC3339), updates["codex_usage_updated_at"])
+}
+
 // ── Part C: ResetCredit 影子拒绝 ───────────────────────────────────────────
 
 // TestResetCreditShadowRejected 验证:
@@ -586,6 +607,46 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 	encoded, err := json.Marshal(usage)
 	require.NoError(t, err)
 	require.NotContains(t, string(encoded), "secret-credit-id")
+}
+
+func TestQueryUsageWindowsSkipsResetCreditDetails(t *testing.T) {
+	account := &Account{
+		ID:       100,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "org-parent123",
+		},
+	}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{100: account}}
+	tokenCache := &stubQuotaTokenCache{tokens: map[string]string{
+		OpenAITokenCacheKey(account): "fake-token",
+	}}
+	tokenProvider := NewOpenAITokenProvider(repo, tokenCache, nil)
+
+	var detailCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		switch r.URL.Path {
+		case "/backend-api/wham/usage":
+			_ = json.NewEncoder(w).Encode(OpenAIQuotaUsage{RateLimit: &OpenAIRateLimit{
+				PrimaryWindow: &OpenAIRateLimitWindow{UsedPercent: 0.25, LimitWindowSeconds: 18000},
+			}})
+		case "/backend-api/wham/rate-limit-reset-credits":
+			detailCalls++
+			_, _ = w.Write([]byte(`{"credits":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	usage, err := svc.QueryUsageWindows(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.NotNil(t, usage.RateLimit)
+	require.Zero(t, detailCalls, "background window refresh must not query reset-credit details")
 }
 
 func TestQueryUsageResetCreditDetails401NonFatal(t *testing.T) {

@@ -144,6 +144,17 @@ func NewOpenAIQuotaService(
 // OAuth account. Returns infraerrors so the handler layer can map them to
 // stable error codes / HTTP statuses.
 func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	return s.queryUsage(ctx, accountID, true)
+}
+
+// QueryUsageWindows reads only the native quota windows. Background account
+// refreshes use this narrower form so they do not issue the additional reset-
+// credit detail request needed only by the interactive quota UI.
+func (s *OpenAIQuotaService) QueryUsageWindows(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	return s.queryUsage(ctx, accountID, false)
+}
+
+func (s *OpenAIQuotaService) queryUsage(ctx context.Context, accountID int64, includeResetCredits bool) (*OpenAIQuotaUsage, error) {
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -193,21 +204,23 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 	}
 
 	payload.FetchedAt = time.Now().Unix()
-	details := s.queryResetCreditDetails(callCtx, client, accessToken, chatGPTAccountID, fedRAMP, accountID)
-	if details != nil {
-		payload.autoResetCandidates = details.AutoResetCandidates
-		hasDetailCount := details.AvailableCount != nil
-		if payload.RateLimitResetCredits == nil {
-			payload.RateLimitResetCredits = &OpenAIRateLimitResetCredits{}
-		}
-		if details.CreditListPresent {
-			payload.RateLimitResetCredits.Credits = details.Credits
-		}
-		switch {
-		case hasDetailCount:
-			payload.RateLimitResetCredits.AvailableCount = *details.AvailableCount
-		case details.CreditListPresent:
-			payload.RateLimitResetCredits.AvailableCount = details.AvailableCreditCount
+	if includeResetCredits {
+		details := s.queryResetCreditDetails(callCtx, client, accessToken, chatGPTAccountID, fedRAMP, accountID)
+		if details != nil {
+			payload.autoResetCandidates = details.AutoResetCandidates
+			hasDetailCount := details.AvailableCount != nil
+			if payload.RateLimitResetCredits == nil {
+				payload.RateLimitResetCredits = &OpenAIRateLimitResetCredits{}
+			}
+			if details.CreditListPresent {
+				payload.RateLimitResetCredits.Credits = details.Credits
+			}
+			switch {
+			case hasDetailCount:
+				payload.RateLimitResetCredits.AvailableCount = *details.AvailableCount
+			case details.CreditListPresent:
+				payload.RateLimitResetCredits.AvailableCount = details.AvailableCreditCount
+			}
 		}
 	}
 	return &payload, nil
@@ -593,14 +606,27 @@ func buildCodexSparkWindowExtraUpdates(usage *OpenAIQuotaUsage, now time.Time) m
 			break
 		}
 	}
-	if spark == nil {
+	return buildCodexQuotaWindowExtraUpdates(spark, now)
+}
+
+// buildCodexPrimaryWindowExtraUpdates maps the ordinary /wham/usage quota
+// window to the same durable codex_* fields used by reactive response headers.
+func buildCodexPrimaryWindowExtraUpdates(usage *OpenAIQuotaUsage, now time.Time) map[string]any {
+	if usage == nil {
+		return nil
+	}
+	return buildCodexQuotaWindowExtraUpdates(usage.RateLimit, now)
+}
+
+func buildCodexQuotaWindowExtraUpdates(rateLimit *OpenAIRateLimit, now time.Time) map[string]any {
+	if rateLimit == nil {
 		return nil
 	}
 
 	// Reuse OpenAICodexUsageSnapshot / Normalize to map primary/secondary windows
-	// to canonical 5h/7d buckets (same logic as probeOpenAICodexSnapshot).
+	// to canonical 5h/7d buckets (same logic as response-header snapshots).
 	snap := &OpenAICodexUsageSnapshot{}
-	if w := spark.PrimaryWindow; w != nil {
+	if w := rateLimit.PrimaryWindow; w != nil {
 		p := w.UsedPercent
 		snap.PrimaryUsedPercent = &p
 		ra := int(w.ResetAfterSeconds)
@@ -608,7 +634,7 @@ func buildCodexSparkWindowExtraUpdates(usage *OpenAIQuotaUsage, now time.Time) m
 		wm := int(w.LimitWindowSeconds / 60)
 		snap.PrimaryWindowMinutes = &wm
 	}
-	if w := spark.SecondaryWindow; w != nil {
+	if w := rateLimit.SecondaryWindow; w != nil {
 		p := w.UsedPercent
 		snap.SecondaryUsedPercent = &p
 		ra := int(w.ResetAfterSeconds)

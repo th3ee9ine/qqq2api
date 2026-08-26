@@ -211,6 +211,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			return
 		}
 		account := selection.Account
+		c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), 0))
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai_chat_completions.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		_ = scheduleDecision
@@ -350,6 +351,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 								return
 							case <-time.After(retryDelay):
 							}
+							c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), account.ID))
 							continue
 						}
 					}

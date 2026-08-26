@@ -355,8 +355,7 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 		retryableOnSameAccount || oauth429Retry,
 	)
 	if oauth429Retry {
-		failoverErr.SameAccountRetryDeadline = s.openAIOAuth429RetryDeadline(account)
-		failoverErr.SameAccountRetryDelay = openAIOAuth429SameAccountRetryDelay(responseHeaders, failoverErr.SameAccountRetryDeadline)
+		failoverErr.SameAccountRetryDeadline, failoverErr.SameAccountRetryDelay = s.openAIOAuth429RetryMetadata(account)
 	}
 	return failoverErr
 }

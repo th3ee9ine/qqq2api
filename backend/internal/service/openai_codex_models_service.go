@@ -368,12 +368,12 @@ func isAgentIdentityTaskInvalidCodexModelsError(err error) bool {
 		isAgentIdentityTaskInvalidHTTPResponse(upstreamErr.statusCode, upstreamErr.body)
 }
 
-// handleCodexModelsManifestAccountAuthError feeds manifest 401s from the
-// ChatGPT Codex backend into the shared upstream-error state machinery
-// (token cache invalidation, temp-unschedulable cooldown, or permanent
-// disable for token_revoked/token_invalidated). Without this, an account
-// whose OAuth token was revoked upstream stays active and schedulable and
-// keeps being selected for every subsequent /models request (#4544).
+// handleCodexModelsManifestAccountAuthError feeds manifest account-state
+// responses from the ChatGPT Codex backend into the shared state machinery.
+// Authentication failures use the ordinary invalidation path. A manifest 429
+// is reporting-only (there is no same-account retry in this surface), so it
+// bypasses the Responses retry reservation and immediately persists the
+// provider cooldown.
 //
 // Scope is deliberately limited to plain OAuth accounts: the manifest
 // endpoint authenticates with the same token as /responses forwarding, so a
@@ -389,14 +389,20 @@ func (s *OpenAIGatewayService) handleCodexModelsManifestAccountAuthError(ctx con
 		return
 	}
 	var upstreamErr *codexModelsManifestUpstreamError
-	if !errors.As(err, &upstreamErr) || upstreamErr.statusCode != http.StatusUnauthorized {
+	if !errors.As(err, &upstreamErr) {
 		return
 	}
 	headers := upstreamErr.headers
 	if headers == nil {
 		headers = http.Header{}
 	}
-	s.handleOpenAIAccountUpstreamError(ctx, account, upstreamErr.statusCode, headers, upstreamErr.body)
+	if upstreamErr.statusCode == http.StatusTooManyRequests {
+		s.handleOpenAIAuxiliaryUpstreamError(ctx, account, upstreamErr.statusCode, headers, upstreamErr.body)
+		return
+	}
+	if upstreamErr.statusCode == http.StatusUnauthorized {
+		s.handleOpenAIAccountUpstreamError(ctx, account, upstreamErr.statusCode, headers, upstreamErr.body)
+	}
 }
 
 func (s *OpenAIGatewayService) fetchCachedAPIKeyCodexModelsManifest(ctx context.Context, request codexModelsManifestRequest, ifNoneMatch string) (*CodexModelsManifest, error) {
@@ -460,6 +466,13 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 	if ifNoneMatch = strings.TrimSpace(ifNoneMatch); ifNoneMatch != "" {
 		req.Header.Set("If-None-Match", ifNoneMatch)
 	}
+	SanitizeOutboundGatewayIdentity(req.Header)
+	// OAuth manifest requests are part of the Codex HTTP control plane and must
+	// use the same transport profile as Responses rather than an unrelated
+	// default net/http client in production.
+	if !request.useAPIKeyUpstream {
+		req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	}
 
 	var resp *http.Response
 	if request.useAPIKeyUpstream {
@@ -468,7 +481,11 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		}
 		req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 		resp, err = s.httpUpstream.Do(req, request.proxyURL, request.accountID, request.accountConcurrency)
+	} else if s.httpUpstream != nil {
+		resp, err = s.doOpenAIUpstream(req, request.proxyURL, request.credentialAccount)
 	} else {
+		// Retain a direct fallback for isolated service tests and lightweight
+		// embedders that intentionally do not install the shared HTTPUpstream.
 		handled := false
 		if s.pluginManager != nil {
 			resp, handled, err = s.pluginManager.RoundTripOpenAIOAuth(reqCtx, req, request.proxyURL, request.credentialAccount)

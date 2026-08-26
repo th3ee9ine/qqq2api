@@ -107,8 +107,10 @@ func (d *coderOpenAIWSClientDialer) Dial(
 		return nil, 0, nil, errors.New("ws url is empty")
 	}
 
+	outboundHeaders := cloneHeader(headers)
+	SanitizeOutboundGatewayIdentity(outboundHeaders)
 	opts := &coderws.DialOptions{
-		HTTPHeader:      cloneHeader(headers),
+		HTTPHeader:      outboundHeaders,
 		CompressionMode: coderws.CompressionContextTakeover,
 	}
 	if proxy := strings.TrimSpace(proxyURL); proxy != "" {

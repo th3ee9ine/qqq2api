@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -120,6 +121,19 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 			markOpsRoutingCapacityLimited(c)
 		}
 		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
+		return
+	}
+	if err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(c.Request.Context(), account); err != nil {
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		var admissionErr *service.OpenAIOAuthAdmissionError
+		if errors.As(err, &admissionErr) {
+			c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+			h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+			return
+		}
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
 		return
 	}
 
@@ -293,6 +307,19 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 			markOpsRoutingCapacityLimited(c)
 		}
 		h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
+		return
+	}
+	if err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(c.Request.Context(), account); err != nil {
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		var admissionErr *service.OpenAIOAuthAdmissionError
+		if errors.As(err, &admissionErr) {
+			c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+			h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+			return
+		}
+		h.anthropicErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
 		return
 	}
 

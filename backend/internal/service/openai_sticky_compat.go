@@ -15,7 +15,24 @@ import (
 
 type openAILegacySessionHashContextKey struct{}
 
+type openAIStickySessionWriteSuppressedContextKey struct{}
+
 var openAILegacySessionHashKey = openAILegacySessionHashContextKey{}
+
+func withOpenAIStickySessionWriteSuppressed(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, openAIStickySessionWriteSuppressedContextKey{}, true)
+}
+
+func openAIStickySessionWriteSuppressed(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	suppressed, _ := ctx.Value(openAIStickySessionWriteSuppressedContextKey{}).(bool)
+	return suppressed
+}
 
 var (
 	openAIStickyLegacyReadFallbackTotal atomic.Int64
@@ -152,7 +169,7 @@ func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, gr
 }
 
 func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string, accountID int64, ttl time.Duration) error {
-	if s == nil || s.cache == nil || accountID <= 0 {
+	if s == nil || s.cache == nil || accountID <= 0 || openAIStickySessionWriteSuppressed(ctx) {
 		return nil
 	}
 	primaryKey := s.openAISessionCacheKey(sessionHash)
@@ -179,7 +196,7 @@ func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, gr
 }
 
 func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, groupID *int64, sessionHash string, ttl time.Duration) error {
-	if s == nil || s.cache == nil {
+	if s == nil || s.cache == nil || openAIStickySessionWriteSuppressed(ctx) {
 		return nil
 	}
 	primaryKey := s.openAISessionCacheKey(sessionHash)
@@ -200,7 +217,7 @@ func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, grou
 }
 
 func (s *OpenAIGatewayService) deleteStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string) error {
-	if s == nil || s.cache == nil {
+	if s == nil || s.cache == nil || openAIStickySessionWriteSuppressed(ctx) {
 		return nil
 	}
 	primaryKey := s.openAISessionCacheKey(sessionHash)

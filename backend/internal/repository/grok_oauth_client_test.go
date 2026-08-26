@@ -15,8 +15,10 @@ import (
 )
 
 func TestGrokOAuthClientExchangeAndRefreshUseFormFields(t *testing.T) {
+	t.Setenv(xai.CLIVersionEnv, xai.CLIClientVersion)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal(t, xai.CLIUserAgent(xai.CLIClientVersion), r.UserAgent())
 		require.NoError(t, r.ParseForm())
 		require.Equal(t, "client-id", r.Form.Get("client_id"))
 

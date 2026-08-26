@@ -31,6 +31,77 @@ type openAIWSClientFrameConn struct {
 	restoreToolNames     func([]byte) []byte
 }
 
+// openAIWSPassthroughTurnAdmission serializes the BeforeTurn/AfterTurn hook
+// pair for passthrough sessions. The relay already rejects overlapping
+// response.create frames; this guard additionally makes the slot lifecycle
+// fail-closed and ensures every admitted turn is finished at most once across
+// terminal events, relay errors, and function-return cleanup.
+type openAIWSPassthroughTurnAdmission struct {
+	mu         sync.Mutex
+	hooks      *OpenAIWSIngressHooks
+	activeTurn int
+	finishing  bool
+}
+
+func (a *openAIWSPassthroughTurnAdmission) begin(turn int) error {
+	if turn <= 0 {
+		return errors.New("passthrough turn must be positive")
+	}
+	a.mu.Lock()
+	if a.activeTurn != 0 || a.finishing {
+		a.mu.Unlock()
+		return fmt.Errorf("passthrough turn admission overlap: active=%d next=%d", a.activeTurn, turn)
+	}
+	a.activeTurn = turn
+	a.mu.Unlock()
+
+	if a.hooks != nil && a.hooks.BeforeTurn != nil {
+		if err := a.hooks.BeforeTurn(turn); err != nil {
+			a.mu.Lock()
+			if a.activeTurn == turn && !a.finishing {
+				a.activeTurn = 0
+			}
+			a.mu.Unlock()
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *openAIWSPassthroughTurnAdmission) finish(turn int, result *OpenAIForwardResult, turnErr error) bool {
+	if turn <= 0 {
+		return false
+	}
+	a.mu.Lock()
+	if a.activeTurn != turn || a.finishing {
+		a.mu.Unlock()
+		return false
+	}
+	a.finishing = true
+	a.mu.Unlock()
+
+	if a.hooks != nil && a.hooks.AfterTurn != nil {
+		a.hooks.AfterTurn(turn, result, turnErr)
+	}
+
+	a.mu.Lock()
+	if a.activeTurn == turn {
+		a.activeTurn = 0
+	}
+	a.finishing = false
+	a.mu.Unlock()
+	return true
+}
+
+func (a *openAIWSPassthroughTurnAdmission) active() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.finishing {
+		return 0
+	}
+	return a.activeTurn
+}
+
 // openAIWSPolicyEnforcingFrameConn wraps a client-side FrameConn and runs
 // every client→upstream frame through the OpenAI Fast Policy. It is the
 // passthrough-relay equivalent of the parseClientPayload integration in the
@@ -663,7 +734,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	firstClientMessage []byte,
 	hooks *OpenAIWSIngressHooks,
 	wsDecision OpenAIWSProtocolDecision,
-) error {
+) (returnErr error) {
 	// The same request context survives scheduler failover attempts. Clear any
 	// reverse mapping installed by the prior account before processing frames.
 	setCodexToolNameReverse(c, nil)
@@ -679,6 +750,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
+	turnAdmission := &openAIWSPassthroughTurnAdmission{hooks: hooks}
+	defer func() {
+		if activeTurn := turnAdmission.active(); activeTurn > 0 {
+			turnAdmission.finish(activeTurn, nil, returnErr)
+		}
+	}()
 	if isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
 		liteFirstMessage, _, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(firstClientMessage, account)
 		if liteErr != nil {
@@ -864,6 +941,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
+		SanitizeOutboundGatewayIdentity(headers)
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
@@ -1093,6 +1171,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			//     覆盖（Store(nil)），因为 OpenAI 上游对该帧实际不传
 			//     service_tier 时按 default 处理，billing 应如实反映。
 			if policyErr == nil && blocked == nil && isResponseCreate {
+				// This is the last local gate before the frame is returned to the
+				// relay for upstream transmission. Acquire the per-turn user/account
+				// slots here so policy-rejected frames never consume capacity.
+				if err := turnAdmission.begin(turnNo); err != nil {
+					return payload, nil, err
+				}
 				usageMeta.updateFromResponseCreate(out, model, requestModelForThisFrame)
 				_, actualModel := usageMeta.turnModels(requestModelForThisFrame)
 				SetOpsUpstreamModel(c, actualModel)
@@ -1117,6 +1201,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 	}
 	upstreamFirstMessageSent := false
+	// The handler already owns the first turn's user/account concurrency slots.
+	// begin(1) only runs the handler's turn pricing/pacing checks and registers
+	// the matching AfterTurn release; it never acquires a second pair of slots.
+	if err := turnAdmission.begin(1); err != nil {
+		return err
+	}
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()
@@ -1222,9 +1312,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					turnResult.Usage.OutputTokens,
 					turnResult.Usage.CacheReadInputTokens,
 				)
-				if hooks != nil && hooks.AfterTurn != nil {
-					hooks.AfterTurn(turnNo, turnResult, nil)
-				}
+				turnAdmission.finish(turnNo, turnResult, nil)
 			},
 			BeforeClientWrite: func(msgType coderws.MessageType, payload []byte) {
 				if msgType == coderws.MessageText && openAIWSPassthroughIsTerminalOutput(payload) {
@@ -1349,11 +1437,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			turnCount,
 		)
 		// 正常路径按 terminal 事件逐 turn 已回调；仅在零 turn 场景兜底回调一次。
-		if turnCount == 0 && hooks != nil && hooks.AfterTurn != nil {
-			if hooks.TurnStarted != nil {
+		if turnCount == 0 {
+			if hooks != nil && hooks.TurnStarted != nil {
 				hooks.TurnStarted(1, time.Now().Add(-result.Duration))
 			}
-			hooks.AfterTurn(1, result, nil)
+			turnAdmission.finish(1, result, nil)
 		}
 		return nil
 	}
@@ -1418,11 +1506,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		relayErr,
 		relayExit.WroteDownstream,
 	)
-	if hooks != nil && hooks.AfterTurn != nil {
-		if hooks.TurnStarted != nil {
+	if turnAdmission.active() == turnCount+1 {
+		if hooks != nil && hooks.TurnStarted != nil {
 			hooks.TurnStarted(turnCount+1, time.Now().Add(-result.Duration))
 		}
-		hooks.AfterTurn(turnCount+1, nil, turnErr)
+		turnAdmission.finish(turnCount+1, nil, turnErr)
 	}
 	return turnErr
 }

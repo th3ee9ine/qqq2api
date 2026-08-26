@@ -1766,6 +1766,9 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	if account == nil {
 		return false, "account_nil"
 	}
+	if retryTarget := openAISameAccountRetryTarget(ctx); retryTarget > 0 && account.ID != retryTarget {
+		return false, "same_account_retry_mismatch"
+	}
 	if req.RequirePrivacySet && !account.IsPrivacySet() {
 		return false, "privacy_not_set"
 	}
@@ -2179,6 +2182,30 @@ func (s *OpenAIGatewayService) selectAccountWithScheduler(
 }
 
 type openAIGroupPrivacyRequirementContextKey struct{}
+
+type openAISameAccountRetryTargetContextKey struct{}
+
+// WithOpenAISameAccountRetryTarget pins the next scheduler pass to the
+// credential whose bounded same-account retry was granted. Passing zero clears
+// the pin after that pass. This prevents a runtime cooldown race from silently
+// converting a same-account retry into an uncounted pool switch.
+func WithOpenAISameAccountRetryTarget(ctx context.Context, accountID int64) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, openAISameAccountRetryTargetContextKey{}, accountID)
+}
+
+func openAISameAccountRetryTarget(ctx context.Context) int64 {
+	if ctx == nil {
+		return 0
+	}
+	accountID, _ := ctx.Value(openAISameAccountRetryTargetContextKey{}).(int64)
+	if accountID <= 0 {
+		return 0
+	}
+	return accountID
+}
 
 type openAIGroupPrivacyRequirement struct {
 	groupID  int64

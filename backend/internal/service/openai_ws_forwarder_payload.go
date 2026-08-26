@@ -102,8 +102,11 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		for _, name := range [...]string{
 			"x-codex-window-id",
 			"x-codex-installation-id",
+			codexParentThreadIDHeader,
+			openAISubagentHeader,
 			"session-id",
 			"thread-id",
+			"turn-id",
 			"x-client-request-id",
 		} {
 			if value := c.Request.Header.Get(name); strings.TrimSpace(value) != "" {
@@ -180,6 +183,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	// 覆盖所有 WS 模式（ctx_pool/dedicated/passthrough）的握手头。
 	account.ApplyHeaderOverrides(headers)
 	setOpenAICodexRoutingHint(headers, account, routingModel, routingServiceTier)
+	SanitizeOutboundGatewayIdentity(headers)
 	logOpenAIRoutingDiagnostics(
 		ctx,
 		account,

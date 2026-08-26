@@ -116,6 +116,11 @@ var codexAccountIdentityFields = []struct {
 	{name: "session-id", kind: "session"},
 	{name: "thread_id", kind: "thread"},
 	{name: "thread-id", kind: "thread"},
+	// Parent-thread references must use the same namespace function as thread
+	// IDs so a parent emitted on an earlier turn still resolves to that exact
+	// upstream thread after account scoping.
+	{name: "parent_thread_id", kind: "thread"},
+	{name: codexParentThreadIDHeader, kind: "thread"},
 	{name: "turn_id", kind: "turn"},
 	{name: "turn-id", kind: "turn"},
 	{name: "window_id", kind: "window"},

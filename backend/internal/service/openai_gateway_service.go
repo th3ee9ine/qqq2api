@@ -72,37 +72,51 @@ const (
 
 // OpenAI allowed headers whitelist (for non-passthrough).
 var openaiAllowedHeaders = map[string]bool{
-	"accept-language":         true,
-	"content-type":            true,
-	"conversation_id":         true,
-	"user-agent":              true,
-	"originator":              true,
-	"session_id":              true,
-	"x-codex-beta-features":   true,
-	"x-codex-installation-id": true,
-	"x-codex-turn-state":      true,
-	"x-codex-turn-metadata":   true,
-	"x-codex-window-id":       true,
-	responsesLiteHeaderKey:    true,
+	"accept-language":          true,
+	"content-type":             true,
+	"conversation_id":          true,
+	"user-agent":               true,
+	"originator":               true,
+	"session-id":               true,
+	"session_id":               true,
+	"thread-id":                true,
+	"turn-id":                  true,
+	"version":                  true,
+	"x-client-request-id":      true,
+	"x-codex-beta-features":    true,
+	"x-codex-installation-id":  true,
+	"x-codex-parent-thread-id": true,
+	"x-codex-turn-state":       true,
+	"x-codex-turn-metadata":    true,
+	"x-codex-window-id":        true,
+	"x-openai-subagent":        true,
+	responsesLiteHeaderKey:     true,
 }
 
 // OpenAI passthrough allowed headers whitelist.
 // 透传模式下仅放行这些低风险请求头，避免将非标准/环境噪声头传给上游触发风控。
 var openaiPassthroughAllowedHeaders = map[string]bool{
-	"accept":                  true,
-	"accept-language":         true,
-	"content-type":            true,
-	"conversation_id":         true,
-	"openai-beta":             true,
-	"user-agent":              true,
-	"originator":              true,
-	"session_id":              true,
-	"x-codex-beta-features":   true,
-	"x-codex-installation-id": true,
-	"x-codex-turn-state":      true,
-	"x-codex-turn-metadata":   true,
-	"x-codex-window-id":       true,
-	responsesLiteHeaderKey:    true,
+	"accept":                   true,
+	"accept-language":          true,
+	"content-type":             true,
+	"conversation_id":          true,
+	"openai-beta":              true,
+	"user-agent":               true,
+	"originator":               true,
+	"session-id":               true,
+	"session_id":               true,
+	"thread-id":                true,
+	"turn-id":                  true,
+	"version":                  true,
+	"x-client-request-id":      true,
+	"x-codex-beta-features":    true,
+	"x-codex-installation-id":  true,
+	"x-codex-parent-thread-id": true,
+	"x-codex-turn-state":       true,
+	"x-codex-turn-metadata":    true,
+	"x-codex-window-id":        true,
+	"x-openai-subagent":        true,
+	responsesLiteHeaderKey:     true,
 }
 
 // codex_cli_only 拒绝时记录的请求头白名单（仅用于诊断日志，不参与上游透传）
@@ -440,6 +454,7 @@ type OpenAIGatewayService struct {
 	openaiWSPoolOnce               sync.Once
 	openaiWSStateStoreOnce         sync.Once
 	openaiSchedulerOnce            sync.Once
+	openAIOAuthAdmissionOnce       sync.Once
 	openaiProxyStreamCircuitOnce   sync.Once
 	openaiWSPassthroughDialerOnce  sync.Once
 	openaiModelTransientOnce       sync.Once
@@ -447,6 +462,7 @@ type OpenAIGatewayService struct {
 	openaiWSPool                   *openAIWSConnPool
 	openaiWSStateStore             OpenAIWSStateStore
 	openaiScheduler                OpenAIAccountScheduler
+	openAIOAuthAdmission           *openAIOAuthAdmissionController
 	openaiWSPassthroughDialer      openAIWSClientDialer
 	openaiWSSessionPreemptions     openAIWSSessionPreemptRegistry
 	openaiAccountStats             *openAIAccountRuntimeStats
@@ -459,7 +475,7 @@ type OpenAIGatewayService struct {
 	openaiAccountRuntimeBlockLocks      sync.Map // key: int64(accountID), value: *sync.Mutex
 	openaiAccountRuntimeBlockGeneration sync.Map // key: int64(accountID), value: uint64
 	openaiAccountRuntimeBlockSequence   atomic.Uint64
-	openaiOAuth429RetryStartedAt        sync.Map // key: int64(accountID), value: time.Time
+	openaiOAuth429RetryStartedAt        sync.Map // key: int64(accountID), value: openAIOAuth429RetryState
 	grokCredentialMutationLocks         sync.Map // key: int64(accountID), value: *sync.Mutex
 	openaiOAuth429WindowStartUnixNano   atomic.Int64
 	openaiOAuth429WindowCount           atomic.Int64

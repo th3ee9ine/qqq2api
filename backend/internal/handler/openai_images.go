@@ -218,6 +218,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		)
 
 		account := selection.Account
+		requestCtx = service.WithOpenAISameAccountRetryTarget(requestCtx, 0)
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.images.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
@@ -324,6 +325,7 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 								return
 							case <-time.After(retryDelay):
 							}
+							requestCtx = service.WithOpenAISameAccountRetryTarget(requestCtx, account.ID)
 							continue
 						}
 					}

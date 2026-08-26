@@ -177,7 +177,7 @@ func (u *upstreamBillingProbeHTTPStub) Do(req *http.Request, proxyURL string, ac
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body: io.NopCloser(strings.NewReader(`{
-			"object":"sub2api.key_billing",
+			"object":"gateway.key_billing",
 			"schema_version":1,
 			"billing_scope":"token",
 			"group_rate_multiplier":0.8,
@@ -292,7 +292,7 @@ func TestUpstreamBillingProbeSuccessPersistsSanitizedSnapshot(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body: io.NopCloser(strings.NewReader(`{
-			"object":"sub2api.key_billing",
+			"object":"gateway.key_billing",
 			"schema_version":1,
 			"billing_scope":"token",
 			"group_rate_multiplier":0.8,
@@ -330,7 +330,7 @@ func TestUpstreamBillingProbeSuccessPersistsSanitizedSnapshot(t *testing.T) {
 	require.Equal(t, 0.6, *account.RateMultiplier)
 	require.NotNil(t, snapshot.SyncedRateMultiplier)
 	require.Equal(t, 0.6, *snapshot.SyncedRateMultiplier)
-	require.Equal(t, "https://upstream.example/v1/sub2api/billing", upstream.lastReq.URL.String())
+	require.Equal(t, "https://upstream.example/v1/billing", upstream.lastReq.URL.String())
 	require.Equal(t, http.MethodGet, upstream.lastReq.Method)
 	require.Equal(t, "Bearer sk-sensitive", upstream.lastReq.Header.Get("Authorization"))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.lastReq.Context()))
@@ -511,7 +511,7 @@ func TestUpstreamBillingProbeKeepsRateWhenDeclarationOutOfSyncRange(t *testing.T
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"application/json"}},
 				Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{
-					"object":"sub2api.key_billing",
+					"object":"gateway.key_billing",
 					"schema_version":1,
 					"billing_scope":"token",
 					"group_rate_multiplier":%[1]s,
@@ -557,7 +557,7 @@ func TestUpstreamBillingProbeWithoutSyncIgnoresUnusableDeclaredRate(t *testing.T
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body: io.NopCloser(strings.NewReader(`{
-			"object":"sub2api.key_billing",
+			"object":"gateway.key_billing",
 			"schema_version":1,
 			"billing_scope":"token",
 			"group_rate_multiplier":0,
@@ -582,7 +582,7 @@ func TestUpstreamBillingProbeWithoutSyncIgnoresUnusableDeclaredRate(t *testing.T
 
 func TestUpstreamBillingProbeRejectsMissingRequiredMultiplier(t *testing.T) {
 	_, err := parseUpstreamBillingProbeResponse([]byte(`{
-		"object":"sub2api.key_billing",
+		"object":"gateway.key_billing",
 		"schema_version":1,
 		"billing_scope":"token",
 		"group_rate_multiplier":0.8,
@@ -634,7 +634,7 @@ func TestUpstreamBillingProbeRejectsInvalidPeakConfiguration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body := fmt.Sprintf(`{
-				"object":"sub2api.key_billing",
+				"object":"gateway.key_billing",
 				"schema_version":1,
 				"billing_scope":"token",
 				"group_rate_multiplier":0.8,
@@ -663,7 +663,7 @@ func TestUpstreamBillingProbeRejectsInconsistentMultipliers(t *testing.T) {
 		{
 			name: "resolved does not use user override",
 			body: `{
-				"object":"sub2api.key_billing","schema_version":1,"billing_scope":"token",
+				"object":"gateway.key_billing","schema_version":1,"billing_scope":"token",
 				"group_rate_multiplier":0.8,"user_rate_multiplier":0.5,"resolved_rate_multiplier":0.8,
 				"peak_rate_enabled":false,"effective_rate_multiplier":0.8,"observed_at":"2026-07-13T01:00:00Z"
 			}`,
@@ -671,7 +671,7 @@ func TestUpstreamBillingProbeRejectsInconsistentMultipliers(t *testing.T) {
 		{
 			name: "effective rate does not match resolved rate",
 			body: `{
-				"object":"sub2api.key_billing","schema_version":1,"billing_scope":"token",
+				"object":"gateway.key_billing","schema_version":1,"billing_scope":"token",
 				"group_rate_multiplier":0.8,"resolved_rate_multiplier":0.8,
 				"peak_rate_enabled":false,"effective_rate_multiplier":1.2,"observed_at":"2026-07-13T01:00:00Z"
 			}`,
@@ -679,7 +679,7 @@ func TestUpstreamBillingProbeRejectsInconsistentMultipliers(t *testing.T) {
 		{
 			name: "applied peak does not match observed window",
 			body: `{
-				"object":"sub2api.key_billing","schema_version":1,"billing_scope":"token",
+				"object":"gateway.key_billing","schema_version":1,"billing_scope":"token",
 				"group_rate_multiplier":0.8,"resolved_rate_multiplier":0.8,
 				"peak_rate_enabled":true,"peak_start":"09:00","peak_end":"18:00",
 				"peak_rate_multiplier":1.5,"applied_peak_multiplier":1,
@@ -769,7 +769,7 @@ func TestUpstreamBillingProbeRetryAfterIsNotShortened(t *testing.T) {
 	require.Equal(t, 48*time.Hour, delay)
 }
 
-// unsupported 的重探间隔明显长于普通失败，但始终有上界：上游后来接入 sub2api
+// unsupported 的重探间隔明显长于普通失败，但始终有上界：上游后来接入计费协议
 // 时最迟一天内会被重新发现，且不会缩短上游 Retry-After 指令。
 func TestUpstreamBillingProbeUnsupportedDelayIsStretchedAndBounded(t *testing.T) {
 	// 默认 30 分钟 interval：普通失败 24~36 分钟，unsupported 为其 8 倍。

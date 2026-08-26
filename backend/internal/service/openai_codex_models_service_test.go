@@ -203,6 +203,28 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	}
 }
 
+func TestFetchCodexModelsManifestOAuthUsesSharedOpenAITransportProfile(t *testing.T) {
+	var captured *http.Request
+	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		captured = req
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"models":[]}`)),
+		}, nil
+	}}
+	s := &OpenAIGatewayService{httpUpstream: upstream}
+
+	manifest, err := s.FetchCodexModelsManifest(context.Background(), newCodexModelsTestAccount(), "0.144.0", "")
+	require.NoError(t, err)
+	require.NotNil(t, manifest)
+	require.NotNil(t, captured)
+	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(captured.Context()))
+	require.Equal(t, "application/json", captured.Header.Get("Accept"))
+	require.Empty(t, captured.Header.Get("OpenAI-Beta"))
+}
+
 func TestFetchCodexModelsManifestAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
@@ -1302,6 +1324,8 @@ type codexModelsAccountStateRepo struct {
 	lastErrorMsg        string
 	setTempUnschedCalls int
 	lastTempReason      string
+	setRateLimitedCalls int
+	lastRateLimitReset  time.Time
 }
 
 func (r *codexModelsAccountStateRepo) SetError(_ context.Context, _ int64, errorMsg string) error {
@@ -1317,6 +1341,14 @@ func (r *codexModelsAccountStateRepo) SetTempUnschedulable(_ context.Context, _ 
 	defer r.mu.Unlock()
 	r.setTempUnschedCalls++
 	r.lastTempReason = reason
+	return nil
+}
+
+func (r *codexModelsAccountStateRepo) SetRateLimited(_ context.Context, _ int64, resetAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.setRateLimitedCalls++
+	r.lastRateLimitReset = resetAt
 	return nil
 }
 
@@ -1373,6 +1405,31 @@ func TestFetchCodexModelsManifestOAuth401TokenRevokedDisablesAccount(t *testing.
 	require.Equal(t, 1, repo.setErrorCalls, "revoked token should permanently disable the account")
 	require.Contains(t, repo.lastErrorMsg, "Token revoked")
 	require.Equal(t, 0, repo.setTempUnschedCalls)
+}
+
+func TestFetchCodexModelsManifestOAuth429PersistsCooldownWithoutRetryReservation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limited"}}`))
+	}))
+	defer server.Close()
+
+	original := chatgptCodexModelsURL
+	chatgptCodexModelsURL = server.URL
+	defer func() { chatgptCodexModelsURL = original }()
+
+	repo := &codexModelsAccountStateRepo{}
+	s := newCodexModels401TestService(repo)
+	account := newCodexModelsTestAccount()
+
+	_, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", "")
+	require.Error(t, err)
+	require.True(t, IsRetryableCodexModelsManifestError(err))
+	require.Equal(t, 1, repo.setRateLimitedCalls)
+	require.True(t, repo.lastRateLimitReset.After(time.Now().Add(25*time.Second)))
+	require.True(t, s.isOpenAIAccountRuntimeBlocked(account))
+	_, retryReserved := s.openaiOAuth429RetryStartedAt.Load(account.ID)
+	require.False(t, retryReserved, "manifest surface must not reserve an unconsumed Responses retry")
 }
 
 func TestFetchCodexModelsManifestAgentIdentity401DoesNotDisableAccount(t *testing.T) {

@@ -612,6 +612,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.Float64("load_skew", scheduleDecision.LoadSkew),
 		)
 		account := selection.Account
+		// The scheduler has now consumed any one-shot same-account retry pin.
+		c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), 0))
 		if previousResponseID != "" && requestPlatform == service.PlatformOpenAI && !account.IsOpenAIApiKey() {
 			// The public Responses HTTP API supports previous_response_id on API-key
 			// accounts. OAuth/SetupToken upstreams do not, so keep searching instead
@@ -786,6 +788,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 								return
 							case <-time.After(retryDelay):
 							}
+							c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), account.ID))
 							continue
 						}
 					}
@@ -1200,6 +1203,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			return
 		}
 		account := selection.Account
+		// The scheduler has now consumed any one-shot same-account retry pin.
+		c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), 0))
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai_messages.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		_ = scheduleDecision
@@ -1341,6 +1346,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 								return
 							case <-time.After(retryDelay):
 							}
+							c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), account.ID))
 							continue
 						}
 					}
@@ -1639,6 +1645,32 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	// 门只存在于调度栈的局部 ctx，必须经选号结果重放到本函数的 ctx 上。
 	ctx := service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
 	account := selection.Account
+	admitAccountStart := func(admitted *service.Account, release func()) bool {
+		err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(ctx, admitted)
+		if err == nil {
+			return true
+		}
+		if release != nil {
+			release()
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		var admissionErr *service.OpenAIOAuthAdmissionError
+		if errors.As(err, &admissionErr) {
+			c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+			reqLog.Info("openai.oauth_account_admission_limited",
+				zap.Int64("account_id", admitted.ID),
+				zap.String("reason", admissionErr.Reason),
+				zap.Duration("retry_after", admissionErr.RetryAfter),
+			)
+			writeError(http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+			return false
+		}
+		reqLog.Warn("openai.oauth_account_admission_failed", zap.Int64("account_id", admitted.ID), zap.Error(err))
+		writeError(http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
+		return false
+	}
 	if selection.Acquired {
 		latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
 		if vetoed {
@@ -1650,6 +1682,9 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		}
 		account = latest
 		selection.Account = latest
+		if !admitAccountStart(account, selection.ReleaseFunc) {
+			return nil, openAISlotAcquireFailed
+		}
 		// 调度器已抢槽路径无门时由选号内部完成 eager 绑定；门下选号内部
 		// 推迟绑定，这里在终检通过后补准入后绑定。
 		if selection.ProfitGateActive() {
@@ -1689,6 +1724,9 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		}
 		account = latest
 		selection.Account = latest
+		if !admitAccountStart(account, fastReleaseFunc) {
+			return nil, openAISlotAcquireFailed
+		}
 		if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
@@ -1745,6 +1783,9 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	}
 	account = latest
 	selection.Account = latest
+	if !admitAccountStart(account, accountReleaseFunc) {
+		return nil, openAISlotAcquireFailed
+	}
 	if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
 		reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 	}
@@ -2253,6 +2294,24 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// turn 级定价：BeforeTurn 重新冻结 pricingAt 并按最新门复核当前账号；
 		// passthrough 没有 BeforeTurn 时，AfterTurn 回退到 TurnStarted 的所属 turn 时刻。
 		var turnPricing openAIWSTurnPricing
+		admitWSTurnStart := func(turn int) error {
+			if err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(ctx, account); err != nil {
+				if ctx.Err() != nil {
+					return err
+				}
+				var admissionErr *service.OpenAIOAuthAdmissionError
+				if errors.As(err, &admissionErr) {
+					reqLog.Info("openai.websocket_oauth_account_admission_limited",
+						zap.Int("turn", turn),
+						zap.Int64("account_id", account.ID),
+						zap.String("reason", admissionErr.Reason),
+						zap.Duration("retry_after", admissionErr.RetryAfter),
+					)
+				}
+				return service.NewOpenAIWSClientCloseError(coderws.StatusTryAgainLater, "account request pacing limit reached, please retry later", err)
+			}
+			return nil
+		}
 		hooks := &service.OpenAIWSIngressHooks{
 			ClientLifecycleContext:  clientLifecycleCtx,
 			InitialRequestModel:     reqModel,
@@ -2318,7 +2377,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				turnPricing.freeze(turnAt)
 				if turn == 1 {
-					return nil
+					return admitWSTurnStart(turn)
 				}
 				// 防御式清理：避免异常路径下旧槽位覆盖导致泄漏。
 				releaseTurnSlots()
@@ -2345,6 +2404,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				currentUserRelease = wrapReleaseOnDone(ctx, userReleaseFunc)
 				currentAccountRelease = wrapReleaseOnDone(ctx, accountReleaseFunc)
+				if err := admitWSTurnStart(turn); err != nil {
+					releaseTurnSlots()
+					return err
+				}
 				return nil
 			},
 			AfterTurn: func(turn int, result *service.OpenAIForwardResult, turnErr error) {

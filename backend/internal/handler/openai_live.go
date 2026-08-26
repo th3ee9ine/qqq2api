@@ -184,6 +184,12 @@ func (h *OpenAIGatewayHandler) writeLiveCreateError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrLiveUnavailable):
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Live is unavailable")
 	default:
+		var admissionErr *service.OpenAIOAuthAdmissionError
+		if errors.As(err, &admissionErr) {
+			c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+			h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+			return
+		}
 		var attestationErr *service.LiveAttestationUnavailableError
 		if errors.As(err, &attestationErr) {
 			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", attestationErr.Error())

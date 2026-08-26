@@ -17,8 +17,11 @@ import (
 )
 
 type liveHTTPUpstreamStub struct {
-	request *http.Request
-	body    []byte
+	request      *http.Request
+	body         []byte
+	statusCode   int
+	responseBody string
+	headers      http.Header
 }
 
 type liveAttestationStub struct {
@@ -46,6 +49,18 @@ func (s *liveHTTPUpstreamStub) Do(
 		return nil, err
 	}
 	s.body = body
+	if s.statusCode != 0 {
+		headers := s.headers
+		if headers == nil {
+			headers = make(http.Header)
+		}
+		return &http.Response{
+			StatusCode: s.statusCode,
+			Status:     http.StatusText(s.statusCode),
+			Header:     headers,
+			Body:       io.NopCloser(strings.NewReader(s.responseBody)),
+		}, nil
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header: http.Header{
@@ -140,6 +155,36 @@ func TestCreateUpstreamLiveCallPreservesSession(t *testing.T) {
 	require.Empty(t, upstream.request.Header.Get("OpenAI-Beta"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.request.Context()))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.request.Context()))
+}
+
+func TestCreateUpstreamLiveCallOAuth429PersistsCooldownWithoutResponsesRetry(t *testing.T) {
+	repo := &codexModelsAccountStateRepo{}
+	service := newCodexModels401TestService(repo)
+	service.cfg = &config.Config{}
+	service.httpUpstream = &liveHTTPUpstreamStub{
+		statusCode:   http.StatusTooManyRequests,
+		responseBody: `{"error":{"message":"rate limited"}}`,
+	}
+	account := &Account{
+		ID:          17,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 2,
+		Credentials: map[string]any{
+			"access_token":       "test-access-token",
+			"chatgpt_account_id": "acct-test",
+		},
+	}
+
+	_, err := service.createUpstreamLiveCall(context.Background(), account, &LiveCallRequest{
+		SDP:     "v=offer\r\n",
+		Session: json.RawMessage(`{"model":"gpt-live-test"}`),
+	}, `{"v":1,"s":0,"t":"v1.test"}`)
+	require.Error(t, err)
+	require.Equal(t, 1, repo.setRateLimitedCalls)
+	require.True(t, service.isOpenAIAccountRuntimeBlocked(account))
+	_, retryReserved := service.openaiOAuth429RetryStartedAt.Load(account.ID)
+	require.False(t, retryReserved)
 }
 
 func TestLiveAttestationCipherRoundTripAndRejectsOtherInstanceKey(t *testing.T) {

@@ -134,6 +134,9 @@ func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 	c.Set("api_key_id", int64(77))
 	c.Request.Header.Set("x-codex-installation-id", "client-installation")
 	c.Request.Header.Set("thread-id", "client-thread")
+	c.Request.Header.Set("turn-id", "client-turn")
+	c.Request.Header.Set(codexParentThreadIDHeader, "client-parent-thread")
+	c.Request.Header.Set(openAISubagentHeader, "review")
 	c.Request.Header.Set("x-codex-window-id", "client-window")
 	c.Request.Header.Set("x-client-request-id", "client-request")
 
@@ -153,11 +156,13 @@ func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 	first := build(account11)
 	firstAgain := build(account11)
 	second := build(account19)
-	for _, header := range []string{"session_id", "x-codex-installation-id", "thread-id", "x-codex-window-id", "x-client-request-id"} {
+	for _, header := range []string{"session_id", "x-codex-installation-id", "thread-id", "turn-id", codexParentThreadIDHeader, "x-codex-window-id", "x-client-request-id"} {
 		require.NotEmpty(t, first.Get(header), header)
 		require.Equal(t, first.Get(header), firstAgain.Get(header), header)
 		require.NotEqual(t, first.Get(header), second.Get(header), header)
 	}
+	require.Equal(t, "review", first.Get(openAISubagentHeader))
+	require.Equal(t, CodexCanonicalClientVersion(), first.Get("version"))
 
 	httpRequest, err := service.buildUpstreamRequest(
 		context.Background(), c, account11,
@@ -184,8 +189,12 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 		c.Request.Header.Set("x-codex-window-id", "client-window")
 		c.Request.Header.Set("session-id", "client-session")
 		c.Request.Header.Set("thread-id", "client-thread")
+		c.Request.Header.Set("turn-id", "client-turn")
+		c.Request.Header.Set(codexParentThreadIDHeader, "client-parent-thread")
+		c.Request.Header.Set(openAISubagentHeader, "review")
+		c.Request.Header.Set("version", "0.1.0")
 		c.Request.Header.Set("x-client-request-id", "client-request")
-		c.Request.Header.Set("x-codex-turn-metadata", `{"installation_id":"client-installation","session_id":"client-session","thread_id":"client-thread","turn_id":"client-turn","window_id":"client-window"}`)
+		c.Request.Header.Set("x-codex-turn-metadata", `{"installation_id":"client-installation","session_id":"client-session","thread_id":"client-thread","parent_thread_id":"client-parent-thread","turn_id":"client-turn","window_id":"client-window","subagent_kind":"review"}`)
 
 		account := &Account{
 			ID:       accountID,
@@ -213,6 +222,8 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 		"session_id",
 		"conversation_id",
 		"thread-id",
+		"turn-id",
+		codexParentThreadIDHeader,
 		"x-client-request-id",
 		"x-codex-turn-metadata",
 	}
@@ -227,4 +238,6 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 		require.NotEqual(t, first.Get(header), second.Get(header), "account failover must rotate upstream identity: %s", header)
 	}
 	require.GreaterOrEqual(t, checked, 5, "test must exercise the real outbound identity surface")
+	require.Equal(t, "review", first.Get(openAISubagentHeader))
+	require.Equal(t, CodexCanonicalClientVersion(), first.Get("version"), "inbound version must converge with the final native identity")
 }

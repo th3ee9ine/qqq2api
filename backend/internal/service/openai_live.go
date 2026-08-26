@@ -148,6 +148,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	// 防御性装门按文本 D 过滤 Live 账号池且门与计费时刻不同源。
 	ctx = WithOpenAIProfitControlSuppressed(ctx)
 	var lastErr error
+	oauthFollowupPending := false
 	for attempt := 0; attempt <= 3; attempt++ {
 		selection, _, selectErr := s.SelectAccountWithSchedulerForCapability(
 			ctx,
@@ -176,6 +177,10 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		}
 
 		account := selection.Account
+		if admissionErr := s.WaitForOpenAIOAuthAccountAdmission(ctx, account); admissionErr != nil {
+			selection.ReleaseFunc()
+			return nil, admissionErr
+		}
 		leaseID := generateRequestID()
 		acquired, acquireErr := liveCache.AcquireLiveLease(
 			ctx,
@@ -201,6 +206,15 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
 			if !s.shouldFailoverLiveCreateError(createErr) {
 				return nil, createErr
+			}
+			// A Live create is not idempotently replayed across an arbitrary pool.
+			// Once an OAuth credential fails, permit one alternate only; any
+			// failure from that follow-up ends the request, including mixed pools.
+			if oauthFollowupPending {
+				return nil, createErr
+			}
+			if account.IsOpenAIOAuthLike() {
+				oauthFollowupPending = true
 			}
 			excluded[account.ID] = struct{}{}
 			lastErr = createErr
@@ -319,6 +333,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		logLiveUpstreamFailure(ctx, account.ID, resp.StatusCode, resp.Header, responseBody)
+		s.handleOpenAIAuxiliaryUpstreamError(ctx, account, resp.StatusCode, resp.Header, responseBody)
 		return nil, &UpstreamFailoverError{
 			StatusCode:      resp.StatusCode,
 			ResponseBody:    responseBody,
@@ -450,6 +465,7 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if err != nil {
 		return nil, err
 	}
+	SanitizeOutboundGatewayIdentity(headers)
 	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(record.CallID)
 	conn, status, _, err := s.getOpenAIWSPassthroughDialer().Dial(ctx, target, headers, resolveAccountProxyURL(account))
 	if err != nil {

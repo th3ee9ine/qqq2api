@@ -60,13 +60,10 @@ func startPassthroughHookRecordingServer(
 	return server, serverErr
 }
 
-// TestPassthroughIngressReportsTurnStartedBeforeAfterTurnWithoutBeforeTurn 钉死
-// ws_v2 透传 ingress 与 handler 侧 turn 定价的耦合：透传 relay 不触发
-// BeforeTurn，但会在每个 AfterTurn 前通过 TurnStarted 报告同一 turn 的开始时刻。
-//
-// handler 的 recordTurnStart 保存该时刻，AfterTurn 再用 currentOr(turnStart)
-// 作为计费 PricingAt；不触发 BeforeTurn 也意味着透传仍没有 turn 级利润复核。
-func TestPassthroughIngressReportsTurnStartedBeforeAfterTurnWithoutBeforeTurn(t *testing.T) {
+// TestPassthroughIngressRunsBeforeTurnAndBalancesAfterTurn 钉死 ws_v2
+// passthrough 与其他 ingress 模式相同的逐 turn 准入契约：出站前
+// BeforeTurn，terminal 后 TurnStarted + AfterTurn，且每轮各一次。
+func TestPassthroughIngressRunsBeforeTurnAndBalancesAfterTurn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	controlCtx, cancelControl := context.WithCancelCause(context.Background())
 	defer cancelControl(context.Canceled)
@@ -90,9 +87,10 @@ func TestPassthroughIngressReportsTurnStartedBeforeAfterTurnWithoutBeforeTurn(t 
 			hookEvents = append(hookEvents, hookEvent{name: "TurnStarted", turn: turn, startedAt: startedAt})
 			hooksMu.Unlock()
 		},
-		BeforeTurn: func(int) error {
+		BeforeTurn: func(turn int) error {
 			hooksMu.Lock()
 			beforeTurnCalls++
+			hookEvents = append(hookEvents, hookEvent{name: "BeforeTurn", turn: turn})
 			hooksMu.Unlock()
 			return nil
 		},
@@ -131,12 +129,47 @@ func TestPassthroughIngressReportsTurnStartedBeforeAfterTurnWithoutBeforeTurn(t 
 	gotEvents := append([]hookEvent(nil), hookEvents...)
 	hooksMu.Unlock()
 
-	require.Zero(t, gotBefore, "透传 ingress 不应调用 BeforeTurn")
-	require.GreaterOrEqual(t, len(gotEvents), 2, "透传 ingress 应报告 TurnStarted 和 AfterTurn")
-	require.Equal(t, "TurnStarted", gotEvents[0].name)
-	require.Equal(t, expectedTurnStartedAt, gotEvents[0].startedAt, "TurnStarted 必须携带入口冻结的首轮开始时刻")
-	require.Equal(t, "AfterTurn", gotEvents[1].name)
-	require.Equal(t, gotEvents[0].turn, gotEvents[1].turn, "TurnStarted 后应提交同一 turn 的 AfterTurn")
+	require.Equal(t, 1, gotBefore, "首轮也应执行一次 BeforeTurn 以冻结 turn 定价")
+	require.Len(t, gotEvents, 3, "透传 ingress 每轮只应报告一组准入/完成回调")
+	require.Equal(t, "BeforeTurn", gotEvents[0].name)
+	require.Equal(t, "TurnStarted", gotEvents[1].name)
+	require.Equal(t, expectedTurnStartedAt, gotEvents[1].startedAt, "TurnStarted 必须携带入口冻结的首轮开始时刻")
+	require.Equal(t, "AfterTurn", gotEvents[2].name)
+	require.Equal(t, gotEvents[1].turn, gotEvents[2].turn, "TurnStarted 后应提交同一 turn 的 AfterTurn")
+}
+
+func TestPassthroughTurnAdmissionFinishesActiveTurnExactlyOnce(t *testing.T) {
+	var mu sync.Mutex
+	beforeTurns := make([]int, 0, 1)
+	afterTurns := make([]int, 0, 1)
+	afterErrors := make([]error, 0, 1)
+	wantErr := errors.New("relay failed")
+	admission := &openAIWSPassthroughTurnAdmission{hooks: &OpenAIWSIngressHooks{
+		BeforeTurn: func(turn int) error {
+			mu.Lock()
+			beforeTurns = append(beforeTurns, turn)
+			mu.Unlock()
+			return nil
+		},
+		AfterTurn: func(turn int, _ *OpenAIForwardResult, turnErr error) {
+			mu.Lock()
+			afterTurns = append(afterTurns, turn)
+			afterErrors = append(afterErrors, turnErr)
+			mu.Unlock()
+		},
+	}}
+
+	require.NoError(t, admission.begin(2))
+	require.Equal(t, 2, admission.active())
+	require.True(t, admission.finish(2, nil, wantErr))
+	require.False(t, admission.finish(2, nil, errors.New("duplicate")))
+	require.Zero(t, admission.active())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []int{2}, beforeTurns)
+	require.Equal(t, []int{2}, afterTurns)
+	require.Equal(t, []error{wantErr}, afterErrors)
 }
 
 func TestPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T) {
@@ -161,6 +194,8 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 		startedAt time.Time
 	}
 	turnStarts := make(chan turnStart, 2)
+	beforeTurns := make(chan int, 2)
+	afterTurns := make(chan int, 2)
 	beforeRequestEntered := make(chan time.Time, 1)
 	releaseBeforeRequest := make(chan struct{})
 	hooks := &OpenAIWSIngressHooks{
@@ -175,6 +210,13 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 			}
 			return nil
 		},
+		BeforeTurn: func(turn int) error {
+			beforeTurns <- turn
+			return nil
+		},
+		AfterTurn: func(turn int, _ *OpenAIForwardResult, _ error) {
+			afterTurns <- turn
+		},
 	}
 
 	server, serverErr := startPassthroughHookRecordingServer(
@@ -188,6 +230,12 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 	clientConn := dialPassthroughLifecycleClient(t, server)
 	defer func() { _ = clientConn.CloseNow() }()
 
+	select {
+	case turn := <-beforeTurns:
+		require.Equal(t, 1, turn)
+	case <-time.After(time.Second):
+		t.Fatal("first turn did not acquire passthrough admission")
+	}
 	require.Equal(t, "response.create", gjson.GetBytes(requirePassthroughUpstreamWrite(t, upstream, 3*time.Second), "type").String())
 	firstCompleted, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
 	require.NoError(t, err)
@@ -197,6 +245,12 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 		require.Equal(t, 1, first.turn)
 	case <-time.After(time.Second):
 		t.Fatal("first turn start was not reported")
+	}
+	select {
+	case turn := <-afterTurns:
+		require.Equal(t, 1, turn)
+	case <-time.After(time.Second):
+		t.Fatal("first turn did not release passthrough admission")
 	}
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
@@ -211,6 +265,12 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 		t.Fatal("second turn did not enter BeforeRequest")
 	}
 	close(releaseBeforeRequest)
+	select {
+	case turn := <-beforeTurns:
+		require.Equal(t, 2, turn)
+	case <-time.After(time.Second):
+		t.Fatal("second turn did not acquire passthrough admission")
+	}
 	require.Equal(t, "response.create", gjson.GetBytes(requirePassthroughUpstreamWrite(t, upstream, 3*time.Second), "type").String())
 	upstream.Send(`{"type":"response.completed","response":{"id":"resp_second","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
 	secondCompleted, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
@@ -224,6 +284,12 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 	case <-time.After(time.Second):
 		t.Fatal("second turn start was not reported")
 	}
+	select {
+	case turn := <-afterTurns:
+		require.Equal(t, 2, turn)
+	case <-time.After(time.Second):
+		t.Fatal("second turn did not release passthrough admission")
+	}
 
 	_ = clientConn.CloseNow()
 	cancelControl(context.Canceled)
@@ -231,5 +297,10 @@ func testPassthroughIngressFreezesSubsequentTurnBeforeRequestPolicy(t *testing.T
 	case <-serverErr:
 	case <-time.After(3 * time.Second):
 		t.Fatal("passthrough ingress did not exit")
+	}
+	select {
+	case turn := <-afterTurns:
+		t.Fatalf("turn %d released more than once", turn)
+	default:
 	}
 }

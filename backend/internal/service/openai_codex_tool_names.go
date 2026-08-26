@@ -12,7 +12,8 @@ import (
 
 const (
 	codexReservedPythonToolName = "python"
-	codexPythonToolAlias        = "python__sub2api"
+	codexPythonToolAlias        = "python__compat"
+	codexPythonToolLegacyAlias  = "python__sub2api"
 	codexToolNameReverseKey     = "openai_codex_tool_name_reverse"
 	codexToolNameSessionKey     = "openai_codex_tool_name_session_reverse"
 )
@@ -39,6 +40,9 @@ func aliasOpenAIOAuthReservedToolNames(reqBody map[string]any) (map[string]strin
 		original := field.name
 		if normalized != field.name {
 			original = strings.TrimSpace(field.name)
+			if strings.EqualFold(original, codexPythonToolLegacyAlias) {
+				original = codexReservedPythonToolName
+			}
 		}
 		if previous, exists := owners[normalized]; exists && previous != original {
 			return nil, false, fmt.Errorf("tool names %q and %q both normalize to %q", previous, original, normalized)
@@ -61,7 +65,8 @@ func aliasOpenAIOAuthReservedToolNames(reqBody map[string]any) (map[string]strin
 
 func aliasOpenAIOAuthReservedToolName(name string) string {
 	trimmed := strings.TrimSpace(name)
-	if strings.EqualFold(trimmed, codexReservedPythonToolName) {
+	if strings.EqualFold(trimmed, codexReservedPythonToolName) ||
+		strings.EqualFold(trimmed, codexPythonToolLegacyAlias) {
 		return codexPythonToolAlias
 	}
 	return name

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -996,9 +997,32 @@ func TestApplyCodexImageGenerationBridgeInstructions_AppendsBridgeOnce(t *testin
 	require.Contains(t, instructions, "existing instructions")
 	require.Contains(t, instructions, codexImageGenerationBridgeMarker)
 	require.Contains(t, instructions, "Responses native `image_generation` tool")
+	require.NotContains(t, strings.ToLower(instructions), "sub2api")
 
 	modified = applyCodexImageGenerationBridgeInstructions(reqBody)
 	require.False(t, modified)
+}
+
+func TestApplyCodexImageGenerationBridgeInstructions_NormalizesLegacyMarker(t *testing.T) {
+	legacyInstructions := "existing instructions\n\n" + codexImageGenerationBridgeLegacyMarker + "\nlegacy bridge\n" + codexImageGenerationBridgeLegacyClosingMarker
+	reqBody := map[string]any{
+		"model":        "gpt-5.4",
+		"instructions": legacyInstructions,
+		"tools": []any{
+			map[string]any{"type": "image_generation", "output_format": "png"},
+		},
+	}
+
+	modified := applyCodexImageGenerationBridgeInstructions(reqBody)
+	require.True(t, modified)
+	instructions, ok := reqBody["instructions"].(string)
+	require.True(t, ok)
+	require.Contains(t, instructions, codexImageGenerationBridgeMarker)
+	require.Contains(t, instructions, codexImageGenerationBridgeClosingMarker)
+	require.NotContains(t, strings.ToLower(instructions), "sub2api")
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
+	require.NotContains(t, strings.ToLower(string(body)), "sub2api")
 }
 
 func TestApplyCodexImageGenerationBridgeInstructions_SkipsSpark(t *testing.T) {
@@ -1098,6 +1122,27 @@ func TestApplyCodexOAuthTransform_AddsSparkImageUnsupportedInstructions(t *testi
 	require.Contains(t, instructions, "does not support image generation")
 	require.Contains(t, instructions, "switch to a non-Spark Codex model")
 	require.NotContains(t, instructions, codexImageGenerationBridgeMarker)
+	require.NotContains(t, strings.ToLower(instructions), "sub2api")
+}
+
+func TestApplyCodexSparkImageUnsupportedInstructions_NormalizesLegacyMarker(t *testing.T) {
+	legacyInstructions := "existing instructions\n\n" + codexSparkImageUnsupportedLegacyMarker + "\nlegacy spark guard\n" + codexSparkImageUnsupportedLegacyClosingMarker
+	reqBody := map[string]any{
+		"model":        "gpt-5.3-codex-spark",
+		"instructions": legacyInstructions,
+		"input":        "hello",
+	}
+
+	modified := applyCodexSparkImageUnsupportedInstructions(reqBody)
+	require.True(t, modified)
+	instructions, ok := reqBody["instructions"].(string)
+	require.True(t, ok)
+	require.Contains(t, instructions, codexSparkImageUnsupportedMarker)
+	require.Contains(t, instructions, codexSparkImageUnsupportedClosingMarker)
+	require.NotContains(t, strings.ToLower(instructions), "sub2api")
+	body, err := json.Marshal(reqBody)
+	require.NoError(t, err)
+	require.NotContains(t, strings.ToLower(string(body)), "sub2api")
 }
 
 func TestApplyCodexOAuthTransform_DoesNotAddSparkImageUnsupportedForNonSpark(t *testing.T) {

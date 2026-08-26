@@ -433,7 +433,7 @@ export default {
       },
       upstreamBillingProbe: {
         title: 'Upstream Rate Auto Detection',
-        description: 'Periodically retrieve rates declared by upstream Sub2API sites. Account rates change only when the separate sync switch is enabled.',
+        description: 'Periodically retrieve rates declared by compatible upstream gateways. Account rates change only when the separate sync switch is enabled.',
         enabled: 'Enable global auto detection',
         enabledHint: 'When enabled, scheduled detection runs only for accounts that also enable automatic detection. Disabling stops all scheduled detection; manual detection remains available.',
         intervalMinutes: 'Detection interval (minutes)',
@@ -975,9 +975,9 @@ export default {
         title: '429 Default Cooldown',
         description: 'Configure the default account cooldown when upstream returns 429 without an explicit reset time',
         enabled: 'Enable 429 Default Cooldown',
-        enabledHint: 'Pause account scheduling when a 429 has no reset time, then auto-recover after cooldown',
+        enabledHint: 'Pause account scheduling when a 429 has no reset time, then auto-recover after cooldown; OpenAI accounts always cool down for at least 30 seconds',
         cooldownSeconds: 'Cooldown Duration (seconds)',
-        cooldownSecondsHint: 'Default cooldown duration (1-7200 seconds); explicit upstream reset times still take precedence',
+        cooldownSecondsHint: 'Default cooldown duration (1-7200 seconds); OpenAI uses the greater of this value and 30 seconds, while longer upstream reset times still take precedence',
         saved: '429 default cooldown settings saved',
         saveFailed: 'Failed to save 429 default cooldown settings'
       },

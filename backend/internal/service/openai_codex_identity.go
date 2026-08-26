@@ -170,6 +170,7 @@ func codexClientVersionFromUA(ua string) string {
 
 // ensureCodexIdentityHeaders 补齐 OAuth（ChatGPT 内部接口）出站请求所需的 Codex 身份头。
 // 已有 User-Agent 与 version 保持不变，交给紧随其后的 enforceCodexIdentityHeaders 收口。
+// 本函数只管理客户端身份，不注入或改写上游能力协商头。
 func ensureCodexIdentityHeaders(h http.Header) {
 	if h == nil {
 		return
@@ -184,7 +185,6 @@ func ensureCodexIdentityHeaders(h http.Header) {
 	if strings.TrimSpace(h.Get("version")) == "" {
 		h.Set("version", identity.version)
 	}
-	h.Set("OpenAI-Beta", "responses=experimental")
 }
 
 // applyOpenAICodexProbeHeaders 为合成探测请求补齐 Codex 身份和引擎指纹。

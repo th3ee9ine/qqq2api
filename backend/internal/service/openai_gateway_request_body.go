@@ -1066,6 +1066,13 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 		normalized = triggerBody
 		changed = true
 	}
+	// Final wire invariant: replayed bodies from older versions may not pass
+	// through the feature-specific transforms above (notably API-key and WS
+	// paths). Retired internal markers must never leave the gateway.
+	if markerBody, markerChanged := normalizeLegacyOpenAIOutboundJSON(normalized); markerChanged {
+		normalized = markerBody
+		changed = true
+	}
 	return normalized, changed, nil
 }
 

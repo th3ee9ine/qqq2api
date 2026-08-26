@@ -51,6 +51,33 @@ func TestHTTPUpstreamDoCanDisableRedirectsPerRequest(t *testing.T) {
 	require.Zero(t, redirectedCalls.Load())
 }
 
+func TestHTTPUpstreamDoSanitizesInternalIdentityMetadata(t *testing.T) {
+	received := make(chan http.Header, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	require.NoError(t, err)
+	req.Header.Set("X-Sub2API-Trace", "trace")
+	req.Header.Set("User-Agent", "qqq2api-upstream-test")
+	req.Header.Set("Authorization", "Bearer opaque-token")
+
+	upstream := NewHTTPUpstream(nil)
+	resp, err := upstream.Do(req, "", 1, 1)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	headers := <-received
+	require.Empty(t, headers.Get("X-Sub2API-Trace"))
+	require.NotContains(t, strings.ToLower(headers.Get("User-Agent")), "qqq2api")
+	require.NotContains(t, strings.ToLower(headers.Get("User-Agent")), "sub2api")
+	require.Equal(t, "Bearer opaque-token", headers.Get("Authorization"))
+}
+
 func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredHTTPProxy(t *testing.T) {
 	var upstreamCalls atomic.Int64
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

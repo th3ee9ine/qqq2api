@@ -161,6 +161,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		}
 
 		account := selection.Account
+		c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), 0))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 		accountRelease, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, false, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
@@ -233,6 +234,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 					return
 				case <-time.After(retryDelay):
 				}
+				c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), account.ID))
 				continue
 			}
 		}

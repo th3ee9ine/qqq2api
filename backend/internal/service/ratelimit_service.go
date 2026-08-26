@@ -1120,13 +1120,36 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		persistOpenAI429PlanType(ctx, s.accountRepo, account, responseBody)
 		s.persistOpenAICodexSnapshot(ctx, account, headers)
 		notifyOpenAIAutoReset(account.ID)
-		if resetAt := s.calculateOpenAI429ResetTime(headers); resetAt != nil {
-			s.notifyAccountSchedulingBlocked(account, *resetAt, "429")
-			if err := s.accountRepo.SetRateLimited(ctx, account.ID, *resetAt); err != nil {
+		// Persist the latest explicit reset signal for every OpenAI credential so
+		// other gateway instances observe the same provider boundary. Retry-After
+		// is a hard lower bound, but must not shorten a longer Codex quota-window
+		// or response-body reset. The 30s floor prevents a short value from
+		// immediately feeding API-key or OAuth credentials back into a 429 loop.
+		now := time.Now()
+		var explicitResetAt time.Time
+		considerReset := func(candidate *time.Time) {
+			if candidate != nil && candidate.After(explicitResetAt) {
+				explicitResetAt = *candidate
+			}
+		}
+		considerReset(parseRetryAfterResetTime(headers, now))
+		considerReset(s.calculateOpenAI429ResetTime(headers))
+		if resetUnix := parseOpenAIRateLimitResetTime(responseBody); resetUnix != nil {
+			bodyResetAt := time.Unix(*resetUnix, 0)
+			considerReset(&bodyResetAt)
+		}
+		if !explicitResetAt.IsZero() {
+			resetAt := explicitResetAt
+			minimumResetAt := now.Add(openAIOAuth429FallbackCooldown)
+			if resetAt.Before(minimumResetAt) {
+				resetAt = minimumResetAt
+			}
+			s.notifyAccountSchedulingBlocked(account, resetAt, "429_retry_after")
+			if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
 				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 				return
 			}
-			slog.Info("openai_account_rate_limited", "account_id", account.ID, "reset_at", *resetAt)
+			slog.Info("openai_account_rate_limited", "account_id", account.ID, "source", "explicit_reset", "reset_at", resetAt)
 			return
 		}
 	}
@@ -1232,6 +1255,15 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 
 func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, account *Account, reason string) {
 	cooldown, enabled := s.get429FallbackCooldown(ctx, account)
+	if account != nil && account.Platform == PlatformOpenAI {
+		// OpenAI credentials always require a distributed cooldown after a 429,
+		// even if the generic fallback is disabled or configured below the safe
+		// floor. OAuth applies the same minimum to its local runtime block.
+		enabled = true
+		if cooldown < openAIOAuth429FallbackCooldown {
+			cooldown = openAIOAuth429FallbackCooldown
+		}
+	}
 	if !enabled {
 		slog.Info("rate_limit_429_fallback_ignored", "account_id", account.ID, "platform", account.Platform, "reason", reason)
 		return

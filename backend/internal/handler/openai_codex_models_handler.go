@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -39,6 +41,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	switchCount := 0
 	var lastUpstreamErr error
+	oauthFollowupPending := false
 
 	for {
 		account, err := h.gatewayService.SelectAccountForModelWithExclusions(c.Request.Context(), apiKey.GroupID, "", "", failedAccountIDs)
@@ -55,6 +58,19 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 		}
 		// 让 ops 错误日志携带实际选中的上游账号，便于定位失效账号（#4544）。
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+		if err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(c.Request.Context(), account); err != nil {
+			if c.Request.Context().Err() != nil {
+				return
+			}
+			var admissionErr *service.OpenAIOAuthAdmissionError
+			if errors.As(err, &admissionErr) {
+				c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
+			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Account request admission unavailable")
+			return
+		}
 
 		manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), c.GetHeader("If-None-Match"))
 		if err != nil {
@@ -62,6 +78,17 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 				return
 			}
 			if service.IsRetryableCodexModelsManifestError(err) && switchCount < maxAccountSwitches {
+				// Once an OAuth account fails, allow exactly one alternate account.
+				// Any failure from that follow-up closes this request even when a
+				// mixed pool selected an API-key account, preventing manifest refreshes
+				// from walking the entire credential pool.
+				if oauthFollowupPending {
+					h.errorResponse(c, infraerrors.Code(err), "upstream_error", infraerrors.Message(err))
+					return
+				}
+				if account.IsOpenAIOAuthLike() {
+					oauthFollowupPending = true
+				}
 				failedAccountIDs[account.ID] = struct{}{}
 				switchCount++
 				lastUpstreamErr = err

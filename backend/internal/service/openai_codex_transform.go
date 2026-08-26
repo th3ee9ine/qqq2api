@@ -134,10 +134,16 @@ func trimOpenAIResponsesKnownCallIDPrefix(id string) string {
 const codexImageGenerationFunctionToolName = "image_gen.imagegen"
 
 const (
-	codexImageGenerationBridgeMarker = "<sub2api-codex-image-generation>"
-	codexImageGenerationBridgeText   = codexImageGenerationBridgeMarker + "\nWhen the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. The local Codex client may not expose an `image_gen` namespace, but that does not mean image generation is unavailable. Do not ask the user to switch to CLI fallback solely because `image_gen` is absent.\n</sub2api-codex-image-generation>"
-	codexSparkImageUnsupportedMarker = "<sub2api-codex-spark-image-unsupported>"
-	codexSparkImageUnsupportedText   = codexSparkImageUnsupportedMarker + "\nThe current model is gpt-5.3-codex-spark, which does not support image generation, image editing, image input, the `image_generation` tool, or Codex `image_gen`/`$imagegen` workflows. If the user asks for image generation or image editing, clearly explain this model limitation and ask them to switch to a non-Spark Codex model such as gpt-5.3-codex or gpt-5.4. Do not claim that the local environment merely lacks image_gen tooling, and do not suggest CLI fallback as the primary fix while the model remains Spark.\n</sub2api-codex-spark-image-unsupported>"
+	codexImageGenerationBridgeMarker              = "<codex-image-generation-bridge>"
+	codexImageGenerationBridgeClosingMarker       = "</codex-image-generation-bridge>"
+	codexImageGenerationBridgeLegacyMarker        = "<sub2api-codex-image-generation>"
+	codexImageGenerationBridgeLegacyClosingMarker = "</sub2api-codex-image-generation>"
+	codexImageGenerationBridgeText                = codexImageGenerationBridgeMarker + "\nWhen the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. The local Codex client may not expose an `image_gen` namespace, but that does not mean image generation is unavailable. Do not ask the user to switch to CLI fallback solely because `image_gen` is absent.\n" + codexImageGenerationBridgeClosingMarker
+	codexSparkImageUnsupportedMarker              = "<codex-spark-image-unsupported>"
+	codexSparkImageUnsupportedClosingMarker       = "</codex-spark-image-unsupported>"
+	codexSparkImageUnsupportedLegacyMarker        = "<sub2api-codex-spark-image-unsupported>"
+	codexSparkImageUnsupportedLegacyClosingMarker = "</sub2api-codex-spark-image-unsupported>"
+	codexSparkImageUnsupportedText                = codexSparkImageUnsupportedMarker + "\nThe current model is gpt-5.3-codex-spark, which does not support image generation, image editing, image input, the `image_generation` tool, or Codex `image_gen`/`$imagegen` workflows. If the user asks for image generation or image editing, clearly explain this model limitation and ask them to switch to a non-Spark Codex model such as gpt-5.3-codex or gpt-5.4. Do not claim that the local environment merely lacks image_gen tooling, and do not suggest CLI fallback as the primary fix while the model remains Spark.\n" + codexSparkImageUnsupportedClosingMarker
 )
 
 var openAIChatGPTInternalUnsupportedFields = []string{
@@ -169,6 +175,9 @@ func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact
 
 func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuthTransformOptions) codexTransformResult {
 	result := codexTransformResult{}
+	if normalizeOpenAICompatClaudeCodeTodoGuardInRequestBody(reqBody) {
+		result.Modified = true
+	}
 	if normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody) {
 		result.Modified = true
 	}
@@ -1090,16 +1099,30 @@ func ensureOpenAIResponsesImageGenerationToolChoiceAuto(reqBody map[string]any) 
 }
 
 func applyCodexImageGenerationBridgeInstructions(reqBody map[string]any) bool {
-	if len(reqBody) == 0 || hasCodexImageGenerationFunctionTool(reqBody) || !hasOpenAIImageGenerationTool(reqBody) {
-		return false
-	}
-	if isCodexSparkModel(firstNonEmptyString(reqBody["model"])) {
+	if len(reqBody) == 0 {
 		return false
 	}
 
 	existing, _ := reqBody["instructions"].(string)
+	existing, legacyNormalized := normalizeLegacyCodexInstructionMarker(
+		existing,
+		codexImageGenerationBridgeLegacyMarker,
+		codexImageGenerationBridgeLegacyClosingMarker,
+		codexImageGenerationBridgeMarker,
+		codexImageGenerationBridgeClosingMarker,
+	)
+	if legacyNormalized {
+		reqBody["instructions"] = existing
+	}
+	if hasCodexImageGenerationFunctionTool(reqBody) || !hasOpenAIImageGenerationTool(reqBody) {
+		return legacyNormalized
+	}
+	if isCodexSparkModel(firstNonEmptyString(reqBody["model"])) {
+		return legacyNormalized
+	}
+
 	if strings.Contains(existing, codexImageGenerationBridgeMarker) {
-		return false
+		return legacyNormalized
 	}
 
 	existing = strings.TrimRight(existing, " \t\r\n")
@@ -1117,8 +1140,18 @@ func applyCodexSparkImageUnsupportedInstructions(reqBody map[string]any) bool {
 		return false
 	}
 	existing, _ := reqBody["instructions"].(string)
+	existing, legacyNormalized := normalizeLegacyCodexInstructionMarker(
+		existing,
+		codexSparkImageUnsupportedLegacyMarker,
+		codexSparkImageUnsupportedLegacyClosingMarker,
+		codexSparkImageUnsupportedMarker,
+		codexSparkImageUnsupportedClosingMarker,
+	)
+	if legacyNormalized {
+		reqBody["instructions"] = existing
+	}
 	if strings.Contains(existing, codexSparkImageUnsupportedMarker) {
-		return false
+		return legacyNormalized
 	}
 	existing = strings.TrimRight(existing, " \t\r\n")
 	if strings.TrimSpace(existing) == "" {
@@ -1127,6 +1160,12 @@ func applyCodexSparkImageUnsupportedInstructions(reqBody map[string]any) bool {
 	}
 	reqBody["instructions"] = existing + "\n\n" + codexSparkImageUnsupportedText
 	return true
+}
+
+func normalizeLegacyCodexInstructionMarker(existing, legacyMarker, legacyClosingMarker, marker, closingMarker string) (string, bool) {
+	normalized := strings.ReplaceAll(existing, legacyMarker, marker)
+	normalized = strings.ReplaceAll(normalized, legacyClosingMarker, closingMarker)
+	return normalized, normalized != existing
 }
 
 func validateOpenAIResponsesImageModel(reqBody map[string]any, model string) error {

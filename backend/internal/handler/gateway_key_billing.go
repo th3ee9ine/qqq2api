@@ -33,7 +33,7 @@ type keyBillingInfoResponse struct {
 }
 
 // KeyBillingInfo returns the token billing multiplier effective for the authenticated API key.
-// GET /v1/sub2api/billing
+// GET /v1/billing
 func (h *GatewayHandler) KeyBillingInfo(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
@@ -81,7 +81,7 @@ func buildKeyBillingInfo(apiKey *service.APIKey, _ float64, now time.Time) keyBi
 	appliedPeak := apiKey.Group.PeakMultiplierAt(now)
 
 	response := keyBillingInfoResponse{
-		Object:                  "sub2api.key_billing",
+		Object:                  "gateway.key_billing",
 		SchemaVersion:           keyBillingInfoSchemaVersion,
 		BillingScope:            "token",
 		GroupRateMultiplier:     groupRate,
