@@ -65,6 +65,7 @@
               {{ t('admin.proxies.batchQualityCheck') }}
             </button>
             <button
+              v-if="authStore.isAdmin"
               @click="openBatchDelete"
               :disabled="selectedCount === 0"
               class="btn btn-danger"
@@ -335,6 +336,7 @@
                 <span class="text-xs">{{ t('common.edit') }}</span>
               </button>
               <button
+                v-if="authStore.isAdmin"
                 @click="handleDelete(row)"
                 class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
               >
@@ -849,6 +851,7 @@
 
     <!-- Delete Confirmation Dialog -->
     <ConfirmDialog
+      v-if="authStore.isAdmin"
       :show="showDeleteDialog"
       :title="t('admin.proxies.deleteProxy')"
       :message="t('admin.proxies.deleteConfirm', { name: deletingProxy?.name })"
@@ -861,6 +864,7 @@
 
     <!-- Batch Delete Confirmation Dialog -->
     <ConfirmDialog
+      v-if="authStore.isAdmin"
       :show="showBatchDeleteDialog"
       :title="t('admin.proxies.batchDelete')"
       :message="t('admin.proxies.batchDeleteConfirm', { count: selectedCount })"
@@ -1014,6 +1018,7 @@
 import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -1045,6 +1050,7 @@ import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 const { copyToClipboard } = useClipboard()
 const proxyExportStepUp = useStepUp()
 
@@ -2030,6 +2036,7 @@ const handleExportData = async () => {
 }
 
 const handleDelete = (proxy: Proxy) => {
+  if (!authStore.isAdmin) return
   if ((proxy.account_count || 0) > 0) {
     appStore.showError(t('admin.proxies.deleteBlockedInUse'))
     return
@@ -2039,6 +2046,7 @@ const handleDelete = (proxy: Proxy) => {
 }
 
 const openBatchDelete = () => {
+  if (!authStore.isAdmin) return
   if (selectedCount.value === 0) {
     return
   }
@@ -2046,7 +2054,7 @@ const openBatchDelete = () => {
 }
 
 const confirmDelete = async () => {
-  if (!deletingProxy.value) return
+  if (!authStore.isAdmin || !deletingProxy.value) return
 
   try {
     await adminAPI.proxies.delete(deletingProxy.value.id)
@@ -2062,6 +2070,7 @@ const confirmDelete = async () => {
 }
 
 const confirmBatchDelete = async () => {
+  if (!authStore.isAdmin) return
   const ids = Array.from(selectedProxyIds.value)
   if (ids.length === 0) {
     showBatchDeleteDialog.value = false

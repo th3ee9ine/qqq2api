@@ -44,7 +44,7 @@
     </div>
     <div class="flex gap-2">
       <template v-if="selectedIds.length > 0">
-        <button @click="$emit('delete')" class="btn btn-danger btn-sm">{{ t('admin.accounts.bulkActions.delete') }}</button>
+        <button v-if="canDelete" @click="$emit('delete')" class="btn btn-danger btn-sm">{{ t('admin.accounts.bulkActions.delete') }}</button>
         <button @click="$emit('reset-status')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.resetStatus') }}</button>
         <button @click="$emit('refresh-token')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.refreshToken') }}</button>
         <button @click="$emit('probe-upstream-billing')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.probeUpstreamBilling') }}</button>
@@ -62,12 +62,15 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
 
-defineProps<{
+withDefaults(defineProps<{
   selectedIds: number[]
   totalResults: number
   selectingAll: boolean
   allResultsSelected: boolean
-}>()
+  canDelete?: boolean
+}>(), {
+  canDelete: false,
+})
 
 defineEmits([
   'delete',

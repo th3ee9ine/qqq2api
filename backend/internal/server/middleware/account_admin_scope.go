@@ -25,7 +25,12 @@ func AccountAdminScope() gin.HandlerFunc {
 			c.Next()
 			return
 		case service.RoleAccountAdmin:
-			if accountAdminRequestAllowed(c.Request.Method, adminRelativePath(c.Request.URL.Path)) {
+			requestPath := adminRelativePath(c.Request.URL.Path)
+			if accountAdminResourceDelete(c.Request.Method, requestPath) {
+				AbortWithError(c, http.StatusForbidden, "ACCOUNT_ADMIN_DELETE_FORBIDDEN", "Account administrators cannot delete accounts or IPs")
+				return
+			}
+			if accountAdminRequestAllowed(c.Request.Method, requestPath) {
 				c.Next()
 				return
 			}
@@ -45,6 +50,25 @@ func adminRelativePath(path string) string {
 	// /admin/accounts/../settings cannot be mistaken for an account endpoint.
 	cleaned := pathpkg.Clean("/" + strings.TrimPrefix(path, "/"))
 	return strings.TrimSuffix(cleaned, "/")
+}
+
+// accountAdminResourceDelete identifies only deletion of the account or proxy
+// resource itself. DELETE child actions such as clearing a temporary state or
+// an Ollama session remain part of normal account maintenance.
+func accountAdminResourceDelete(method, path string) bool {
+	if method == http.MethodPost {
+		return path == "/admin/accounts/batch-delete" || path == "/admin/proxies/batch-delete"
+	}
+	if method != http.MethodDelete {
+		return false
+	}
+
+	for _, prefix := range []string{"/admin/accounts/", "/admin/proxies/"} {
+		if suffix, ok := strings.CutPrefix(path, prefix); ok && suffix != "" && !strings.Contains(suffix, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 func accountAdminRequestAllowed(method, path string) bool {

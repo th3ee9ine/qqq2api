@@ -10,7 +10,8 @@ const {
   batchCreateProxies,
   updateProxy,
   showError,
-  showSuccess
+  showSuccess,
+  authState
 } = vi.hoisted(() => ({
   listProxies: vi.fn(),
   getAllWithCount: vi.fn(),
@@ -18,7 +19,8 @@ const {
   batchCreateProxies: vi.fn(),
   updateProxy: vi.fn(),
   showError: vi.fn(),
-  showSuccess: vi.fn()
+  showSuccess: vi.fn(),
+  authState: { isAdmin: true }
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -39,6 +41,10 @@ vi.mock('@/stores/app', () => ({
     showSuccess,
     showInfo: vi.fn()
   })
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => authState
 }))
 
 vi.mock('@/composables/useClipboard', () => ({
@@ -153,6 +159,7 @@ const mountView = async () => {
 
 describe('admin proxy account assignment limits', () => {
   beforeEach(() => {
+    authState.isAdmin = true
     listProxies.mockReset()
     getAllWithCount.mockReset()
     createProxy.mockReset()
@@ -179,6 +186,29 @@ describe('admin proxy account assignment limits', () => {
 
     const capacities = wrapper.findAll('[data-testid="proxy-account-capacity"]')
     expect(capacities.map((item) => item.text())).toEqual(['2 / 5', '3 / Unlimited'])
+  })
+
+  it('hides single and batch delete actions from account administrators', async () => {
+    authState.isAdmin = false
+    const wrapper = await mountView()
+
+    expect(wrapper.findAll('button').some((button) =>
+      button.text().trim() === 'admin.proxies.batchDeleteAction'
+    )).toBe(false)
+    expect(wrapper.findAll('button').some((button) =>
+      button.text().trim() === 'common.delete'
+    )).toBe(false)
+  })
+
+  it('keeps single and batch delete actions visible to the super administrator', async () => {
+    const wrapper = await mountView()
+
+    expect(wrapper.findAll('button').some((button) =>
+      button.text().trim() === 'admin.proxies.batchDeleteAction'
+    )).toBe(true)
+    expect(wrapper.findAll('button').some((button) =>
+      button.text().trim() === 'common.delete'
+    )).toBe(true)
   })
 
   it('includes max_accounts when creating a proxy', async () => {

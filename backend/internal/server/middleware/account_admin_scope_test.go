@@ -28,8 +28,15 @@ func TestAccountAdminScope_AccountAdminRequestMatrix(t *testing.T) {
 		{name: "read ollama account policy", method: http.MethodGet, path: "/api/v1/admin/accounts/ollama-cloud-usage/settings", wantStatus: http.StatusNoContent},
 		{name: "openai oauth account flow", method: http.MethodPost, path: "/api/v1/admin/openai/oauth/start", wantStatus: http.StatusNoContent},
 		{name: "create proxy IP", method: http.MethodPost, path: "/api/v1/admin/proxies", wantStatus: http.StatusNoContent},
-		{name: "delete proxy IP", method: http.MethodDelete, path: "/api/v1/admin/proxies/7", wantStatus: http.StatusNoContent},
+		{name: "clear ollama session", method: http.MethodDelete, path: "/api/v1/admin/accounts/42/ollama-cloud-usage/session", wantStatus: http.StatusNoContent},
+		{name: "clear temporary account state", method: http.MethodDelete, path: "/api/v1/admin/accounts/42/temp-unschedulable", wantStatus: http.StatusNoContent},
 		{name: "scheduled account test", method: http.MethodPost, path: "/api/v1/admin/scheduled-test-plans/9/run", wantStatus: http.StatusNoContent},
+
+		// Account administrators may maintain resources but cannot remove them.
+		{name: "delete account", method: http.MethodDelete, path: "/api/v1/admin/accounts/42", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_DELETE_FORBIDDEN"},
+		{name: "batch delete accounts", method: http.MethodPost, path: "/api/v1/admin/accounts/batch-delete", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_DELETE_FORBIDDEN"},
+		{name: "delete proxy IP", method: http.MethodDelete, path: "/api/v1/admin/proxies/7", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_DELETE_FORBIDDEN"},
+		{name: "batch delete proxy IPs", method: http.MethodPost, path: "/api/v1/admin/proxies/batch-delete", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_DELETE_FORBIDDEN"},
 
 		// Read-only support data needed by account forms.
 		{name: "read all groups", method: http.MethodGet, path: "/api/v1/admin/groups/all", wantStatus: http.StatusNoContent},
@@ -73,7 +80,10 @@ func TestAccountAdminScope_AccountAdminRequestMatrix(t *testing.T) {
 			require.Equal(t, tt.wantStatus, response.Code)
 			require.Equal(t, tt.wantStatus == http.StatusNoContent, reached)
 			if tt.wantCode != "" {
-				require.JSONEq(t, `{"code":"`+tt.wantCode+`","message":"Account administrators may only manage accounts and IPs"}`, response.Body.String())
+				require.Contains(t, response.Body.String(), `"code":"`+tt.wantCode+`"`)
+				if tt.wantCode == "ACCOUNT_ADMIN_DELETE_FORBIDDEN" {
+					require.Contains(t, response.Body.String(), "Account administrators cannot delete accounts or IPs")
+				}
 			}
 		})
 	}
@@ -113,6 +123,35 @@ func TestAccountAdminScope_RoleMatrix(t *testing.T) {
 			if tt.wantCode != "" {
 				require.Contains(t, response.Body.String(), `"code":"`+tt.wantCode+`"`)
 			}
+		})
+	}
+}
+
+func TestAccountAdminScope_SuperAdminCanDeleteAccountsAndIPs(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		method string
+		path   string
+	}{
+		{name: "delete account", method: http.MethodDelete, path: "/api/v1/admin/accounts/42"},
+		{name: "batch delete accounts", method: http.MethodPost, path: "/api/v1/admin/accounts/batch-delete"},
+		{name: "delete proxy IP", method: http.MethodDelete, path: "/api/v1/admin/proxies/7"},
+		{name: "batch delete proxy IPs", method: http.MethodPost, path: "/api/v1/admin/proxies/batch-delete"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				c.Set(string(ContextKeyUserRole), service.RoleAdmin)
+				c.Next()
+			})
+			router.Use(AccountAdminScope())
+			router.Any("/*path", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(tt.method, tt.path, nil))
+
+			require.Equal(t, http.StatusNoContent, response.Code)
 		})
 	}
 }
