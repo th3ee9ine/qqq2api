@@ -365,9 +365,6 @@ const (
 	// OpenAIUpstreamAccessStateReason marks a provider credential whose
 	// account, workspace, or organization is unavailable.
 	OpenAIUpstreamAccessStateReason = GatewayFailureReason("openai_upstream_access_state")
-	// OpenAIHTTPContinuationUnsupportedReason identifies accounts that cannot
-	// preserve an official Responses HTTP continuation without dropping state.
-	OpenAIHTTPContinuationUnsupportedReason = GatewayFailureReason("openai_http_continuation_unsupported")
 )
 
 // isOpenAIUpstreamAccessStateError recognizes provider-side credential state

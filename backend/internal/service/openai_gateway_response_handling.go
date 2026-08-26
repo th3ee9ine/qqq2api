@@ -506,6 +506,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			}
 			if responseID == "" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
+				if err := s.bindHTTPResponseAccountBeforeWrite(ctx, c, account, responseID); err != nil {
+					streamEarlyErr = err
+					return
+				}
 			}
 			forceFlushFailedEvent := false
 			if !capacityFailoverSuppressedLogged && account != nil && account.Platform == PlatformOpenAI &&
@@ -1440,36 +1444,66 @@ func (s *OpenAIGatewayService) BindOpenAIHTTPResponseOwner(
 	)
 }
 
-func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *gin.Context, account *Account, responseID string) {
+func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *gin.Context, account *Account, responseID string) error {
 	if s == nil || account == nil || account.ID <= 0 {
-		return
+		return errors.New("invalid HTTP response affinity state")
 	}
 	responseID = strings.TrimSpace(responseID)
 	if responseID == "" {
-		return
+		return nil
 	}
 	store := s.getOpenAIWSStateStore()
 	if store == nil {
-		return
+		return errors.New("HTTP response affinity store is unavailable")
 	}
 	groupID := getOpenAIGroupIDFromContext(c)
 	ttl := s.openAIWSResponseStickyTTL()
-	logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, store.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
-	if rawOwner, ok := c.Get(openAIHTTPResponseOwnerContextKey); ok {
-		if owner, ok := rawOwner.(openAIHTTPResponseOwner); ok && owner.userID > 0 && owner.apiKeyID > 0 {
-			if err := s.BindOpenAIHTTPResponseOwner(ctx, groupID, responseID, owner.userID, owner.apiKeyID); err != nil {
-				logger.L().Warn(
-					"openai.http_bind_response_owner_failed",
-					zap.Int64("group_id", groupID),
-					zap.Int64("account_id", account.ID),
-					zap.Int64("user_id", owner.userID),
-					zap.Int64("api_key_id", owner.apiKeyID),
-					zap.String("response_id", truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen)),
-					zap.Error(err),
-				)
-			}
-		}
+	if err := store.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl); err != nil {
+		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, err)
+		return err
 	}
+	if c == nil {
+		return errors.New("HTTP response owner context is unavailable")
+	}
+	rawOwner, ok := c.Get(openAIHTTPResponseOwnerContextKey)
+	owner, validOwner := rawOwner.(openAIHTTPResponseOwner)
+	if !ok || !validOwner || owner.userID <= 0 || owner.apiKeyID <= 0 {
+		return errors.New("HTTP response owner context is unavailable")
+	}
+	if err := s.BindOpenAIHTTPResponseOwner(ctx, groupID, responseID, owner.userID, owner.apiKeyID); err != nil {
+		logger.L().Warn(
+			"openai.http_bind_response_owner_failed",
+			zap.Int64("group_id", groupID),
+			zap.Int64("account_id", account.ID),
+			zap.Int64("user_id", owner.userID),
+			zap.Int64("api_key_id", owner.apiKeyID),
+			zap.String("response_id", truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen)),
+			zap.Error(err),
+		)
+		return err
+	}
+	return nil
+}
+
+// bindHTTPResponseAccountBeforeWrite installs continuation affinity before a
+// response ID can be observed by an HTTP client. The HTTP handler records the
+// authenticated owner in the Gin context. Low-level service callers without
+// that marker retain their historical behavior and are bound by Forward after
+// the response handler returns.
+func (s *OpenAIGatewayService) bindHTTPResponseAccountBeforeWrite(ctx context.Context, c *gin.Context, account *Account, responseID string) error {
+	responseID = strings.TrimSpace(responseID)
+	if responseID == "" || c == nil {
+		return nil
+	}
+	rawOwner, ok := c.Get(openAIHTTPResponseOwnerContextKey)
+	owner, validOwner := rawOwner.(openAIHTTPResponseOwner)
+	if !ok || !validOwner || owner.userID <= 0 || owner.apiKeyID <= 0 {
+		return nil
+	}
+	if err := s.bindHTTPResponseAccount(ctx, c, account, responseID); err != nil {
+		return fmt.Errorf("bind OpenAI HTTP response affinity before write: %w", err)
+	}
+	return nil
 }
 
 func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
@@ -1626,6 +1660,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		return nil, fmt.Errorf("restore OpenAI namespace response: %w", err)
 	}
 	body = restoreCodexToolNamesFromContext(c, body)
+	responseID := extractOpenAIResponseIDFromJSONBytes(body)
+	if err := s.bindHTTPResponseAccountBeforeWrite(ctx, c, account, responseID); err != nil {
+		return nil, err
+	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	// Codex 协议要求 /responses/compact JSON 响应携带 x-codex-turn-state
 	// （codex-api/src/endpoint/compact.rs 从响应头捕获），显式回传。
@@ -1645,7 +1683,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
 		usage:            usage,
-		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		responseID:       responseID,
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
 		searchCount:      countGrokNativeSearchCallsFromJSONBytes(body),
@@ -1731,6 +1769,10 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		body = []byte(bodyText)
 	}
 
+	responseID := extractOpenAIResponseIDFromJSONBytes(body)
+	if err := s.bindHTTPResponseAccountBeforeWrite(c.Request.Context(), c, account, responseID); err != nil {
+		return nil, err
+	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, usage, terminalType, false)
 	s.relayOpenAICodexTurnState(c, account, resp.Header)
@@ -1749,7 +1791,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
 		usage:            usage,
-		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		responseID:       responseID,
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
 		searchCount:      countGrokNativeSearchCallsFromSSEBody(bodyText),

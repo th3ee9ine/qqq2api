@@ -63,9 +63,30 @@ func normalizeOpenAIClientTransport(transport OpenAIClientTransport) OpenAIClien
 func resolveOpenAIWSDecisionByClientTransport(
 	decision OpenAIWSProtocolDecision,
 	clientTransport OpenAIClientTransport,
+	account *Account,
 ) OpenAIWSProtocolDecision {
 	if clientTransport == OpenAIClientTransportHTTP {
+		if shouldBridgeOpenAIResponsesHTTPToWSV2(decision, account) {
+			decision.Reason = "http_responses_facade_" + decision.Reason
+			return decision
+		}
 		return openAIWSHTTPDecision("client_protocol_http")
 	}
 	return decision
+}
+
+func shouldBridgeOpenAIResponsesHTTPToWSV2(decision OpenAIWSProtocolDecision, account *Account) bool {
+	return decision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 &&
+		isOpenAIResponsesHTTPWSFacadeAccount(account)
+}
+
+// isOpenAIResponsesHTTPWSFacadeAccount identifies ChatGPT/Codex credentials
+// whose response IDs are scoped to a live WSv2 connection. API-key accounts
+// keep using the native Responses HTTP API; PAT and Agent Identity accounts
+// retain their existing transport contracts.
+func isOpenAIResponsesHTTPWSFacadeAccount(account *Account) bool {
+	return account != nil &&
+		account.IsOpenAIOAuthLike() &&
+		!account.IsOpenAIPersonalAccessToken() &&
+		!account.IsOpenAIAgentIdentity()
 }

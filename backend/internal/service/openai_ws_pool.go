@@ -74,6 +74,10 @@ type openAIWSAcquireRequest struct {
 	ForceNewConn bool
 	// ForcePreferredConn: 强制本次只使用 PreferredConnID，禁止漂移到其它连接。
 	ForcePreferredConn bool
+	// AllowPinnedOverflow permits a forced-new REST session to exceed the
+	// account's concurrency-derived soft limit when pinned idle sessions
+	// prevent eviction. The pool-wide hard cap still applies.
+	AllowPinnedOverflow bool
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
@@ -567,18 +571,19 @@ func (c *openAIWSConn) markPrewarmed() {
 }
 
 type openAIWSAccountPool struct {
-	mu            sync.Mutex
-	conns         map[string]*openAIWSConn
-	pinnedConns   map[string]int
-	changedCh     chan struct{}
-	creating      int
-	generation    uint64
-	lastCleanupAt time.Time
-	lastAcquire   *openAIWSAcquireRequest
-	prewarmActive bool
-	prewarmUntil  time.Time
-	prewarmFails  int
-	prewarmFailAt time.Time
+	mu                sync.Mutex
+	conns             map[string]*openAIWSConn
+	pinnedConns       map[string]int
+	timedResponsePins map[string]time.Time
+	changedCh         chan struct{}
+	creating          int
+	generation        uint64
+	lastCleanupAt     time.Time
+	lastAcquire       *openAIWSAcquireRequest
+	prewarmActive     bool
+	prewarmUntil      time.Time
+	prewarmFails      int
+	prewarmFailAt     time.Time
 }
 
 func (ap *openAIWSAccountPool) changeChannelLocked() chan struct{} {
@@ -703,6 +708,8 @@ func (p *openAIWSConnPool) Close() {
 					conn.close()
 				}
 			}
+			ap.timedResponsePins = make(map[string]time.Time)
+			ap.pinnedConns = make(map[string]int)
 			ap.mu.Unlock()
 			return true
 		})
@@ -872,6 +879,9 @@ retryAcquire:
 	ap.mu.Lock()
 	acquireGeneration := ap.generation
 	now := time.Now()
+	if p.cleanupExpiredTimedResponsePinsLocked(ap, now) {
+		ap.signalChangedLocked()
+	}
 	if ap.lastCleanupAt.IsZero() || now.Sub(ap.lastCleanupAt) >= openAIWSAcquireCleanupInterval {
 		evicted = p.cleanupAccountLocked(ap, now, effectiveMaxConns)
 		ap.lastCleanupAt = now
@@ -1051,6 +1061,7 @@ retryAcquire:
 		}
 	}
 
+	createLimit := effectiveMaxConns
 	if !req.ForceNewConn && len(ap.conns)+ap.creating >= effectiveMaxConns {
 		affine := p.pickLeastBusyConnWithRoutingAffinityLocked(ap, compatibility, routingAffinity)
 		if idle := p.pickOldestIdleConnWithoutHandshakeCompatibilityLocked(ap, compatibility); idle != nil {
@@ -1076,27 +1087,39 @@ retryAcquire:
 				closeOpenAIWSConns(evicted)
 				return nil, errOpenAIWSConnClosed
 			}
+			nextPinExpiry := nextOpenAIWSTimedResponsePinExpiryLocked(ap, now)
 			changedCh := ap.changeChannelLocked()
 			ap.mu.Unlock()
 			closeOpenAIWSConns(evicted)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-changedCh:
-				goto retryAcquire
+			if err := waitForOpenAIWSPoolChange(ctx, changedCh, nextPinExpiry); err != nil {
+				return nil, err
 			}
+			goto retryAcquire
 		}
 	}
 
 	if req.ForceNewConn && len(ap.conns)+ap.creating >= effectiveMaxConns {
-		if idle := p.pickOldestIdleConnLocked(ap); idle != nil {
+		for len(ap.conns)+ap.creating >= effectiveMaxConns {
+			idle := p.pickOldestIdleConnLocked(ap)
+			if idle == nil {
+				break
+			}
 			delete(ap.conns, idle.id)
+			removeOpenAIWSConnPinsLocked(ap, idle.id)
 			evicted = append(evicted, idle)
 			p.metrics.scaleDownTotal.Add(1)
 		}
+		if req.AllowPinnedOverflow &&
+			(p.dynamicMaxConnsEnabled() || p.modeRouterV2Enabled()) &&
+			effectiveMaxConns < p.maxConnsHardCap() &&
+			len(ap.conns)+ap.creating >= effectiveMaxConns &&
+			len(ap.conns)+ap.creating < p.maxConnsHardCap() &&
+			p.hasPinnedIdleConnLocked(ap) {
+			createLimit = p.maxConnsHardCap()
+		}
 	}
 
-	if len(ap.conns)+ap.creating < effectiveMaxConns {
+	if len(ap.conns)+ap.creating < createLimit {
 		connPick := time.Since(pickStartedAt)
 		p.recordConnPickDuration(connPick)
 		ap.creating++
@@ -1280,9 +1303,10 @@ func (p *openAIWSConnPool) getOrCreateAccountPool(accountID int64) *openAIWSAcco
 		}
 	}
 	ap := &openAIWSAccountPool{
-		conns:       make(map[string]*openAIWSConn),
-		pinnedConns: make(map[string]int),
-		changedCh:   make(chan struct{}),
+		conns:             make(map[string]*openAIWSConn),
+		pinnedConns:       make(map[string]int),
+		timedResponsePins: make(map[string]time.Time),
+		changedCh:         make(chan struct{}),
 	}
 	actual, _ := p.accounts.LoadOrStore(accountID, ap)
 	if typed, ok := actual.(*openAIWSAccountPool); ok && typed != nil {
@@ -1319,10 +1343,112 @@ func (p *openAIWSConnPool) notifyAccountPoolChanged(accountID int64) {
 }
 
 func (p *openAIWSConnPool) isConnPinnedLocked(ap *openAIWSAccountPool, connID string) bool {
-	if ap == nil || connID == "" || len(ap.pinnedConns) == 0 {
+	if ap == nil || connID == "" {
 		return false
 	}
-	return ap.pinnedConns[connID] > 0
+	if ap.pinnedConns[connID] > 0 {
+		return true
+	}
+	expiresAt, ok := ap.timedResponsePins[connID]
+	return ok && time.Now().Before(expiresAt)
+}
+
+func decrementOpenAIWSConnPinLocked(ap *openAIWSAccountPool, connID string) {
+	if ap == nil || connID == "" || len(ap.pinnedConns) == 0 {
+		return
+	}
+	count := ap.pinnedConns[connID]
+	if count <= 1 {
+		delete(ap.pinnedConns, connID)
+		return
+	}
+	ap.pinnedConns[connID] = count - 1
+}
+
+func removeOpenAIWSConnPinsLocked(ap *openAIWSAccountPool, connID string) bool {
+	if ap == nil || connID == "" {
+		return false
+	}
+	_, timedPinned := ap.timedResponsePins[connID]
+	delete(ap.timedResponsePins, connID)
+	changed := timedPinned
+	if _, ok := ap.pinnedConns[connID]; ok {
+		delete(ap.pinnedConns, connID)
+		changed = true
+	}
+	return changed
+}
+
+func (p *openAIWSConnPool) cleanupExpiredTimedResponsePinsLocked(ap *openAIWSAccountPool, now time.Time) bool {
+	if ap == nil || len(ap.timedResponsePins) == 0 {
+		return false
+	}
+	changed := false
+	for connID, expiresAt := range ap.timedResponsePins {
+		if !expiresAt.IsZero() && now.Before(expiresAt) {
+			continue
+		}
+		delete(ap.timedResponsePins, connID)
+		changed = true
+	}
+	return changed
+}
+
+func nextOpenAIWSTimedResponsePinExpiryLocked(ap *openAIWSAccountPool, now time.Time) time.Time {
+	if ap == nil || len(ap.timedResponsePins) == 0 {
+		return time.Time{}
+	}
+	var next time.Time
+	for _, expiresAt := range ap.timedResponsePins {
+		if expiresAt.IsZero() || !now.Before(expiresAt) {
+			return now
+		}
+		if next.IsZero() || expiresAt.Before(next) {
+			next = expiresAt
+		}
+	}
+	return next
+}
+
+func waitForOpenAIWSPoolChange(ctx context.Context, changedCh <-chan struct{}, nextPinExpiry time.Time) error {
+	if nextPinExpiry.IsZero() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changedCh:
+			return nil
+		}
+	}
+
+	wait := time.Until(nextPinExpiry)
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-changedCh:
+		return nil
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (p *openAIWSConnPool) hasPinnedIdleConnLocked(ap *openAIWSAccountPool) bool {
+	if ap == nil {
+		return false
+	}
+	for _, conn := range ap.conns {
+		if conn == nil || conn.isLeased() || conn.waiters.Load() > 0 {
+			continue
+		}
+		if p.isConnPinnedLocked(ap, conn.id) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now time.Time, maxConns int) []*openAIWSConn {
@@ -1330,22 +1456,19 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 		return nil
 	}
 	maxAge := p.maxConnAge()
+	changed := p.cleanupExpiredTimedResponsePinsLocked(ap, now)
 
 	evicted := make([]*openAIWSConn, 0)
 	for id, conn := range ap.conns {
 		if conn == nil {
 			delete(ap.conns, id)
-			if len(ap.pinnedConns) > 0 {
-				delete(ap.pinnedConns, id)
-			}
+			changed = removeOpenAIWSConnPinsLocked(ap, id) || changed
 			continue
 		}
 		select {
 		case <-conn.closedCh:
 			delete(ap.conns, id)
-			if len(ap.pinnedConns) > 0 {
-				delete(ap.pinnedConns, id)
-			}
+			changed = removeOpenAIWSConnPinsLocked(ap, id) || changed
 			evicted = append(evicted, conn)
 			continue
 		default:
@@ -1355,9 +1478,7 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 		}
 		if maxAge > 0 && !conn.isLeased() && conn.age(now) > maxAge {
 			delete(ap.conns, id)
-			if len(ap.pinnedConns) > 0 {
-				delete(ap.pinnedConns, id)
-			}
+			changed = removeOpenAIWSConnPinsLocked(ap, id) || changed
 			evicted = append(evicted, conn)
 		}
 	}
@@ -1374,9 +1495,7 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 		for id, conn := range ap.conns {
 			if conn == nil {
 				delete(ap.conns, id)
-				if len(ap.pinnedConns) > 0 {
-					delete(ap.pinnedConns, id)
-				}
+				changed = removeOpenAIWSConnPinsLocked(ap, id) || changed
 				continue
 			}
 			// 有等待者的连接不能在清理阶段被淘汰，否则等待中的 acquire 会收到 closed 错误。
@@ -1395,16 +1514,14 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 		for i := 0; i < redundant; i++ {
 			conn := idleConns[i]
 			delete(ap.conns, conn.id)
-			if len(ap.pinnedConns) > 0 {
-				delete(ap.pinnedConns, conn.id)
-			}
+			changed = removeOpenAIWSConnPinsLocked(ap, conn.id) || changed
 			evicted = append(evicted, conn)
 		}
 		if redundant > 0 {
 			p.metrics.scaleDownTotal.Add(int64(redundant))
 		}
 	}
-	if len(evicted) > 0 {
+	if len(evicted) > 0 || changed {
 		ap.signalChangedLocked()
 	}
 
@@ -1684,11 +1801,12 @@ func (p *openAIWSConnPool) ClearAccount(accountID int64) {
 	conns := make([]*openAIWSConn, 0, len(ap.conns))
 	for id, conn := range ap.conns {
 		delete(ap.conns, id)
-		delete(ap.pinnedConns, id)
 		if conn != nil {
 			conns = append(conns, conn)
 		}
 	}
+	ap.timedResponsePins = make(map[string]time.Time)
+	ap.pinnedConns = make(map[string]int)
 	ap.lastAcquire = nil
 	ap.prewarmUntil = time.Time{}
 	ap.prewarmFails = 0
@@ -1706,12 +1824,13 @@ func (p *openAIWSConnPool) evictConn(accountID int64, connID string) {
 	ap, ok := p.getAccountPool(accountID)
 	if ok && ap != nil {
 		ap.mu.Lock()
+		changed := removeOpenAIWSConnPinsLocked(ap, connID)
 		if c, exists := ap.conns[connID]; exists {
 			conn = c
 			delete(ap.conns, connID)
-			if len(ap.pinnedConns) > 0 {
-				delete(ap.pinnedConns, connID)
-			}
+			changed = true
+		}
+		if changed {
 			ap.signalChangedLocked()
 		}
 		ap.mu.Unlock()
@@ -1745,6 +1864,47 @@ func (p *openAIWSConnPool) PinConn(accountID int64, connID string) bool {
 	return true
 }
 
+// PinResponseConn protects the connection that owns a store=false response ID.
+// Retention is tracked per connection, so its cardinality is bounded by the
+// pool hard cap even when a connection produces many response IDs.
+func (p *openAIWSConnPool) PinResponseConn(accountID int64, responseID, connID string, ttl time.Duration) bool {
+	if p == nil || accountID <= 0 {
+		return false
+	}
+	responseID = stringsTrim(responseID)
+	connID = stringsTrim(connID)
+	if responseID == "" || connID == "" {
+		return false
+	}
+	ap, ok := p.getAccountPool(accountID)
+	if !ok || ap == nil {
+		return false
+	}
+
+	now := time.Now()
+	expiresAt := now.Add(normalizeOpenAIWSTTL(ttl))
+	ap.mu.Lock()
+	defer ap.mu.Unlock()
+	conn, exists := ap.conns[connID]
+	if !exists || conn == nil {
+		return false
+	}
+	select {
+	case <-conn.closedCh:
+		return false
+	default:
+	}
+
+	if ap.timedResponsePins == nil {
+		ap.timedResponsePins = make(map[string]time.Time)
+	}
+	if existing := ap.timedResponsePins[connID]; existing.After(expiresAt) {
+		expiresAt = existing
+	}
+	ap.timedResponsePins[connID] = expiresAt
+	return true
+}
+
 func (p *openAIWSConnPool) UnpinConn(accountID int64, connID string) {
 	if p == nil || accountID <= 0 {
 		return
@@ -1762,13 +1922,7 @@ func (p *openAIWSConnPool) UnpinConn(accountID int64, connID string) {
 	if len(ap.pinnedConns) == 0 {
 		return
 	}
-	count := ap.pinnedConns[connID]
-	if count <= 1 {
-		delete(ap.pinnedConns, connID)
-		ap.signalChangedLocked()
-		return
-	}
-	ap.pinnedConns[connID] = count - 1
+	decrementOpenAIWSConnPinLocked(ap, connID)
 	ap.signalChangedLocked()
 }
 

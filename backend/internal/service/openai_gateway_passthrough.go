@@ -1957,6 +1957,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			}
 			if responseID == "" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
+				if err := s.bindHTTPResponseAccountBeforeWrite(ctx, c, account, responseID); err != nil {
+					return resultWithUsage(), err
+				}
 			}
 			imageCounter.AddSSEData(dataBytes)
 			if sanitizedData, sanitized := sanitizeOpenAIResponseFailedEventForClient(
@@ -2144,13 +2147,17 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err != nil {
 		return nil, fmt.Errorf("restore OpenAI Responses client tools: %w", err)
 	}
+	responseID := extractOpenAIResponseIDFromJSONBytes(body)
+	if err := s.bindHTTPResponseAccountBeforeWrite(ctx, c, account, responseID); err != nil {
+		return nil, err
+	}
 	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
 		c.Data(resp.StatusCode, contentType, body)
 	}
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
 		usage:            usage,
-		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		responseID:       responseID,
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
 	}, nil
@@ -2209,6 +2216,10 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		body = []byte(bodyText)
 	}
 
+	responseID := extractOpenAIResponseIDFromJSONBytes(body)
+	if err := s.bindHTTPResponseAccountBeforeWrite(c.Request.Context(), c, account, responseID); err != nil {
+		return nil, err
+	}
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, usage, terminalType, false)
 
@@ -2226,7 +2237,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
 		usage:            usage,
-		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		responseID:       responseID,
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
 	}, nil

@@ -136,6 +136,16 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 	storeDisabled := s.isOpenAIWSStoreDisabledInRequest(reqBody, account)
+	httpOAuthFacade := GetOpenAIClientTransport(c) == OpenAIClientTransportHTTP &&
+		isOpenAIResponsesHTTPWSFacadeAccount(account)
+	strictHTTPContinuation := httpOAuthFacade &&
+		previousResponseID != ""
+	if strictHTTPContinuation && preferredConnID == "" {
+		return nil, wrapOpenAIWSFallback(
+			"previous_response_not_found",
+			errors.New("the connection for the previous response is unavailable"),
+		)
+	}
 	if stateStore != nil && storeDisabled && previousResponseID == "" && sessionHash != "" {
 		if connID, ok := stateStore.GetSessionConn(groupID, sessionHash); ok {
 			preferredConnID = connID
@@ -202,8 +212,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
-		PreferredConnID: preferredConnID,
-		ForceNewConn:    forceNewConn,
+		PreferredConnID:     preferredConnID,
+		ForceNewConn:        forceNewConn,
+		ForcePreferredConn:  strictHTTPContinuation,
+		AllowPinnedOverflow: httpOAuthFacade && forceNewConn,
 		ProxyURL: func() string {
 			if account.ProxyID != nil && account.Proxy != nil {
 				return account.Proxy.URL()
@@ -212,6 +224,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}(),
 	})
 	if err != nil {
+		if strictHTTPContinuation && errors.Is(err, errOpenAIWSPreferredConnUnavailable) {
+			return nil, wrapOpenAIWSFallback(
+				"previous_response_not_found",
+				errors.New("the connection for the previous response is unavailable"),
+			)
+		}
 		var agentDialErr *openAIWSDialError
 		if s.isAgentIdentityAccount(ctx, account) && errors.As(err, &agentDialErr) && isAgentIdentityTaskInvalidWSDialError(agentDialErr) && agentTaskRecoveryTried != nil && !*agentTaskRecoveryTried {
 			*agentTaskRecoveryTried = true
@@ -358,6 +376,34 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	responseID := ""
+	responseAffinityBound := false
+	bindResponseAffinity := func(refresh bool) error {
+		if responseAffinityBound && !refresh {
+			return nil
+		}
+		ttl := s.openAIWSResponseStickyTTL()
+		if responseID != "" && stateStore != nil {
+			if httpOAuthFacade {
+				if err := s.bindHTTPResponseAccount(ctx, c, account, responseID); err != nil {
+					return fmt.Errorf("bind HTTP response owner affinity: %w", err)
+				}
+			} else {
+				logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
+			}
+			stateStore.BindResponseConn(responseID, lease.ConnID(), ttl)
+			// Pin last: the active lease already prevents eviction while durable
+			// bindings are written, and starting the pin here gives the client the
+			// full configured continuation TTL after a slow cache write.
+			if httpOAuthFacade && !s.getOpenAIWSConnPool().PinResponseConn(account.ID, responseID, lease.ConnID(), ttl) {
+				return errors.New("failed to retain the connection for the response")
+			}
+		}
+		if stateStore != nil && storeDisabled && sessionHash != "" {
+			stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
+		}
+		responseAffinityBound = true
+		return nil
+	}
 	var finalResponse []byte
 	wroteDownstream := false
 	needModelReplace := originalModel != mappedModel
@@ -653,7 +699,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			setOpsUpstreamError(c, statusCode, errMsg, "")
 			if reqStream && !clientDisconnected {
-				flushBufferedStreamEvents("error_event")
+				if httpOAuthFacade && responseID != "" && !responseAffinityBound {
+					// The connection is already broken, so a buffered response.created
+					// ID cannot be offered as a usable REST continuation. Do not expose
+					// that orphaned ID before emitting the terminal error event.
+					bufferedStreamEvents = nil
+				} else {
+					flushBufferedStreamEvents("error_event")
+				}
 				emitStreamMessage(message, true)
 			}
 			if !reqStream {
@@ -688,6 +741,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 					)
 				}
 			} else {
+				if isTerminalEvent || (httpOAuthFacade && responseID != "") {
+					if bindErr := bindResponseAffinity(isTerminalEvent); bindErr != nil {
+						lease.MarkBroken()
+						return nil, wrapOpenAIWSFallback("response_affinity", bindErr)
+					}
+				}
 				flushBufferedStreamEvents(eventType)
 				emitStreamMessage(message, isTerminalEvent)
 			}
@@ -735,19 +794,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if responseID == "" {
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
+		if bindErr := bindResponseAffinity(true); bindErr != nil {
+			lease.MarkBroken()
+			return nil, wrapOpenAIWSFallback("response_affinity", bindErr)
+		}
 
 		c.Data(http.StatusOK, "application/json", finalResponse)
 	} else {
 		flushStreamWriter(true)
-	}
-
-	if responseID != "" && stateStore != nil {
-		ttl := s.openAIWSResponseStickyTTL()
-		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
-		stateStore.BindResponseConn(responseID, lease.ConnID(), ttl)
-	}
-	if stateStore != nil && storeDisabled && sessionHash != "" {
-		stateStore.BindSessionConn(groupID, sessionHash, lease.ConnID(), s.openAIWSSessionStickyTTL())
 	}
 	firstTokenMsValue := -1
 	if firstTokenMs != nil {

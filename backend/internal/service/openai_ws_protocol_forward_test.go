@@ -31,6 +31,54 @@ type httpUpstreamSequenceRecorder struct {
 	callCount int
 }
 
+type openAIWSSequenceCaptureDialer struct {
+	mu        sync.Mutex
+	conns     []*openAIWSCaptureConn
+	dialCount int
+}
+
+type openAIWSWriteProbeRecorder struct {
+	*httptest.ResponseRecorder
+	once             sync.Once
+	beforeFirstWrite func()
+}
+
+func (r *openAIWSWriteProbeRecorder) Write(payload []byte) (int, error) {
+	r.once.Do(func() {
+		if r.beforeFirstWrite != nil {
+			r.beforeFirstWrite()
+		}
+	})
+	return r.ResponseRecorder.Write(payload)
+}
+
+func (d *openAIWSSequenceCaptureDialer) Dial(
+	ctx context.Context,
+	wsURL string,
+	headers http.Header,
+	proxyURL string,
+) (openAIWSClientConn, int, http.Header, error) {
+	_ = ctx
+	_ = wsURL
+	_ = headers
+	_ = proxyURL
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.dialCount >= len(d.conns) {
+		return nil, 0, nil, io.ErrUnexpectedEOF
+	}
+	conn := d.conns[d.dialCount]
+	d.dialCount++
+	return conn, 0, nil, nil
+}
+
+func (d *openAIWSSequenceCaptureDialer) DialCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.dialCount
+}
+
 func (u *httpUpstreamSequenceRecorder) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -184,6 +232,549 @@ func TestOpenAIGatewayService_Forward_HTTPIngressStaysHTTPWhenWSEnabled(t *testi
 	reason, _ := c.Get("openai_ws_transport_reason")
 	require.Equal(t, string(OpenAIUpstreamTransportHTTPSSE), decision)
 	require.Equal(t, "client_protocol_http", reason)
+}
+
+func TestOpenAIGatewayService_Forward_HTTPAPIKeyPreviousResponseID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	wsFallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer wsFallbackServer.Close()
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = false
+
+	tests := []struct {
+		name       string
+		field      string
+		wantExists bool
+		wantID     string
+	}{
+		{
+			name:       "nonempty is preserved",
+			field:      `"previous_response_id":"resp_http_keep",`,
+			wantExists: true,
+			wantID:     "resp_http_keep",
+		},
+		{
+			name:       "empty string is preserved",
+			field:      `"previous_response_id":"",`,
+			wantExists: true,
+		},
+		{
+			name:       "null is preserved",
+			field:      `"previous_response_id":null,`,
+			wantExists: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+			c.Request.Header.Set("User-Agent", "custom-client/1.0")
+			SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+			upstream := &httpUpstreamRecorder{
+				resp: &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body: io.NopCloser(strings.NewReader(
+						`{"usage":{"input_tokens":1,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}`,
+					)),
+				},
+			}
+			svc := &OpenAIGatewayService{
+				cfg:              cfg,
+				httpUpstream:     upstream,
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+			}
+			account := &Account{
+				ID:          101,
+				Name:        "openai-apikey",
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeAPIKey,
+				Concurrency: 1,
+				Credentials: map[string]any{
+					"api_key":  "sk-test",
+					"base_url": wsFallbackServer.URL,
+				},
+				Extra: map[string]any{
+					"openai_responses_supported": true,
+				},
+			}
+
+			body := []byte(`{"model":"gpt-5.1","stream":false,` + tt.field + `"input":[{"type":"input_text","text":"hello"}]}`)
+			result, err := svc.Forward(context.Background(), c, account, body)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.False(t, result.OpenAIWSMode)
+			require.NotNil(t, upstream.lastReq, "API-key native Responses should use the HTTP upstream")
+
+			previousResponseID := gjson.GetBytes(upstream.lastBody, "previous_response_id")
+			require.Equal(t, tt.wantExists, previousResponseID.Exists())
+			require.Equal(t, tt.wantID, previousResponseID.String())
+		})
+	}
+}
+
+func TestOpenAIGatewayService_Forward_HTTPIngressOAuthKeepsWSv2Decision(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newHTTPContext := func() (*gin.Context, *httptest.ResponseRecorder) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+		c.Request.Header.Set("User-Agent", "custom-client/1.0")
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+		SetOpenAIHTTPResponseOwner(c, 1001, 2001)
+		return c, rec
+	}
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+	}}
+	captureConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_first","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":2}}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_second","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":2}}}`),
+	}}
+	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	pool.setClientDialerForTest(captureDialer)
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		openaiWSPool:     pool,
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          102,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	firstContext, _ := newHTTPContext()
+	firstBody := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	firstResult, err := svc.Forward(context.Background(), firstContext, account, firstBody)
+	require.NoError(t, err)
+	require.NotNil(t, firstResult)
+	require.True(t, firstResult.OpenAIWSMode)
+	require.Equal(t, "resp_oauth_first", firstResult.RequestID)
+	store := svc.getOpenAIWSStateStore()
+	firstConnID, ok := store.GetResponseConn("resp_oauth_first")
+	require.True(t, ok)
+	ownerUserID, ownerAPIKeyID, ownerFound, err := store.GetHTTPResponseOwner(context.Background(), 0, "resp_oauth_first")
+	require.NoError(t, err)
+	require.True(t, ownerFound, "HTTP facade affinity must not depend on store=false")
+	require.Equal(t, int64(1001), ownerUserID)
+	require.Equal(t, int64(2001), ownerAPIKeyID)
+	accountPool, ok := pool.getAccountPool(account.ID)
+	require.True(t, ok)
+	accountPool.mu.Lock()
+	_, firstPinned := accountPool.timedResponsePins[firstConnID]
+	accountPool.mu.Unlock()
+	require.True(t, firstPinned, "HTTP facade connection pinning must not depend on store=false")
+
+	continuationContext, continuationRecorder := newHTTPContext()
+	continuationBody := []byte(`{"model":"gpt-5.1","stream":true,"previous_response_id":"resp_oauth_first","input":[{"type":"input_text","text":"continue"}]}`)
+	continuationResult, err := svc.Forward(context.Background(), continuationContext, account, continuationBody)
+	require.NoError(t, err)
+	require.NotNil(t, continuationResult)
+	require.True(t, continuationResult.OpenAIWSMode)
+	require.True(t, continuationResult.Stream)
+	require.Equal(t, "resp_oauth_second", continuationResult.RequestID)
+	require.Contains(t, continuationRecorder.Header().Get("Content-Type"), "text/event-stream")
+	require.Contains(t, continuationRecorder.Body.String(), `"type":"response.completed"`)
+	require.Nil(t, upstream.lastReq, "OAuth HTTP ingress should use the WSv2 forwarder when enabled")
+	require.Equal(t, 1, captureDialer.DialCount())
+	require.Equal(t, "resp_oauth_first", gjson.Get(requestToJSONString(captureConn.lastWrite), "previous_response_id").String())
+
+	decision, _ := continuationContext.Get("openai_ws_transport_decision")
+	reason, _ := continuationContext.Get("openai_ws_transport_reason")
+	require.Equal(t, string(OpenAIUpstreamTransportResponsesWebsocketV2), decision)
+	require.Equal(t, "http_responses_facade_ws_v2_enabled", reason)
+
+	connID, ok := store.GetResponseConn("resp_oauth_second")
+	require.True(t, ok)
+	pool.evictConn(account.ID, connID)
+
+	lostContext, lostRecorder := newHTTPContext()
+	lostResult, lostErr := svc.Forward(
+		context.Background(),
+		lostContext,
+		account,
+		[]byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_oauth_second","input":"continue again"}`),
+	)
+	require.Error(t, lostErr)
+	require.Nil(t, lostResult)
+	require.Equal(t, http.StatusBadRequest, lostRecorder.Code)
+	require.Equal(t, "previous_response_not_found", gjson.GetBytes(lostRecorder.Body.Bytes(), "error.code").String())
+	require.Equal(t, "previous_response_id", gjson.GetBytes(lostRecorder.Body.Bytes(), "error.param").String())
+	require.Equal(t, 1, captureDialer.DialCount(), "a connection-local continuation must not drift to a new WS connection")
+}
+
+func TestOpenAIGatewayService_ForwardOpenAIWSV2_HTTPFacadeAffinityWithStoreEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	captureConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_store_enabled","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":2}}}`),
+	}}
+	dialer := &openAIWSCaptureDialer{conn: captureConn}
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.AllowStoreRecovery = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	pool.setClientDialerForTest(dialer)
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		openaiWSPool:     pool,
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          105,
+		Name:        "openai-oauth-store-enabled",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	SetOpenAIHTTPResponseOwner(c, 1001, 2001)
+	decision := svc.getOpenAIWSProtocolResolver().Resolve(account)
+
+	result, err := svc.forwardOpenAIWSV2(
+		context.Background(),
+		c,
+		account,
+		map[string]any{"model": "gpt-5.1", "stream": false, "store": true, "input": "hello"},
+		"",
+		"oauth-token",
+		decision,
+		false,
+		false,
+		"gpt-5.1",
+		"gpt-5.1",
+		time.Now(),
+		1,
+		"",
+		new(bool),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "resp_oauth_store_enabled", result.RequestID)
+	require.True(t, gjson.Get(requestToJSONString(captureConn.lastWrite), "store").Bool())
+
+	store := svc.getOpenAIWSStateStore()
+	connID, ok := store.GetResponseConn("resp_oauth_store_enabled")
+	require.True(t, ok)
+	ownerUserID, ownerAPIKeyID, ownerFound, err := store.GetHTTPResponseOwner(context.Background(), 0, "resp_oauth_store_enabled")
+	require.NoError(t, err)
+	require.True(t, ownerFound)
+	require.Equal(t, int64(1001), ownerUserID)
+	require.Equal(t, int64(2001), ownerAPIKeyID)
+	accountPool, ok := pool.getAccountPool(account.ID)
+	require.True(t, ok)
+	accountPool.mu.Lock()
+	_, pinned := accountPool.timedResponsePins[connID]
+	accountPool.mu.Unlock()
+	require.True(t, pinned, "HTTP facade affinity must not depend on store=false")
+}
+
+func TestOpenAIGatewayService_ForwardOpenAIWSV2_HTTPFacadeDoesNotExposeOrphanedResponseID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	captureConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.created","response":{"id":"resp_oauth_orphaned","status":"in_progress"}}`),
+		[]byte(`{"type":"error","error":{"type":"invalid_request_error","code":"invalid_request","message":"bad request"}}`),
+	}}
+	dialer := &openAIWSCaptureDialer{conn: captureConn}
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	pool.setClientDialerForTest(dialer)
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		openaiWSPool:     pool,
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          106,
+		Name:        "openai-oauth-error",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	SetOpenAIHTTPResponseOwner(c, 1001, 2001)
+
+	result, err := svc.forwardOpenAIWSV2(
+		context.Background(),
+		c,
+		account,
+		map[string]any{"model": "gpt-5.1", "stream": true, "store": false, "input": "hello"},
+		"",
+		"oauth-token",
+		svc.getOpenAIWSProtocolResolver().Resolve(account),
+		false,
+		true,
+		"gpt-5.1",
+		"gpt-5.1",
+		time.Now(),
+		1,
+		"",
+		new(bool),
+	)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Contains(t, recorder.Body.String(), `"type":"error"`)
+	require.NotContains(t, recorder.Body.String(), "resp_oauth_orphaned")
+	boundAccountID, accountBindingErr := svc.getOpenAIWSStateStore().GetResponseAccount(context.Background(), 0, "resp_oauth_orphaned")
+	require.NoError(t, accountBindingErr)
+	require.Zero(t, boundAccountID)
+}
+
+func TestOpenAIGatewayService_Forward_HTTPIngressOAuthRetainsConnectionAcrossIndependentSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newHTTPContext := func(sessionID string) (*gin.Context, *httptest.ResponseRecorder) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+		c.Request.Header.Set("User-Agent", "custom-client/1.0")
+		c.Request.Header.Set("session_id", sessionID)
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+		SetOpenAIHTTPResponseOwner(c, 1001, 2001)
+		return c, rec
+	}
+
+	connA := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp_session_a_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":2}}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_session_a_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":2}}}`),
+	}}
+	connB := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp_session_b_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":2}}}`),
+	}}
+	dialer := &openAIWSSequenceCaptureDialer{conns: []*openAIWSCaptureConn{connA, connB}}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.StoreDisabledConnMode = openAIWSStoreDisabledConnModeStrict
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	cfg.Gateway.OpenAIWS.DynamicMaxConnsByAccountConcurrencyEnabled = true
+	cfg.Gateway.OpenAIWS.OAuthMaxConnsFactor = 1
+	cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = 3600
+
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	pool.setClientDialerForTest(dialer)
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		openaiWSPool:     pool,
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          103,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	contextA1, _ := newHTTPContext("session-a")
+	resultA1, err := svc.Forward(
+		context.Background(),
+		contextA1,
+		account,
+		[]byte(`{"model":"gpt-5.1","stream":false,"input":"session A first turn"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "resp_session_a_1", resultA1.RequestID)
+
+	contextB1, _ := newHTTPContext("session-b")
+	resultB1, err := svc.Forward(
+		context.Background(),
+		contextB1,
+		account,
+		[]byte(`{"model":"gpt-5.1","stream":false,"input":"session B first turn"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "resp_session_b_1", resultB1.RequestID)
+	require.Equal(t, 2, dialer.DialCount(), "session B should get a separate upstream connection")
+	require.False(t, connA.closed, "session B must not evict session A's retained connection")
+
+	contextA2, _ := newHTTPContext("session-a")
+	resultA2, err := svc.Forward(
+		context.Background(),
+		contextA2,
+		account,
+		[]byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_session_a_1","input":"session A second turn"}`),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "resp_session_a_2", resultA2.RequestID)
+	require.Equal(t, 2, dialer.DialCount(), "session A continuation must reuse its original connection")
+	require.Equal(t, "resp_session_a_1", gjson.Get(requestToJSONString(connA.lastWrite), "previous_response_id").String())
+	require.False(t, gjson.Get(requestToJSONString(connB.lastWrite), "previous_response_id").Exists())
+}
+
+func TestOpenAIGatewayService_Forward_HTTPIngressOAuthBindsBeforeSSEWriteAndRefreshesAtTerminal(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	captureConn := &openAIWSCaptureConn{
+		readDelays: []time.Duration{0, 0, 1250 * time.Millisecond},
+		events: [][]byte{
+			[]byte(`{"type":"response.created","response":{"id":"resp_sse_visible","model":"gpt-5.1","status":"in_progress"}}`),
+			[]byte(`{"type":"response.output_text.delta","response":{"id":"resp_sse_visible"},"delta":"ready"}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_sse_visible","model":"gpt-5.1","status":"completed","usage":{"input_tokens":1,"output_tokens":2}}}`),
+		},
+	}
+	dialer := &openAIWSCaptureDialer{conn: captureConn}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.StoreDisabledConnMode = openAIWSStoreDisabledConnModeStrict
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = 1
+
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	pool.setClientDialerForTest(dialer)
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		openaiWSPool:     pool,
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          104,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+	store := svc.getOpenAIWSStateStore()
+	probeCalled := false
+	probeRecorder := &openAIWSWriteProbeRecorder{ResponseRecorder: httptest.NewRecorder()}
+	probeRecorder.beforeFirstWrite = func() {
+		probeCalled = true
+		boundAccountID, err := store.GetResponseAccount(context.Background(), 0, "resp_sse_visible")
+		require.NoError(t, err)
+		require.Equal(t, account.ID, boundAccountID, "response account affinity must exist before the ID becomes visible")
+		ownerUserID, ownerAPIKeyID, ownerFound, err := store.GetHTTPResponseOwner(context.Background(), 0, "resp_sse_visible")
+		require.NoError(t, err)
+		require.True(t, ownerFound, "response owner affinity must exist before the ID becomes visible")
+		require.Equal(t, int64(1001), ownerUserID)
+		require.Equal(t, int64(2001), ownerAPIKeyID)
+		connID, ok := store.GetResponseConn("resp_sse_visible")
+		require.True(t, ok, "response connection affinity must exist before the ID becomes visible")
+
+		ap, ok := pool.getAccountPool(account.ID)
+		require.True(t, ok)
+		ap.mu.Lock()
+		expiresAt, pinned := ap.timedResponsePins[connID]
+		ap.mu.Unlock()
+		require.True(t, pinned, "the owning connection must be retained before the ID becomes visible")
+		require.True(t, expiresAt.After(time.Now()))
+	}
+
+	c, _ := gin.CreateTestContext(probeRecorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+	c.Request.Header.Set("session_id", "sse-session")
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	SetOpenAIHTTPResponseOwner(c, 1001, 2001)
+
+	result, err := svc.Forward(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"gpt-5.1","stream":true,"input":"hello"}`),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "resp_sse_visible", result.RequestID)
+	require.True(t, probeCalled)
+	require.Contains(t, probeRecorder.Body.String(), `"type":"response.created"`)
+	require.Contains(t, probeRecorder.Body.String(), `"type":"response.completed"`)
+	boundAccountID, err := store.GetResponseAccount(context.Background(), 0, "resp_sse_visible")
+	require.NoError(t, err)
+	require.Equal(t, account.ID, boundAccountID, "terminal completion must refresh the provisional account binding")
+	connID, ok := store.GetResponseConn("resp_sse_visible")
+	require.True(t, ok, "terminal completion must refresh the provisional connection binding")
+	ap, ok := pool.getAccountPool(account.ID)
+	require.True(t, ok)
+	ap.mu.Lock()
+	expiresAt := ap.timedResponsePins[connID]
+	ap.mu.Unlock()
+	require.True(t, expiresAt.After(time.Now()), "terminal completion must refresh the connection retention TTL")
 }
 
 func TestOpenAIGatewayService_Forward_HTTPIngressRetriesInvalidEncryptedContentOnce(t *testing.T) {

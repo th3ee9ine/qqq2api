@@ -2121,6 +2121,86 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
 }
 
+// SelectAccountForHTTPResponseContinuation hard-pins a REST continuation to
+// the account that emitted the prior response. A missing binding is terminal:
+// probing another account would either mask the real error or send a
+// connection-local OAuth response ID to an unrelated upstream session.
+func (s *OpenAIGatewayService) SelectAccountForHTTPResponseContinuation(
+	ctx context.Context,
+	groupID *int64,
+	previousResponseID string,
+	sessionHash string,
+	requestedModel string,
+	requiredCapability OpenAIEndpointCapability,
+	requireCompact bool,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	decision := OpenAIAccountScheduleDecision{Layer: openAIAccountScheduleLayerPreviousResponse}
+	startedAt := time.Now()
+
+	ctx = s.withOpenAIQuotaAutoPauseContext(ctx)
+	ctx = s.withOpenAIGroupPrivacyRequirement(ctx, groupID)
+	ctx = s.withOpenAIProfitControlGate(ctx, groupID)
+	// A strict continuation may not switch accounts, but it must still pass the
+	// same channel policy that guards ordinary account selection.
+	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
+		decision.LatencyMs = time.Since(startedAt).Milliseconds()
+		return nil, decision, ErrOpenAIHTTPPreviousResponseNotFound
+	}
+	selection, err := s.selectAccountByPreviousResponseIDForHTTPContinuation(
+		ctx,
+		groupID,
+		previousResponseID,
+		requestedModel,
+		requiredCapability,
+		requireCompact,
+	)
+	decision.LatencyMs = time.Since(startedAt).Milliseconds()
+	if err != nil {
+		return nil, decision, err
+	}
+	if selection == nil || selection.Account == nil {
+		return nil, decision, ErrOpenAIHTTPPreviousResponseNotFound
+	}
+
+	compatibilityReq := OpenAIAccountScheduleRequest{
+		GroupID:            groupID,
+		Platform:           PlatformOpenAI,
+		RequestedModel:     requestedModel,
+		RequiredTransport:  OpenAIUpstreamTransportAny,
+		RequiredCapability: requiredCapability,
+		RequireCompact:     requireCompact,
+		RequirePrivacySet:  s.openAIGroupRequiresPrivacySet(ctx, groupID),
+	}
+	compatibilityScheduler := &defaultOpenAIAccountScheduler{service: s}
+	compatible, reason := compatibilityScheduler.isAccountRequestCompatibleReason(ctx, selection.Account, compatibilityReq)
+	// Proxy-stream quarantine is a preference rather than a hard outage. Since
+	// the response ID is account-bound, this account is the entire candidate
+	// set; mirror the normal scheduler's second, quarantine-bypassed pass.
+	if !compatible && reason == "proxy_stream_quarantined" {
+		compatible, _ = compatibilityScheduler.isAccountRequestCompatibleReason(
+			withOpenAIProxyStreamQuarantineBypass(ctx),
+			selection.Account,
+			compatibilityReq,
+		)
+	}
+	hasGroupMetadata := len(selection.Account.GroupIDs) > 0 || len(selection.Account.AccountGroups) > 0
+	groupCompatible := !hasGroupMetadata || s.openAIAccountMatchesSchedulingGroup(selection.Account, groupID)
+	if !compatible || !groupCompatible {
+		if selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		return nil, decision, ErrOpenAIHTTPPreviousResponseNotFound
+	}
+
+	decision.StickyPreviousHit = true
+	decision.SelectedAccountID = selection.Account.ID
+	decision.SelectedAccountType = selection.Account.Type
+	if strings.TrimSpace(sessionHash) != "" {
+		_ = s.bindOpenAIStickySessionDuringSelection(ctx, groupID, sessionHash, selection.Account.ID)
+	}
+	return selection, decision, nil
+}
+
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
 	ctx context.Context,
 	groupID *int64,

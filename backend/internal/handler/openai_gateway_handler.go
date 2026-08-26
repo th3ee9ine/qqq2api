@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -334,6 +335,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+	// Validate the raw object before any normalizer or field reader can apply a
+	// different duplicate-key policy.
+	if !gjson.ValidBytes(body) {
+		logRequestBodyParseFailure(reqLog, body, nil)
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+		return
+	}
+	if openAIResponsesHasDuplicatePreviousResponseID(body) {
+		reqLog.Warn("openai.request_validation_failed",
+			zap.String("reason", "duplicate_previous_response_id"),
+		)
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Duplicate previous_response_id fields are not allowed")
+		return
+	}
 
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body
@@ -353,13 +368,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 失败仍走 JSON+状态码链路；未标记客户端流式或间隔为 0 时是 no-op。
 	stopCompactKeepalive := service.StartOpenAICompactSSEKeepalive(c, h.openAICompactKeepaliveInterval())
 	defer stopCompactKeepalive()
-
-	// 校验请求体 JSON 合法性
-	if !gjson.ValidBytes(body) {
-		logRequestBodyParseFailure(reqLog, body, nil)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
-		return
-	}
 
 	// 使用 gjson 只读提取字段做校验，避免完整 Unmarshal
 	modelResult := gjson.GetBytes(body, "model")
@@ -387,7 +395,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
-	previousResponseID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String())
+	previousResponseResult := gjson.GetBytes(body, "previous_response_id")
+	previousResponseID := ""
+	if previousResponseResult.Exists() {
+		switch previousResponseResult.Type {
+		case gjson.Null:
+		case gjson.String:
+			previousResponseID = strings.TrimSpace(previousResponseResult.String())
+		default:
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a string or null")
+			return
+		}
+	}
 	if previousResponseID != "" {
 		previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)
 		reqLog = reqLog.With(
@@ -479,6 +498,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// Get subscription info (may be nil)
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
+	strictHTTPResponseContinuation := previousResponseID != "" && requestPlatform == service.PlatformOpenAI
 
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
@@ -530,6 +550,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
 	needsResponses := nativeV2 || legacyCompact
 	requiredCapability := openAIResponsesRequiredCapabilityForRequest(imageIntent, needsResponses, requestPlatform)
+	if strictHTTPResponseContinuation {
+		requiredCapability = service.OpenAIEndpointCapabilityResponses
+	}
 
 	// 分组利润控制：请求级装配定价上下文——pricingAt 固定本请求的
 	// D 与计费高峰因子，选号、槽位终检与全部 failover 重入共用同一门与阈值。
@@ -547,20 +570,37 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		// Select account supporting the requested model
 		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
-			apiKey.GroupID,
-			previousResponseID,
-			sessionHash,
-			reqModel,
-			failedAccountIDs,
-			service.OpenAIUpstreamTransportAny,
-			requiredCapability,
-			requireCompact,
-			false,
-			!imageIntent,
-			requestPlatform,
+		var (
+			selection        *service.AccountSelectionResult
+			scheduleDecision service.OpenAIAccountScheduleDecision
+			err              error
 		)
+		if strictHTTPResponseContinuation {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountForHTTPResponseContinuation(
+				c.Request.Context(),
+				apiKey.GroupID,
+				previousResponseID,
+				sessionHash,
+				reqModel,
+				requiredCapability,
+				requireCompact,
+			)
+		} else {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
+				c.Request.Context(),
+				apiKey.GroupID,
+				previousResponseID,
+				sessionHash,
+				reqModel,
+				failedAccountIDs,
+				service.OpenAIUpstreamTransportAny,
+				requiredCapability,
+				requireCompact,
+				false,
+				!imageIntent,
+				requestPlatform,
+			)
+		}
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
@@ -570,6 +610,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if errors.Is(err, service.ErrOpenAIHTTPPreviousResponseNotFound) {
+				h.openAIPreviousResponseNotFound(c)
+				return
+			}
 			if len(failedAccountIDs) == 0 {
 				if legacyCompact && errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -599,6 +643,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
 			return
 		}
+		if strictHTTPResponseContinuation && !scheduleDecision.StickyPreviousHit {
+			if selection.ReleaseFunc != nil {
+				selection.ReleaseFunc()
+			}
+			h.openAIPreviousResponseNotFound(c)
+			return
+		}
 		if previousResponseID != "" && selection != nil && selection.Account != nil {
 			reqLog.Debug("openai.account_selected_with_previous_response_id", zap.Int64("account_id", selection.Account.ID))
 		}
@@ -614,29 +665,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		account := selection.Account
 		// The scheduler has now consumed any one-shot same-account retry pin.
 		c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), 0))
-		if previousResponseID != "" && requestPlatform == service.PlatformOpenAI && !account.IsOpenAIApiKey() {
-			// The public Responses HTTP API supports previous_response_id on API-key
-			// accounts. OAuth/SetupToken upstreams do not, so keep searching instead
-			// of silently deleting continuation state from a mixed account pool.
-			failedAccountIDs[account.ID] = struct{}{}
-			if selection.ReleaseFunc != nil {
-				selection.ReleaseFunc()
-				selection.ReleaseFunc = nil
-			}
-			lastFailoverErr = &service.UpstreamFailoverError{
-				StatusCode:       http.StatusBadRequest,
-				Stage:            service.GatewayFailureStageInference,
-				Scope:            service.GatewayFailureScopeRequest,
-				Reason:           service.OpenAIHTTPContinuationUnsupportedReason,
-				ClientStatusCode: http.StatusBadRequest,
-				ClientMessage:    "previous_response_id requires an OpenAI API-key account for HTTP requests",
-			}
-			reqLog.Debug("openai.account_skipped_http_continuation_unsupported",
-				zap.Int64("account_id", account.ID),
-				zap.String("account_type", account.Type),
-			)
-			continue
-		}
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
@@ -791,6 +819,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 							c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), account.ID))
 							continue
 						}
+					}
+					if strictHTTPResponseContinuation {
+						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						return
 					}
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
@@ -1493,17 +1525,17 @@ func (h *OpenAIGatewayHandler) validateFunctionCallOutputRequest(c *gin.Context,
 		return true
 	}
 
-	previousResponseID := gjson.GetBytes(body, "previous_response_id").String()
-	if strings.TrimSpace(previousResponseID) != "" || validation.HasToolCallContext {
-		return true
-	}
-
 	if validation.HasFunctionCallOutputMissingCallID {
 		reqLog.Warn("openai.request_validation_failed",
 			zap.String("reason", "function_call_output_missing_call_id"),
 		)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "function_call_output requires call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "function_call_output requires a non-empty call_id")
 		return false
+	}
+
+	previousResponseID := gjson.GetBytes(body, "previous_response_id").String()
+	if strings.TrimSpace(previousResponseID) != "" || validation.HasToolCallContext {
+		return true
 	}
 	if validation.HasItemReferenceForAllCallIDs {
 		return true
@@ -1512,7 +1544,7 @@ func (h *OpenAIGatewayHandler) validateFunctionCallOutputRequest(c *gin.Context,
 	reqLog.Warn("openai.request_validation_failed",
 		zap.String("reason", "function_call_output_missing_item_reference"),
 	)
-	h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "function_call_output requires item_reference ids matching each call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2")
+	h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "function_call_output requires item_reference ids matching each call_id when previous_response_id is not provided")
 	return false
 }
 
@@ -2847,14 +2879,6 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		)
 		return
 	}
-	if failoverErr.Reason == service.OpenAIHTTPContinuationUnsupportedReason {
-		message := strings.TrimSpace(failoverErr.ClientMessage)
-		if message == "" {
-			message = "previous_response_id requires an OpenAI API-key account for HTTP requests"
-		}
-		h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", message, streamStarted)
-		return
-	}
 	copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
 	if failoverErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(failoverErr)
@@ -3169,6 +3193,34 @@ func openAIFirstOutputFailoverExhausted(failoverErr *service.UpstreamFailoverErr
 	return false
 }
 
+// openAIResponsesHasDuplicatePreviousResponseID rejects the security-sensitive
+// ambiguity before first-value readers and last-value decoders can disagree.
+func openAIResponsesHasDuplicatePreviousResponseID(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
+	}
+
+	keys := gjson.GetBytes(body, "@keys")
+	if !keys.IsArray() {
+		return false
+	}
+	count := 0
+	duplicate := false
+	keys.ForEach(func(_, key gjson.Result) bool {
+		if key.String() != "previous_response_id" {
+			return true
+		}
+		count++
+		if count > 1 {
+			duplicate = true
+			return false
+		}
+		return true
+	})
+	return duplicate
+}
+
 // errorResponse returns OpenAI API format error response
 func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType, message string) {
 	// body-signal compact 心跳可能已把响应头提交为 200：JSON 错误体会与已
@@ -3182,6 +3234,24 @@ func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"type":    errType,
+			"message": message,
+		},
+	})
+}
+
+func (h *OpenAIGatewayHandler) openAIPreviousResponseNotFound(c *gin.Context) {
+	const message = "Previous response not found."
+	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
+		service.MarkOpsStreamError(c, "invalid_request_error", message, http.StatusBadRequest)
+		if writeResponsesFailedSSE(c, "invalid_request_error", message) {
+			return
+		}
+	}
+	c.JSON(http.StatusBadRequest, gin.H{
+		"error": gin.H{
+			"type":    "invalid_request_error",
+			"code":    "previous_response_not_found",
+			"param":   "previous_response_id",
 			"message": message,
 		},
 	})

@@ -14,6 +14,10 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+// ErrOpenAIHTTPPreviousResponseNotFound reports a REST continuation whose
+// response ID cannot be resolved to its original upstream account or session.
+var ErrOpenAIHTTPPreviousResponseNotFound = errors.New("openai previous response binding not found")
+
 func (s *OpenAIGatewayService) isOpenAIWSGeneratePrewarmEnabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled
 }
@@ -465,10 +469,34 @@ func (s *OpenAIGatewayService) selectAccountByPreviousResponseIDForCapability(
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
 ) (*AccountSelectionResult, error) {
+	return s.selectAccountByPreviousResponseIDForMode(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact, false)
+}
+
+func (s *OpenAIGatewayService) selectAccountByPreviousResponseIDForHTTPContinuation(
+	ctx context.Context,
+	groupID *int64,
+	previousResponseID string,
+	requestedModel string,
+	requiredCapability OpenAIEndpointCapability,
+	requireCompact bool,
+) (*AccountSelectionResult, error) {
+	return s.selectAccountByPreviousResponseIDForMode(ctx, groupID, previousResponseID, requestedModel, nil, requiredCapability, requireCompact, true)
+}
+
+func (s *OpenAIGatewayService) selectAccountByPreviousResponseIDForMode(
+	ctx context.Context,
+	groupID *int64,
+	previousResponseID string,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+	requiredCapability OpenAIEndpointCapability,
+	requireCompact bool,
+	httpContinuation bool,
+) (*AccountSelectionResult, error) {
 	if s == nil {
 		return nil, nil
 	}
-	accountID, account, responseID, store := s.resolveAccountByPreviousResponseIDForCapability(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact)
+	accountID, account, responseID, store := s.resolveAccountByPreviousResponseIDForMode(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact, httpContinuation)
 	if accountID <= 0 || account == nil || store == nil {
 		return nil, nil
 	}
@@ -525,6 +553,19 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
 ) (int64, *Account, string, OpenAIWSStateStore) {
+	return s.resolveAccountByPreviousResponseIDForMode(ctx, groupID, previousResponseID, requestedModel, excludedIDs, requiredCapability, requireCompact, false)
+}
+
+func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForMode(
+	ctx context.Context,
+	groupID *int64,
+	previousResponseID string,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+	requiredCapability OpenAIEndpointCapability,
+	requireCompact bool,
+	httpContinuation bool,
+) (int64, *Account, string, OpenAIWSStateStore) {
 	if s == nil {
 		return 0, nil, "", nil
 	}
@@ -552,12 +593,13 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
 		return 0, nil, "", nil
 	}
-	// OAuth/SetupToken continuation state lives on the WSv2 session and cannot
-	// survive an HTTP fallback. Official API-key Responses HTTP requests are
-	// different: previous_response_id is supported by the provider and scoped to
-	// the selected key/project, so the response-id binding must retain that key.
-	if !account.IsOpenAIApiKey() && s.getOpenAIWSProtocolResolver().Resolve(account).Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+	if !s.openAIPreviousResponseAccountSupportsMode(account, httpContinuation) {
 		return 0, nil, "", nil
+	}
+	if httpContinuation && isOpenAIResponsesHTTPWSFacadeAccount(account) {
+		if _, ok := store.GetResponseConn(responseID); !ok {
+			return 0, nil, "", nil
+		}
 	}
 	if shouldClearStickySession(account, requestedModel) || !account.IsOpenAI() || !account.IsSchedulable() {
 		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
@@ -612,6 +654,9 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 		if !latest.SupportsOpenAIEndpointCapability(requiredCapability) {
 			return 0, nil, "", nil
 		}
+		if !s.openAIPreviousResponseAccountSupportsMode(latest, httpContinuation) {
+			return 0, nil, "", nil
+		}
 		if paused, _ := shouldAutoPauseOpenAIAccountByQuota(ctx, latest); paused {
 			return 0, nil, "", nil
 		}
@@ -630,6 +675,24 @@ func (s *OpenAIGatewayService) resolveAccountByPreviousResponseIDForCapability(
 		return 0, nil, "", nil
 	}
 	return accountID, account, responseID, store
+}
+
+func (s *OpenAIGatewayService) openAIPreviousResponseAccountSupportsMode(account *Account, httpContinuation bool) bool {
+	if account == nil {
+		return false
+	}
+	wsV2 := s.getOpenAIWSProtocolResolver().Resolve(account).Transport == OpenAIUpstreamTransportResponsesWebsocketV2
+	if !httpContinuation {
+		if account.IsOpenAIApiKey() {
+			return true
+		}
+		return wsV2
+	}
+	if account.IsOpenAIApiKey() {
+		return account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityResponses)
+	}
+	return isOpenAIResponsesHTTPWSFacadeAccount(account) &&
+		wsV2
 }
 
 func classifyOpenAIWSAcquireError(err error) string {
