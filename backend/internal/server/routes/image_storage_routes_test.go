@@ -32,7 +32,6 @@ func TestAdminImageStorageRoutesAreStandaloneAndUpdateRequiresStepUp(t *testing.
 		servermiddleware.AuditLogMiddleware(pass),
 		servermiddleware.StepUpAuthMiddleware(stepUp),
 		nil,
-		nil,
 	)
 
 	registered := make(map[string]bool)

@@ -121,6 +121,7 @@ const createApiKey = (): ApiKey => ({
   expires_at: null,
   created_at: '2026-06-27T00:00:00Z',
   updated_at: '2026-06-27T00:00:00Z',
+  concurrency: 0,
   current_concurrency: 3,
   rate_limit_5h: 0,
   rate_limit_1d: 0,
@@ -391,7 +392,7 @@ describe('user KeysView column settings', () => {
   it('renders the current concurrency value', async () => {
     const wrapper = await mountView()
 
-    expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
+    expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3 / ∞')
   })
 
   it('marks current concurrency as sortable', async () => {

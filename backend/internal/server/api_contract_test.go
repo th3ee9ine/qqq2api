@@ -43,7 +43,7 @@ func TestAPIContracts(t *testing.T) {
 			name:   "POST /api/v1/keys",
 			method: http.MethodPost,
 			path:   "/api/v1/keys",
-			body:   `{"name":"Key One","custom_key":"sk_custom_1234567890"}`,
+			body:   `{"name":"Key One","custom_key":"sk_custom_1234567890","concurrency":12}`,
 			headers: map[string]string{
 				"Content-Type": "application/json",
 			},
@@ -61,6 +61,7 @@ func TestAPIContracts(t *testing.T) {
 					"ip_blacklist": null,
 					"last_used_at": null,
 					"last_used_ip": null,
+					"concurrency": 12,
 					"current_concurrency": 0,
 					"quota": 0,
 					"quota_used": 0,
@@ -84,13 +85,14 @@ func TestAPIContracts(t *testing.T) {
 			setup: func(t *testing.T, deps *contractDeps) {
 				t.Helper()
 				deps.apiKeyRepo.MustSeed(&service.APIKey{
-					ID:        100,
-					UserID:    99,
-					Key:       "sk_custom_1234567890",
-					Name:      "Key One",
-					Status:    service.StatusActive,
-					CreatedAt: deps.now,
-					UpdatedAt: deps.now,
+					ID:          100,
+					UserID:      99,
+					Key:         "sk_custom_1234567890",
+					Name:        "Key One",
+					Status:      service.StatusActive,
+					Concurrency: 7,
+					CreatedAt:   deps.now,
+					UpdatedAt:   deps.now,
 				})
 			},
 			method:     http.MethodGet,
@@ -111,6 +113,7 @@ func TestAPIContracts(t *testing.T) {
 							"ip_blacklist": null,
 							"last_used_at": null,
 							"last_used_ip": null,
+							"concurrency": 7,
 							"current_concurrency": 0,
 							"quota": 0,
 							"quota_used": 0,

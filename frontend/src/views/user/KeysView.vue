@@ -172,7 +172,7 @@
             </div>
           </template>
 
-          <template #cell-current_concurrency="{ value }">
+          <template #cell-current_concurrency="{ value, row }">
             <span
               :class="[
                 'inline-flex min-w-8 items-center justify-center rounded px-2 py-1 text-sm font-semibold tabular-nums',
@@ -181,7 +181,7 @@
                   : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-dark-400'
               ]"
             >
-              {{ value ?? 0 }}
+              {{ value ?? 0 }} / {{ row.concurrency > 0 ? row.concurrency : '∞' }}
             </span>
           </template>
 
@@ -542,6 +542,20 @@
             :options="statusOptions"
             :placeholder="t('keys.selectStatus')"
           />
+        </div>
+
+        <div>
+          <label class="input-label">{{ t('keys.concurrencyLimit') }}</label>
+          <input
+            v-model.number="formData.concurrency"
+            type="number"
+            min="0"
+            step="1"
+            class="input"
+            placeholder="0"
+            data-testid="api-key-concurrency"
+          />
+          <p class="input-hint">{{ t('keys.concurrencyLimitHint') }}</p>
         </div>
 
         <!-- IP Restriction Section -->
@@ -1274,6 +1288,7 @@ const formData = ref({
   enable_ip_restriction: false,
   ip_whitelist: '',
   ip_blacklist: '',
+  concurrency: 0,
   // Quota settings (empty = unlimited)
   enable_quota: false,
   quota: null as number | null,
@@ -1505,6 +1520,7 @@ const editKey = (key: ApiKey) => {
     enable_ip_restriction: hasIPRestriction,
     ip_whitelist: (key.ip_whitelist || []).join('\n'),
     ip_blacklist: (key.ip_blacklist || []).join('\n'),
+    concurrency: key.concurrency ?? 0,
     enable_quota: key.quota > 0,
     quota: key.quota > 0 ? key.quota : null,
     enable_rate_limit: (key.rate_limit_5h > 0) || (key.rate_limit_1d > 0) || (key.rate_limit_7d > 0),
@@ -1603,6 +1619,12 @@ const handleSubmit = async () => {
     return
   }
 
+  const concurrency = Number(formData.value.concurrency)
+  if (!Number.isInteger(concurrency) || concurrency < 0) {
+    appStore.showError(t('keys.concurrencyLimitInvalid'))
+    return
+  }
+
   // Validate custom key if enabled
   if (!showEditModal.value && formData.value.use_custom_key) {
     if (!formData.value.custom_key) {
@@ -1658,6 +1680,7 @@ const handleSubmit = async () => {
         group_id: formData.value.group_id,
         ip_whitelist: ipWhitelist,
         ip_blacklist: ipBlacklist,
+        concurrency,
         quota: quota,
         expires_at: expiresAt,
         rate_limit_5h: rateLimitData.rate_limit_5h,
@@ -1679,7 +1702,8 @@ const handleSubmit = async () => {
         ipBlacklist,
         quota,
         expiresInDays,
-        rateLimitData
+        rateLimitData,
+        concurrency
       )
       appStore.showSuccess(t('keys.keyCreatedSuccess'))
       // Only advance tour if active, on submit step, and creation succeeded
@@ -1731,6 +1755,7 @@ const closeModals = () => {
     enable_ip_restriction: false,
     ip_whitelist: '',
     ip_blacklist: '',
+    concurrency: 0,
     enable_quota: false,
     quota: null,
     enable_rate_limit: false,

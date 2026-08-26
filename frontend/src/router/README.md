@@ -48,7 +48,7 @@ authenticated administrator and to `/login` otherwise.
 2. Redirect removed feature, user, and self-service authentication paths.
 3. Keep `/setup` reachable only while initial setup is required.
 4. Require an authenticated administrator for every protected route.
-5. Apply administrator compliance and feature-specific checks.
+5. Apply feature-specific checks.
 6. In backend mode, expose only the small public allowlist to anonymous users.
 
 Client-side guards are navigation controls only. The backend must continue to

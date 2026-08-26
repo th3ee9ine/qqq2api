@@ -41,6 +41,8 @@ type stubConcurrencyCacheForTest struct {
 	loadBatchCalls           atomic.Int64
 	trackedAPIKeyIDs         []int64
 	trackedAPIKeyRequestIDs  []string
+	acquiredAPIKeyIDs        []int64
+	acquiredAPIKeyLimits     []int
 	releasedAPIKeyIDs        []int64
 	releasedAPIKeyRequestIDs []string
 }
@@ -131,6 +133,11 @@ func (c *stubConcurrencyCacheForTest) TrackAPIKeySlot(_ context.Context, apiKeyI
 	c.trackedAPIKeyRequestIDs = append(c.trackedAPIKeyRequestIDs, requestID)
 	return c.apiKeyTrackErr
 }
+func (c *stubConcurrencyCacheForTest) AcquireAPIKeySlot(_ context.Context, apiKeyID int64, maxConcurrency int, _ string) (bool, error) {
+	c.acquiredAPIKeyIDs = append(c.acquiredAPIKeyIDs, apiKeyID)
+	c.acquiredAPIKeyLimits = append(c.acquiredAPIKeyLimits, maxConcurrency)
+	return c.acquireResult, c.acquireErr
+}
 func (c *stubConcurrencyCacheForTest) ReleaseAPIKeySlot(_ context.Context, apiKeyID int64, requestID string) error {
 	c.releasedAPIKeyIDs = append(c.releasedAPIKeyIDs, apiKeyID)
 	c.releasedAPIKeyRequestIDs = append(c.releasedAPIKeyRequestIDs, requestID)
@@ -145,6 +152,12 @@ func (c *stubConcurrencyCacheForTest) GetAPIKeyConcurrencyBatch(_ context.Contex
 		result[apiKeyID] = c.apiKeyConcurrency[apiKeyID]
 	}
 	return result, nil
+}
+func (c *stubConcurrencyCacheForTest) IncrementAPIKeyWaitCount(_ context.Context, _ int64, _ int) (bool, error) {
+	return c.waitAllowed, c.waitErr
+}
+func (c *stubConcurrencyCacheForTest) DecrementAPIKeyWaitCount(_ context.Context, _ int64) error {
+	return nil
 }
 func (c *stubConcurrencyCacheForTest) IncrementWaitCount(_ context.Context, _ int64, _ int) (bool, error) {
 	return c.waitAllowed, c.waitErr
@@ -295,6 +308,35 @@ func TestTrackAPIKeySlot_FailOpen(t *testing.T) {
 
 	require.NotPanics(t, release)
 	require.Empty(t, cache.releasedAPIKeyIDs)
+}
+
+func TestAcquireAPIKeySlot_UsesIndependentLimiter(t *testing.T) {
+	cache := &stubConcurrencyCacheForTest{acquireResult: true}
+	svc := NewConcurrencyService(cache)
+
+	result, err := svc.AcquireAPIKeySlot(context.Background(), 88, 7)
+	require.NoError(t, err)
+	require.True(t, result.Acquired)
+	require.Equal(t, []int64{88}, cache.acquiredAPIKeyIDs)
+	require.Equal(t, []int{7}, cache.acquiredAPIKeyLimits)
+	require.Empty(t, cache.trackedAPIKeyIDs, "limited keys must not be double-counted by Track")
+
+	result.ReleaseFunc()
+	require.Equal(t, []int64{88}, cache.releasedAPIKeyIDs)
+}
+
+func TestAcquireAPIKeySlot_UnlimitedStillTracks(t *testing.T) {
+	cache := &stubConcurrencyCacheForTest{}
+	svc := NewConcurrencyService(cache)
+
+	result, err := svc.AcquireAPIKeySlot(context.Background(), 99, 0)
+	require.NoError(t, err)
+	require.True(t, result.Acquired)
+	require.Empty(t, cache.acquiredAPIKeyIDs)
+	require.Equal(t, []int64{99}, cache.trackedAPIKeyIDs)
+
+	result.ReleaseFunc()
+	require.Equal(t, []int64{99}, cache.releasedAPIKeyIDs)
 }
 
 func TestGetAPIKeyConcurrencyBatch_Fallbacks(t *testing.T) {

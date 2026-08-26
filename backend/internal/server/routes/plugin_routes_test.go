@@ -34,7 +34,6 @@ func TestPluginManagementRoutesRequireAdminAndMutationsRequireStepUp(t *testing.
 			servermiddleware.AuditLogMiddleware(pass),
 			servermiddleware.StepUpAuthMiddleware(pass),
 			nil,
-			nil,
 		)
 
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/plugins", nil)
@@ -58,7 +57,6 @@ func TestPluginManagementRoutesRequireAdminAndMutationsRequireStepUp(t *testing.
 			servermiddleware.AdminAuthMiddleware(pass),
 			servermiddleware.AuditLogMiddleware(pass),
 			servermiddleware.StepUpAuthMiddleware(stepUp),
-			nil,
 			nil,
 		)
 

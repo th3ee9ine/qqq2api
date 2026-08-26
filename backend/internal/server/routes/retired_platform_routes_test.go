@@ -22,7 +22,6 @@ func TestAdminRoutesRetiredPlatformEndpointsAreNotRegistered(t *testing.T) {
 		servermiddleware.AuditLogMiddleware(pass),
 		servermiddleware.StepUpAuthMiddleware(pass),
 		nil,
-		nil,
 	)
 
 	registered := make(map[string]bool)
@@ -79,6 +78,8 @@ func TestAdminRoutesRetiredPlatformEndpointsAreNotRegistered(t *testing.T) {
 		"GET /api/v1/admin/data-management/backups/:job_id",
 		"GET /api/v1/admin/payment/dashboard",
 		"GET /api/v1/admin/payment/orders",
+		"GET /api/v1/admin/compliance",
+		"POST /api/v1/admin/compliance/accept",
 		"GET /api/v1/admin/dashboard/users-trend",
 		"GET /api/v1/admin/dashboard/users-ranking",
 		"POST /api/v1/admin/dashboard/users-usage",

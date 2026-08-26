@@ -30,7 +30,6 @@ func ProvideAdminHandlers(
 	scheduledTestHandler *admin.ScheduledTestHandler,
 	contentModerationHandler *admin.ContentModerationHandler,
 	promptAuditHandler *securityaudit.PromptAdminHandler,
-	complianceHandler *admin.ComplianceHandler,
 	auditLogHandler *admin.AuditLogHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
@@ -57,7 +56,6 @@ func ProvideAdminHandlers(
 		ScheduledTest:         scheduledTestHandler,
 		ContentModeration:     contentModerationHandler,
 		PromptAudit:           promptAuditHandler,
-		Compliance:            complianceHandler,
 		AuditLog:              auditLogHandler,
 	}
 }
@@ -198,7 +196,6 @@ var ProviderSet = wire.NewSet(
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,
 	admin.NewContentModerationHandler,
-	admin.NewComplianceHandler,
 	admin.NewAuditLogHandler,
 
 	// AdminHandlers and Handlers constructors

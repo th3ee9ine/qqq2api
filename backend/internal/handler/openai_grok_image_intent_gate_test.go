@@ -102,7 +102,7 @@ func runOpenAIResponsesImagePermissionGateTest(t *testing.T, platform string, bo
 		billingCacheService: service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, &config.Config{RunMode: config.RunModeSimple}, nil),
 		apiKeyService:       &service.APIKeyService{},
 		concurrencyHelper: &ConcurrencyHelper{concurrencyService: service.NewConcurrencyService(
-			&helperConcurrencyCacheStub{userSeq: []bool{true}},
+			&helperConcurrencyCacheStub{apiKeySeq: []bool{true}},
 		)},
 		cfg:          &config.Config{},
 		imageLimiter: &imageConcurrencyLimiter{},

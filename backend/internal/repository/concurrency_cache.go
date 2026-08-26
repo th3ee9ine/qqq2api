@@ -40,6 +40,8 @@ const (
 	liveLeaseTTLSeconds            = 60
 	// 等待队列计数器格式: concurrency:wait:{userID}
 	waitQueueKeyPrefix = "concurrency:wait:"
+	// API Key 等待队列计数器格式: concurrency:wait:api_key:{apiKeyID}
+	apiKeyWaitQueueKeyPrefix = "concurrency:wait:api_key:"
 	// 账号级等待队列计数器格式: wait:account:{accountID}
 	accountWaitKeyPrefix = "wait:account:"
 
@@ -47,9 +49,10 @@ const (
 	defaultSlotTTLMinutes = 15
 
 	// 活跃索引用来替代后台任务全量 SCAN 槽位键。
-	// member 是账号/用户 ID，score 是“预计仍需关注到”的 Redis Unix 秒时间戳。
+	// member 是账号/用户/API Key ID，score 是“预计仍需关注到”的 Redis Unix 秒时间戳。
 	accountActiveIndexKey = "concurrency:account:active_index" // ZSET member=accountID, score=expireAtUnixSeconds
 	userActiveIndexKey    = "concurrency:user:active_index"    // ZSET member=userID, score=expireAtUnixSeconds
+	apiKeyActiveIndexKey  = "concurrency:api_key:active_index" // ZSET member=apiKeyID, score=expireAtUnixSeconds
 
 	// 后台清理只按批处理索引候选，避免单次任务占用 Redis 太久。
 	activeIndexCleanupBatchSize  = 1000
@@ -134,12 +137,14 @@ var (
 		local accountLive = KEYS[2]
 		local userRegular = KEYS[3]
 		local userLive = KEYS[4]
-		local apiLive = KEYS[5]
+		local apiRegular = KEYS[5]
+		local apiLive = KEYS[6]
 		local accountMax = tonumber(ARGV[1])
 		local userMax = tonumber(ARGV[2])
-		local ttl = tonumber(ARGV[3])
-		local leaseID = ARGV[4]
-		local replacing = tonumber(ARGV[5])
+		local apiMax = tonumber(ARGV[3])
+		local ttl = tonumber(ARGV[4])
+		local leaseID = ARGV[5]
+		local replacing = tonumber(ARGV[6])
 		local now = tonumber(redis.call('TIME')[1])
 		local liveExpireBefore = now - ttl
 		redis.call('ZREMRANGEBYSCORE', accountLive, '-inf', liveExpireBefore)
@@ -150,10 +155,12 @@ var (
 		end
 		local accountCount = redis.call('ZCARD', accountRegular) + redis.call('ZCARD', accountLive)
 		local userCount = redis.call('ZCARD', userRegular) + redis.call('ZCARD', userLive)
+		local apiCount = redis.call('ZCARD', apiRegular) + redis.call('ZCARD', apiLive)
 		local allowance = 0
 		if replacing == 1 then allowance = 1 end
 		if accountMax > 0 and accountCount >= accountMax + allowance then return 0 end
 		if userMax > 0 and userCount >= userMax + allowance then return 0 end
+		if apiMax > 0 and apiCount >= apiMax + allowance then return 0 end
 		redis.call('ZADD', accountLive, now, leaseID)
 		redis.call('ZADD', userLive, now, leaseID)
 		redis.call('ZADD', apiLive, now, leaseID)
@@ -180,7 +187,7 @@ var (
 		return 1
 	`)
 
-	// trackSlotScript 记录 stats-only 槽位，不做并发上限判断。
+	// trackSlotScript 记录不限流槽位，同时返回 Redis 当前秒用于活跃索引。
 	// KEYS[1] = 有序集合键
 	// ARGV[1] = TTL（秒）
 	// ARGV[2] = requestID
@@ -199,7 +206,7 @@ var (
 		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
 		redis.call('ZADD', key, now, requestID)
 		redis.call('EXPIRE', key, ttl)
-		return 1
+		return {1, now}
 	`)
 
 	// acquireOpenAIWSIngressLeaseScript atomically reaps crashed members and
@@ -390,6 +397,10 @@ func apiKeySlotKey(apiKeyID int64) string {
 	return fmt.Sprintf("%s%d", apiKeySlotKeyPrefix, apiKeyID)
 }
 
+func apiKeyWaitQueueKey(apiKeyID int64) string {
+	return fmt.Sprintf("%s%d", apiKeyWaitQueueKeyPrefix, apiKeyID)
+}
+
 func liveAccountSlotKey(accountID int64) string {
 	return fmt.Sprintf("%s%d", liveAccountSlotKeyPrefix, accountID)
 }
@@ -434,6 +445,7 @@ type slotIndexSpec struct {
 var (
 	accountSlotIndex = slotIndexSpec{indexKey: accountActiveIndexKey, slotKey: accountSlotKey, waitKey: accountWaitKey}
 	userSlotIndex    = slotIndexSpec{indexKey: userActiveIndexKey, slotKey: userSlotKey, waitKey: waitQueueKey}
+	apiKeySlotIndex  = slotIndexSpec{indexKey: apiKeyActiveIndexKey, slotKey: apiKeySlotKey, waitKey: apiKeyWaitQueueKey}
 )
 
 // touchActiveIndexAt 是写路径上的轻量标记：主操作已成功时，尽力把 ID 放入活跃索引，
@@ -457,6 +469,10 @@ func (c *concurrencyCache) refreshAccountActiveIndex(ctx context.Context, accoun
 
 func (c *concurrencyCache) refreshUserActiveIndex(ctx context.Context, userID int64) {
 	c.refreshActiveIndex(ctx, userActiveIndexKey, userID, userSlotKey(userID), waitQueueKey(userID))
+}
+
+func (c *concurrencyCache) refreshAPIKeyActiveIndex(ctx context.Context, apiKeyID int64) {
+	c.refreshActiveIndex(ctx, apiKeyActiveIndexKey, apiKeyID, apiKeySlotKey(apiKeyID), apiKeyWaitQueueKey(apiKeyID))
 }
 
 // refreshActiveIndex 以 Redis 中的真实槽位/等待数为准重建索引状态。
@@ -741,13 +757,39 @@ func (c *concurrencyCache) GetUserConcurrency(ctx context.Context, userID int64)
 
 func (c *concurrencyCache) TrackAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error {
 	key := apiKeySlotKey(apiKeyID)
-	_, err := trackSlotScript.Run(ctx, c.rdb, []string{key}, c.slotTTLSeconds, requestID).Result()
+	_, now, err := runScriptInt64Pair(ctx, c.rdb, trackSlotScript, []string{key}, c.slotTTLSeconds, requestID)
+	if err == nil {
+		c.touchActiveIndexAt(ctx, apiKeyActiveIndexKey, apiKeyID, now+int64(c.slotTTLSeconds))
+	}
 	return err
+}
+
+func (c *concurrencyCache) AcquireAPIKeySlot(ctx context.Context, apiKeyID int64, maxConcurrency int, requestID string) (bool, error) {
+	result, now, err := runScriptInt64Pair(
+		ctx,
+		c.rdb,
+		acquireScript,
+		[]string{apiKeySlotKey(apiKeyID), liveAPIKeySlotKey(apiKeyID)},
+		maxConcurrency,
+		c.slotTTLSeconds,
+		requestID,
+	)
+	if err != nil {
+		return false, err
+	}
+	if result == 1 {
+		c.touchActiveIndexAt(ctx, apiKeyActiveIndexKey, apiKeyID, now+int64(c.slotTTLSeconds))
+	}
+	return result == 1, nil
 }
 
 func (c *concurrencyCache) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error {
 	key := apiKeySlotKey(apiKeyID)
-	return c.rdb.ZRem(ctx, key, requestID).Err()
+	if err := c.rdb.ZRem(ctx, key, requestID).Err(); err != nil {
+		return err
+	}
+	c.refreshAPIKeyActiveIndex(ctx, apiKeyID)
+	return nil
 }
 
 func (c *concurrencyCache) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error) {
@@ -799,6 +841,7 @@ func (c *concurrencyCache) AcquireLiveLease(
 	userID int64,
 	userMax int,
 	apiKeyID int64,
+	apiKeyMax int,
 	leaseID string,
 	replacingRegularSlots bool,
 ) (bool, error) {
@@ -814,8 +857,9 @@ func (c *concurrencyCache) AcquireLiveLease(
 		liveAccountSlotKey(accountID),
 		userSlotKey(userID),
 		liveUserSlotKey(userID),
+		apiKeySlotKey(apiKeyID),
 		liveAPIKeySlotKey(apiKeyID),
-	}, accountMax, userMax, liveLeaseTTLSeconds, leaseID, replacing).Int()
+	}, accountMax, userMax, apiKeyMax, liveLeaseTTLSeconds, leaseID, replacing).Int()
 	return result == 1, err
 }
 
@@ -905,6 +949,26 @@ func (c *concurrencyCache) DecrementWaitCount(ctx context.Context, userID int64)
 	if err == nil {
 		// 等待数减少后重新判断是否还需要保留索引。
 		c.refreshUserActiveIndex(ctx, userID)
+	}
+	return err
+}
+
+func (c *concurrencyCache) IncrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64, maxWait int) (bool, error) {
+	key := apiKeyWaitQueueKey(apiKeyID)
+	result, now, err := runScriptInt64Pair(ctx, c.rdb, incrementWaitScript, []string{key}, maxWait, c.waitQueueTTLSeconds)
+	if err != nil {
+		return false, err
+	}
+	if result == 1 {
+		c.touchActiveIndexAt(ctx, apiKeyActiveIndexKey, apiKeyID, now+int64(c.waitQueueTTLSeconds))
+	}
+	return result == 1, nil
+}
+
+func (c *concurrencyCache) DecrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64) error {
+	_, err := decrementWaitScript.Run(ctx, c.rdb, []string{apiKeyWaitQueueKey(apiKeyID)}).Result()
+	if err == nil {
+		c.refreshAPIKeyActiveIndex(ctx, apiKeyID)
 	}
 	return err
 }
@@ -1085,14 +1149,17 @@ func (c *concurrencyCache) CleanupExpiredAccountSlots(ctx context.Context, accou
 	return err
 }
 
-// CleanupExpiredAccountSlotKeys 处理账号与用户两个活跃索引中已到期的候选。
-// （方法名中的 Account 是历史遗留，保留以避免接口变更；实际同时回收两个索引，
-// 否则 user 索引的过期成员没有任何清理路径，会无界累积。）
+// CleanupExpiredAccountSlotKeys 处理账号、用户与 API Key 活跃索引中已到期的候选。
+// （方法名中的 Account 是历史遗留，保留以避免接口变更；实际同时回收三个索引，
+// 否则 user/API Key 索引的过期成员没有任何清理路径，会无界累积。）
 func (c *concurrencyCache) CleanupExpiredAccountSlotKeys(ctx context.Context) error {
 	if err := c.reconcileExpiredIndexCandidates(ctx, accountSlotIndex); err != nil {
 		return err
 	}
-	return c.reconcileExpiredIndexCandidates(ctx, userSlotIndex)
+	if err := c.reconcileExpiredIndexCandidates(ctx, userSlotIndex); err != nil {
+		return err
+	}
+	return c.reconcileExpiredIndexCandidates(ctx, apiKeySlotIndex)
 }
 
 // reconcileExpiredIndexCandidates 处理单个活跃索引中 score 已到期的候选：
@@ -1139,8 +1206,6 @@ func (c *concurrencyCache) reconcileExpiredIndexCandidates(ctx context.Context, 
 // CleanupStaleProcessSlots 启动时清理非当前进程前缀的槽位。
 // 清理范围来自活跃索引（含 score 已过期的成员——它们往往正是崩溃进程留下的残留），
 // 避免在 Redis 上 SCAN 全部 concurrency:* 键；另有一次性迁移清扫兜底索引机制上线前的遗留等待计数。
-// API Key 槽位（concurrency:api_key:*）是 stats-only 数据：每次 Track/读取都会按分数
-// 裁剪过期成员，key 自带 TTL，可在一个 slot TTL 内自愈，因此不参与启动清理。
 func (c *concurrencyCache) CleanupStaleProcessSlots(ctx context.Context, activeRequestPrefix string) error {
 	if activeRequestPrefix == "" {
 		return nil
@@ -1165,7 +1230,15 @@ func (c *concurrencyCache) CleanupStaleProcessSlots(ctx context.Context, activeR
 	if err != nil {
 		return err
 	}
-	return c.cleanupStaleProcessSlotsForIndex(ctx, userSlotIndex, userMembers, activeRequestPrefix, now)
+	if err := c.cleanupStaleProcessSlotsForIndex(ctx, userSlotIndex, userMembers, activeRequestPrefix, now); err != nil {
+		return err
+	}
+
+	apiKeyMembers, err := c.allIndexMembers(ctx, apiKeyActiveIndexKey)
+	if err != nil {
+		return err
+	}
+	return c.cleanupStaleProcessSlotsForIndex(ctx, apiKeySlotIndex, apiKeyMembers, activeRequestPrefix, now)
 }
 
 // sweepLegacyWaitKeysOnce 一次性清扫活跃索引机制上线前遗留的等待计数键。

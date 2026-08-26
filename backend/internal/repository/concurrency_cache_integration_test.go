@@ -109,8 +109,9 @@ func (s *ConcurrencyCacheSuite) TestLiveLease_CountsTowardRegularAccountAndUserL
 		accountID,
 		1,
 		userID,
-		1,
+		0,
 		apiKeyID,
+		1,
 		"live-integration",
 		false,
 	)

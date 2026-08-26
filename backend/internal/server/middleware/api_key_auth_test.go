@@ -50,6 +50,52 @@ func TestAPIKeyAuthRejectsOversizedCredentialsBeforeLookup(t *testing.T) {
 	require.Zero(t, calls.Load())
 }
 
+func TestAPIKeyAuthSubjectUsesKeyConcurrency(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := &service.User{
+		ID:          7,
+		Role:        service.RoleAdmin,
+		Status:      service.StatusActive,
+		Concurrency: 5,
+	}
+	apiKey := &service.APIKey{
+		ID:          100,
+		UserID:      user.ID,
+		Key:         "independent-concurrency-key",
+		Status:      service.StatusActive,
+		Concurrency: 12,
+		User:        user,
+	}
+	repo := &stubApiKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) {
+		clone := *apiKey
+		userClone := *user
+		clone.User = &userClone
+		return &clone, nil
+	}}
+
+	for _, runMode := range []string{config.RunModeSimple, config.RunModeStandard} {
+		t.Run(runMode, func(t *testing.T) {
+			cfg := &config.Config{RunMode: runMode}
+			svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
+			router := gin.New()
+			router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(svc, nil, cfg)))
+			router.GET("/t", func(c *gin.Context) {
+				subject, ok := GetAuthSubjectFromContext(c)
+				require.True(t, ok)
+				c.JSON(http.StatusOK, gin.H{"concurrency": subject.Concurrency})
+			})
+
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/t", nil)
+			req.Header.Set("x-api-key", apiKey.Key)
+			router.ServeHTTP(w, req)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			require.JSONEq(t, `{"concurrency":12}`, w.Body.String())
+		})
+	}
+}
+
 func TestAPIKeyAuthGlobalKeyIgnoresTechnicalOwnerStatus(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	user := &service.User{

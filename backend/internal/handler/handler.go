@@ -26,7 +26,6 @@ type AdminHandlers struct {
 	ScheduledTest         *admin.ScheduledTestHandler
 	ContentModeration     *admin.ContentModerationHandler
 	PromptAudit           *securityaudit.PromptAdminHandler
-	Compliance            *admin.ComplianceHandler
 	AuditLog              *admin.AuditLogHandler
 }
 

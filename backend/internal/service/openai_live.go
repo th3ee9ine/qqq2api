@@ -119,13 +119,13 @@ func ValidateLiveCallRequest(request *LiveCallRequest) error {
 	return nil
 }
 
-// CreateLiveCall 创建 Frameless 会话。调用方须在调用期间持有普通用户槽位；
+// CreateLiveCall 创建 Frameless 会话。调用方须在调用期间持有普通 API Key 槽位；
 // 调度器持有的普通账号槽位会被同一个 Live 租约原子接替。
 func (s *OpenAIGatewayService) CreateLiveCall(
 	ctx context.Context,
 	request *LiveCallRequest,
 	identity LiveCallIdentity,
-	userMaxConcurrency int,
+	apiKeyMaxConcurrency int,
 ) (*LiveCallCreated, error) {
 	if err := ValidateLiveCallRequest(request); err != nil {
 		return nil, err
@@ -187,8 +187,9 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			account.ID,
 			account.Concurrency,
 			identity.UserID,
-			userMaxConcurrency,
+			0,
 			identity.APIKeyID,
+			apiKeyMaxConcurrency,
 			leaseID,
 			true,
 		)

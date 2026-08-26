@@ -39,6 +39,7 @@ func TestGeneratedWireIncludesStandaloneImageStorageHandler(t *testing.T) {
 		"admin.NewDataManagementHandler",
 		"admin.NewChannelHandler",
 		"admin.NewChannelMonitorHandler",
+		"admin.NewComplianceHandler",
 		"admin.NewGeminiOAuthHandler",
 		"admin.NewAntigravityOAuthHandler",
 		"admin.NewGrokOAuthHandler",

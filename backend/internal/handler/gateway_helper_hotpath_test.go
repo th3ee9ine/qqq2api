@@ -20,9 +20,11 @@ type helperConcurrencyCacheStub struct {
 
 	accountSeq []bool
 	userSeq    []bool
+	apiKeySeq  []bool
 
 	accountAcquireCalls int
 	userAcquireCalls    int
+	apiKeyAcquireCalls  int
 	accountReleaseCalls int
 	userReleaseCalls    int
 	waitAllowed         bool
@@ -109,6 +111,18 @@ func (s *helperConcurrencyCacheStub) TrackAPIKeySlot(ctx context.Context, apiKey
 	return nil
 }
 
+func (s *helperConcurrencyCacheStub) AcquireAPIKeySlot(ctx context.Context, apiKeyID int64, maxConcurrency int, requestID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.apiKeyAcquireCalls++
+	if len(s.apiKeySeq) == 0 {
+		return false, nil
+	}
+	v := s.apiKeySeq[0]
+	s.apiKeySeq = s.apiKeySeq[1:]
+	return v, nil
+}
+
 func (s *helperConcurrencyCacheStub) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -122,6 +136,14 @@ func (s *helperConcurrencyCacheStub) GetAPIKeyConcurrencyBatch(ctx context.Conte
 		out[apiKeyID] = 0
 	}
 	return out, nil
+}
+
+func (s *helperConcurrencyCacheStub) IncrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64, maxWait int) (bool, error) {
+	return s.IncrementWaitCount(ctx, apiKeyID, maxWait)
+}
+
+func (s *helperConcurrencyCacheStub) DecrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64) error {
+	return s.DecrementWaitCount(ctx, apiKeyID)
 }
 
 func (s *helperConcurrencyCacheStub) IncrementWaitCount(ctx context.Context, userID int64, maxWait int) (bool, error) {
@@ -299,7 +321,7 @@ func TestAcquireUserSlotWithWait_ImmediateAcquireSkipsWaitQueue(t *testing.T) {
 
 func TestAcquireUserSlotWithWait_TracksAPIKeySlot(t *testing.T) {
 	cache := &helperConcurrencyCacheStub{
-		userSeq: []bool{true},
+		apiKeySeq: []bool{true},
 	}
 	concurrency := service.NewConcurrencyService(cache)
 	helper := NewConcurrencyHelper(concurrency, SSEPingFormatNone, 5*time.Millisecond)
@@ -310,18 +332,18 @@ func TestAcquireUserSlotWithWait_TracksAPIKeySlot(t *testing.T) {
 	release, err := helper.acquireUserSlotWithWaitTimeout(c, 202, 3, time.Second, false, &streamStarted)
 	require.NoError(t, err)
 	require.NotNil(t, release)
-	require.Equal(t, 1, cache.apiKeyTrackCalls)
-	require.Equal(t, []int64{77}, cache.apiKeyTrackIDs)
+	require.Equal(t, 1, cache.apiKeyAcquireCalls)
+	require.Equal(t, 0, cache.apiKeyTrackCalls)
 
 	release()
 
-	require.Equal(t, 1, cache.userReleaseCalls)
+	require.Equal(t, 0, cache.userReleaseCalls)
 	require.Equal(t, 1, cache.apiKeyReleaseCalls)
 }
 
 func TestTryAcquireUserSlotForAPIKey_TracksAPIKeySlot(t *testing.T) {
 	cache := &helperConcurrencyCacheStub{
-		userSeq: []bool{true},
+		apiKeySeq: []bool{true},
 	}
 	concurrency := service.NewConcurrencyService(cache)
 	helper := NewConcurrencyHelper(concurrency, SSEPingFormatNone, 5*time.Millisecond)
@@ -330,12 +352,12 @@ func TestTryAcquireUserSlotForAPIKey_TracksAPIKeySlot(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, acquired)
 	require.NotNil(t, release)
-	require.Equal(t, 1, cache.apiKeyTrackCalls)
-	require.Equal(t, []int64{77}, cache.apiKeyTrackIDs)
+	require.Equal(t, 1, cache.apiKeyAcquireCalls)
+	require.Equal(t, 0, cache.apiKeyTrackCalls)
 
 	release()
 
-	require.Equal(t, 1, cache.userReleaseCalls)
+	require.Equal(t, 0, cache.userReleaseCalls)
 	require.Equal(t, 1, cache.apiKeyReleaseCalls)
 }
 

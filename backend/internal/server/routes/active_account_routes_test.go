@@ -22,7 +22,6 @@ func TestAdminRoutesClaudeAndOpenAIAccountCapabilitiesAreRegistered(t *testing.T
 		servermiddleware.AuditLogMiddleware(pass),
 		servermiddleware.StepUpAuthMiddleware(pass),
 		nil,
-		nil,
 	)
 
 	registered := make(map[string]bool)

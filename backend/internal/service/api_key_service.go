@@ -61,11 +61,12 @@ const (
 // 若编辑 Key 时无条件整行回写，并发累计的配额与限流计数就会被旧快照覆盖。
 // 因此调用方必须显式声明要改的列。
 type APIKeyUpdateFields struct {
-	Name      bool
-	Status    bool
-	Quota     bool
-	GroupID   bool
-	ExpiresAt bool
+	Name        bool
+	Status      bool
+	Concurrency bool
+	Quota       bool
+	GroupID     bool
+	ExpiresAt   bool
 	// QuotaUsed 仅供"重置配额用量"路径声明；常规计费走 IncrementQuotaUsed。
 	QuotaUsed bool
 	// RateLimits 覆盖 rate_limit_5h / _1d / _7d 三个阈值。
@@ -227,6 +228,7 @@ type CreateAPIKeyRequest struct {
 	CustomKey   *string  `json:"custom_key"`   // 可选的自定义key
 	IPWhitelist []string `json:"ip_whitelist"` // IP 白名单
 	IPBlacklist []string `json:"ip_blacklist"` // IP 黑名单
+	Concurrency int      `json:"concurrency"`  // Concurrent request limit (0 = unlimited)
 
 	// Quota fields
 	Quota         float64 `json:"quota"`           // Quota limit in USD (0 = unlimited)
@@ -245,6 +247,7 @@ type UpdateAPIKeyRequest struct {
 	Status      *string   `json:"status"`
 	IPWhitelist *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
 	IPBlacklist *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
+	Concurrency *int      `json:"concurrency"`  // nil = no change, 0 = unlimited
 
 	// Quota fields
 	Quota           *float64   `json:"quota"`       // Quota limit in USD (nil = no change, 0 = unlimited)
@@ -267,6 +270,9 @@ func validateAPIKeyLimit(v float64) error {
 }
 
 func validateCreateAPIKeyRequest(req CreateAPIKeyRequest) error {
+	if req.Concurrency < 0 {
+		return infraerrors.BadRequest("API_KEY_CONCURRENCY_INVALID", "API key concurrency must be non-negative")
+	}
 	for _, v := range []float64{req.Quota, req.RateLimit5h, req.RateLimit1d, req.RateLimit7d} {
 		if err := validateAPIKeyLimit(v); err != nil {
 			return err
@@ -279,6 +285,9 @@ func validateCreateAPIKeyRequest(req CreateAPIKeyRequest) error {
 }
 
 func validateUpdateAPIKeyRequest(req UpdateAPIKeyRequest) error {
+	if req.Concurrency != nil && *req.Concurrency < 0 {
+		return infraerrors.BadRequest("API_KEY_CONCURRENCY_INVALID", "API key concurrency must be non-negative")
+	}
 	for _, v := range []*float64{req.Quota, req.RateLimit5h, req.RateLimit1d, req.RateLimit7d} {
 		if v != nil {
 			if err := validateAPIKeyLimit(*v); err != nil {
@@ -574,6 +583,7 @@ func (s *APIKeyService) Create(ctx context.Context, userID int64, req CreateAPIK
 		Status:      StatusActive,
 		IPWhitelist: req.IPWhitelist,
 		IPBlacklist: req.IPBlacklist,
+		Concurrency: req.Concurrency,
 		Quota:       req.Quota,
 		QuotaUsed:   0,
 		RateLimit5h: req.RateLimit5h,
@@ -965,6 +975,11 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 		if s.cache != nil {
 			_ = s.cache.DeleteCreateAttemptCount(ctx, apiKey.UserID)
 		}
+	}
+
+	if req.Concurrency != nil {
+		apiKey.Concurrency = *req.Concurrency
+		fields.Concurrency = true
 	}
 
 	// Update quota fields

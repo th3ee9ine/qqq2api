@@ -61,6 +61,13 @@ type APIKeyConcurrencyCache interface {
 	GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
 }
 
+type APIKeyConcurrencyLimiterCache interface {
+	AcquireAPIKeySlot(ctx context.Context, apiKeyID int64, maxConcurrency int, requestID string) (bool, error)
+	ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
+	IncrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64, maxWait int) (bool, error)
+	DecrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64) error
+}
+
 // OpenAIWSIngressLeaseCache owns the short-lived distributed lease used to
 // bound live client WebSocket sessions. It is deliberately independent of the
 // request-slot namespace: idle ingress connections do not occupy turn slots.
@@ -227,7 +234,7 @@ const (
 	apiKeySlotTrackTimeout          = 2 * time.Second
 )
 
-// ConcurrencyService 管理账号和用户的并发限制。
+// ConcurrencyService 管理账号、用户和 API Key 的并发限制。
 type ConcurrencyService struct {
 	cache ConcurrencyCache
 
@@ -414,9 +421,54 @@ func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, 
 	}, nil
 }
 
-// TrackAPIKeySlot records one active request slot for an API key without
-// applying key-level concurrency limits. It is fail-open: Redis errors are
-// logged and return a no-op release function.
+// AcquireAPIKeySlot attempts to acquire a concurrency slot scoped to one API
+// key. A zero limit is unlimited, but still tracks the active request for the
+// real-time concurrency display.
+func (s *ConcurrencyService) AcquireAPIKeySlot(ctx context.Context, apiKeyID int64, maxConcurrency int) (*AcquireResult, error) {
+	if maxConcurrency <= 0 {
+		return &AcquireResult{
+			Acquired:    true,
+			ReleaseFunc: s.TrackAPIKeySlot(ctx, apiKeyID),
+		}, nil
+	}
+	if s == nil || s.cache == nil || apiKeyID <= 0 {
+		return nil, errors.New("api key concurrency cache is unavailable")
+	}
+	cache, ok := s.cache.(APIKeyConcurrencyLimiterCache)
+	if !ok {
+		return nil, errors.New("api key concurrency cache is unsupported")
+	}
+
+	requestID := generateRequestID()
+	acquired, err := cache.AcquireAPIKeySlot(ctx, apiKeyID, maxConcurrency, requestID)
+	if err != nil {
+		return nil, err
+	}
+	if !acquired {
+		return &AcquireResult{Acquired: false}, nil
+	}
+	return &AcquireResult{
+		Acquired: true,
+		ReleaseFunc: func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := cache.ReleaseAPIKeySlot(bgCtx, apiKeyID, requestID); err != nil {
+				logger.LegacyPrintf("service.concurrency", "Warning: failed to release api key slot for %d (req=%s): %v", apiKeyID, requestID, err)
+			}
+		},
+	}, nil
+}
+
+func (s *ConcurrencyService) SupportsAPIKeyConcurrencyLimit() bool {
+	if s == nil || s.cache == nil {
+		return false
+	}
+	_, ok := s.cache.(APIKeyConcurrencyLimiterCache)
+	return ok
+}
+
+// TrackAPIKeySlot records one active request slot for an unlimited API key. It
+// is fail-open: Redis errors are logged and return a no-op release function.
 func (s *ConcurrencyService) TrackAPIKeySlot(ctx context.Context, apiKeyID int64) func() {
 	if s == nil || s.cache == nil || apiKeyID <= 0 {
 		return func() {}
@@ -520,6 +572,39 @@ func (s *ConcurrencyService) DecrementWaitCount(ctx context.Context, userID int6
 
 	if err := s.cache.DecrementWaitCount(bgCtx, userID); err != nil {
 		logger.LegacyPrintf("service.concurrency", "Warning: decrement wait count failed for user %d: %v", userID, err)
+	}
+}
+
+// IncrementAPIKeyWaitCount attempts to enter one API key's wait queue.
+func (s *ConcurrencyService) IncrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64, maxWait int) (bool, error) {
+	if s == nil || s.cache == nil {
+		return true, nil
+	}
+	cache, ok := s.cache.(APIKeyConcurrencyLimiterCache)
+	if !ok {
+		return false, errors.New("api key concurrency cache is unsupported")
+	}
+	result, err := cache.IncrementAPIKeyWaitCount(ctx, apiKeyID, maxWait)
+	if err != nil {
+		logger.LegacyPrintf("service.concurrency", "Warning: increment wait count failed for api key %d: %v", apiKeyID, err)
+		return true, nil
+	}
+	return result, nil
+}
+
+// DecrementAPIKeyWaitCount leaves one API key's wait queue.
+func (s *ConcurrencyService) DecrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	cache, ok := s.cache.(APIKeyConcurrencyLimiterCache)
+	if !ok {
+		return
+	}
+	bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := cache.DecrementAPIKeyWaitCount(bgCtx, apiKeyID); err != nil {
+		logger.LegacyPrintf("service.concurrency", "Warning: decrement wait count failed for api key %d: %v", apiKeyID, err)
 	}
 }
 

@@ -37,6 +37,7 @@ type CreateAPIKeyRequest struct {
 	CustomKey     *string  `json:"custom_key"`      // 可选的自定义key
 	IPWhitelist   []string `json:"ip_whitelist"`    // IP 白名单
 	IPBlacklist   []string `json:"ip_blacklist"`    // IP 黑名单
+	Concurrency   *int     `json:"concurrency"`     // 并发限制，0 表示不限制
 	Quota         *float64 `json:"quota"`           // 配额限制 (USD)
 	ExpiresInDays *int     `json:"expires_in_days"` // 过期天数
 
@@ -53,6 +54,7 @@ type UpdateAPIKeyRequest struct {
 	Status      string    `json:"status" binding:"omitempty,oneof=active inactive"`
 	IPWhitelist *[]string `json:"ip_whitelist"` // IP 白名单（nil 不修改，空数组清空）
 	IPBlacklist *[]string `json:"ip_blacklist"` // IP 黑名单（nil 不修改，空数组清空）
+	Concurrency *int      `json:"concurrency"`  // 并发限制（nil 不修改，0 表示不限制）
 	Quota       *float64  `json:"quota"`        // 配额限制 (USD), 0=无限制
 	ExpiresAt   *string   `json:"expires_at"`   // 过期时间 (ISO 8601)
 	ResetQuota  *bool     `json:"reset_quota"`  // 重置已用配额
@@ -67,6 +69,9 @@ type UpdateAPIKeyRequest struct {
 func validAPIKeyLimit(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 }
 
 func validateAPIKeyCreateRequest(req CreateAPIKeyRequest) error {
+	if req.Concurrency != nil && *req.Concurrency < 0 {
+		return errors.New("invalid concurrency")
+	}
 	if req.Quota != nil && !validAPIKeyLimit(*req.Quota) {
 		return errors.New("invalid quota")
 	}
@@ -86,6 +91,9 @@ func validateAPIKeyCreateRequest(req CreateAPIKeyRequest) error {
 }
 
 func validateAPIKeyUpdateRequest(req UpdateAPIKeyRequest) error {
+	if req.Concurrency != nil && *req.Concurrency < 0 {
+		return errors.New("invalid concurrency")
+	}
 	if req.Quota != nil && !validAPIKeyLimit(*req.Quota) {
 		return errors.New("invalid quota")
 	}
@@ -198,6 +206,9 @@ func (h *APIKeyHandler) Create(c *gin.Context) {
 		IPBlacklist:   req.IPBlacklist,
 		ExpiresInDays: req.ExpiresInDays,
 	}
+	if req.Concurrency != nil {
+		svcReq.Concurrency = *req.Concurrency
+	}
 	if req.Quota != nil {
 		svcReq.Quota = *req.Quota
 	}
@@ -248,6 +259,7 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	svcReq := service.UpdateAPIKeyRequest{
 		IPWhitelist:         req.IPWhitelist,
 		IPBlacklist:         req.IPBlacklist,
+		Concurrency:         req.Concurrency,
 		Quota:               req.Quota,
 		ResetQuota:          req.ResetQuota,
 		RateLimit5h:         req.RateLimit5h,

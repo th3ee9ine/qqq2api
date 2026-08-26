@@ -15,6 +15,7 @@ func TestValidateCreateAPIKeyRequestNumericLimits(t *testing.T) {
 		Quota: 1e100, RateLimit5h: 1e100, ExpiresInDays: &positiveExpiry,
 	}))
 	require.NoError(t, validateCreateAPIKeyRequest(CreateAPIKeyRequest{}))
+	require.NoError(t, validateCreateAPIKeyRequest(CreateAPIKeyRequest{Concurrency: 8}))
 
 	invalidExpiry := 0
 	tests := []CreateAPIKeyRequest{
@@ -25,6 +26,7 @@ func TestValidateCreateAPIKeyRequestNumericLimits(t *testing.T) {
 		{RateLimit1d: math.NaN()},
 		{RateLimit7d: math.Inf(-1)},
 		{ExpiresInDays: &invalidExpiry},
+		{Concurrency: -1},
 	}
 	for _, req := range tests {
 		require.Error(t, validateCreateAPIKeyRequest(req))
@@ -33,13 +35,17 @@ func TestValidateCreateAPIKeyRequestNumericLimits(t *testing.T) {
 
 func TestValidateUpdateAPIKeyRequestNumericLimits(t *testing.T) {
 	zero, large, negative, nan, inf := 0.0, 1e100, -1.0, math.NaN(), math.Inf(1)
+	zeroConcurrency, positiveConcurrency, negativeConcurrency := 0, 8, -1
 	require.NoError(t, validateUpdateAPIKeyRequest(UpdateAPIKeyRequest{Quota: &zero, RateLimit7d: &large}))
+	require.NoError(t, validateUpdateAPIKeyRequest(UpdateAPIKeyRequest{Concurrency: &zeroConcurrency}))
+	require.NoError(t, validateUpdateAPIKeyRequest(UpdateAPIKeyRequest{Concurrency: &positiveConcurrency}))
 
 	for _, req := range []UpdateAPIKeyRequest{
 		{Quota: &negative},
 		{RateLimit5h: &nan},
 		{RateLimit1d: &inf},
 		{RateLimit7d: &negative},
+		{Concurrency: &negativeConcurrency},
 	} {
 		require.Error(t, validateUpdateAPIKeyRequest(req))
 	}

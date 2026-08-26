@@ -2,8 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-REPO="th3ee9ine/qqq-kiro-go"
+PROJECT_DIR="$SCRIPT_DIR"
+REPO="th3ee9ine/qqq2api"
 PROXY="http://127.0.0.1:7890"
 HOST_PROXY="http://host.docker.internal:7890"
 VERSION=$(tr -d '[:space:]' < "$PROJECT_DIR/VERSION")
@@ -18,6 +18,7 @@ echo "==> Building and pushing $REPO:$VERSION (linux/amd64 + linux/arm64)"
 HTTPS_PROXY="$PROXY" HTTP_PROXY="$PROXY" \
 docker buildx build \
   --platform "linux/amd64,linux/arm64" \
+  --build-arg "VERSION=$VERSION" \
   --build-arg "http_proxy=$HOST_PROXY" \
   --build-arg "https_proxy=$HOST_PROXY" \
   -t "$REPO:$VERSION" \

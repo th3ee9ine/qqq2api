@@ -55,6 +55,7 @@ export async function getById(id: number): Promise<ApiKey> {
  * @param quota - Optional quota limit in USD (0 = unlimited)
  * @param expiresInDays - Optional days until expiry (undefined = never expires)
  * @param rateLimitData - Optional rate limit fields
+ * @param concurrency - Concurrent request limit (0 = unlimited)
  * @returns Created API key
  */
 export async function create(
@@ -65,7 +66,8 @@ export async function create(
   ipBlacklist?: string[],
   quota?: number,
   expiresInDays?: number,
-  rateLimitData?: { rate_limit_5h?: number; rate_limit_1d?: number; rate_limit_7d?: number }
+  rateLimitData?: { rate_limit_5h?: number; rate_limit_1d?: number; rate_limit_7d?: number },
+  concurrency?: number
 ): Promise<ApiKey> {
   const payload: CreateApiKeyRequest = { name }
   if (groupId !== undefined) {
@@ -79,6 +81,9 @@ export async function create(
   }
   if (ipBlacklist && ipBlacklist.length > 0) {
     payload.ip_blacklist = ipBlacklist
+  }
+  if (concurrency !== undefined) {
+    payload.concurrency = Math.max(0, Math.floor(concurrency))
   }
   if (quota !== undefined && quota > 0) {
     payload.quota = quota
