@@ -15,6 +15,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2830,6 +2832,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if len(ids) == 0 {
 		return 0, nil
 	}
+	if updates.AutoAssignProxy && updates.ProxyID != nil {
+		return 0, service.ErrProxyAssignmentModeConflict
+	}
 	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(updates.Extra)
 
 	setClauses := make([]string, 0, 8)
@@ -2963,20 +2968,24 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		setClauses = append(setClauses, "extra = "+extraExpression)
 	}
 
-	if len(setClauses) == 0 {
+	if len(setClauses) == 0 && !updates.AutoAssignProxy {
 		return 0, nil
 	}
 
-	setClauses = append(setClauses, "updated_at = NOW()")
+	hasBulkFields := len(setClauses) > 0
+	query := ""
+	if hasBulkFields {
+		setClauses = append(setClauses, "updated_at = NOW()")
 
-	whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
-	args = append(args, pq.Array(ids))
-	idx++
-	if updates.ProbeEnabled != nil {
-		whereClause += " AND type = $" + itoa(idx)
-		args = append(args, service.AccountTypeAPIKey)
+		whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
+		args = append(args, pq.Array(ids))
+		idx++
+		if updates.ProbeEnabled != nil {
+			whereClause += " AND type = $" + itoa(idx)
+			args = append(args, service.AccountTypeAPIKey)
+		}
+		query = "UPDATE accounts SET " + joinClauses(setClauses, ", ") + whereClause
 	}
-	query := "UPDATE accounts SET " + joinClauses(setClauses, ", ") + whereClause
 
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
@@ -2997,13 +3006,35 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 	}
 
-	result, err := exec.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
+	var automaticAssignments []proxyAccountAssignment
+	if updates.AutoAssignProxy {
+		capacities, err := loadAndLockAutomaticProxyCapacities(ctx, exec)
+		if err != nil {
+			return 0, err
+		}
+		targets, excludedAccountIDs, err := loadAndLockAutomaticProxyTargets(ctx, exec, ids)
+		if err != nil {
+			return 0, err
+		}
+		if err := loadAutomaticProxyBaselineCounts(ctx, exec, capacities, excludedAccountIDs); err != nil {
+			return 0, err
+		}
+		automaticAssignments, err = planAutomaticProxyAssignments(capacities, targets)
+		if err != nil {
+			return 0, err
+		}
 	}
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return 0, err
+
+	rows := int64(len(uniquePositiveInt64s(ids)))
+	if hasBulkFields {
+		result, err := exec.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, err
+		}
+		rows, err = result.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
 	}
 	if updates.ProbeEnabled != nil {
 		expectedRows := int64(0)
@@ -3019,8 +3050,19 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			return 0, service.ErrUpstreamBillingProbeAccountInvalid
 		}
 	}
+	changedAccountIDs := uniquePositiveInt64s(ids)
+	if updates.AutoAssignProxy {
+		assignedRows, assignmentIDs, err := applyAutomaticProxyAssignments(ctx, exec, automaticAssignments)
+		if err != nil {
+			return 0, err
+		}
+		if assignedRows != int64(len(automaticAssignments)) {
+			return 0, fmt.Errorf("automatic proxy assignment updated %d accounts, expected %d", assignedRows, len(automaticAssignments))
+		}
+		changedAccountIDs = uniquePositiveInt64s(append(changedAccountIDs, assignmentIDs...))
+	}
 	if rows > 0 {
-		payload := map[string]any{"account_ids": ids}
+		payload := map[string]any{"account_ids": changedAccountIDs}
 		if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, payload); err != nil {
 			return 0, err
 		}
@@ -3043,6 +3085,237 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 	}
 	return rows, nil
+}
+
+// automaticProxyCapacity represents one active, non-expired proxy while its
+// row lock is held. MaxAccounts is an automatic-assignment limit; zero means
+// unlimited. AccountCount excludes every account family being reassigned.
+type automaticProxyCapacity struct {
+	ID           int64
+	MaxAccounts  int
+	AccountCount int
+}
+
+// automaticProxyTarget keeps a parent account and all of its linked shadows as
+// one placement unit. Shadows inherit the parent's proxy, so each member must
+// consume one capacity slot on the same proxy.
+type automaticProxyTarget struct {
+	AccountID int64
+	MemberIDs []int64
+}
+
+type proxyAccountAssignment struct {
+	AccountID int64
+	ProxyID   int64
+}
+
+// planAutomaticProxyAssignments greedily places the largest account families
+// first, always choosing the currently least-used proxy (ID breaks ties).
+// Counts are incremented after each placement, producing a balanced result.
+func planAutomaticProxyAssignments(capacities []automaticProxyCapacity, targets []automaticProxyTarget) ([]proxyAccountAssignment, error) {
+	capacities = append([]automaticProxyCapacity(nil), capacities...)
+	targets = append([]automaticProxyTarget(nil), targets...)
+	sort.SliceStable(targets, func(i, j int) bool {
+		if len(targets[i].MemberIDs) == len(targets[j].MemberIDs) {
+			return targets[i].AccountID < targets[j].AccountID
+		}
+		return len(targets[i].MemberIDs) > len(targets[j].MemberIDs)
+	})
+
+	required := 0
+	for i := range targets {
+		required += len(targets[i].MemberIDs)
+	}
+	available := 0
+	for i := range capacities {
+		if capacities[i].MaxAccounts > capacities[i].AccountCount {
+			available += capacities[i].MaxAccounts - capacities[i].AccountCount
+		}
+	}
+
+	assignments := make([]proxyAccountAssignment, 0, required)
+	for _, target := range targets {
+		weight := len(target.MemberIDs)
+		best := -1
+		for i := range capacities {
+			candidate := capacities[i]
+			if candidate.MaxAccounts > 0 && candidate.AccountCount+weight > candidate.MaxAccounts {
+				continue
+			}
+			if best < 0 || candidate.AccountCount < capacities[best].AccountCount ||
+				(candidate.AccountCount == capacities[best].AccountCount && candidate.ID < capacities[best].ID) {
+				best = i
+			}
+		}
+		if best < 0 {
+			return nil, service.ErrProxyCapacityInsufficient.WithMetadata(map[string]string{
+				"required_accounts":  strconv.Itoa(required),
+				"available_accounts": strconv.Itoa(available),
+			})
+		}
+		for _, accountID := range target.MemberIDs {
+			assignments = append(assignments, proxyAccountAssignment{AccountID: accountID, ProxyID: capacities[best].ID})
+		}
+		capacities[best].AccountCount += weight
+	}
+	return assignments, nil
+}
+
+func loadAndLockAutomaticProxyCapacities(ctx context.Context, exec sqlExecutor) ([]automaticProxyCapacity, error) {
+	rows, err := exec.QueryContext(ctx, `
+		SELECT id, max_accounts
+		FROM proxies
+		WHERE deleted_at IS NULL
+		  AND status = $1
+		  AND (expires_at IS NULL OR expires_at > NOW())
+		ORDER BY id
+		-- NO KEY UPDATE serializes automatic assigners and proxy config changes,
+		-- while remaining compatible with the KEY SHARE lock taken by manual
+		-- account proxy/FK updates. max_accounts is intentionally an automatic-
+		-- assignment limit, not a hard constraint on those manual writes.
+		FOR NO KEY UPDATE
+	`, service.StatusActive)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	capacities := make([]automaticProxyCapacity, 0)
+	for rows.Next() {
+		var capacity automaticProxyCapacity
+		if err := rows.Scan(&capacity.ID, &capacity.MaxAccounts); err != nil {
+			return nil, err
+		}
+		capacities = append(capacities, capacity)
+	}
+	return capacities, rows.Err()
+}
+
+func loadAndLockAutomaticProxyTargets(ctx context.Context, exec sqlExecutor, ids []int64) ([]automaticProxyTarget, []int64, error) {
+	ids = uniquePositiveInt64s(ids)
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	selected := make(map[int64]struct{}, len(ids))
+	targetsByID := make(map[int64]*automaticProxyTarget, len(ids))
+	found := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		selected[id] = struct{}{}
+		targetsByID[id] = &automaticProxyTarget{AccountID: id, MemberIDs: []int64{id}}
+	}
+
+	rows, err := exec.QueryContext(ctx, `
+		SELECT id, parent_account_id
+		FROM accounts
+		WHERE deleted_at IS NULL
+		  AND (id = ANY($1) OR parent_account_id = ANY($1))
+		ORDER BY id
+		FOR UPDATE
+	`, pq.Array(ids))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			accountID int64
+			parentID  sql.NullInt64
+		)
+		if err := rows.Scan(&accountID, &parentID); err != nil {
+			return nil, nil, err
+		}
+		if _, ok := selected[accountID]; ok {
+			found[accountID] = struct{}{}
+		}
+		if parentID.Valid {
+			if target, ok := targetsByID[parentID.Int64]; ok {
+				target.MemberIDs = append(target.MemberIDs, accountID)
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if len(found) != len(ids) {
+		return nil, nil, service.ErrAccountNotFound
+	}
+
+	targets := make([]automaticProxyTarget, 0, len(ids))
+	excluded := make([]int64, 0, len(ids)*2)
+	for _, id := range ids {
+		target := *targetsByID[id]
+		target.MemberIDs = uniquePositiveInt64s(target.MemberIDs)
+		targets = append(targets, target)
+		excluded = append(excluded, target.MemberIDs...)
+	}
+	return targets, uniquePositiveInt64s(excluded), nil
+}
+
+func loadAutomaticProxyBaselineCounts(ctx context.Context, exec sqlExecutor, capacities []automaticProxyCapacity, excludedAccountIDs []int64) error {
+	if len(capacities) == 0 {
+		return nil
+	}
+	proxyIDs := make([]int64, 0, len(capacities))
+	capacityByID := make(map[int64]*automaticProxyCapacity, len(capacities))
+	for i := range capacities {
+		capacities[i].AccountCount = 0
+		proxyIDs = append(proxyIDs, capacities[i].ID)
+		capacityByID[capacities[i].ID] = &capacities[i]
+	}
+	rows, err := exec.QueryContext(ctx, `
+		SELECT proxy_id, COUNT(*)
+		FROM accounts
+		WHERE deleted_at IS NULL
+		  AND proxy_id = ANY($1)
+		  AND NOT (id = ANY($2))
+		GROUP BY proxy_id
+	`, pq.Array(proxyIDs), pq.Array(excludedAccountIDs))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var proxyID, count int64
+		if err := rows.Scan(&proxyID, &count); err != nil {
+			return err
+		}
+		if capacity := capacityByID[proxyID]; capacity != nil {
+			capacity.AccountCount = int(count)
+		}
+	}
+	return rows.Err()
+}
+
+func applyAutomaticProxyAssignments(ctx context.Context, exec sqlExecutor, assignments []proxyAccountAssignment) (int64, []int64, error) {
+	if len(assignments) == 0 {
+		return 0, nil, nil
+	}
+	accountIDs := make([]int64, 0, len(assignments))
+	proxyIDs := make([]int64, 0, len(assignments))
+	for _, assignment := range assignments {
+		accountIDs = append(accountIDs, assignment.AccountID)
+		proxyIDs = append(proxyIDs, assignment.ProxyID)
+	}
+	result, err := exec.ExecContext(ctx, `
+		UPDATE accounts AS a
+		SET proxy_id = assignment.proxy_id,
+			extra = CASE
+				WHEN a.proxy_id IS DISTINCT FROM assignment.proxy_id
+				 AND a.platform IN ('openai', 'anthropic')
+				 AND a.type = 'apikey'
+				THEN COALESCE(a.extra, '{}'::jsonb) - 'ollama_cloud_usage_snapshot'
+				ELSE a.extra
+			END,
+			updated_at = NOW()
+		FROM unnest($1::bigint[], $2::bigint[]) AS assignment(account_id, proxy_id)
+		WHERE a.id = assignment.account_id
+		  AND a.deleted_at IS NULL
+	`, pq.Array(accountIDs), pq.Array(proxyIDs))
+	if err != nil {
+		return 0, nil, err
+	}
+	rows, err := result.RowsAffected()
+	return rows, accountIDs, err
 }
 
 type accountGroupQueryOptions struct {

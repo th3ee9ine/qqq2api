@@ -462,9 +462,16 @@ export async function batchUpdateCredentials(request: {
  * @param updates - Fields to update
  * @returns Success confirmation
  */
+export interface BulkUpdateAccountFields extends Record<string, unknown> {
+  /** Assign every target to the least-used active proxy that still has automatic capacity. */
+  auto_assign_proxy?: boolean
+  /** Explicit proxy assignment; mutually exclusive with auto_assign_proxy. */
+  proxy_id?: number
+}
+
 export async function bulkUpdate(
-  accountIdsOrPayload: number[] | Record<string, unknown>,
-  updates?: Record<string, unknown>
+  accountIdsOrPayload: number[] | BulkUpdateAccountFields,
+  updates?: BulkUpdateAccountFields
 ): Promise<{
   success: number
   failed: number

@@ -910,6 +910,7 @@ export interface Proxy {
   password?: string | null
   status: 'active' | 'inactive' | 'expired'
   account_count?: number // Number of accounts using this proxy
+  max_accounts: number // Automatic-assignment capacity; 0 means unlimited
   latency_ms?: number
   latency_status?: 'success' | 'failed'
   latency_message?: string
@@ -1490,6 +1491,7 @@ export interface CreateProxyRequest {
   port: number
   username?: string | null
   password?: string | null
+  max_accounts?: number // Automatic-assignment capacity; 0 means unlimited
   expires_at?: number | null   // unix 秒；null/0 = 永不过期
   fallback_mode?: 'none' | 'proxy' | 'direct'
   backup_proxy_id?: number | null
@@ -1503,6 +1505,7 @@ export interface UpdateProxyRequest {
   port?: number
   username?: string | null
   password?: string | null
+  max_accounts?: number // Automatic-assignment capacity; 0 means unlimited
   status?: 'active' | 'inactive'
   expires_at?: number | null   // unix 秒；null/0 = 永不过期
   fallback_mode?: 'none' | 'proxy' | 'direct'
@@ -1528,6 +1531,7 @@ export interface AdminDataProxy {
   port: number
   username?: string | null
   password?: string | null
+  max_accounts?: number // Omitted in exports created before account limits were introduced
   status: 'active' | 'inactive'
 }
 

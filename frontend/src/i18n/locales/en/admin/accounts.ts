@@ -476,6 +476,10 @@ export default {
         rateSyncConflict: 'Cannot change account rates: {count} target account(s) have upstream rate sync enabled.',
         longContextShadowHint: 'Long-context billing belongs to the parent account. Selected shadow accounts keep following their parent, including when targets come from a filter.',
         longContextParentRequired: 'All selected accounts are shadows. Select the parent account to change long-context billing.',
+        manualAssignProxy: 'Choose one proxy',
+        autoAssignProxy: 'Auto-assign proxies',
+        autoAssignProxyHint: 'Assigns accounts to active proxies with available capacity, starting with the proxies currently used by the fewest accounts.',
+        autoAssignProxyCapacityInsufficient: 'There is not enough capacity across active proxies to auto-assign all selected accounts.',
         mixedPlatformWarning: 'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.'
       },
       bulkDeleteTitle: 'Bulk Delete Accounts',

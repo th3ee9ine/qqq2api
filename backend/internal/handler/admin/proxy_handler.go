@@ -37,6 +37,7 @@ type CreateProxyRequest struct {
 	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
 	BackupProxyID  *int64 `json:"backup_proxy_id"`
 	ExpiryWarnDays int    `json:"expiry_warn_days" binding:"omitempty,min=0"`
+	MaxAccounts    int    `json:"max_accounts" binding:"omitempty,min=0"`
 }
 
 // UpdateProxyRequest represents update proxy request
@@ -52,6 +53,7 @@ type UpdateProxyRequest struct {
 	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
 	BackupProxyID  *int64 `json:"backup_proxy_id"`
 	ExpiryWarnDays int    `json:"expiry_warn_days" binding:"omitempty,min=0"`
+	MaxAccounts    *int   `json:"max_accounts" binding:"omitempty,min=0"`
 }
 
 // List handles listing all proxies with pagination
@@ -159,6 +161,7 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 			FallbackMode:   strings.TrimSpace(req.FallbackMode),
 			BackupProxyID:  req.BackupProxyID,
 			ExpiryWarnDays: req.ExpiryWarnDays,
+			MaxAccounts:    req.MaxAccounts,
 		})
 		if err != nil {
 			return nil, err
@@ -199,6 +202,7 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 		FallbackMode:   strings.TrimSpace(req.FallbackMode),
 		BackupProxyID:  req.BackupProxyID,
 		ExpiryWarnDays: req.ExpiryWarnDays,
+		MaxAccounts:    req.MaxAccounts,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -328,16 +332,17 @@ func (h *ProxyHandler) GetProxyAccounts(c *gin.Context) {
 
 // BatchCreateProxyItem represents a single proxy in batch create request
 type BatchCreateProxyItem struct {
-	Protocol string `json:"protocol" binding:"required,oneof=http https socks5 socks5h"`
-	Host     string `json:"host" binding:"required"`
-	Port     int    `json:"port" binding:"required,min=1,max=65535"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Protocol    string `json:"protocol" binding:"required,oneof=http https socks5 socks5h"`
+	Host        string `json:"host" binding:"required"`
+	Port        int    `json:"port" binding:"required,min=1,max=65535"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	MaxAccounts int    `json:"max_accounts" binding:"omitempty,min=0"`
 }
 
 // BatchCreateRequest represents batch create proxies request
 type BatchCreateRequest struct {
-	Proxies []BatchCreateProxyItem `json:"proxies" binding:"required,min=1"`
+	Proxies []BatchCreateProxyItem `json:"proxies" binding:"required,min=1,dive"`
 }
 
 // BatchCreate handles batch creating proxies
@@ -373,12 +378,13 @@ func (h *ProxyHandler) BatchCreate(c *gin.Context) {
 
 		// Create proxy with default name
 		_, err = h.adminService.CreateProxy(c.Request.Context(), &service.CreateProxyInput{
-			Name:     "default",
-			Protocol: protocol,
-			Host:     host,
-			Port:     item.Port,
-			Username: username,
-			Password: password,
+			Name:        "default",
+			Protocol:    protocol,
+			Host:        host,
+			Port:        item.Port,
+			Username:    username,
+			Password:    password,
+			MaxAccounts: item.MaxAccounts,
 		})
 		if err != nil {
 			// If creation fails due to duplicate, count as skipped

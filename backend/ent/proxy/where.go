@@ -125,6 +125,11 @@ func ExpiryWarnDays(v int) predicate.Proxy {
 	return predicate.Proxy(sql.FieldEQ(FieldExpiryWarnDays, v))
 }
 
+// MaxAccounts applies equality check predicate on the "max_accounts" field. It's identical to MaxAccountsEQ.
+func MaxAccounts(v int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldMaxAccounts, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.Proxy {
 	return predicate.Proxy(sql.FieldEQ(FieldCreatedAt, v))
@@ -888,6 +893,46 @@ func ExpiryWarnDaysLT(v int) predicate.Proxy {
 // ExpiryWarnDaysLTE applies the LTE predicate on the "expiry_warn_days" field.
 func ExpiryWarnDaysLTE(v int) predicate.Proxy {
 	return predicate.Proxy(sql.FieldLTE(FieldExpiryWarnDays, v))
+}
+
+// MaxAccountsEQ applies the EQ predicate on the "max_accounts" field.
+func MaxAccountsEQ(v int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldEQ(FieldMaxAccounts, v))
+}
+
+// MaxAccountsNEQ applies the NEQ predicate on the "max_accounts" field.
+func MaxAccountsNEQ(v int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNEQ(FieldMaxAccounts, v))
+}
+
+// MaxAccountsIn applies the In predicate on the "max_accounts" field.
+func MaxAccountsIn(vs ...int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldIn(FieldMaxAccounts, vs...))
+}
+
+// MaxAccountsNotIn applies the NotIn predicate on the "max_accounts" field.
+func MaxAccountsNotIn(vs ...int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldNotIn(FieldMaxAccounts, vs...))
+}
+
+// MaxAccountsGT applies the GT predicate on the "max_accounts" field.
+func MaxAccountsGT(v int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGT(FieldMaxAccounts, v))
+}
+
+// MaxAccountsGTE applies the GTE predicate on the "max_accounts" field.
+func MaxAccountsGTE(v int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldGTE(FieldMaxAccounts, v))
+}
+
+// MaxAccountsLT applies the LT predicate on the "max_accounts" field.
+func MaxAccountsLT(v int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLT(FieldMaxAccounts, v))
+}
+
+// MaxAccountsLTE applies the LTE predicate on the "max_accounts" field.
+func MaxAccountsLTE(v int) predicate.Proxy {
+	return predicate.Proxy(sql.FieldLTE(FieldMaxAccounts, v))
 }
 
 // HasAccounts applies the HasEdge predicate on the "accounts" edge.

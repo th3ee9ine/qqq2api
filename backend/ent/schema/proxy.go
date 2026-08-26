@@ -64,6 +64,10 @@ func (Proxy) Fields() []ent.Field {
 		field.Int("expiry_warn_days").
 			Default(7).
 			Comment("Days before expiry to flag as expiring-soon (per proxy)."),
+		field.Int("max_accounts").
+			Default(0).
+			NonNegative().
+			Comment("Account limit used by automatic proxy assignment; 0 means unlimited."),
 	}
 }
 

@@ -31,14 +31,15 @@ type dataPayload struct {
 }
 
 type dataProxy struct {
-	ProxyKey string `json:"proxy_key"`
-	Name     string `json:"name"`
-	Protocol string `json:"protocol"`
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Status   string `json:"status"`
+	ProxyKey    string `json:"proxy_key"`
+	Name        string `json:"name"`
+	Protocol    string `json:"protocol"`
+	Host        string `json:"host"`
+	Port        int    `json:"port"`
+	Username    string `json:"username"`
+	Password    string `json:"password"`
+	Status      string `json:"status"`
+	MaxAccounts *int   `json:"max_accounts"`
 }
 
 type dataAccount struct {
@@ -85,14 +86,15 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 	proxyID := int64(11)
 	adminSvc.proxies = []service.Proxy{
 		{
-			ID:       proxyID,
-			Name:     "proxy",
-			Protocol: "http",
-			Host:     "127.0.0.1",
-			Port:     8080,
-			Username: "user",
-			Password: "pass",
-			Status:   service.StatusActive,
+			ID:          proxyID,
+			Name:        "proxy",
+			Protocol:    "http",
+			Host:        "127.0.0.1",
+			Port:        8080,
+			Username:    "user",
+			Password:    "pass",
+			Status:      service.StatusActive,
+			MaxAccounts: 23,
 		},
 		{
 			ID:       12,
@@ -132,6 +134,8 @@ func TestExportDataIncludesSecrets(t *testing.T) {
 	require.Equal(t, 0, resp.Data.Version)
 	require.Len(t, resp.Data.Proxies, 1)
 	require.Equal(t, "pass", resp.Data.Proxies[0].Password)
+	require.NotNil(t, resp.Data.Proxies[0].MaxAccounts)
+	require.Equal(t, 23, *resp.Data.Proxies[0].MaxAccounts)
 	require.Len(t, resp.Data.Accounts, 1)
 	require.Equal(t, "secret", resp.Data.Accounts[0].Credentials["token"])
 }

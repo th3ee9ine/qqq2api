@@ -68,6 +68,9 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 	if input.ExpiryWarnDays < 0 {
 		return nil, infraerrors.BadRequest("PROXY_WARN_DAYS_INVALID", "expiry_warn_days must be >= 0")
 	}
+	if input.MaxAccounts < 0 {
+		return nil, infraerrors.BadRequest("PROXY_MAX_ACCOUNTS_INVALID", "max_accounts must be >= 0")
+	}
 
 	proxy := &Proxy{
 		Name:           input.Name,
@@ -81,6 +84,7 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 		FallbackMode:   mode,
 		BackupProxyID:  input.BackupProxyID,
 		ExpiryWarnDays: input.ExpiryWarnDays,
+		MaxAccounts:    input.MaxAccounts,
 	}
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
 		return nil, err
@@ -106,6 +110,9 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	}
 	if input.ExpiryWarnDays < 0 {
 		return nil, infraerrors.BadRequest("PROXY_WARN_DAYS_INVALID", "expiry_warn_days must be >= 0")
+	}
+	if input.MaxAccounts != nil && *input.MaxAccounts < 0 {
+		return nil, infraerrors.BadRequest("PROXY_MAX_ACCOUNTS_INVALID", "max_accounts must be >= 0")
 	}
 
 	proxy, err := s.proxyRepo.GetByID(ctx, id)
@@ -139,6 +146,9 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	proxy.FallbackMode = mode
 	proxy.BackupProxyID = input.BackupProxyID
 	proxy.ExpiryWarnDays = input.ExpiryWarnDays
+	if input.MaxAccounts != nil {
+		proxy.MaxAccounts = *input.MaxAccounts
+	}
 
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err

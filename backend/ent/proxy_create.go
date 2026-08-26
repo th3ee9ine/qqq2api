@@ -187,6 +187,20 @@ func (_c *ProxyCreate) SetNillableExpiryWarnDays(v *int) *ProxyCreate {
 	return _c
 }
 
+// SetMaxAccounts sets the "max_accounts" field.
+func (_c *ProxyCreate) SetMaxAccounts(v int) *ProxyCreate {
+	_c.mutation.SetMaxAccounts(v)
+	return _c
+}
+
+// SetNillableMaxAccounts sets the "max_accounts" field if the given value is not nil.
+func (_c *ProxyCreate) SetNillableMaxAccounts(v *int) *ProxyCreate {
+	if v != nil {
+		_c.SetMaxAccounts(*v)
+	}
+	return _c
+}
+
 // AddAccountIDs adds the "accounts" edge to the Account entity by IDs.
 func (_c *ProxyCreate) AddAccountIDs(ids ...int64) *ProxyCreate {
 	_c.mutation.AddAccountIDs(ids...)
@@ -270,6 +284,10 @@ func (_c *ProxyCreate) defaults() error {
 		v := proxy.DefaultExpiryWarnDays
 		_c.mutation.SetExpiryWarnDays(v)
 	}
+	if _, ok := _c.mutation.MaxAccounts(); !ok {
+		v := proxy.DefaultMaxAccounts
+		_c.mutation.SetMaxAccounts(v)
+	}
 	return nil
 }
 
@@ -336,6 +354,14 @@ func (_c *ProxyCreate) check() error {
 	}
 	if _, ok := _c.mutation.ExpiryWarnDays(); !ok {
 		return &ValidationError{Name: "expiry_warn_days", err: errors.New(`ent: missing required field "Proxy.expiry_warn_days"`)}
+	}
+	if _, ok := _c.mutation.MaxAccounts(); !ok {
+		return &ValidationError{Name: "max_accounts", err: errors.New(`ent: missing required field "Proxy.max_accounts"`)}
+	}
+	if v, ok := _c.mutation.MaxAccounts(); ok {
+		if err := proxy.MaxAccountsValidator(v); err != nil {
+			return &ValidationError{Name: "max_accounts", err: fmt.Errorf(`ent: validator failed for field "Proxy.max_accounts": %w`, err)}
+		}
 	}
 	return nil
 }
@@ -415,6 +441,10 @@ func (_c *ProxyCreate) createSpec() (*Proxy, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ExpiryWarnDays(); ok {
 		_spec.SetField(proxy.FieldExpiryWarnDays, field.TypeInt, value)
 		_node.ExpiryWarnDays = value
+	}
+	if value, ok := _c.mutation.MaxAccounts(); ok {
+		_spec.SetField(proxy.FieldMaxAccounts, field.TypeInt, value)
+		_node.MaxAccounts = value
 	}
 	if nodes := _c.mutation.AccountsIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -699,6 +729,24 @@ func (u *ProxyUpsert) AddExpiryWarnDays(v int) *ProxyUpsert {
 	return u
 }
 
+// SetMaxAccounts sets the "max_accounts" field.
+func (u *ProxyUpsert) SetMaxAccounts(v int) *ProxyUpsert {
+	u.Set(proxy.FieldMaxAccounts, v)
+	return u
+}
+
+// UpdateMaxAccounts sets the "max_accounts" field to the value that was provided on create.
+func (u *ProxyUpsert) UpdateMaxAccounts() *ProxyUpsert {
+	u.SetExcluded(proxy.FieldMaxAccounts)
+	return u
+}
+
+// AddMaxAccounts adds v to the "max_accounts" field.
+func (u *ProxyUpsert) AddMaxAccounts(v int) *ProxyUpsert {
+	u.Add(proxy.FieldMaxAccounts, v)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -972,6 +1020,27 @@ func (u *ProxyUpsertOne) AddExpiryWarnDays(v int) *ProxyUpsertOne {
 func (u *ProxyUpsertOne) UpdateExpiryWarnDays() *ProxyUpsertOne {
 	return u.Update(func(s *ProxyUpsert) {
 		s.UpdateExpiryWarnDays()
+	})
+}
+
+// SetMaxAccounts sets the "max_accounts" field.
+func (u *ProxyUpsertOne) SetMaxAccounts(v int) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetMaxAccounts(v)
+	})
+}
+
+// AddMaxAccounts adds v to the "max_accounts" field.
+func (u *ProxyUpsertOne) AddMaxAccounts(v int) *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.AddMaxAccounts(v)
+	})
+}
+
+// UpdateMaxAccounts sets the "max_accounts" field to the value that was provided on create.
+func (u *ProxyUpsertOne) UpdateMaxAccounts() *ProxyUpsertOne {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateMaxAccounts()
 	})
 }
 
@@ -1414,6 +1483,27 @@ func (u *ProxyUpsertBulk) AddExpiryWarnDays(v int) *ProxyUpsertBulk {
 func (u *ProxyUpsertBulk) UpdateExpiryWarnDays() *ProxyUpsertBulk {
 	return u.Update(func(s *ProxyUpsert) {
 		s.UpdateExpiryWarnDays()
+	})
+}
+
+// SetMaxAccounts sets the "max_accounts" field.
+func (u *ProxyUpsertBulk) SetMaxAccounts(v int) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.SetMaxAccounts(v)
+	})
+}
+
+// AddMaxAccounts adds v to the "max_accounts" field.
+func (u *ProxyUpsertBulk) AddMaxAccounts(v int) *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.AddMaxAccounts(v)
+	})
+}
+
+// UpdateMaxAccounts sets the "max_accounts" field to the value that was provided on create.
+func (u *ProxyUpsertBulk) UpdateMaxAccounts() *ProxyUpsertBulk {
+	return u.Update(func(s *ProxyUpsert) {
+		s.UpdateMaxAccounts()
 	})
 }
 

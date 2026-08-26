@@ -913,6 +913,12 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if input == nil {
+		return nil, ErrAccountNilInput
+	}
+	if input.AutoAssignProxy && input.ProxyID != nil {
+		return nil, ErrProxyAssignmentModeConflict
+	}
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
@@ -929,6 +935,21 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			return nil, err
 		}
 		input.AccountIDs = accountIDs
+	}
+	if input.AutoAssignProxy {
+		seen := make(map[int64]struct{}, len(input.AccountIDs))
+		normalizedIDs := make([]int64, 0, len(input.AccountIDs))
+		for _, accountID := range input.AccountIDs {
+			if accountID <= 0 {
+				return nil, infraerrors.BadRequest("INVALID_ACCOUNT_ID", "account_ids must contain only positive IDs")
+			}
+			if _, exists := seen[accountID]; exists {
+				continue
+			}
+			seen[accountID] = struct{}{}
+			normalizedIDs = append(normalizedIDs, accountID)
+		}
+		input.AccountIDs = normalizedIDs
 	}
 
 	result := &BulkUpdateAccountsResult{
@@ -1004,7 +1025,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// 影子账号 proxy 恒继承母账号(与单账号 UpdateAccount 守卫对齐——外审第4轮 P1):批量携带 proxy
 	// 时目标不得含影子,否则影子会获得独立 proxy、破坏继承不变量(网关按所选影子自身 proxy 出站,
 	// 要等母账号下次改 proxy 才覆盖→漂移)。含影子即整体拒绝,提示从选择中剔除影子。
-	if input.ProxyID != nil {
+	if input.ProxyID != nil || input.AutoAssignProxy {
 		for _, acc := range cachedTargets {
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_PROXY_INHERITED",
@@ -1073,6 +1094,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		Extra:                      input.Extra,
 		ProbeEnabled:               input.ProbeEnabled,
 		EnsureCodexFingerprintSeed: ShouldEnsureCodexFingerprintSeedForExtraUpdates(input.Extra),
+		AutoAssignProxy:            input.AutoAssignProxy,
 	}
 	if input.ProbeEnabled != nil {
 		if repoUpdates.Extra == nil {
@@ -1083,7 +1105,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			repoUpdates.Extra[UpstreamBillingRateSyncEnabledExtraKey] = false
 		}
 	}
-	if updatesUpstreamBillingProbeIdentity(input.Credentials) || input.ProxyID != nil {
+	if updatesUpstreamBillingProbeIdentity(input.Credentials) || input.ProxyID != nil || input.AutoAssignProxy {
 		if repoUpdates.Extra == nil {
 			repoUpdates.Extra = make(map[string]any)
 		}

@@ -166,6 +166,79 @@ func TestAdminService_BulkUpdateAccounts_AllSuccessIDs(t *testing.T) {
 	require.Len(t, result.Results, 3)
 }
 
+func TestAdminServiceBulkUpdateAccountsForwardsAutomaticProxyAssignment(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{
+			{ID: 1, Platform: PlatformOpenAI},
+			{ID: 2, Platform: PlatformAnthropic},
+		},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:      []int64{1, 2},
+		AutoAssignProxy: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.Success)
+	require.Equal(t, 1, repo.bulkUpdateCalls)
+	require.True(t, repo.lastBulkUpdate.AutoAssignProxy)
+	require.Nil(t, repo.lastBulkUpdate.ProxyID)
+	require.Contains(t, repo.lastBulkUpdate.Extra, UpstreamBillingProbeExtraKey)
+	require.Nil(t, repo.lastBulkUpdate.Extra[UpstreamBillingProbeExtraKey])
+}
+
+func TestAdminServiceBulkUpdateAccountsRejectsConflictingProxyModesBeforeReadOrWrite(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{}
+	svc := &adminServiceImpl{accountRepo: repo}
+	proxyID := int64(7)
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:      []int64{1},
+		ProxyID:         &proxyID,
+		AutoAssignProxy: true,
+	})
+
+	require.Nil(t, result)
+	requireApplicationErrorReason(t, err, "PROXY_ASSIGNMENT_MODE_CONFLICT")
+	require.False(t, repo.getByIDsCalled)
+	require.Zero(t, repo.bulkUpdateCalls)
+}
+
+func TestAdminServiceBulkUpdateAccountsNormalizesAutomaticAssignmentIDs(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{
+		getByIDsAccounts: []*Account{{ID: 1, Platform: PlatformOpenAI}},
+	}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:      []int64{1, 1},
+		AutoAssignProxy: true,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, repo.getByIDsIDs)
+	require.Equal(t, []int64{1}, repo.bulkUpdateIDs)
+	require.Equal(t, []int64{1}, result.SuccessIDs)
+	require.Equal(t, 1, result.Success)
+}
+
+func TestAdminServiceBulkUpdateAccountsRejectsInvalidAutomaticAssignmentIDBeforeReadOrWrite(t *testing.T) {
+	repo := &accountRepoStubForBulkUpdate{}
+	svc := &adminServiceImpl{accountRepo: repo}
+
+	result, err := svc.BulkUpdateAccounts(context.Background(), &BulkUpdateAccountsInput{
+		AccountIDs:      []int64{1, 0},
+		AutoAssignProxy: true,
+	})
+
+	require.Nil(t, result)
+	requireApplicationErrorReason(t, err, "INVALID_ACCOUNT_ID")
+	require.False(t, repo.getByIDsCalled)
+	require.Zero(t, repo.bulkUpdateCalls)
+}
+
 func TestAdminService_BulkUpdateAccounts_RejectsRateChangeForSyncedAccounts(t *testing.T) {
 	repo := &accountRepoStubForBulkUpdate{
 		getByIDsAccounts: []*Account{

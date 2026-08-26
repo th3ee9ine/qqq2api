@@ -202,16 +202,18 @@
             <button
               v-if="(value || 0) > 0"
               type="button"
+              data-testid="proxy-account-capacity"
               class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-primary-700 hover:bg-gray-200 dark:bg-dark-600 dark:text-primary-300 dark:hover:bg-dark-500"
               @click="openAccountsModal(row)"
             >
-              {{ t('admin.groups.accountsCount', { count: value || 0 }) }}
+              {{ proxyAccountCapacityLabel(row) }}
             </button>
             <span
               v-else
+              data-testid="proxy-account-capacity"
               class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-800 dark:bg-dark-600 dark:text-gray-300"
             >
-              {{ t('admin.groups.accountsCount', { count: 0 }) }}
+              {{ proxyAccountCapacityLabel(row) }}
             </span>
           </template>
 
@@ -493,6 +495,21 @@
           </div>
         </div>
         <div>
+          <label for="create-proxy-max-accounts" class="input-label">
+            {{ t('admin.proxies.maxAccounts') }}
+          </label>
+          <input
+            id="create-proxy-max-accounts"
+            v-model.number="createForm.max_accounts"
+            type="number"
+            required
+            min="0"
+            step="1"
+            class="input"
+          />
+          <p class="input-hint mt-1">{{ t('admin.proxies.maxAccountsHint') }}</p>
+        </div>
+        <div>
           <label class="input-label">{{ t('admin.proxies.expiresAt') }}</label>
           <div class="mb-2 flex flex-wrap gap-2">
             <button
@@ -544,6 +561,20 @@
           <p class="input-hint mt-2">
             {{ t('admin.proxies.batchInputHint') }}
           </p>
+        </div>
+        <div>
+          <label for="batch-proxy-max-accounts" class="input-label">
+            {{ t('admin.proxies.maxAccounts') }}
+          </label>
+          <input
+            id="batch-proxy-max-accounts"
+            v-model.number="batchMaxAccounts"
+            type="number"
+            min="0"
+            step="1"
+            class="input"
+          />
+          <p class="input-hint mt-1">{{ t('admin.proxies.batchMaxAccountsHint') }}</p>
         </div>
 
         <!-- Parse Result -->
@@ -720,6 +751,21 @@
               <Icon :name="editPasswordVisible ? 'eyeOff' : 'eye'" size="md" />
             </button>
           </div>
+        </div>
+        <div>
+          <label for="edit-proxy-max-accounts" class="input-label">
+            {{ t('admin.proxies.maxAccounts') }}
+          </label>
+          <input
+            id="edit-proxy-max-accounts"
+            v-model.number="editForm.max_accounts"
+            type="number"
+            required
+            min="0"
+            step="1"
+            class="input"
+          />
+          <p class="input-hint mt-1">{{ t('admin.proxies.maxAccountsHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.proxies.status') }}</label>
@@ -1107,6 +1153,7 @@ const qualityReport = ref<ProxyQualityCheckResult | null>(null)
 // Batch import state
 const createMode = ref<'standard' | 'batch'>('standard')
 const batchInput = ref('')
+const batchMaxAccounts = ref(0)
 const batchParseResult = reactive({
   total: 0,
   valid: 0,
@@ -1128,6 +1175,7 @@ const createForm = reactive({
   port: 8080,
   username: '',
   password: '',
+  max_accounts: 0,
   expires_at: '' as string,
   fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
   backup_proxy_id: null as number | null,
@@ -1141,6 +1189,7 @@ const editForm = reactive({
   port: 8080,
   username: '',
   password: '',
+  max_accounts: 0,
   status: 'active' as 'active' | 'inactive' | 'expired',
   expires_at: '' as string,
   fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
@@ -1257,12 +1306,14 @@ const closeCreateModal = () => {
   createForm.port = 8080
   createForm.username = ''
   createForm.password = ''
+  createForm.max_accounts = 0
   createForm.expires_at = ''
   createForm.fallback_mode = 'none'
   createForm.backup_proxy_id = null
   createForm.expiry_warn_days = 7
   createPasswordVisible.value = false
   batchInput.value = ''
+  batchMaxAccounts.value = 0
   batchParseResult.total = 0
   batchParseResult.valid = 0
   batchParseResult.invalid = 0
@@ -1348,10 +1399,19 @@ const parseBatchInput = () => {
 
 const handleBatchCreate = async () => {
   if (batchParseResult.valid === 0) return
+  if (!Number.isInteger(batchMaxAccounts.value) || batchMaxAccounts.value < 0) {
+    appStore.showError(t('admin.proxies.maxAccountsInvalid'))
+    return
+  }
 
   submitting.value = true
   try {
-    const result = await adminAPI.proxies.batchCreate(batchParseResult.proxies)
+    const result = await adminAPI.proxies.batchCreate(
+      batchParseResult.proxies.map(proxy => ({
+        ...proxy,
+        max_accounts: batchMaxAccounts.value
+      }))
+    )
     const created = result.created || 0
     const skipped = result.skipped || 0
 
@@ -1384,6 +1444,10 @@ const handleCreateProxy = async () => {
     appStore.showError(t('admin.proxies.portInvalid'))
     return
   }
+  if (!Number.isInteger(createForm.max_accounts) || createForm.max_accounts < 0) {
+    appStore.showError(t('admin.proxies.maxAccountsInvalid'))
+    return
+  }
   submitting.value = true
   try {
     await adminAPI.proxies.create({
@@ -1393,6 +1457,7 @@ const handleCreateProxy = async () => {
       port: createForm.port,
       username: createForm.username.trim() || null,
       password: createForm.password.trim() || null,
+      max_accounts: createForm.max_accounts,
       expires_at: createForm.expires_at ? Math.floor(new Date(createForm.expires_at).getTime() / 1000) : null,
       fallback_mode: createForm.fallback_mode,
       backup_proxy_id: createForm.fallback_mode === 'proxy' ? createForm.backup_proxy_id : null,
@@ -1417,6 +1482,7 @@ const handleEdit = (proxy: Proxy) => {
   editForm.port = proxy.port
   editForm.username = proxy.username || ''
   editForm.password = proxy.password || ''
+  editForm.max_accounts = proxy.max_accounts ?? 0
   editForm.status = proxy.status === 'expired' ? 'inactive' : proxy.status
   editForm.expires_at = proxy.expires_at ? proxy.expires_at.slice(0, 10) : ''
   editForm.fallback_mode = proxy.fallback_mode || 'none'
@@ -1448,6 +1514,10 @@ const handleUpdateProxy = async () => {
     appStore.showError(t('admin.proxies.portInvalid'))
     return
   }
+  if (!Number.isInteger(editForm.max_accounts) || editForm.max_accounts < 0) {
+    appStore.showError(t('admin.proxies.maxAccountsInvalid'))
+    return
+  }
 
   submitting.value = true
   try {
@@ -1457,6 +1527,7 @@ const handleUpdateProxy = async () => {
       host: editForm.host.trim(),
       port: editForm.port,
       username: editForm.username.trim() || null,
+      max_accounts: editForm.max_accounts,
       status: editForm.status,
       expires_at: editForm.expires_at ? Math.floor(new Date(editForm.expires_at).getTime() / 1000) : null,
       fallback_mode: editForm.fallback_mode,
@@ -1536,6 +1607,12 @@ const applyQualityResult = (proxyId: number, result: ProxyQualityCheckResult) =>
 const formatLocation = (proxy: Proxy) => {
   const parts = [proxy.country, proxy.city].filter(Boolean) as string[]
   return parts.join(' · ')
+}
+
+const proxyAccountCapacityLabel = (proxy: Proxy) => {
+  const assigned = proxy.account_count ?? 0
+  const limit = proxy.max_accounts > 0 ? proxy.max_accounts : t('admin.proxies.unlimited')
+  return `${assigned} / ${limit}`
 }
 
 const flagUrl = (code: string) =>

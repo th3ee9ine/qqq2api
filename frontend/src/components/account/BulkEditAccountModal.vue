@@ -678,8 +678,53 @@
             class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
           />
         </div>
-        <div id="bulk-edit-proxy-body" :class="!enableProxy && 'pointer-events-none opacity-50'">
+        <div
+          id="bulk-edit-proxy-body"
+          class="space-y-3"
+          :class="!enableProxy && 'pointer-events-none opacity-50'"
+        >
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <label
+              class="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-600"
+              :class="proxyAssignmentMode === 'manual' && 'border-primary-400 bg-primary-50/60 dark:border-primary-600 dark:bg-primary-900/20'"
+            >
+              <input
+                id="bulk-edit-proxy-assignment-manual"
+                v-model="proxyAssignmentMode"
+                type="radio"
+                name="bulk-edit-proxy-assignment"
+                value="manual"
+                :disabled="!enableProxy"
+                class="mt-0.5 border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>{{ t('admin.accounts.bulkEdit.manualAssignProxy') }}</span>
+            </label>
+            <label
+              class="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-600"
+              :class="proxyAssignmentMode === 'auto' && 'border-primary-400 bg-primary-50/60 dark:border-primary-600 dark:bg-primary-900/20'"
+            >
+              <input
+                id="bulk-edit-proxy-assignment-auto"
+                v-model="proxyAssignmentMode"
+                type="radio"
+                name="bulk-edit-proxy-assignment"
+                value="auto"
+                :disabled="!enableProxy"
+                class="mt-0.5 border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>{{ t('admin.accounts.bulkEdit.autoAssignProxy') }}</span>
+            </label>
+          </div>
+
+          <div
+            v-if="proxyAssignmentMode === 'auto'"
+            data-testid="bulk-edit-auto-assign-proxy-hint"
+            class="rounded-lg bg-blue-50 p-3 text-xs text-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
+          >
+            {{ t('admin.accounts.bulkEdit.autoAssignProxyHint') }}
+          </div>
           <ProxySelector
+            v-else
             v-model="proxyId"
             :proxies="proxies"
             aria-labelledby="bulk-edit-proxy-label"
@@ -1471,6 +1516,7 @@ import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
+import type { BulkUpdateAccountFields } from '@/api/admin/accounts'
 import type {
   Proxy as ProxyConfig,
   AdminGroup,
@@ -1665,7 +1711,7 @@ const enableRpmLimit = ref(false)
 const submitting = ref(false)
 const showMixedChannelWarning = ref(false)
 const mixedChannelWarningMessage = ref('')
-const pendingUpdatesForConfirm = ref<Record<string, unknown> | null>(null)
+const pendingUpdatesForConfirm = ref<BulkUpdateAccountFields | null>(null)
 const baseUrl = ref('')
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
@@ -1675,6 +1721,7 @@ const customErrorCodeInput = ref<number | null>(null)
 const interceptWarmupRequests = ref(false)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
+const proxyAssignmentMode = ref<'manual' | 'auto'>('manual')
 const proxyId = ref<number | null>(null)
 const concurrency = ref(1)
 const loadFactor = ref<number | null>(null)
@@ -1910,8 +1957,8 @@ const buildOpenAICompactModelMapping = (): Record<string, string> | null => {
   return buildModelMappingPayload('mapping', [], openAICompactModelMappings.value)
 }
 
-const buildUpdatePayload = (): Record<string, unknown> | null => {
-  const updates: Record<string, unknown> = {}
+const buildUpdatePayload = (): BulkUpdateAccountFields | null => {
+  const updates: BulkUpdateAccountFields = {}
   const credentials: Record<string, unknown> = {}
   let credentialsChanged = false
   const applyOpenAILongContextBilling =
@@ -1927,8 +1974,13 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   }
 
   if (enableProxy.value) {
-    // 后端期望 proxy_id: 0 表示清除代理，而不是 null
-    updates.proxy_id = proxyId.value === null ? 0 : proxyId.value
+    if (proxyAssignmentMode.value === 'auto') {
+      // 由后端按当前已分配账号数从少到多选择未达上限的代理。
+      updates.auto_assign_proxy = true
+    } else {
+      // 后端期望 proxy_id: 0 表示清除代理，而不是 null
+      updates.proxy_id = proxyId.value === null ? 0 : proxyId.value
+    }
   }
 
   if (enableConcurrency.value) {
@@ -2151,7 +2203,7 @@ const handleClose = () => {
 }
 
 // 预检查：提交前调接口检测，有风险就弹窗阻止，返回 false 表示需要用户确认
-const preCheckMixedChannelRisk = async (built: Record<string, unknown>): Promise<boolean> => {
+const preCheckMixedChannelRisk = async (built: BulkUpdateAccountFields): Promise<boolean> => {
   if (!canPreCheck()) return true
   if (mixedChannelConfirmed.value) return true
 
@@ -2251,7 +2303,7 @@ const handleSubmit = async () => {
   await submitBulkUpdate(built)
 }
 
-const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
+const submitBulkUpdate = async (baseUpdates: BulkUpdateAccountFields) => {
   // 无论是预检查确认还是 409 兜底确认，只要 mixedChannelConfirmed 为 true 就带上 flag
   const updates = mixedChannelConfirmed.value
     ? { ...baseUpdates, confirm_mixed_channel_risk: true }
@@ -2305,6 +2357,8 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
       }))
     } else if (error.reason === 'OPENAI_LONG_CONTEXT_PARENT_REQUIRED') {
       appStore.showError(t('admin.accounts.bulkEdit.longContextParentRequired'))
+    } else if (error.reason === 'PROXY_CAPACITY_INSUFFICIENT') {
+      appStore.showError(t('admin.accounts.bulkEdit.autoAssignProxyCapacityInsufficient'))
     } else {
       appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
       console.error('Error bulk updating accounts:', error)
@@ -2376,6 +2430,7 @@ watch(
       interceptWarmupRequests.value = false
       headerOverrideEnabled.value = false
       headerOverrideRows.value = []
+      proxyAssignmentMode.value = 'manual'
       proxyId.value = null
       concurrency.value = 1
       loadFactor.value = null

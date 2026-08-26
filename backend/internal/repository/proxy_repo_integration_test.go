@@ -35,11 +35,12 @@ func TestProxyRepoSuite(t *testing.T) {
 
 func (s *ProxyRepoSuite) TestCreate() {
 	proxy := &service.Proxy{
-		Name:     "test-create",
-		Protocol: "http",
-		Host:     "127.0.0.1",
-		Port:     8080,
-		Status:   service.StatusActive,
+		Name:        "test-create",
+		Protocol:    "http",
+		Host:        "127.0.0.1",
+		Port:        8080,
+		Status:      service.StatusActive,
+		MaxAccounts: 11,
 	}
 
 	err := s.repo.Create(s.ctx, proxy)
@@ -49,6 +50,7 @@ func (s *ProxyRepoSuite) TestCreate() {
 	got, err := s.repo.GetByID(s.ctx, proxy.ID)
 	s.Require().NoError(err, "GetByID")
 	s.Require().Equal("test-create", got.Name)
+	s.Require().Equal(11, got.MaxAccounts)
 }
 
 func (s *ProxyRepoSuite) TestGetByID_NotFound() {

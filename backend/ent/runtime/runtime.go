@@ -1705,6 +1705,12 @@ func init() {
 	proxyDescExpiryWarnDays := proxyFields[10].Descriptor()
 	// proxy.DefaultExpiryWarnDays holds the default value on creation for the expiry_warn_days field.
 	proxy.DefaultExpiryWarnDays = proxyDescExpiryWarnDays.Default.(int)
+	// proxyDescMaxAccounts is the schema descriptor for max_accounts field.
+	proxyDescMaxAccounts := proxyFields[11].Descriptor()
+	// proxy.DefaultMaxAccounts holds the default value on creation for the max_accounts field.
+	proxy.DefaultMaxAccounts = proxyDescMaxAccounts.Default.(int)
+	// proxy.MaxAccountsValidator is a validator for the "max_accounts" field. It is called by the builders before save.
+	proxy.MaxAccountsValidator = proxyDescMaxAccounts.Validators[0].(func(int) error)
 	redeemcodeFields := schema.RedeemCode{}.Fields()
 	_ = redeemcodeFields
 	// redeemcodeDescCode is the schema descriptor for code field.

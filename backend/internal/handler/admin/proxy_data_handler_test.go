@@ -280,3 +280,70 @@ func TestProxyImportDataReusesAndTriggersLatencyProbe(t *testing.T) {
 		return len(adminSvc.testedProxyIDs) == 1
 	}, time.Second, 10*time.Millisecond)
 }
+
+func TestProxyImportLegacyDataPreservesExistingMaxAccounts(t *testing.T) {
+	router, adminSvc := setupProxyDataRouter()
+	adminSvc.proxies = []service.Proxy{{
+		ID:          1,
+		Name:        "proxy-a",
+		Protocol:    "http",
+		Host:        "127.0.0.1",
+		Port:        8080,
+		Status:      service.StatusActive,
+		MaxAccounts: 17,
+	}}
+
+	payload := map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []map[string]any{{
+				"proxy_key": "http|127.0.0.1|8080||",
+				"name":      "proxy-a",
+				"protocol":  "http",
+				"host":      "127.0.0.1",
+				"port":      8080,
+				"status":    "active",
+				// Legacy bundles have no max_accounts field.
+			}},
+			"accounts": []map[string]any{},
+		},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/proxies/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	adminSvc.mu.Lock()
+	defer adminSvc.mu.Unlock()
+	require.Empty(t, adminSvc.updatedProxies, "missing legacy field must not reset an existing limit")
+}
+
+func TestProxyExportDataIncludesZeroMaxAccountsExplicitly(t *testing.T) {
+	router, adminSvc := setupProxyDataRouter()
+	adminSvc.proxies = []service.Proxy{{
+		ID:          1,
+		Name:        "proxy-a",
+		Protocol:    "http",
+		Host:        "127.0.0.1",
+		Port:        8080,
+		Status:      service.StatusActive,
+		MaxAccounts: 0,
+	}}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/proxies/data", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
+	data := raw["data"].(map[string]any)
+	proxies := data["proxies"].([]any)
+	exported := proxies[0].(map[string]any)
+	require.Contains(t, exported, "max_accounts")
+	require.Equal(t, float64(0), exported["max_accounts"])
+}

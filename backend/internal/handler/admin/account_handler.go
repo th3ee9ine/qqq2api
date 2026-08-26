@@ -154,10 +154,11 @@ type UpdateAccountRequest struct {
 
 // BulkUpdateAccountsRequest represents the payload for bulk editing accounts
 type BulkUpdateAccountsRequest struct {
-	AccountIDs              []int64                   `json:"account_ids"`
+	AccountIDs              []int64                   `json:"account_ids" binding:"omitempty,dive,gt=0"`
 	Filters                 *BulkUpdateAccountFilters `json:"filters"`
 	Name                    string                    `json:"name"`
 	ProxyID                 *int64                    `json:"proxy_id"`
+	AutoAssignProxy         bool                      `json:"auto_assign_proxy"`
 	Concurrency             *int                      `json:"concurrency"`
 	Priority                *int                      `json:"priority"`
 	RateMultiplier          *float64                  `json:"rate_multiplier"`
@@ -2092,6 +2093,10 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		response.BadRequest(c, "account_ids or filters is required")
 		return
 	}
+	if req.AutoAssignProxy && req.ProxyID != nil {
+		response.ErrorFrom(c, service.ErrProxyAssignmentModeConflict)
+		return
+	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
 	sanitizeExtraBaseRPM(req.Extra)
 
@@ -2100,6 +2105,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 
 	hasUpdates := req.Name != "" ||
 		req.ProxyID != nil ||
+		req.AutoAssignProxy ||
 		req.Concurrency != nil ||
 		req.Priority != nil ||
 		req.RateMultiplier != nil ||
@@ -2121,6 +2127,7 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 		Filters:               toServiceBulkUpdateAccountFilters(req.Filters),
 		Name:                  req.Name,
 		ProxyID:               req.ProxyID,
+		AutoAssignProxy:       req.AutoAssignProxy,
 		Concurrency:           req.Concurrency,
 		Priority:              req.Priority,
 		RateMultiplier:        req.RateMultiplier,

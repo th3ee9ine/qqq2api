@@ -48,6 +48,7 @@ type DataProxy struct {
 	FallbackMode    string `json:"fallback_mode,omitempty"`     // none/direct/proxy
 	BackupProxyName string `json:"backup_proxy_name,omitempty"` // 备用代理 name（跨实例按 name 反查）
 	ExpiryWarnDays  int    `json:"expiry_warn_days,omitempty"`
+	MaxAccounts     *int   `json:"max_accounts,omitempty"`
 }
 
 // DataAccount 是管理员显式备份导出使用的账号结构，故意不走 dto.Account 的脱敏路径，
@@ -187,6 +188,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 		if p.BackupProxyID != nil {
 			backupProxyName = proxyNameByID[*p.BackupProxyID]
 		}
+		maxAccounts := p.MaxAccounts
 		dataProxies = append(dataProxies, DataProxy{
 			ProxyKey:        key,
 			Name:            p.Name,
@@ -200,6 +202,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			FallbackMode:    p.FallbackMode,
 			BackupProxyName: backupProxyName,
 			ExpiryWarnDays:  p.ExpiryWarnDays,
+			MaxAccounts:     &maxAccounts,
 		})
 	}
 
@@ -306,8 +309,8 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		if existingID, ok := proxyKeyToID[key]; ok {
 			proxyKeyToID[key] = existingID
 			result.ProxyReused++
-			if normalizedStatus != "" {
-				if proxy, getErr := h.adminService.GetProxy(ctx, existingID); getErr == nil && proxy != nil && proxy.Status != normalizedStatus {
+			if normalizedStatus != "" || item.MaxAccounts != nil {
+				if proxy, getErr := h.adminService.GetProxy(ctx, existingID); getErr == nil && proxy != nil && ((normalizedStatus != "" && proxy.Status != normalizedStatus) || (item.MaxAccounts != nil && proxy.MaxAccounts != *item.MaxAccounts)) {
 					// 同步 status 时传入完整字段，避免零值覆盖已存在代理的有效期/fallback 配置。
 					var existingExpiresAt *time.Time
 					if item.ExpiresAt != nil {
@@ -324,19 +327,27 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 							existingBackupProxyID = &bid
 						}
 					}
-					_, _ = h.adminService.UpdateProxy(ctx, existingID, &service.UpdateProxyInput{
+					if _, updateErr := h.adminService.UpdateProxy(ctx, existingID, &service.UpdateProxyInput{
 						Status:         normalizedStatus,
 						ExpiresAt:      existingExpiresAt,
 						FallbackMode:   existingFallbackMode,
 						BackupProxyID:  existingBackupProxyID,
 						ExpiryWarnDays: item.ExpiryWarnDays,
+						MaxAccounts:    item.MaxAccounts,
 						Name:           proxy.Name,
 						Protocol:       proxy.Protocol,
 						Host:           proxy.Host,
 						Port:           proxy.Port,
 						Username:       proxy.Username,
 						Password:       proxy.Password,
-					})
+					}); updateErr != nil {
+						result.Errors = append(result.Errors, DataImportError{
+							Kind:     "proxy",
+							Name:     item.Name,
+							ProxyKey: key,
+							Message:  "update proxy settings failed: " + updateErr.Error(),
+						})
+					}
 				}
 			}
 			continue
@@ -367,6 +378,10 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			}
 		}
 
+		maxAccounts := 0
+		if item.MaxAccounts != nil {
+			maxAccounts = *item.MaxAccounts
+		}
 		created, createErr := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
 			Name:           defaultProxyName(item.Name),
 			Protocol:       item.Protocol,
@@ -378,6 +393,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			FallbackMode:   fallbackMode,
 			BackupProxyID:  backupProxyID,
 			ExpiryWarnDays: item.ExpiryWarnDays,
+			MaxAccounts:    maxAccounts,
 		})
 		if createErr != nil {
 			result.ProxyFailed++
@@ -398,19 +414,27 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 
 		if normalizedStatus != "" && normalizedStatus != created.Status {
 			// 新建后同步 status 时，传入完整字段，避免零值覆盖刚创建的有效期/fallback 配置。
-			_, _ = h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
+			if _, updateErr := h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
 				Status:         normalizedStatus,
 				ExpiresAt:      expiresAt,
 				FallbackMode:   fallbackMode,
 				BackupProxyID:  backupProxyID,
 				ExpiryWarnDays: item.ExpiryWarnDays,
+				MaxAccounts:    item.MaxAccounts,
 				Name:           created.Name,
 				Protocol:       created.Protocol,
 				Host:           created.Host,
 				Port:           created.Port,
 				Username:       created.Username,
 				Password:       created.Password,
-			})
+			}); updateErr != nil {
+				result.Errors = append(result.Errors, DataImportError{
+					Kind:     "proxy",
+					Name:     item.Name,
+					ProxyKey: key,
+					Message:  "update proxy settings failed: " + updateErr.Error(),
+				})
+			}
 		}
 	}
 
@@ -658,6 +682,9 @@ func validateDataProxy(item DataProxy) error {
 	}
 	if item.Port <= 0 || item.Port > 65535 {
 		return errors.New("proxy port is invalid")
+	}
+	if item.MaxAccounts != nil && *item.MaxAccounts < 0 {
+		return errors.New("max_accounts must be >= 0")
 	}
 	switch item.Protocol {
 	case "http", "https", "socks5", "socks5h":

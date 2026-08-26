@@ -43,6 +43,8 @@ const (
 	FieldBackupProxyID = "backup_proxy_id"
 	// FieldExpiryWarnDays holds the string denoting the expiry_warn_days field in the database.
 	FieldExpiryWarnDays = "expiry_warn_days"
+	// FieldMaxAccounts holds the string denoting the max_accounts field in the database.
+	FieldMaxAccounts = "max_accounts"
 	// EdgeAccounts holds the string denoting the accounts edge name in mutations.
 	EdgeAccounts = "accounts"
 	// EdgeBackupProxy holds the string denoting the backup_proxy edge name in mutations.
@@ -79,6 +81,7 @@ var Columns = []string{
 	FieldFallbackMode,
 	FieldBackupProxyID,
 	FieldExpiryWarnDays,
+	FieldMaxAccounts,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -125,6 +128,10 @@ var (
 	FallbackModeValidator func(string) error
 	// DefaultExpiryWarnDays holds the default value on creation for the "expiry_warn_days" field.
 	DefaultExpiryWarnDays int
+	// DefaultMaxAccounts holds the default value on creation for the "max_accounts" field.
+	DefaultMaxAccounts int
+	// MaxAccountsValidator is a validator for the "max_accounts" field. It is called by the builders before save.
+	MaxAccountsValidator func(int) error
 )
 
 // OrderOption defines the ordering options for the Proxy queries.
@@ -203,6 +210,11 @@ func ByBackupProxyID(opts ...sql.OrderTermOption) OrderOption {
 // ByExpiryWarnDays orders the results by the expiry_warn_days field.
 func ByExpiryWarnDays(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldExpiryWarnDays, opts...).ToFunc()
+}
+
+// ByMaxAccounts orders the results by the max_accounts field.
+func ByMaxAccounts(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldMaxAccounts, opts...).ToFunc()
 }
 
 // ByAccountsCount orders the results by accounts count.

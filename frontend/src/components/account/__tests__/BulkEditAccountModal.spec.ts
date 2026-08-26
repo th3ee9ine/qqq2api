@@ -93,6 +93,43 @@ describe('BulkEditAccountModal', () => {
     } as any)
   })
 
+  it('批量自动分配代理时只提交 auto_assign_proxy', async () => {
+    const wrapper = mountModal()
+
+    await wrapper.get('#bulk-edit-proxy-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-proxy-assignment-auto').setValue(true)
+
+    expect(wrapper.get('[data-testid="bulk-edit-auto-assign-proxy-hint"]').text()).toContain(
+      'admin.accounts.bulkEdit.autoAssignProxyHint'
+    )
+
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      auto_assign_proxy: true
+    })
+  })
+
+  it('自动分配代理容量不足时展示专用错误', async () => {
+    vi.mocked(adminAPI.accounts.bulkUpdate).mockRejectedValueOnce({
+      reason: 'PROXY_CAPACITY_INSUFFICIENT',
+      message: 'capacity is insufficient'
+    })
+    const wrapper = mountModal()
+
+    await wrapper.get('#bulk-edit-proxy-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-proxy-assignment-auto').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith(
+      'admin.accounts.bulkEdit.autoAssignProxyCapacityInsufficient'
+    )
+    expect(wrapper.emitted('close')).toBeUndefined()
+  })
+
   it('批量修改倍率时提示自动同步账号需要先关闭同步', async () => {
     const wrapper = mountModal()
 

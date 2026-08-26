@@ -267,7 +267,7 @@ func TestGroupHandlerEndpoints(t *testing.T) {
 }
 
 func TestProxyHandlerEndpoints(t *testing.T) {
-	router, _ := setupAdminRouter()
+	router, adminSvc := setupAdminRouter()
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/proxies", nil)
@@ -284,19 +284,24 @@ func TestProxyHandlerEndpoints(t *testing.T) {
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	body, _ := json.Marshal(map[string]any{"name": "proxy", "protocol": "http", "host": "localhost", "port": 8080})
+	body, _ := json.Marshal(map[string]any{"name": "proxy", "protocol": "http", "host": "localhost", "port": 8080, "max_accounts": 12})
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/proxies", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotEmpty(t, adminSvc.createdProxies)
+	require.Equal(t, 12, adminSvc.createdProxies[len(adminSvc.createdProxies)-1].MaxAccounts)
 
-	body, _ = json.Marshal(map[string]any{"name": "proxy2"})
+	body, _ = json.Marshal(map[string]any{"name": "proxy2", "max_accounts": 8})
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPut, "/api/v1/admin/proxies/4", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotEmpty(t, adminSvc.updatedProxies)
+	require.NotNil(t, adminSvc.updatedProxies[len(adminSvc.updatedProxies)-1].MaxAccounts)
+	require.Equal(t, 8, *adminSvc.updatedProxies[len(adminSvc.updatedProxies)-1].MaxAccounts)
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/admin/proxies/4", nil)

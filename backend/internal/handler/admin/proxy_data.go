@@ -66,6 +66,7 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 		if p.BackupProxyID != nil {
 			backupProxyName = proxyNameByID[*p.BackupProxyID]
 		}
+		maxAccounts := p.MaxAccounts
 		dataProxies = append(dataProxies, DataProxy{
 			ProxyKey:        key,
 			Name:            p.Name,
@@ -79,6 +80,7 @@ func (h *ProxyHandler) ExportData(c *gin.Context) {
 			FallbackMode:    p.FallbackMode,
 			BackupProxyName: backupProxyName,
 			ExpiryWarnDays:  p.ExpiryWarnDays,
+			MaxAccounts:     &maxAccounts,
 		})
 	}
 
@@ -151,7 +153,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 		normalizedStatus := normalizeProxyStatus(item.Status)
 		if existing, ok := proxyByKey[key]; ok {
 			result.ProxyReused++
-			if normalizedStatus != "" && normalizedStatus != existing.Status {
+			if (normalizedStatus != "" && normalizedStatus != existing.Status) || (item.MaxAccounts != nil && existing.MaxAccounts != *item.MaxAccounts) {
 				// 已存在代理同步 status 时，同时保留/覆盖导入 item 的完整字段，
 				// 避免 UpdateProxy 零值覆盖有效期/fallback 配置。
 				var existingExpiresAt *time.Time
@@ -175,6 +177,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 					FallbackMode:   existingFallbackMode,
 					BackupProxyID:  existingBackupProxyID,
 					ExpiryWarnDays: item.ExpiryWarnDays,
+					MaxAccounts:    item.MaxAccounts,
 					// 保留已存在代理的网络配置字段
 					Name:     existing.Name,
 					Protocol: existing.Protocol,
@@ -188,7 +191,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 						Kind:     "proxy",
 						Name:     item.Name,
 						ProxyKey: key,
-						Message:  "update status failed: " + err.Error(),
+						Message:  "update proxy settings failed: " + err.Error(),
 					})
 				}
 			}
@@ -221,6 +224,10 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 			}
 		}
 
+		maxAccounts := 0
+		if item.MaxAccounts != nil {
+			maxAccounts = *item.MaxAccounts
+		}
 		created, err := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
 			Name:           defaultProxyName(item.Name),
 			Protocol:       item.Protocol,
@@ -232,6 +239,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 			FallbackMode:   fallbackMode,
 			BackupProxyID:  backupProxyID,
 			ExpiryWarnDays: item.ExpiryWarnDays,
+			MaxAccounts:    maxAccounts,
 		})
 		if err != nil {
 			result.ProxyFailed++
@@ -258,6 +266,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 				FallbackMode:   fallbackMode,
 				BackupProxyID:  backupProxyID,
 				ExpiryWarnDays: item.ExpiryWarnDays,
+				MaxAccounts:    item.MaxAccounts,
 				Name:           created.Name,
 				Protocol:       created.Protocol,
 				Host:           created.Host,
@@ -269,7 +278,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 					Kind:     "proxy",
 					Name:     item.Name,
 					ProxyKey: key,
-					Message:  "update status failed: " + err.Error(),
+					Message:  "update proxy settings failed: " + err.Error(),
 				})
 			}
 		}

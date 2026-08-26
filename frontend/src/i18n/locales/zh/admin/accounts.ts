@@ -562,6 +562,10 @@ export default {
         rateSyncConflict: '无法修改账号倍率：{count} 个目标账号已开启上游倍率同步。',
         longContextShadowHint: '长上下文计费归母账号所有。选中的影子账号仍跟随母账号，筛选全量目标时同样如此。',
         longContextParentRequired: '选中的账号全部是影子账号，请选择母账号修改长上下文计费。',
+        manualAssignProxy: '指定同一代理',
+        autoAssignProxy: '自动分配代理',
+        autoAssignProxyHint: '按代理当前已使用账号数从少到多，将账号分配给仍有容量的启用代理。',
+        autoAssignProxyCapacityInsufficient: '启用代理的剩余自动分配容量不足，无法为所有选中账号分配代理。',
         mixedPlatformWarning: '所选账号跨越多个平台（{platforms}）。显示的模型映射预设为合并结果——请确保映射对每个平台都适用。'
       },
       bulkDeleteTitle: '批量删除账号',
