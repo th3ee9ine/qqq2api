@@ -9869,7 +9869,8 @@ const form = reactive<SettingsForm>({
   enable_client_dateline_normalization: true,
   openai_codex_user_agent: "",
   openai_codex_client_version: "",
-  // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
+  // 只读展示：自动同步任务写入的官方最新稳定版，供 UA engine 与
+  // Responses/WS Version 共用；不参与提交（提交载荷按字段显式构造）
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
   // codex_cli_only 加固

@@ -96,7 +96,8 @@ const antigravityUserAgentVersionErrorTTL = 5 * time.Second
 const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 
 // DefaultOpenAICodexUserAgent 是 OpenAI Codex 默认 User-Agent，用于规避浏览器 UA 的质询。
-// 默认采用 codex-tui 身份，版本段随 codexCLIVersion 一起更新。
+// 默认采用 Codex Desktop 身份：首段引擎版本随 codexCLIVersion 更新，
+// 尾部 Desktop app 版本保持独立。
 const DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
@@ -105,18 +106,34 @@ type cachedOpenAICodexUserAgent struct {
 	expiresAt int64 // unix nano
 }
 
-// cachedOpenAICodexClientVersion 缓存出站 Codex 客户端版本号（进程内缓存，60s TTL）
-type cachedOpenAICodexClientVersion struct {
+// cachedOpenAICodexResponsesVersion 缓存 Codex 统一身份版本。
+// User-Agent engine 与 Responses/WS Version 都消费该值。
+type cachedOpenAICodexResponsesVersion struct {
 	version   string
+	sourceOK  bool  // true = 已成功合并当前 DB 中的 manual/synced 值
 	expiresAt int64 // unix nano
+}
+
+// openAICodexResponsesVersionLoadResult 携带本次回源所属的缓存代次。
+// 设置更新会推进 epoch；旧代次的慢查询即使稍后返回，也不能回填或
+// 把旧结果交给失效之后的请求。
+type openAICodexResponsesVersionLoadResult struct {
+	version  string
+	sourceOK bool
+	epoch    uint64
+	stored   bool
 }
 
 const openAICodexClientVersionCacheTTL = 60 * time.Second
 const openAICodexClientVersionErrorTTL = 5 * time.Second
 const openAICodexClientVersionDBTimeout = 5 * time.Second
 
-// openAICodexClientVersionSFKey singleflight 键。
-const openAICodexClientVersionSFKey = "openai_codex_client_version"
+// openAICodexResponsesVersionSFKey 是 Codex 统一身份版本单飞键。
+const openAICodexResponsesVersionSFKey = "openai_codex_responses_version"
+
+func openAICodexResponsesVersionSFKeyForEpoch(epoch uint64) string {
+	return openAICodexResponsesVersionSFKey + ":" + strconv.FormatUint(epoch, 10)
+}
 
 type cachedOpenAIQuotaAutoPauseSettings struct {
 	settings  OpsOpenAIAccountQuotaAutoPauseSettings
@@ -309,61 +326,166 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 	return fallback
 }
 
-// GetOpenAICodexClientVersion 返回出站声明的 Codex 客户端版本号。
-// 优先级：管理员在面板覆写的版本 → 自动同步到的官方最新稳定版 → 内置常量。
-// 上游在容量紧张时按客户端身份分优先级降载，陈旧版本会被优先丢弃，故该值需保持跟随官方发布；
-// 自动同步让运维不必为了跟版本而发新版本。
+// GetOpenAICodexClientVersion 返回 User-Agent 首段与 Responses/WS Version
+// 共用的官方稳定版。保留该方法名以兼容既有调用方。
 func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string {
-	fallback := codexCLIVersion
+	return s.GetOpenAICodexResponsesVersion(ctx)
+}
+
+// GetOpenAICodexResponsesVersion 返回 Codex 统一身份版本。
+// User-Agent engine 与 Responses/WS Version 使用同一个结果：自动同步值、管理员
+// 热修复值和编译期下限中取最高的合法稳定版，确保任一路径都不会声明旧版本。
+func (s *SettingService) GetOpenAICodexResponsesVersion(ctx context.Context) string {
+	version, _, _ := s.getOpenAICodexResponsesVersion(ctx)
+	return version
+}
+
+// getOpenAICodexResponsesVersion 同时返回本次结果是否已成功合并 DB 中的
+// manual/synced 候选值。同步任务借此区分「真实 fallback」与「DB 瞬时错误」，
+// 避免把错误回退值长时间发布到进程缓存。
+func (s *SettingService) getOpenAICodexResponsesVersion(ctx context.Context) (string, bool, uint64) {
+	fallback := codexResponsesVersionFallback
 	if s == nil || s.settingRepo == nil {
-		return fallback
+		return fallback, false, 0
 	}
-	if cached, ok := s.openAICodexVersionCache.Load().(*cachedOpenAICodexClientVersion); ok && cached != nil {
-		if time.Now().UnixNano() < cached.expiresAt {
-			return cached.version
-		}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
-	result, _, _ := s.openAICodexVersionSF.Do(openAICodexClientVersionSFKey, func() (any, error) {
-		if cached, ok := s.openAICodexVersionCache.Load().(*cachedOpenAICodexClientVersion); ok && cached != nil {
-			if time.Now().UnixNano() < cached.expiresAt {
-				return cached.version, nil
+	for {
+		epoch := s.openAICodexResponsesVersionEpoch.Load()
+		if cached, ok := s.openAICodexResponsesVersionCache.Load().(*cachedOpenAICodexResponsesVersion); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt && epoch == s.openAICodexResponsesVersionEpoch.Load() {
+				return cached.version, cached.sourceOK, epoch
 			}
 		}
-		if ctx == nil {
-			ctx = context.Background()
+
+		result, _, _ := s.openAICodexResponsesVersionSF.Do(
+			openAICodexResponsesVersionSFKeyForEpoch(epoch),
+			func() (any, error) {
+				if epoch != s.openAICodexResponsesVersionEpoch.Load() {
+					return openAICodexResponsesVersionLoadResult{epoch: epoch}, nil
+				}
+				if cached, ok := s.openAICodexResponsesVersionCache.Load().(*cachedOpenAICodexResponsesVersion); ok && cached != nil {
+					if time.Now().UnixNano() < cached.expiresAt && epoch == s.openAICodexResponsesVersionEpoch.Load() {
+						return openAICodexResponsesVersionLoadResult{
+							version:  cached.version,
+							sourceOK: cached.sourceOK,
+							epoch:    epoch,
+							stored:   true,
+						}, nil
+					}
+				}
+
+				dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAICodexClientVersionDBTimeout)
+				defer cancel()
+				values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+					SettingKeyOpenAICodexClientVersion,
+					SettingKeyOpenAICodexClientVersionSynced,
+				})
+				if err != nil {
+					slog.Warn("failed to get openai codex responses version setting", "error", err)
+					version, stored := s.storeOpenAICodexResponsesVersionAtEpoch(
+						fallback,
+						openAICodexClientVersionErrorTTL,
+						epoch,
+						false,
+					)
+					return openAICodexResponsesVersionLoadResult{
+						version:  version,
+						sourceOK: false,
+						epoch:    epoch,
+						stored:   stored,
+					}, nil
+				}
+
+				version := fallback
+				for _, candidate := range []string{
+					values[SettingKeyOpenAICodexClientVersion],
+					values[SettingKeyOpenAICodexClientVersionSynced],
+				} {
+					candidate = normalizeStableCodexClientVersion(candidate)
+					if candidate != "" && CompareVersions(candidate, version) > 0 {
+						version = candidate
+					}
+				}
+				version, stored := s.storeOpenAICodexResponsesVersionAtEpoch(
+					version,
+					openAICodexClientVersionCacheTTL,
+					epoch,
+					true,
+				)
+				return openAICodexResponsesVersionLoadResult{
+					version:  version,
+					sourceOK: true,
+					epoch:    epoch,
+					stored:   stored,
+				}, nil
+			},
+		)
+		loaded, ok := result.(openAICodexResponsesVersionLoadResult)
+		if !ok {
+			return fallback, false, epoch
 		}
-		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAICodexClientVersionDBTimeout)
-		defer cancel()
-		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
-			SettingKeyOpenAICodexClientVersion,
-			SettingKeyOpenAICodexClientVersionSynced,
-		})
-		if err != nil {
-			slog.Warn("failed to get openai codex client version setting", "error", err)
-			s.openAICodexVersionCache.Store(&cachedOpenAICodexClientVersion{
-				version:   fallback,
-				expiresAt: time.Now().Add(openAICodexClientVersionErrorTTL).UnixNano(),
-			})
-			return fallback, nil
+		// 失效与 DB 慢读并发时，旧 epoch 结果必须丢弃并在新代次重读。
+		if !loaded.stored || loaded.epoch != s.openAICodexResponsesVersionEpoch.Load() {
+			continue
 		}
-		version := NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersion])
-		if version == "" {
-			version = NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersionSynced])
+		if loaded.version == "" {
+			return fallback, loaded.sourceOK, loaded.epoch
 		}
-		if version == "" {
-			version = fallback
-		}
-		s.openAICodexVersionCache.Store(&cachedOpenAICodexClientVersion{
-			version:   version,
-			expiresAt: time.Now().Add(openAICodexClientVersionCacheTTL).UnixNano(),
-		})
-		return version, nil
-	})
-	if version, ok := result.(string); ok && version != "" {
-		return version
+		return loaded.version, loaded.sourceOK, loaded.epoch
 	}
-	return fallback
+}
+
+// storeOpenAICodexResponsesVersionAtEpoch 只在调用方捕获的 epoch 仍生效时回填。
+// 同步成功、管理员保存与旧 DB 读取并发时，较晚完成的旧读取不得跨代覆盖。
+func (s *SettingService) storeOpenAICodexResponsesVersionAtEpoch(
+	version string,
+	ttl time.Duration,
+	epoch uint64,
+	sourceOK bool,
+) (string, bool) {
+	version = normalizeStableCodexClientVersion(version)
+	if version == "" || CompareVersions(version, codexResponsesVersionFallback) < 0 {
+		version = codexResponsesVersionFallback
+	}
+	s.openAICodexResponsesVersionMu.Lock()
+	defer s.openAICodexResponsesVersionMu.Unlock()
+	if epoch != s.openAICodexResponsesVersionEpoch.Load() {
+		return "", false
+	}
+	if cached, ok := s.openAICodexResponsesVersionCache.Load().(*cachedOpenAICodexResponsesVersion); ok && cached != nil {
+		if current := normalizeStableCodexClientVersion(cached.version); current != "" &&
+			CompareVersions(current, version) > 0 {
+			version = current
+		}
+	}
+	if ttl <= 0 {
+		ttl = openAICodexClientVersionCacheTTL
+	}
+	s.openAICodexResponsesVersionCache.Store(&cachedOpenAICodexResponsesVersion{
+		version:   version,
+		sourceOK:  sourceOK,
+		expiresAt: time.Now().Add(ttl).UnixNano(),
+	})
+	return version, true
+}
+
+// PublishOpenAICodexResponsesVersion 在官方同步成功后立即发布新 Version，
+// 避免等待下一次 DB 回源或 60s TTL。发布只对调用时的当前 epoch 生效；
+// 若管理员设置恰好并发失效缓存，旧发布不会跨代回填。
+func (s *SettingService) PublishOpenAICodexResponsesVersion(version string) {
+	if s == nil {
+		return
+	}
+	epoch := s.openAICodexResponsesVersionEpoch.Load()
+	_, _ = s.storeOpenAICodexResponsesVersionAtEpoch(
+		version,
+		openAICodexClientVersionCacheTTL,
+		epoch,
+		true,
+	)
 }
 
 // InvalidateOpenAICodexClientVersionCache 丢弃版本号缓存，下次读取回源。
@@ -372,17 +494,22 @@ func (s *SettingService) InvalidateOpenAICodexClientVersionCache() {
 	if s == nil {
 		return
 	}
-	s.openAICodexVersionSF.Forget(openAICodexClientVersionSFKey)
-	s.openAICodexVersionCache.Store((*cachedOpenAICodexClientVersion)(nil))
+	s.openAICodexResponsesVersionMu.Lock()
+	newEpoch := s.openAICodexResponsesVersionEpoch.Add(1)
+	s.openAICodexResponsesVersionCache.Store((*cachedOpenAICodexResponsesVersion)(nil))
+	s.openAICodexResponsesVersionMu.Unlock()
+	s.openAICodexResponsesVersionSF.Forget(openAICodexResponsesVersionSFKeyForEpoch(newEpoch - 1))
 }
 
 // GetOpenAICodexCanonicalUserAgent 返回出站规范 Codex User-Agent。
-// 未填面板 UA 时按当前生效的客户端版本号拼出标准 Codex TUI UA。
+// 未填面板 UA 时按当前生效的引擎版本号拼出标准 Codex Desktop UA。
 //
-// 面板 UA 只贡献客户端名与 OS / 架构 / 终端指纹，版本段一律用生效版本重建：该输入框是
+// 面板 UA 贡献客户端名与 OS / 架构 / 终端 / 宿主 app 指纹，首段 engine 版本
+// 一律用生效版本重建：该输入框是
 // 唯一能改 UA 后缀的地方，但它填写于某个历史版本，逐字沿用会把出站身份永久钉死在陈旧
-// 版本上并绕过自动同步——而陈旧身份正是上游优先降载的那一侧。
-// 需要固定版本请填「Codex 客户端版本号」并关闭自动同步。
+// engine 版本上并绕过自动同步——而陈旧身份正是上游优先降载的那一侧。
+// Desktop app build 是独立 trailer 信号，保留原样；首段 engine 与 Version
+// 始终使用同一官方稳定版。
 func (s *SettingService) GetOpenAICodexCanonicalUserAgent(ctx context.Context) string {
 	if s == nil {
 		return codexCLIUserAgent

@@ -74,6 +74,68 @@ func TestNormalizeOpenAIWSRoutingAffinityPrefersCanonicalAndSortsVariants(t *tes
 	require.Equal(t, "variant-uppercase", normalizeOpenAIWSRoutingAffinity(headers))
 }
 
+func TestOpenAIWSHandshakeCompatibilityTracksCodexIdentityVersion(t *testing.T) {
+	oldHeaders := http.Header{
+		"User-Agent": {codexCLIUserAgent},
+		"Originator": {"Codex Desktop"},
+		"Version":    {"0.150.1"},
+	}
+	newHeaders := oldHeaders.Clone()
+	newHeaders.Set("User-Agent", buildCodexCLIUserAgent("0.200.1"))
+	newHeaders.Set("Version", "0.200.1")
+
+	oldKey := normalizeOpenAIWSHandshakeCompatibility(nil, oldHeaders)
+	newKey := normalizeOpenAIWSHandshakeCompatibility(nil, newHeaders)
+	require.NotEqual(t, oldKey, newKey, "new turns must not reuse a connection negotiated with an old Codex identity version")
+
+	conn := newOpenAIWSConn("pinned", 1, &openAIWSFakeConn{}, oldHeaders)
+	conn.handshakeCompatibility = oldKey
+	require.False(t, conn.matchesHandshakeCompatibility(newKey))
+	require.True(t, conn.matchesContinuationHandshakeCompatibility(newKey),
+		"a pinned in-flight continuation must finish on its original connection")
+}
+
+func TestOpenAIWSConnPool_VersionSyncRotatesIdleHandshake(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	account := &Account{ID: 12001, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	oldHeaders := http.Header{
+		"User-Agent": {codexCLIUserAgent},
+		"Originator": {"Codex Desktop"},
+		"Version":    {"0.150.1"},
+	}
+
+	oldLease, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/backend-api/codex/responses",
+		Headers: oldHeaders,
+	})
+	require.NoError(t, err)
+	oldConnID := oldLease.ConnID()
+	oldLease.Release()
+
+	newHeaders := oldHeaders.Clone()
+	newHeaders.Set("User-Agent", buildCodexCLIUserAgent("0.200.1"))
+	newHeaders.Set("Version", "0.200.1")
+	newLease, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/backend-api/codex/responses",
+		Headers: newHeaders,
+	})
+	require.NoError(t, err)
+	require.False(t, newLease.Reused())
+	require.NotEqual(t, oldConnID, newLease.ConnID())
+	newLease.Release()
+	require.Equal(t, 2, dialer.DialCount())
+}
+
 func TestOpenAIWSConnLease_WriteJSONAndGuards(t *testing.T) {
 	conn := newOpenAIWSConn("lease_write", 1, &openAIWSFakeConn{}, nil)
 	lease := &openAIWSConnLease{conn: conn}

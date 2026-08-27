@@ -70,6 +70,7 @@ func TestIsCodexOfficialClientRequest(t *testing.T) {
 		{name: "codex_atlas 前缀", ua: "codex_atlas/1.0.0", want: true},
 		{name: "codex_exec 前缀", ua: "codex_exec/0.1.0", want: true},
 		{name: "codex_sdk_ts 前缀", ua: "codex_sdk_ts/0.1.0", want: true},
+		{name: "Codex Desktop 原生 UA", ua: "Codex Desktop/0.150.0-alpha.8 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 26.820.60940)", want: true},
 		{name: "Codex 桌面 UA", ua: "Codex Desktop/1.2.3", want: true},
 		{name: "codex-tui 连字符前缀(真实流量占比最高)", ua: "codex-tui/0.141.0 (Mac OS 15.5.0; arm64) ghostty/1.3.1 (codex-tui; 0.141.0)", want: true},
 		{name: "复合 UA 包含 codex_app", ua: "Mozilla/5.0 codex_app/0.1.0", want: true},
@@ -137,6 +138,7 @@ func TestIsCodexOfficialClientRequestStrict(t *testing.T) {
 		{name: "codex_cli_rs 前缀开头", ua: "codex_cli_rs/0.141.0 (x)", want: true},
 		{name: "codex_vscode 前缀开头", ua: "codex_vscode/1.0.0", want: true},
 		{name: "codex_app 前缀开头", ua: "codex_app/2.1.0", want: true},
+		{name: "Codex Desktop 原生 UA 前缀保留", ua: "Codex Desktop/0.150.0-alpha.8 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 26.820.60940)", want: true},
 		{name: "Codex 家族前缀保留", ua: "Codex Desktop/1.2.3", want: true},
 		{name: "大小写混合前缀开头", ua: "Codex_CLI_Rs/0.141.0", want: true},
 		// UA 尾部兜底保留：cccc override 真实 codex-tui 仍放行
@@ -166,6 +168,7 @@ func TestIsCodexOfficialClientByHeaders(t *testing.T) {
 	}{
 		{name: "仅 originator 命中 desktop", originator: "Codex Desktop", want: true},
 		{name: "仅 originator 命中 vscode", originator: "codex_vscode", want: true},
+		{name: "仅 ua 命中 desktop 原生 UA", ua: "Codex Desktop/0.150.0-alpha.8 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 26.820.60940)", want: true},
 		{name: "仅 ua 命中 desktop", ua: "Codex Desktop/1.2.3", want: true},
 		{name: "仅 originator 命中 codex-tui", originator: "codex-tui", want: true},
 		{name: "仅 ua 命中 codex-tui", ua: "codex-tui/0.141.0 (Mac OS 15.5.0; arm64) ghostty/1.3.1", want: true},
@@ -179,6 +182,29 @@ func TestIsCodexOfficialClientByHeaders(t *testing.T) {
 			got := IsCodexOfficialClientByHeaders(tt.ua, tt.originator)
 			if got != tt.want {
 				t.Fatalf("IsCodexOfficialClientByHeaders(%q, %q) = %v, want %v", tt.ua, tt.originator, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsCodexEngineVersionedOriginator(t *testing.T) {
+	tests := []struct {
+		originator string
+		want       bool
+	}{
+		{originator: "codex_cli_rs", want: true},
+		{originator: "codex-tui", want: true},
+		{originator: "codex_exec", want: true},
+		{originator: "CODEX-TUI", want: true},
+		{originator: "codex_vscode", want: false},
+		{originator: "Codex Desktop", want: false},
+		{originator: "Codex Xcode", want: false},
+		{originator: "codex_sdk_ts", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.originator, func(t *testing.T) {
+			if got := IsCodexEngineVersionedOriginator(tt.originator); got != tt.want {
+				t.Fatalf("IsCodexEngineVersionedOriginator(%q) = %v, want %v", tt.originator, got, tt.want)
 			}
 		})
 	}

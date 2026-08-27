@@ -3066,6 +3066,8 @@ func TestNormalizeOpenAICompactRequestBodyDropsParallelToolCallsWithoutUsableToo
 
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	SetCodexCanonicalResponsesVersionResolver(func() string { return "0.200.1" })
+	t.Cleanup(func() { SetCodexCanonicalResponsesVersionResolver(nil) })
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader([]byte(`{"model":"gpt-5"}`)))
@@ -3077,7 +3079,9 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *test
 	require.NoError(t, err)
 	require.Equal(t, chatgptCodexURL+"/compact", req.URL.String())
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
-	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
+	require.Equal(t, openai.CodexDefaultOriginator, req.Header.Get("Originator"))
+	require.Equal(t, buildCodexCLIUserAgent("0.200.1"), req.Header.Get("User-Agent"))
+	require.Equal(t, "0.200.1", req.Header.Get("Version"))
 	require.Empty(t, req.Header.Get("OpenAI-Beta"), "Codex OAuth HTTP must not synthesize the legacy responses beta header")
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
@@ -3118,7 +3122,7 @@ func TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, chatgptCodexURL+"/compact", req.URL.String())
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
-	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
+	require.Equal(t, codexResponsesVersionFallback, req.Header.Get("Version"))
 	require.Empty(t, req.Header.Get("OpenAI-Beta"), "Codex OAuth HTTP must not synthesize the legacy responses beta header")
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
@@ -3243,7 +3247,7 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 			require.NoError(t, err)
 			require.Equal(t, openai.CodexDefaultOriginator, req.Header.Get("originator"))
 			require.Equal(t, codexCLIUserAgent, req.Header.Get("User-Agent"))
-			require.Equal(t, codexCLIVersion, req.Header.Get("version"))
+			require.Equal(t, codexResponsesVersionFallback, req.Header.Get("version"))
 		})
 	}
 }

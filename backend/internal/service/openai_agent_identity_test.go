@@ -83,9 +83,13 @@ func TestDecryptAgentTaskIDSupportsCodexSealedBoxResponse(t *testing.T) {
 func TestRegisterAgentIdentityTaskAcceptsPlaintextAndEncryptedResponses(t *testing.T) {
 	key, privateKey := newTestAgentIdentityKey(t)
 	requestCount := 0
+	wantUA, wantOriginator := CodexCanonicalAuthIdentity()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		require.Equal(t, "/v1/agent/runtime-test/task/register", r.URL.Path)
+		require.Equal(t, wantUA, r.Header.Get("User-Agent"))
+		require.Equal(t, wantOriginator, r.Header.Get("Originator"))
+		require.Empty(t, r.Header.Get("Version"), "auth.openai.com task registration must not send Responses Version")
 		var request map[string]string
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 		require.NotEmpty(t, request["timestamp"])

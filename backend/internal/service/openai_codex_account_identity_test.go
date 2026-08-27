@@ -162,7 +162,7 @@ func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 		require.NotEqual(t, first.Get(header), second.Get(header), header)
 	}
 	require.Equal(t, "review", first.Get(openAISubagentHeader))
-	require.Equal(t, CodexCanonicalClientVersion(), first.Get("version"))
+	require.Equal(t, codexResponsesVersionFallback, first.Get("version"))
 
 	httpRequest, err := service.buildUpstreamRequest(
 		context.Background(), c, account11,
@@ -239,5 +239,5 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 	}
 	require.GreaterOrEqual(t, checked, 5, "test must exercise the real outbound identity surface")
 	require.Equal(t, "review", first.Get(openAISubagentHeader))
-	require.Equal(t, CodexCanonicalClientVersion(), first.Get("version"), "inbound version must converge with the final native identity")
+	require.Equal(t, codexResponsesVersionFallback, first.Get("version"), "HTTP/WS must use the current Responses Version fallback")
 }

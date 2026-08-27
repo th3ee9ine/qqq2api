@@ -81,6 +81,9 @@ type openAIWSAcquireRequest struct {
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
+	userAgent           string
+	originator          string
+	version             string
 	betaFeatures        string
 	codexResidency      string
 	responsesTiming     string
@@ -572,9 +575,18 @@ func (c *openAIWSConn) matchesContinuationHandshakeCompatibility(compatibility o
 	existing.responsesTiming = ""
 	existing.subagent = ""
 	existing.memgenRequest = ""
+	// 已 pin 的 continuation 必须在原握手连接上继续；版本同步或
+	// 管理员调整身份后，新 turn 会因完整兼容键变化而建新连接，
+	// 但在途 continuation 不得因无法重谈握手而中断。
+	existing.userAgent = ""
+	existing.originator = ""
+	existing.version = ""
 	compatibility.responsesTiming = ""
 	compatibility.subagent = ""
 	compatibility.memgenRequest = ""
+	compatibility.userAgent = ""
+	compatibility.originator = ""
+	compatibility.version = ""
 	return existing == compatibility
 }
 
@@ -2200,6 +2212,9 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 
 func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
+		userAgent:       normalizeOpenAIWSStableIdentityHeader(headers, "user-agent"),
+		originator:      normalizeOpenAIWSStableIdentityHeader(headers, "originator"),
+		version:         normalizeOpenAIWSStableIdentityHeader(headers, "version"),
 		betaFeatures:    normalizeOpenAIWSBetaFeatures(headers),
 		codexResidency:  normalizeOpenAIWSStableIdentityHeader(headers, openAICodexResidencyHeader),
 		responsesTiming: normalizeOpenAIWSStableIdentityHeader(headers, openAIResponsesTimingMetricsHeader),

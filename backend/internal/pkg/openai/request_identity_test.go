@@ -30,6 +30,20 @@ func TestPairCodexClientIdentity(t *testing.T) {
 			wantOK:         true,
 		},
 		{
+			name:           "Codex Desktop 原生首段直接配对",
+			ua:             "Codex Desktop/0.150.0-alpha.8 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 26.820.60940)",
+			wantOriginator: "Codex Desktop",
+			wantUA:         "Codex Desktop/0.150.0-alpha.8 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 26.820.60940)",
+			wantOK:         true,
+		},
+		{
+			name:           "Codex Desktop 原生身份恢复规范大小写",
+			ua:             "codex desktop/0.150.0-alpha.8 (Mac OS 26.2.0; arm64) dumb (codex desktop; 26.820.60940)",
+			wantOriginator: "Codex Desktop",
+			wantUA:         "Codex Desktop/0.150.0-alpha.8 (Mac OS 26.2.0; arm64) dumb (codex desktop; 26.820.60940)",
+			wantOK:         true,
+		},
+		{
 			name:           "Codex 家族前缀配对保留原大小写",
 			ua:             "Codex Desktop/1.2.3",
 			wantOriginator: "Codex Desktop",

@@ -891,7 +891,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 			require.NotNil(t, result)
 			require.Equal(t, openai.CodexDefaultOriginator, captureDialer.lastHeaders.Get("originator"))
 			require.Equal(t, codexCLIUserAgent, captureDialer.lastHeaders.Get("user-agent"))
-			require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
+			require.Equal(t, codexResponsesVersionFallback, captureDialer.lastHeaders.Get("version"))
 		})
 	}
 }
@@ -900,6 +900,8 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 // 否则同一个账号在两种传输上以不同身份出站。指纹保留、版本段重建、originator 配套。
 func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	SetCodexCanonicalResponsesVersionResolver(func() string { return "0.200.1" })
+	t.Cleanup(func() { SetCodexCanonicalResponsesVersionResolver(nil) })
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -959,10 +961,10 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testin
 	require.NotNil(t, result)
 	require.Equal(t, "codex-tui", captureDialer.lastHeaders.Get("originator"))
 	require.Equal(t,
-		"codex-tui/"+codexCLIVersion+" (Mac OS X 15.1.0; arm64) iTerm.app",
+		"codex-tui/0.200.1 (Mac OS X 15.1.0; arm64) iTerm.app",
 		captureDialer.lastHeaders.Get("user-agent"),
 	)
-	require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
+	require.Equal(t, "0.200.1", captureDialer.lastHeaders.Get("version"))
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheKey(t *testing.T) {

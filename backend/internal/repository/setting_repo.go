@@ -53,6 +53,53 @@ func (r *settingRepository) Set(ctx context.Context, key, value string) error {
 		Exec(ctx)
 }
 
+// CompareAndSwap atomically writes a setting only when its current value still
+// matches expected. expected=nil means the row must still be absent. The sync
+// service uses this to keep the official Codex Version monotonic across replicas.
+func (r *settingRepository) CompareAndSwap(
+	ctx context.Context,
+	key string,
+	expected *string,
+	value string,
+) (bool, error) {
+	now := time.Now()
+	if expected == nil {
+		err := r.client.Setting.
+			Create().
+			SetKey(key).
+			SetValue(value).
+			SetUpdatedAt(now).
+			OnConflictColumns(setting.FieldKey).
+			DoNothing().
+			Exec(ctx)
+		if err != nil && !isSQLNoRowsError(err) {
+			return false, err
+		}
+		// Ent's upsert Exec does not expose RowsAffected. Reading the row keeps
+		// PostgreSQL transactions usable after a conflict and reports success when
+		// this caller (or an equivalent concurrent caller) established value.
+		current, err := r.GetValue(ctx, key)
+		if err != nil {
+			return false, err
+		}
+		return current == value, nil
+	}
+
+	updated, err := r.client.Setting.
+		Update().
+		Where(
+			setting.KeyEQ(key),
+			setting.ValueEQ(*expected),
+		).
+		SetValue(value).
+		SetUpdatedAt(now).
+		Save(ctx)
+	if err != nil {
+		return false, err
+	}
+	return updated == 1, nil
+}
+
 func (r *settingRepository) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
 	if len(keys) == 0 {
 		return map[string]string{}, nil

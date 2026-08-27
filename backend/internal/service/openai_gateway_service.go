@@ -33,15 +33,17 @@ const (
 	openaiPlatformAPIURL            = "https://api.openai.com/v1/responses"
 	openaiPlatformAPIInputTokensURL = "https://api.openai.com/v1/responses/input_tokens"
 	openaiStickySessionTTL          = time.Hour // 粘性会话TTL
-	// 与真实 Codex TUI 的 User-Agent 结构对齐：
-	// {originator}/{version} ({OS} {OS_version}; {arch}) {terminal}
-	// 缺少 OS/架构/终端后缀的形态易被上游指纹识别为非官方客户端。
-	// 该后缀是 UA 形态的唯一定义处，buildCodexCLIUserAgent 按运行时版本号复用它。
-	codexCLIUserAgentSuffix = " (Ubuntu 22.4.0; x86_64) xterm-256color"
-	// codexCLIUserAgent 是编译期兜底 UA；运行时优先使用由后台版本号拼出的规范 UA。
-	// 版本段必须来自 codexCLIVersion：UA 与 version 头是同一个版本声明的两个出口，
-	// 各自硬编码会漂移成互相矛盾的身份。
-	codexCLIUserAgent = openai.CodexDefaultOriginator + "/" + codexCLIVersion + codexCLIUserAgentSuffix
+	// 与本机 Codex Desktop 内置 app-server 实测的 User-Agent 结构对齐：
+	// {originator}/{engine_version} ({OS} {OS_version}; {arch}) {terminal}
+	// ({desktop_client_name}; {desktop_app_version})
+	//
+	// engine_version 与 Responses/WS Version 同源跟随官方最新稳定 rust-v；
+	// desktop_app_version 是独立的 Desktop 宿主 build，保留在 trailer 中且不冒充 rust-v。
+	codexDesktopAppVersion      = "26.820.60940"
+	codexDesktopUserAgentSuffix = " (Mac OS 26.2.0; arm64) unknown (Codex Desktop; " + codexDesktopAppVersion + ")"
+	// codexCLIUserAgent 是历史内部名称，当前表示编译期兜底的 Codex Desktop UA。
+	// 运行时只重建首段 engine_version；UA 尾部的 Desktop app 版本保持独立。
+	codexCLIUserAgent = openai.CodexDefaultOriginator + "/" + codexCLIVersion + codexDesktopUserAgentSuffix
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
@@ -56,12 +58,17 @@ const (
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
 	openAIUpstreamEndpointContextKey   = "openai_actual_upstream_endpoint"
-	// codexCLIVersion 是网关对上游声明的 Codex 客户端版本，同时供 codexCLIUserAgent
-	// 与 version 头使用。上游 /backend-api/codex 在容量紧张时按客户端身份分优先级降载，
+	// codexCLIVersion 是 Codex Desktop UA 首段与 Responses/WS Version 共用的
+	// 编译期稳定版下限。
+	// 上游 /backend-api/codex 在容量紧张时按客户端身份分优先级降载，
 	// 陈旧版本会被优先丢弃（HTTP 200 + 流内 server_is_overloaded）；非官方客户端配不出
-	// 官方身份时整体回退到本常量，因此它必须跟随官方 CLI 的当前发布版本，
+	// 官方身份时整体回退到本常量，因此它必须跟随官方 Codex 稳定版，
 	// 落后多个版本会让这些请求稳定落在被优先丢弃的一侧。
-	codexCLIVersion = "0.146.0"
+	codexCLIVersion = "0.150.1"
+	// codexResponsesVersionFallback 与 UA engine 共用同一版本源，防止两个字段漂移。
+	// 运行时每 6 小时同步官方最新稳定 rust-v，可继续向前推进。
+	// Auth 面仍不发送 Version。
+	codexResponsesVersionFallback = codexCLIVersion
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 	// 配额自动暂停时，超过该时长仍未刷新的 used% 快照视为陈旧，不再据此暂停账号。

@@ -1442,10 +1442,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}
 	}
 	if req.OpenAICodexClientVersion != nil {
-		// 该值会被拼进出站 User-Agent 与 version 头，必须是合法版本号；空串表示跟随自动同步。
+		// 该值是 UA engine 与 Responses/WS Version 共用的稳定版热修复下限；
+		// 与后续持久化共用同一严格 X.Y.Z 校验，避免 API 接受后又被服务层静默清空。
 		normalized := strings.TrimSpace(*req.OpenAICodexClientVersion)
-		if normalized != "" && service.NormalizeCodexClientVersion(normalized) == "" {
-			response.Error(c, http.StatusBadRequest, "openai_codex_client_version must be empty or a valid version (e.g. 0.146.0)")
+		if normalized != "" && service.NormalizeStableCodexClientVersion(normalized) == "" {
+			response.Error(c, http.StatusBadRequest, "openai_codex_client_version must be empty or a stable X.Y.Z version (e.g. 0.150.1)")
 			return
 		}
 		req.OpenAICodexClientVersion = &normalized

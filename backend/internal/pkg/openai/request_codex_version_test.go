@@ -9,8 +9,9 @@ import (
 func TestCodexUserAgentVersion(t *testing.T) {
 	require.Equal(t, "0.146.0", CodexUserAgentVersion("codex_cli_rs/0.146.0 (Ubuntu 22.4.0; x86_64) xterm-256color"))
 	require.Equal(t, "0.146.0", CodexUserAgentVersion("  codex_cli_rs/0.146.0  "))
-	// 预发布后缀原样保留：出站 version 头必须与 UA 版本段逐字一致。
+	// UA engine 的预发布后缀必须原样保留。
 	require.Equal(t, "0.147.0-alpha.4", CodexUserAgentVersion("codex-tui/0.147.0-alpha.4 (Mac OS X 14.0; arm64) iTerm"))
+	require.Equal(t, "0.150.0-alpha.8", CodexUserAgentVersion("Codex Desktop/0.150.0-alpha.8 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 26.820.60940)"))
 	// 非 `{client}/{version}` 形态取不到版本段。
 	require.Empty(t, CodexUserAgentVersion("curl 8.7.1"))
 	require.Empty(t, CodexUserAgentVersion("/0.146.0"))
@@ -31,6 +32,25 @@ func TestSetCodexUserAgentVersion(t *testing.T) {
 	require.Equal(t,
 		"cccc/0.146.0 (Ubuntu 22.4.0; x86_64) screen (codex-tui; 0.146.0)",
 		SetCodexUserAgentVersion("cccc/0.142.0 (Ubuntu 22.4.0; x86_64) screen (codex-tui; 0.142.0)", "0.146.0"),
+	)
+	// Desktop 尾部是独立 app 版本，不是首段 engine 版本；同步 engine 时必须保留。
+	require.Equal(t,
+		"Codex Desktop/0.150.0 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 26.820.60940)",
+		SetCodexUserAgentVersion("Codex Desktop/0.146.0 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 26.820.60940)", "0.150.0"),
+	)
+	// 两个版本偶然相同时仍属于独立版本域，Desktop trailer 也不得跟随 engine 更新。
+	require.Equal(t,
+		"Codex Desktop/0.150.0 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 0.146.0)",
+		SetCodexUserAgentVersion("Codex Desktop/0.146.0 (Mac OS 26.2.0; arm64) dumb (Codex Desktop; 0.146.0)", "0.150.0"),
+	)
+	// App/extension clientInfo.version 属于独立版本域；即使偶然等于旧 engine 也不得联动。
+	require.Equal(t,
+		"codex_vscode/0.150.0 (Mac OS 26.2.0; arm64) vscode (codex_vscode; 0.146.0)",
+		SetCodexUserAgentVersion("codex_vscode/0.146.0 (Mac OS 26.2.0; arm64) vscode (codex_vscode; 0.146.0)", "0.150.0"),
+	)
+	require.Equal(t,
+		"Codex Xcode/0.150.0 (Mac OS 26.2.0; arm64) unknown (Codex Xcode; 0.146.0)",
+		SetCodexUserAgentVersion("Codex Xcode/0.146.0 (Mac OS 26.2.0; arm64) unknown (Codex Xcode; 0.146.0)", "0.150.0"),
 	)
 	// OS 括号组不是客户端标识，不得被误改。
 	require.Equal(t,

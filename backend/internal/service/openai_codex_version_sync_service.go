@@ -2,11 +2,19 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 )
+
+// openAICodexVersionCASRepository 是同步任务使用的可选原子写接口。
+// 生产 SettingRepository 实现该接口，使多实例的「读取当前值→只向前写入」成为
+// 单个 compare-and-swap 操作；普通测试桩仍可只实现 SettingRepository。
+type openAICodexVersionCASRepository interface {
+	CompareAndSwap(ctx context.Context, key string, expected *string, value string) (bool, error)
+}
 
 const (
 	// openAICodexVersionSyncInterval 自动同步间隔。上游客户端发版频率是天级，
@@ -26,11 +34,13 @@ const (
 	openAICodexVersionTagPrefix = "rust-v"
 )
 
-// OpenAICodexVersionSyncService 周期性把官方 Codex 客户端的最新稳定版版本号同步到设置，
-// 供出站规范身份使用，避免为了跟上游版本而发新版本。
+// OpenAICodexVersionSyncService 周期性把官方 Codex rust-v 的最新稳定版同步到设置，
+// 供 User-Agent engine 与 Responses/WS Version 同源使用，避免为了跟上游版本而
+// 发布网关新版本。Codex Desktop trailer 中的 app build 仍作为独立宿主信号保留。
 //
-// 同步值写入 SettingKeyOpenAICodexClientVersionSynced（本服务独占写入）；管理员在面板填写的
-// SettingKeyOpenAICodexClientVersion 优先级更高，因此手工固定版本不会被同步覆盖。
+// 同步值写入 SettingKeyOpenAICodexClientVersionSynced（本服务独占写入）。
+// SettingKeyOpenAICodexClientVersion 是统一版本的管理员热修复值；最终取它、同步值与
+// 编译期下限中的最高稳定版。
 type OpenAICodexVersionSyncService struct {
 	settingRepo    SettingRepository
 	settingService *SettingService
@@ -57,7 +67,7 @@ func NewOpenAICodexVersionSyncService(
 }
 
 func (s *OpenAICodexVersionSyncService) Start() {
-	if s == nil || s.settingRepo == nil || s.githubClient == nil || s.interval <= 0 {
+	if s == nil || s.settingRepo == nil || s.settingService == nil || s.githubClient == nil || s.interval <= 0 {
 		return
 	}
 	s.wg.Add(1)
@@ -112,7 +122,8 @@ func (s *OpenAICodexVersionSyncService) syncedWithinInterval() bool {
 	if err != nil || setting == nil || setting.UpdatedAt.IsZero() {
 		return false
 	}
-	if NormalizeCodexClientVersion(setting.Value) == "" {
+	version := normalizeStableCodexClientVersion(setting.Value)
+	if version == "" || CompareVersions(version, codexResponsesVersionFallback) < 0 {
 		return false
 	}
 	return time.Since(setting.UpdatedAt) < s.interval
@@ -130,18 +141,121 @@ func (s *OpenAICodexVersionSyncService) runOnce() {
 	if latest == "" {
 		return
 	}
-
-	current := NormalizeCodexClientVersion(s.currentSyncedVersion(ctx))
-	// 只向前推进：上游偶发返回旧数据或重新发布历史 tag 时不把已同步的版本号降级。
-	if current != "" && CompareVersions(latest, current) <= 0 {
+	if CompareVersions(latest, codexResponsesVersionFallback) < 0 {
+		slog.Warn("openai_codex_version_sync_below_builtin_fallback",
+			"version", latest,
+			"fallback", codexResponsesVersionFallback,
+		)
 		return
 	}
-	if err := s.settingRepo.Set(ctx, SettingKeyOpenAICodexClientVersionSynced, latest); err != nil {
-		slog.Warn("openai_codex_version_sync_persist_failed", "version", latest, "error", err)
+
+	// 失效前保留已知的生效值。若同步落库后的 manual/synced 合并读取恰好
+	// 遇到 DB 瞬时错误，它可防止已缓存的更高管理员热修复下限被临时降级。
+	previousEffective := s.settingService.GetOpenAICodexResponsesVersion(ctx)
+	current, updated, ok := s.persistLatestStableVersion(ctx, latest)
+	if !ok {
 		return
 	}
 	s.settingService.InvalidateOpenAICodexClientVersionCache()
-	slog.Info("openai_codex_version_synced", "previous", current, "version", latest)
+	effective, sourceOK, effectiveEpoch := s.settingService.getOpenAICodexResponsesVersion(ctx)
+	if CompareVersions(current, effective) > 0 {
+		effective = current
+	}
+	cacheTTL := openAICodexClientVersionCacheTTL
+	if !sourceOK {
+		if CompareVersions(previousEffective, effective) > 0 {
+			effective = previousEffective
+		}
+		// DB 合并未确认时只做短缓存，让后续请求尽快重试读取 manual floor。
+		cacheTTL = openAICodexClientVersionErrorTTL
+	}
+	// 只能发布到产生 effective 的同一 epoch。管理员若在「合并完成→发布」
+	// 之间保存了新 manual floor，Invalidate 会让此写入失败，新代次随后自行回源。
+	_, _ = s.settingService.storeOpenAICodexResponsesVersionAtEpoch(
+		effective,
+		cacheTTL,
+		effectiveEpoch,
+		sourceOK,
+	)
+	if updated {
+		slog.Info("openai_codex_version_synced", "version", current)
+	}
+}
+
+// persistLatestStableVersion 以数据库 CAS 保证多实例下也只向前推进。
+// 两个实例即使同时读到旧值，较晚写入者也必须重新读取胜出值，而不能把新版覆盖成旧版。
+// 返回值依次为数据库最终生效版本、是否由本次调用写入、操作是否成功。
+func (s *OpenAICodexVersionSyncService) persistLatestStableVersion(
+	ctx context.Context,
+	latest string,
+) (string, bool, bool) {
+	casRepo, supportsCAS := s.settingRepo.(openAICodexVersionCASRepository)
+	if !supportsCAS {
+		// 兼容只实现基础 SettingRepository 的轻量测试桩；生产仓库始终走 CAS 分支。
+		current := normalizeStableCodexClientVersion(s.currentSyncedVersion(ctx))
+		if current != "" && CompareVersions(latest, current) <= 0 {
+			return current, false, true
+		}
+		if err := s.settingRepo.Set(ctx, SettingKeyOpenAICodexClientVersionSynced, latest); err != nil {
+			slog.Warn("openai_codex_version_sync_persist_failed", "version", latest, "error", err)
+			return "", false, false
+		}
+		return latest, true, true
+	}
+
+	for ctx.Err() == nil {
+		setting, err := s.settingRepo.Get(ctx, SettingKeyOpenAICodexClientVersionSynced)
+		var expected *string
+		currentRaw := ""
+		switch {
+		case err == nil && setting != nil:
+			currentRaw = setting.Value
+			expected = &currentRaw
+		case err == nil || errors.Is(err, ErrSettingNotFound):
+			// expected=nil 表示仅当设置行仍不存在时插入。
+		default:
+			slog.Warn("openai_codex_version_sync_current_read_failed", "error", err)
+			return "", false, false
+		}
+
+		current := normalizeStableCodexClientVersion(currentRaw)
+		// 只向前推进；预发布/非法值不是稳定版上界，允许同 core 正式版替换。
+		if current != "" && CompareVersions(latest, current) <= 0 {
+			// 同值 CAS 仅刷新 UpdatedAt，记录本轮已成功核对官方版本。
+			// runInitial 依赖该时间戳抑制频繁重启造成的 GitHub 请求风暴。
+			touched, err := casRepo.CompareAndSwap(
+				ctx,
+				SettingKeyOpenAICodexClientVersionSynced,
+				expected,
+				currentRaw,
+			)
+			if err != nil {
+				slog.Warn("openai_codex_version_sync_touch_failed", "version", current, "error", err)
+				return "", false, false
+			}
+			if touched {
+				return current, false, true
+			}
+			continue
+		}
+
+		swapped, err := casRepo.CompareAndSwap(
+			ctx,
+			SettingKeyOpenAICodexClientVersionSynced,
+			expected,
+			latest,
+		)
+		if err != nil {
+			slog.Warn("openai_codex_version_sync_persist_failed", "version", latest, "error", err)
+			return "", false, false
+		}
+		if swapped {
+			return latest, true, true
+		}
+		// CAS 失败说明其他实例刚更新了行；重新读取并比较实际胜出值。
+	}
+
+	return "", false, false
 }
 
 // fetchLatestStableVersion 取官方最新稳定版客户端版本号；取不到时返回空串，
@@ -211,8 +325,8 @@ func latestCodexStableReleaseVersion(releases []*GitHubRelease) string {
 		if !strings.HasPrefix(tag, openAICodexVersionTagPrefix) {
 			continue
 		}
-		version := NormalizeCodexClientVersion(strings.TrimPrefix(tag, openAICodexVersionTagPrefix))
-		if version == "" || strings.Contains(version, "-") {
+		version := normalizeStableCodexClientVersion(strings.TrimPrefix(tag, openAICodexVersionTagPrefix))
+		if version == "" {
 			continue
 		}
 		if best == "" || CompareVersions(version, best) > 0 {

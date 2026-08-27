@@ -6,13 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"golang.org/x/sync/singleflight"
-	"sync"
 )
 
 const (
@@ -117,21 +117,23 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 
 // SettingService 系统设置服务
 type SettingService struct {
-	settingRepo                 SettingRepository
-	defaultSubGroupReader       DefaultSubscriptionGroupReader
-	proxyRepo                   ProxyRepository // for resolving websearch provider proxy URLs
-	cfg                         *config.Config
-	onUpdate                    func() // Callback when settings are updated (for cache invalidation)
-	version                     string // Application version
-	webSearchManagerBuilder     WebSearchManagerBuilder
-	antigravityUAVersionCache   atomic.Value // *cachedAntigravityUserAgentVersion
-	antigravityUAVersionSF      singleflight.Group
-	openAICodexUACache          atomic.Value // *cachedOpenAICodexUserAgent
-	openAICodexUASF             singleflight.Group
-	openAICodexVersionCache     atomic.Value // *cachedOpenAICodexClientVersion
-	openAICodexVersionSF        singleflight.Group
-	codexRestrictionPolicyCache atomic.Value // *cachedCodexRestrictionPolicy
-	codexRestrictionPolicySF    singleflight.Group
+	settingRepo                      SettingRepository
+	defaultSubGroupReader            DefaultSubscriptionGroupReader
+	proxyRepo                        ProxyRepository // for resolving websearch provider proxy URLs
+	cfg                              *config.Config
+	onUpdate                         func() // Callback when settings are updated (for cache invalidation)
+	version                          string // Application version
+	webSearchManagerBuilder          WebSearchManagerBuilder
+	antigravityUAVersionCache        atomic.Value // *cachedAntigravityUserAgentVersion
+	antigravityUAVersionSF           singleflight.Group
+	openAICodexUACache               atomic.Value // *cachedOpenAICodexUserAgent
+	openAICodexUASF                  singleflight.Group
+	openAICodexResponsesVersionMu    sync.Mutex
+	openAICodexResponsesVersionEpoch atomic.Uint64
+	openAICodexResponsesVersionCache atomic.Value // *cachedOpenAICodexResponsesVersion
+	openAICodexResponsesVersionSF    singleflight.Group
+	codexRestrictionPolicyCache      atomic.Value // *cachedCodexRestrictionPolicy
+	codexRestrictionPolicySF         singleflight.Group
 
 	cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
 	cyberSessionBlockRuntimeSF    singleflight.Group

@@ -150,6 +150,19 @@ func IsCodexOfficialClientOriginator(originator string) bool {
 	return strings.HasPrefix(v, codexOfficialClientFamilyPrefix)
 }
 
+// IsCodexEngineVersionedOriginator reports whether clientInfo.version shares the
+// Rust engine version domain and may therefore move with the leading UA version.
+// App hosts such as VS Code/Desktop/Xcode use their own app or extension version
+// in the trailer even when it happens to equal the engine version.
+func IsCodexEngineVersionedOriginator(originator string) bool {
+	switch normalizeCodexClientHeader(originator) {
+	case "codex_cli_rs", "codex-tui", "codex_exec":
+		return true
+	default:
+		return false
+	}
+}
+
 // IsCodexOfficialClientByHeaders checks whether the request headers indicate an
 // official Codex client family request.
 func IsCodexOfficialClientByHeaders(userAgent, originator string) bool {
@@ -235,9 +248,12 @@ func isSaneCodexOriginator(name string) bool {
 }
 
 // canonicalizeCodexOriginator 把精确集合的官方 originator 大小写变体归一为规范小写形态
-// （如 CODEX_CLI_RS → codex_cli_rs）；`Codex ` 家族不在精确集合中，保留原大小写
-// （其规范形态本就是混合大小写，上游按大小写敏感 starts_with("Codex ") 判定）。
+// （如 CODEX_CLI_RS → codex_cli_rs）；默认 Desktop 身份规范为 `Codex Desktop`。
+// 其余 `Codex ` 家族不在精确集合中，保留原大小写。
 func canonicalizeCodexOriginator(name string) string {
+	if strings.EqualFold(strings.TrimSpace(name), CodexDefaultOriginator) {
+		return CodexDefaultOriginator
+	}
 	if lower := normalizeCodexClientHeader(name); codexOfficialClientOriginators[lower] {
 		return lower
 	}
@@ -247,12 +263,13 @@ func canonicalizeCodexOriginator(name string) string {
 // CodexCLIOriginator 是 codex-rs 客户端的历史默认 originator，保留用于兼容识别。
 const CodexCLIOriginator = "codex_cli_rs"
 
-// CodexDefaultOriginator 是网关默认使用的 Codex TUI originator。
-const CodexDefaultOriginator = "codex-tui"
+// CodexDefaultOriginator 是网关默认使用的 Codex Desktop originator。
+// app-server 将 clientInfo.name 同时用于 UA 首段、尾部客户端标识和 originator 请求头。
+const CodexDefaultOriginator = "Codex Desktop"
 
 // CodexUserAgentVersion 提取 Codex UA 的完整版本段，即 `{client}/{version} (...` 中的 version。
 // 与 ParseCodexEngineVersion 的区别：后者只取三段数字用于引擎版本比较（会丢掉 -alpha.4
-// 之类的预发布后缀），本函数保留原样，因为出站 version 头必须与 UA 版本段逐字一致。
+// 之类的预发布后缀），本函数保留 UA engine 的完整预发布版本原样。
 // 取不到（非 Codex 形态 UA）时返回空串。
 func CodexUserAgentVersion(userAgent string) string {
 	ua := strings.TrimSpace(userAgent)
@@ -271,10 +288,10 @@ func CodexUserAgentVersion(userAgent string) string {
 // （客户端名、OS / 架构 / 终端指纹）原样保留；UA 不是 `{client}/{version}` 形态时返回空串，
 // 由调用方决定整体回退。
 //
-// 尾部官方客户端标识组 `(name; version)` 与首段是同一个版本声明的两个出口
-// （CODEX_INTERNAL_ORIGINATOR_OVERRIDE 场景，如 `cccc/0.142.0 ... (codex-tui; 0.142.0)`），
-// 必须一并更新，否则会拼出首段声明新版本、尾部仍是旧版本的自相矛盾身份。
-// 仅在括号组确为官方客户端标识时才改写，避免误伤 OS 组（如 `(Ubuntu 22.4.0; x86_64)`）。
+// 尾部官方客户端标识组 `(name; version)` 来自 app-server 的 clientInfo。
+// TUI/exec 通常让该版本与首段 engine 版本相同，此时必须一并更新；Desktop、
+// VS Code、Xcode 等宿主则使用独立 app/extension 版本，不得被 engine 版本覆盖。
+// 仅对明确同版本域的 originator，且尾部版本等于原首段版本时执行改写。
 func SetCodexUserAgentVersion(userAgent, version string) string {
 	ua := strings.TrimSpace(userAgent)
 	version = strings.TrimSpace(version)
@@ -291,18 +308,23 @@ func SetCodexUserAgentVersion(userAgent, version string) string {
 	}
 	rest := ua[slash+1:]
 	tail := ""
+	previousVersion := ""
 	if space := strings.IndexByte(rest, ' '); space >= 0 {
+		previousVersion = strings.TrimSpace(rest[:space])
 		tail = rest[space:]
 	} else if strings.TrimSpace(rest) == "" {
 		// `client/` 没有版本段，不是可重建的 Codex 形态。
 		return ""
+	} else {
+		previousVersion = strings.TrimSpace(rest)
 	}
-	return rewriteCodexUATrailerVersion(client+"/"+version+tail, version)
+	return rewriteCodexUATrailerVersion(client+"/"+version+tail, previousVersion, version)
 }
 
-// rewriteCodexUATrailerVersion 把尾部官方客户端标识组 `(name; version)` 的版本改成 version。
-// 括号组缺少 `;` 分隔的版本、或 name 不是官方 originator 时原样返回。
-func rewriteCodexUATrailerVersion(ua, version string) string {
+// rewriteCodexUATrailerVersion 在尾部明确使用 engine 版本域的 CLI/TUI 标识组
+// `(name; version)` 与原首段 engine 版本相同时，将其更新为 version。
+// VS Code/Desktop/Xcode 等 app-server 宿主的独立 app/extension 版本始终保留。
+func rewriteCodexUATrailerVersion(ua, previousVersion, version string) string {
 	open := strings.LastIndex(ua, "(")
 	if open < 0 {
 		return ua
@@ -317,7 +339,11 @@ func rewriteCodexUATrailerVersion(ua, version string) string {
 		return ua
 	}
 	name := strings.TrimSpace(inner[:semi])
-	if name == "" || !IsCodexOfficialClientOriginator(name) {
+	if name == "" || !IsCodexEngineVersionedOriginator(name) {
+		return ua
+	}
+	trailerVersion := strings.TrimSpace(inner[semi+1:])
+	if trailerVersion == "" || trailerVersion != previousVersion {
 		return ua
 	}
 	return ua[:open+1] + name + "; " + version + ua[open+1+closeIdx:]
