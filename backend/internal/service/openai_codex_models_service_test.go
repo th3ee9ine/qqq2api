@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/tlsfingerprint"
 	"golang.org/x/net/http2"
 )
 

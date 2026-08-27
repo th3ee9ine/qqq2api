@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 )
 
 func init() {

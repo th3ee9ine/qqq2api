@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Wei-Shaw/sub2api/internal/payment"
 	stripe "github.com/stripe/stripe-go/v85"
 	"github.com/stripe/stripe-go/v85/webhook"
+	"github.com/th3ee9ine/qqq2api/internal/payment"
 )
 
 // Stripe constants.

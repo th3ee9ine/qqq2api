@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/antigravity"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/claude"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/geminicli"
 )
 
 // UpstreamModelSyncErrorKind classifies model sync failures for safe HTTP mapping.

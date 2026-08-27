@@ -5,9 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // cyber mark 存在时，中间件必须跳过自身落库（由 recordCyberPolicyIfMarked 统一落 403）。

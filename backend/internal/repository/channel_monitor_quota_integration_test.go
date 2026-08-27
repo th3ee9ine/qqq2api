@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/domain"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // 配额模式 repo 层集成测试：

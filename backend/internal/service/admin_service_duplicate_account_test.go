@@ -11,8 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
 type duplicateAccountRepoStub struct {

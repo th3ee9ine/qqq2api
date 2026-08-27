@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/handler"
-	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/handler"
+	servermiddleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {

@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 type activeConfigSnapshot struct {

@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/stretchr/testify/require"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/internal/payment"
 )
 
 const webhookProviderTestEncryptionKey = "0123456789abcdef0123456789abcdef"

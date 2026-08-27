@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // 本文件覆盖：worker 池已停止（进程关停窗口）时，计费任务不得静默丢失，

@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/repository"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	"github.com/th3ee9ine/qqq2api/internal/repository"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 const promptAuditRedisTestEnv = "PROMPT_AUDIT_TEST_REDIS_ADDR"

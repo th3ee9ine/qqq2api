@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 )
 
 // WithOpenAIRequestPricingContext：装门 + 固定 pricingAt；显式抑制标记

@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/antigravity"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 )
 
 // antigravityRetryLoopParams 重试循环的参数

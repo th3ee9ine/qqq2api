@@ -3,8 +3,8 @@ package service
 import (
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/stretchr/testify/assert"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/antigravity"
 )
 
 func TestNormalizeAntigravitySubscription_PaidTierWithIneligible(t *testing.T) {

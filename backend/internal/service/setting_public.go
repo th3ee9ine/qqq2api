@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 )
 
 func normalizeLoginAgreementMode(raw string) string {
@@ -246,24 +246,6 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		return nil, fmt.Errorf("get public settings: %w", err)
 	}
 
-	linuxDoEnabled := false
-	if raw, ok := settings[SettingKeyLinuxDoConnectEnabled]; ok {
-		linuxDoEnabled = raw == "true"
-	} else {
-		linuxDoEnabled = s.cfg != nil && s.cfg.LinuxDo.Enabled
-	}
-	dingTalkEnabled := false
-	if raw, ok := settings[SettingKeyDingTalkConnectEnabled]; ok {
-		dingTalkEnabled = raw == "true"
-	} else {
-		dingTalkEnabled = s.cfg != nil && s.cfg.DingTalk.Enabled
-	}
-	oidcEnabled := false
-	if raw, ok := settings[SettingKeyOIDCConnectEnabled]; ok {
-		oidcEnabled = raw == "true"
-	} else {
-		oidcEnabled = s.cfg != nil && s.cfg.OIDC.Enabled
-	}
 	oidcProviderName := strings.TrimSpace(settings[SettingKeyOIDCConnectProviderName])
 	if oidcProviderName == "" && s.cfg != nil {
 		oidcProviderName = strings.TrimSpace(s.cfg.OIDC.ProviderName)
@@ -271,65 +253,34 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	if oidcProviderName == "" {
 		oidcProviderName = "OIDC"
 	}
-	gitHubEnabled := s.emailOAuthPublicEnabled(settings, "github")
-	googleEnabled := s.emailOAuthPublicEnabled(settings, "google")
-	weChatEnabled, weChatOpenEnabled, weChatMPEnabled, weChatMobileEnabled := s.weChatOAuthCapabilitiesFromSettings(settings)
-
-	// Password reset requires email verification to be enabled
-	emailVerifyEnabled := settings[SettingKeyEmailVerifyEnabled] == "true"
-	passwordResetEnabled := emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true"
-	registrationEmailSuffixWhitelist := ParseRegistrationEmailSuffixWhitelist(
-		settings[SettingKeyRegistrationEmailSuffixWhitelist],
-	)
 	tableDefaultPageSize, tablePageSizeOptions := parseTablePreferences(
 		settings[SettingKeyTableDefaultPageSize],
 		settings[SettingKeyTablePageSizeOptions],
 	)
-	loginAgreementDocuments := parseLoginAgreementDocuments(settings[SettingKeyLoginAgreementDocuments])
 	loginAgreementUpdatedAt := strings.TrimSpace(settings[SettingKeyLoginAgreementUpdatedAt])
 	if loginAgreementUpdatedAt == "" {
 		loginAgreementUpdatedAt = defaultLoginAgreementDate
 	}
 
-	var balanceLowNotifyThreshold float64
-	if v, err := strconv.ParseFloat(settings[SettingKeyBalanceLowNotifyThreshold], 64); err == nil && v >= 0 {
-		balanceLowNotifyThreshold = v
-	}
-
 	// The public contract must reflect the reduced single-administrator
 	// product surface even when an upgraded database still contains enabled
 	// values for retired user/self-service features.
-	emailVerifyEnabled = false
-	passwordResetEnabled = false
-	registrationEmailSuffixWhitelist = nil
-	loginAgreementDocuments = nil
-	linuxDoEnabled = false
-	dingTalkEnabled = false
-	oidcEnabled = false
-	gitHubEnabled = false
-	googleEnabled = false
-	weChatEnabled = false
-	weChatOpenEnabled = false
-	weChatMPEnabled = false
-	weChatMobileEnabled = false
-	balanceLowNotifyThreshold = 0
-
 	return &PublicSettings{
 		RegistrationEnabled:                 false,
-		EmailVerifyEnabled:                  emailVerifyEnabled,
+		EmailVerifyEnabled:                  false,
 		ForceEmailOnThirdPartySignup:        false,
-		RegistrationEmailSuffixWhitelist:    registrationEmailSuffixWhitelist,
+		RegistrationEmailSuffixWhitelist:    nil,
 		RegistrationEmailDomainQuotaEnabled: false,
 		PromoCodeEnabled:                    false,
-		PasswordResetEnabled:                passwordResetEnabled,
+		PasswordResetEnabled:                false,
 		InvitationCodeEnabled:               false,
 		TotpEnabled:                         settings[SettingKeyTotpEnabled] == "true",
 		PasskeyEnabled:                      false,
 		LoginAgreementEnabled:               false,
 		LoginAgreementMode:                  normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
 		LoginAgreementUpdatedAt:             loginAgreementUpdatedAt,
-		LoginAgreementRevision:              buildLoginAgreementRevision(loginAgreementUpdatedAt, loginAgreementDocuments),
-		LoginAgreementDocuments:             loginAgreementDocuments,
+		LoginAgreementRevision:              buildLoginAgreementRevision(loginAgreementUpdatedAt, nil),
+		LoginAgreementDocuments:             nil,
 		TurnstileEnabled:                    settings[SettingKeyTurnstileEnabled] == "true",
 		TurnstileSiteKey:                    settings[SettingKeyTurnstileSiteKey],
 		TencentCaptchaEnabled:               settings[SettingKeyTencentCaptchaEnabled] == "true",
@@ -354,21 +305,21 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		TablePageSizeOptions:                tablePageSizeOptions,
 		CustomMenuItems:                     "",
 		CustomEndpoints:                     "",
-		LinuxDoOAuthEnabled:                 linuxDoEnabled,
-		DingTalkOAuthEnabled:                dingTalkEnabled,
-		WeChatOAuthEnabled:                  weChatEnabled,
-		WeChatOAuthOpenEnabled:              weChatOpenEnabled,
-		WeChatOAuthMPEnabled:                weChatMPEnabled,
-		WeChatOAuthMobileEnabled:            weChatMobileEnabled,
+		LinuxDoOAuthEnabled:                 false,
+		DingTalkOAuthEnabled:                false,
+		WeChatOAuthEnabled:                  false,
+		WeChatOAuthOpenEnabled:              false,
+		WeChatOAuthMPEnabled:                false,
+		WeChatOAuthMobileEnabled:            false,
 		BackendModeEnabled:                  settings[SettingKeyBackendModeEnabled] == "true",
 		PaymentEnabled:                      false,
-		OIDCOAuthEnabled:                    oidcEnabled,
+		OIDCOAuthEnabled:                    false,
 		OIDCOAuthProviderName:               oidcProviderName,
-		GitHubOAuthEnabled:                  gitHubEnabled,
-		GoogleOAuthEnabled:                  googleEnabled,
+		GitHubOAuthEnabled:                  false,
+		GoogleOAuthEnabled:                  false,
 		BalanceLowNotifyEnabled:             false,
 		AccountQuotaNotifyEnabled:           false,
-		BalanceLowNotifyThreshold:           balanceLowNotifyThreshold,
+		BalanceLowNotifyThreshold:           0,
 		BalanceLowNotifyRechargeURL:         "",
 
 		ChannelMonitorEnabled:                false,

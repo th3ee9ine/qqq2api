@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/antigravity"
 )
 
 const (

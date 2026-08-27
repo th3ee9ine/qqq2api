@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/google/uuid"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/claude"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
+	"github.com/th3ee9ine/qqq2api/internal/util/urlvalidator"
 	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"

@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/apicompat"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )

@@ -5,8 +5,8 @@ import (
 	pathpkg "path"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // AccountAdminScope constrains restricted account administrators to the

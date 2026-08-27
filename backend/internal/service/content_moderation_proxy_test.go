@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
 )
 
 // contentModerationTestProxyRepo 仅实现审计代理路径用到的 GetByID，其余方法不应被调用。

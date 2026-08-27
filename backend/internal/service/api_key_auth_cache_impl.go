@@ -10,8 +10,8 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/dgraph-io/ristretto"
+	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
 const apiKeyAuthSnapshotVersion = 22 // v22: API Keys carry an independent concurrency limit

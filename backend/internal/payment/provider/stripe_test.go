@@ -7,9 +7,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/stretchr/testify/require"
 	stripe "github.com/stripe/stripe-go/v85"
+	"github.com/th3ee9ine/qqq2api/internal/payment"
 )
 
 type stripeRefundBackend struct {

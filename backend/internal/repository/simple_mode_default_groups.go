@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/ent/group"
-	"github.com/Wei-Shaw/sub2api/internal/service"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/ent/group"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 const simpleModeDefaultGroupDescription = "Auto-created default group"

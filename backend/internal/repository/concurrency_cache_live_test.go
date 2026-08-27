@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 func TestLiveLeaseReplacesRegularSlotsAndCountsTowardLimits(t *testing.T) {
@@ -18,6 +18,8 @@ func TestLiveLeaseReplacesRegularSlotsAndCountsTowardLimits(t *testing.T) {
 	live, ok := regular.(service.LiveConcurrencyCache)
 	require.True(t, ok)
 	apiKeys, ok := regular.(service.APIKeyConcurrencyLimiterCache)
+	require.True(t, ok)
+	apiKeyConcurrency, ok := regular.(service.APIKeyConcurrencyCache)
 	require.True(t, ok)
 	ctx := context.Background()
 
@@ -44,7 +46,7 @@ func TestLiveLeaseReplacesRegularSlotsAndCountsTowardLimits(t *testing.T) {
 	userCount, err := regular.GetUserConcurrency(ctx, 20)
 	require.NoError(t, err)
 	require.Equal(t, 1, userCount)
-	apiKeyCounts, err := regular.(service.APIKeyConcurrencyCache).GetAPIKeyConcurrencyBatch(ctx, []int64{30})
+	apiKeyCounts, err := apiKeyConcurrency.GetAPIKeyConcurrencyBatch(ctx, []int64{30})
 	require.NoError(t, err)
 	require.Equal(t, 1, apiKeyCounts[30])
 	accountAcquired, err = regular.AcquireAccountSlot(ctx, 10, 1, "ordinary-blocked")

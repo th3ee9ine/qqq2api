@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 func TestChannelMonitorV2DisplayModelIsPlatformScoped(t *testing.T) {

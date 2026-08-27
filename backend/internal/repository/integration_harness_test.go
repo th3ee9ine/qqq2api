@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	_ "github.com/th3ee9ine/qqq2api/ent/runtime"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"

@@ -6,11 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/ent/channelmonitor"
-	"github.com/Wei-Shaw/sub2api/ent/channelmonitorrequesttemplate"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/ent/channelmonitor"
+	"github.com/th3ee9ine/qqq2api/ent/channelmonitorrequesttemplate"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // channelMonitorRequestTemplateRepository 实现 service.ChannelMonitorRequestTemplateRepository。

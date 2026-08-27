@@ -2,8 +2,8 @@
 package routes
 
 import (
-	"github.com/Wei-Shaw/sub2api/internal/handler"
-	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/th3ee9ine/qqq2api/internal/handler"
+	"github.com/th3ee9ine/qqq2api/internal/server/middleware"
 
 	"github.com/gin-gonic/gin"
 )

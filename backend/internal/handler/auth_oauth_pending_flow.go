@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/ent/authidentity"
-	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
-	"github.com/Wei-Shaw/sub2api/ent/identityadoptiondecision"
-	"github.com/Wei-Shaw/sub2api/ent/predicate"
-	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
-	"github.com/Wei-Shaw/sub2api/internal/service"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/ent/authidentity"
+	"github.com/th3ee9ine/qqq2api/ent/authidentitychannel"
+	"github.com/th3ee9ine/qqq2api/ent/identityadoptiondecision"
+	"github.com/th3ee9ine/qqq2api/ent/predicate"
+	dbuser "github.com/th3ee9ine/qqq2api/ent/user"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ip"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/oauth"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/gin-gonic/gin"
@@ -1475,59 +1475,6 @@ func readPendingOAuthBrowserSession(c *gin.Context, h *AuthHandler) (*service.Au
 	}
 
 	return svc, session, clearCookies, nil
-}
-
-func (h *AuthHandler) consumePendingOAuthSessionOnLogout(c *gin.Context) {
-	if c == nil || c.Request == nil {
-		return
-	}
-
-	sessionToken, err := readOAuthPendingSessionCookie(c)
-	if err != nil || strings.TrimSpace(sessionToken) == "" {
-		return
-	}
-	browserSessionKey, err := readOAuthPendingBrowserCookie(c)
-	if err != nil || strings.TrimSpace(browserSessionKey) == "" {
-		return
-	}
-
-	svc, err := h.pendingIdentityService()
-	if err != nil {
-		return
-	}
-	_, _ = svc.ConsumeBrowserSession(c.Request.Context(), sessionToken, browserSessionKey)
-}
-
-func clearOAuthLogoutCookies(c *gin.Context) {
-	secureCookie := isRequestHTTPS(c)
-
-	clearOAuthPendingSessionCookie(c, secureCookie)
-	clearOAuthPendingBrowserCookie(c, secureCookie)
-	clearOAuthBindAccessTokenCookie(c, secureCookie)
-
-	clearCookie(c, linuxDoOAuthStateCookieName, secureCookie)
-	clearCookie(c, linuxDoOAuthVerifierCookie, secureCookie)
-	clearCookie(c, linuxDoOAuthRedirectCookie, secureCookie)
-	clearCookie(c, linuxDoOAuthIntentCookieName, secureCookie)
-	clearCookie(c, linuxDoOAuthBindUserCookieName, secureCookie)
-
-	oidcClearCookie(c, oidcOAuthStateCookieName, secureCookie)
-	oidcClearCookie(c, oidcOAuthVerifierCookie, secureCookie)
-	oidcClearCookie(c, oidcOAuthRedirectCookie, secureCookie)
-	oidcClearCookie(c, oidcOAuthNonceCookie, secureCookie)
-	oidcClearCookie(c, oidcOAuthIntentCookieName, secureCookie)
-	oidcClearCookie(c, oidcOAuthBindUserCookieName, secureCookie)
-
-	wechatClearCookie(c, wechatOAuthStateCookieName, secureCookie)
-	wechatClearCookie(c, wechatOAuthRedirectCookieName, secureCookie)
-	wechatClearCookie(c, wechatOAuthIntentCookieName, secureCookie)
-	wechatClearCookie(c, wechatOAuthModeCookieName, secureCookie)
-	wechatClearCookie(c, wechatOAuthBindUserCookieName, secureCookie)
-
-	wechatPaymentClearCookie(c, wechatPaymentOAuthStateName, secureCookie)
-	wechatPaymentClearCookie(c, wechatPaymentOAuthRedirect, secureCookie)
-	wechatPaymentClearCookie(c, wechatPaymentOAuthContextName, secureCookie)
-	wechatPaymentClearCookie(c, wechatPaymentOAuthScope, secureCookie)
 }
 
 func buildPendingOAuthSessionStatusPayload(session *dbent.PendingAuthSession) gin.H {

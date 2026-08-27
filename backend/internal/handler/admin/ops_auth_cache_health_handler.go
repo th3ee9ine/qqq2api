@@ -3,8 +3,8 @@ package admin
 import (
 	"net/http"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
 )
 
 // GetAuthCacheInvalidationHealth exposes durable outbox lag and subscriber health.

@@ -3,9 +3,9 @@ package admin
 import (
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/handler/dto"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 func TestEnrichShadowParentInfo(t *testing.T) {

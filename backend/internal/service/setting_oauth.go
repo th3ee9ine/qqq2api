@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/imroc/req/v3"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
 // CoerceDingTalkCorpPolicyForWrite 是 coerceDeprecatedDingTalkCorpPolicy 的导出版本，
@@ -262,19 +262,6 @@ func (s *SettingService) parseWeChatConnectOAuthConfig(settings map[string]strin
 	return cfg, nil
 }
 
-func (s *SettingService) weChatOAuthCapabilitiesFromSettings(settings map[string]string) (bool, bool, bool, bool) {
-	cfg := s.effectiveWeChatConnectOAuthConfig(settings)
-	if !cfg.Enabled {
-		return false, false, false, false
-	}
-
-	openReady := cfg.OpenEnabled && cfg.AppIDForMode("open") != "" && cfg.AppSecretForMode("open") != ""
-	mpReady := cfg.MPEnabled && cfg.AppIDForMode("mp") != "" && cfg.AppSecretForMode("mp") != ""
-	mobileReady := cfg.MobileEnabled && cfg.AppIDForMode("mobile") != "" && cfg.AppSecretForMode("mobile") != ""
-
-	return openReady || mpReady, openReady, mpReady, mobileReady
-}
-
 func (s *SettingService) emailOAuthBaseConfig(provider string) config.EmailOAuthProviderConfig {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "github":
@@ -337,11 +324,6 @@ func mergeEmailOAuthBaseConfig(base, override config.EmailOAuthProviderConfig) c
 		base.FrontendRedirectURL = strings.TrimSpace(override.FrontendRedirectURL)
 	}
 	return base
-}
-
-func (s *SettingService) emailOAuthPublicEnabled(settings map[string]string, provider string) bool {
-	cfg := s.effectiveEmailOAuthConfig(settings, provider)
-	return cfg.Enabled && strings.TrimSpace(cfg.ClientID) != "" && strings.TrimSpace(cfg.ClientSecret) != ""
 }
 
 func (s *SettingService) effectiveEmailOAuthConfig(settings map[string]string, provider string) config.EmailOAuthProviderConfig {

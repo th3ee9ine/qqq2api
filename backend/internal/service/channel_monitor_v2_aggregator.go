@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/google/uuid"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 )
 
 const (

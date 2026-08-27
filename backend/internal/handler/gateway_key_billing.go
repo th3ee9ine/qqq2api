@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
-	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
+	middleware2 "github.com/th3ee9ine/qqq2api/internal/server/middleware"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 const keyBillingInfoSchemaVersion = 1

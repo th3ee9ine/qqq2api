@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/usagestats"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 func TestUsageLog_ListWithFilters_ResolvesSoftDeletedUser(t *testing.T) {

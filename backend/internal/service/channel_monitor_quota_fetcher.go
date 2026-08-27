@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/domain"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 	"golang.org/x/sync/singleflight"
 )
 

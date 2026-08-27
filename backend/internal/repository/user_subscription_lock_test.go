@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	_ "github.com/Wei-Shaw/sub2api/ent/runtime"
-	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/stretchr/testify/require"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	_ "github.com/th3ee9ine/qqq2api/ent/runtime"
+	"github.com/th3ee9ine/qqq2api/ent/usersubscription"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"

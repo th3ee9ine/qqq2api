@@ -151,7 +151,7 @@ Per-source signup grants (balance, concurrency, subscriptions) are configured wi
 ## CI/CD & Deployment
 
 **Hosting:**
-- Self-hosted. Docker Compose is the primary path (`deploy/docker-compose.yml`: `weishaw/sub2api:latest` + `postgres:18-alpine` + `redis:8-alpine`; only the app publishes ports). Variants for dev, local, and standalone (single-container).
+- Self-hosted. Docker Compose is the primary path (`deploy/docker-compose.yml`: `ghcr.io/th3ee9ine/sub2api:latest` + `postgres:18-alpine` + `redis:8-alpine`; only the app publishes ports). Variants for dev, local, and standalone (single-container).
 - Alternatives: systemd units (`deploy/sub2api.service`, `deploy/sub2api-datamanagementd.service`), Apple Container (`deploy/apple-container.sh`), Caddy front proxy (`deploy/Caddyfile`).
 - Install/deploy scripts: `deploy/install.sh`, `deploy/docker-deploy.sh`, `deploy/install-datamanagementd.sh`. Docs: `deploy/DOCKER.md`, `deploy/EDGE_SECURITY.md`.
 

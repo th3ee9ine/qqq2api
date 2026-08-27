@@ -7,10 +7,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
-	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/securityaudit"
+	middleware2 "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )

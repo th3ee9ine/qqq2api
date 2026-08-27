@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // 并发控制缓存常量定义

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	dbusagecleanuptask "github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
-	"github.com/Wei-Shaw/sub2api/internal/service"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	dbusagecleanuptask "github.com/th3ee9ine/qqq2api/ent/usagecleanuptask"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 type usageCleanupRepository struct {

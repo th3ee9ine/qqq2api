@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/ent/apikey"
-	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
-	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/ent/apikey"
+	"github.com/th3ee9ine/qqq2api/ent/schema/mixins"
+	"github.com/th3ee9ine/qqq2api/ent/usersubscription"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 func uniqueSoftDeleteValue(t *testing.T, prefix string) string {

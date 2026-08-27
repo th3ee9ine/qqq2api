@@ -2,7 +2,7 @@
 
 **Analysis Date:** 2026-08-23
 
-Sub2API (module `github.com/Wei-Shaw/sub2api`) is an AI API gateway platform. Two-part monorepo: a Go backend (`backend/`) and a Vue 3 SPA (`frontend/`) that is compiled into the Go binary via `go:embed`.
+Sub2API (module `github.com/th3ee9ine/qqq2api`) is an AI API gateway platform. Two-part monorepo: a Go backend (`backend/`) and a Vue 3 SPA (`frontend/`) that is compiled into the Go binary via `go:embed`.
 
 ## Languages
 
@@ -121,7 +121,7 @@ Sub2API (module `github.com/Wei-Shaw/sub2api`) is an AI API gateway platform. Tw
 - Contributor guide: `DEV_GUIDE.md`.
 
 **Production:**
-- Docker Compose is the primary target: `deploy/docker-compose.yml` (app `weishaw/sub2api:latest`, `postgres:18-alpine`, `redis:8-alpine`). Variants: `.dev.yml`, `.local.yml`, `.standalone.yml`.
+- Docker Compose is the primary target: `deploy/docker-compose.yml` (app `ghcr.io/th3ee9ine/sub2api:latest`, `postgres:18-alpine`, `redis:8-alpine`). Variants: `.dev.yml`, `.local.yml`, `.standalone.yml`.
 - Also supported: systemd (`deploy/sub2api.service`, `deploy/sub2api-datamanagementd.service`), Apple Container (`deploy/apple-container.sh`, `deploy/APPLE_CONTAINER.md`), Caddy reverse proxy (`deploy/Caddyfile`).
 - Runs as non-root uid/gid 1000; data volume at `/app/data`; listens on 8080 (`SERVER_PORT`).
 - Health check: `GET /health` (`backend/internal/server/routes/common.go`).

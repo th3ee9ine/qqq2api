@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	servermiddleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 type accountAdminHandlerServiceStub struct {

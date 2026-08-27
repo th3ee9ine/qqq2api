@@ -1,10 +1,10 @@
 package admin
 
 import (
-	"github.com/Wei-Shaw/sub2api/internal/model"
-	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/model"
+	"github.com/th3ee9ine/qqq2api/internal/server/middleware"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // Account administrators receive only the lookup fields required by account

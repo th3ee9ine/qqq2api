@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/migrations"
 )
 
 func TestGroupUsageRollupTriggerInvalidatesCascadedHistoricalDelete(t *testing.T) {

@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 )
 
 func profitControlTestGroup(id int64, margin, buffer float64) *Group {

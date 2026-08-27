@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
-	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ip"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 
 	"github.com/gin-gonic/gin"
 )

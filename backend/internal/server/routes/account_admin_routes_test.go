@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/handler"
-	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
-	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/handler"
+	adminhandler "github.com/th3ee9ine/qqq2api/internal/handler/admin"
+	servermiddleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 )
 
 func TestAccountAdminManagementRoutesAreRegistered(t *testing.T) {

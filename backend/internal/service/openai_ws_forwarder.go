@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	coderws "github.com/coder/websocket"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 	"go.uber.org/zap"
 )
 

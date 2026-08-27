@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	appTimezone "github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
+	appTimezone "github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 )
 
 func useGroupUsageTestTimezone(t *testing.T, name string) {

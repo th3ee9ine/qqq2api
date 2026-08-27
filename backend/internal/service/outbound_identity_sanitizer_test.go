@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/tlsfingerprint"
 )
 
 func TestSanitizeOutboundGatewayIdentity(t *testing.T) {

@@ -5,9 +5,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	middleware2 "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 )
 
 func TestOpsCaptureWriterDoesNotCopyIngressRejectBody(t *testing.T) {

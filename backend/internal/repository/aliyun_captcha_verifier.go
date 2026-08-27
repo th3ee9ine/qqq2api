@@ -10,7 +10,7 @@ import (
 	"github.com/alibabacloud-go/tea/dara"
 	"github.com/alibabacloud-go/tea/tea"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 const aliyunCaptchaTimeoutMillis = 10_000

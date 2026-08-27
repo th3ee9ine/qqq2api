@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // --- 账号统计定价规则 ---

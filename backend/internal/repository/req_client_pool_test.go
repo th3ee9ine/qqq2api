@@ -11,9 +11,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/servertiming"
 )
 
 func forceHTTPVersion(t *testing.T, client *req.Client) string {

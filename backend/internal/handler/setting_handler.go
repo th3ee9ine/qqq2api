@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
-	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/th3ee9ine/qqq2api/internal/handler/dto"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 
 	"github.com/gin-gonic/gin"
 )

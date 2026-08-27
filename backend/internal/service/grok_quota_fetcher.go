@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 )
 
 const grokQuotaSnapshotExtraKey = "grok_usage_snapshot"

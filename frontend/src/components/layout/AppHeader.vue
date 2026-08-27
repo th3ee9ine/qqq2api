@@ -62,7 +62,7 @@
                 </router-link>
                 <a
                   v-if="authStore.isAdmin"
-                  href="https://github.com/Wei-Shaw/sub2api"
+                  href="https://github.com/th3ee9ine/qqq2api"
                   target="_blank"
                   rel="noopener noreferrer"
                   class="dropdown-item"

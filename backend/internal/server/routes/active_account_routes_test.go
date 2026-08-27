@@ -3,10 +3,10 @@ package routes
 import (
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/handler"
-	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/handler"
+	servermiddleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 )
 
 func TestAdminRoutesClaudeAndOpenAIAccountCapabilitiesAreRegistered(t *testing.T) {

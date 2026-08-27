@@ -77,16 +77,16 @@ Monorepo with two independent convention sets: Go backend (`backend/`) and Vue 3
 
 **Go — three groups separated by blank lines:**
 1. Standard library
-2. Project packages (`github.com/Wei-Shaw/sub2api/...`)
+2. Project packages (`github.com/th3ee9ine/qqq2api/...`)
 3. Third-party
 
 `internal/handler/api_key_handler.go:4-19` shows the canonical shape. `internal/service/api_key_service.go` merges groups 2 and 3 into one block; both forms exist, so follow the neighbouring file.
 
 **Go aliasing conventions:**
-- `infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"` — always aliased to avoid shadowing stdlib `errors`.
+- `infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"` — always aliased to avoid shadowing stdlib `errors`.
 - `stderrors "errors"` when a file needs stdlib errors alongside the project package.
-- `dbent "github.com/Wei-Shaw/sub2api/ent"` for the generated Ent client.
-- `middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"` in handlers that also see `internal/middleware`.
+- `dbent "github.com/th3ee9ine/qqq2api/ent"` for the generated Ent client.
+- `middleware2 "github.com/th3ee9ine/qqq2api/internal/server/middleware"` in handlers that also see `internal/middleware`.
 - `dot-import-whitelist` permits only `fmt`; do not dot-import anything else.
 
 **Frontend:**

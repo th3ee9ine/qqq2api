@@ -6,11 +6,11 @@ import (
 	"context"
 	"testing"
 
-	dbent "github.com/Wei-Shaw/sub2api/ent"
-	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
-	"github.com/Wei-Shaw/sub2api/ent/user"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/ent/redeemcode"
+	"github.com/th3ee9ine/qqq2api/ent/user"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // TestCreateWithEmailAliasGuardJoinsOuterTransaction 验证用户创建会加入调用方开启的

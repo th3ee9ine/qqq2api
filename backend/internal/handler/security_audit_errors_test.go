@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
-	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
+	"github.com/th3ee9ine/qqq2api/internal/securityaudit"
 )
 
 func promptGuardDecision(kind securityaudit.DecisionKind) *securityaudit.Decision {

@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 )
 
 func (s *GatewayService) getUserGroupRateMultiplier(ctx context.Context, userID, groupID int64, groupDefaultMultiplier float64) float64 {
@@ -361,65 +361,6 @@ func finalizePostUsageBilling(_ context.Context, p *postUsageBillingParams, deps
 
 	// Account-quota notification is system/account scoped and remains active.
 	go notifyAccountQuota(p, deps, result)
-}
-
-func syncBalanceCacheAfterDeduction(ctx context.Context, p *postUsageBillingParams, deps *billingDeps, result *UsageBillingApplyResult) {
-	if p == nil || p.Cost == nil || p.User == nil || deps == nil || deps.billingCacheService == nil {
-		return
-	}
-	if result != nil && result.NewBalance != nil && deps.billingCacheService.balanceBelowEligibilityThreshold(*result.NewBalance) {
-		if err := deps.billingCacheService.InvalidateUserBalance(ctx, p.User.ID); err != nil {
-			slog.Warn("invalidate balance cache after exhausted deduction failed",
-				"user_id", p.User.ID,
-				"new_balance", *result.NewBalance,
-				"balance_overdrafted", result.BalanceOverdrafted,
-				"error", err,
-			)
-		}
-		return
-	}
-	deps.billingCacheService.QueueDeductBalance(p.User.ID, p.Cost.ActualCost)
-}
-
-// notifyBalanceLow sends balance low notification after deduction.
-// When result.NewBalance is available (from DB transaction RETURNING), it is used directly
-// to reconstruct oldBalance, avoiding stale Redis reads and concurrent-deduction races.
-func notifyBalanceLow(p *postUsageBillingParams, deps *billingDeps, result *UsageBillingApplyResult) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("panic in notifyBalanceLow", "recover", r)
-		}
-	}()
-	if p.APIKey != nil || p.IsSubscriptionBill || p.Cost.ActualCost <= 0 || p.User == nil || deps.balanceNotifyService == nil {
-		slog.Debug("notifyBalanceLow: skipped",
-			"is_subscription", p.IsSubscriptionBill,
-			"actual_cost", p.Cost.ActualCost,
-			"user_nil", p.User == nil,
-			"service_nil", deps.balanceNotifyService == nil,
-		)
-		return
-	}
-
-	oldBalance := resolveOldBalance(p, result)
-	slog.Debug("notifyBalanceLow: calling CheckBalanceAfterDeduction",
-		"user_id", p.User.ID,
-		"old_balance", oldBalance,
-		"cost", p.Cost.ActualCost,
-		"notify_enabled", p.User.BalanceNotifyEnabled,
-		"threshold", p.User.BalanceNotifyThreshold,
-		"result_has_new_balance", result != nil && result.NewBalance != nil,
-	)
-	deps.balanceNotifyService.CheckBalanceAfterDeduction(context.Background(), p.User, oldBalance, p.Cost.ActualCost)
-}
-
-// resolveOldBalance returns the pre-deduction balance.
-// Prefers the DB transaction result (newBalance + cost) over snapshot.
-func resolveOldBalance(p *postUsageBillingParams, result *UsageBillingApplyResult) float64 {
-	if result != nil && result.NewBalance != nil {
-		return *result.NewBalance + p.Cost.ActualCost
-	}
-	// Legacy fallback: snapshot balance from request context
-	return p.User.Balance
 }
 
 // notifyAccountQuota sends account quota threshold notification after increment.

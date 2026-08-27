@@ -26,15 +26,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
-	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/claude"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/geminicli"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai_compat"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
+	"github.com/th3ee9ine/qqq2api/internal/util/urlvalidator"
 	"github.com/tidwall/gjson"
 )
 

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
 )
 
 // mockAccountRepoForGemini Gemini 测试用的 mock

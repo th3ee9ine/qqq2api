@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	pkghttputil "github.com/th3ee9ine/qqq2api/internal/pkg/httputil"
 )
 
 func extractMaxBytesError(err error) (*http.MaxBytesError, bool) {

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai_compat"
 	"github.com/tidwall/gjson"
 )
 
@@ -1198,7 +1198,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageOutputSizes = nonStreamResult.imageOutputSizes
 			searchCount = nonStreamResult.searchCount
 		}
-		s.bindHTTPResponseAccount(ctx, c, account, responseID)
+		if err := s.bindHTTPResponseAccount(ctx, c, account, responseID); err != nil {
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Failed to bind HTTP response affinity: account=%d response_id=%s error=%v", account.ID, responseID, err)
+		}
 
 		// Extract and save Codex usage snapshot from response headers (for OAuth accounts).
 		// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。

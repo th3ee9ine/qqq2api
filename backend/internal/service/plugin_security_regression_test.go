@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	pluginv1 "github.com/Wei-Shaw/sub2api/pkg/pluginapi/v1"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	pluginv1 "github.com/th3ee9ine/qqq2api/pkg/pluginapi/v1"
 	"google.golang.org/grpc"
 )
 

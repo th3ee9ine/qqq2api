@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/ent/userplatformquota"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/ent/userplatformquota"
 )
 
 func TestUpsertForUser_NewUserInsertsAllRecords(t *testing.T) {

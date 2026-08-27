@@ -9,9 +9,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	errors2 "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	errors2 "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
 // ---------- 辅助函数 ----------

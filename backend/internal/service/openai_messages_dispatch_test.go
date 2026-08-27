@@ -3,8 +3,8 @@ package service
 import (
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 )
 
 func TestNormalizeOpenAIMessagesDispatchModelConfig(t *testing.T) {

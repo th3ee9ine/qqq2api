@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
 // 周期任务对 coding plan 账号的额度探测行为（runOnce 集成路径）：

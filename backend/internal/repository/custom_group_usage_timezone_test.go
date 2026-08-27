@@ -3,8 +3,8 @@ package repository
 import (
 	"testing"
 
-	appTimezone "github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
+	appTimezone "github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 )
 
 func useGroupUsageRepositoryTestTimezone(t *testing.T, name string) {

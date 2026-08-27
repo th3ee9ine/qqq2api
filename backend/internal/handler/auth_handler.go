@@ -7,13 +7,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
-	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
-	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/handler/dto"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ip"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
+	middleware2 "github.com/th3ee9ine/qqq2api/internal/server/middleware"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -164,19 +164,8 @@ func (h *AuthHandler) ensureBackendModeAllowsUser(ctx context.Context, user *ser
 	return service.ErrAdminOnlyMode
 }
 
-func (h *AuthHandler) ensureBackendModeAllowsNewUserLogin(ctx context.Context) error {
-	return infraerrors.Forbidden("ADMIN_ONLY_MODE", "User registration and self-service authentication are disabled.")
-}
-
-func (h *AuthHandler) isBackendModeEnabled(ctx context.Context) bool {
-	if h == nil || h.settingSvc == nil {
-		return false
-	}
-	settings, err := h.settingSvc.GetPublicSettings(ctx)
-	if err == nil && settings != nil {
-		return settings.BackendModeEnabled
-	}
-	return h.settingSvc.IsBackendModeEnabled(ctx)
+func (h *AuthHandler) ensureBackendModeAllowsNewUserLogin(_ context.Context) error {
+	return service.ErrAdminOnlyMode
 }
 
 // Register handles user registration

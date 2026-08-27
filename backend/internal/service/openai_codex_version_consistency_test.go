@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 )
 
 func TestCodexVersionConstants_Consistency(t *testing.T) {

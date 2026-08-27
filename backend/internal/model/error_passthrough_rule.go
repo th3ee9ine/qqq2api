@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/th3ee9ine/qqq2api/internal/domain"
 )
 
 // ErrorPassthroughRule 全局错误透传规则

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 )
 
 // WithResolvedTargetPlatform stores the concrete provider chosen for a request

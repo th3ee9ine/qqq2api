@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"testing"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // TestRefreshSingleAccount_RejectsShadow 验证外审第6轮:手动刷新对 spark 影子在调用上游前早拒

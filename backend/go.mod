@@ -1,4 +1,4 @@
-module github.com/Wei-Shaw/sub2api
+module github.com/th3ee9ine/qqq2api
 
 go 1.27.0
 

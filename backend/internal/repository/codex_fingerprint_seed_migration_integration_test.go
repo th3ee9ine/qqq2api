@@ -6,11 +6,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
-	dbmigrations "github.com/Wei-Shaw/sub2api/migrations"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/service"
+	dbmigrations "github.com/th3ee9ine/qqq2api/migrations"
 )
 
 func requireCanonicalUUIDString(t *testing.T, value string) {

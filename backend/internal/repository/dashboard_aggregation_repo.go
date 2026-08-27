@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 type dashboardAggregationRepository struct {

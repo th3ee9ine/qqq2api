@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 type proxyDataResponse struct {
@@ -341,9 +341,13 @@ func TestProxyExportDataIncludesZeroMaxAccountsExplicitly(t *testing.T) {
 
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw))
-	data := raw["data"].(map[string]any)
-	proxies := data["proxies"].([]any)
-	exported := proxies[0].(map[string]any)
+	data, ok := raw["data"].(map[string]any)
+	require.True(t, ok)
+	proxies, ok := data["proxies"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, proxies)
+	exported, ok := proxies[0].(map[string]any)
+	require.True(t, ok)
 	require.Contains(t, exported, "max_accounts")
 	require.Equal(t, float64(0), exported["max_accounts"])
 }

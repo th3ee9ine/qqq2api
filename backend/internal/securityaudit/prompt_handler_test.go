@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	servermiddleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 )
 
 type fakePromptAdminService struct {

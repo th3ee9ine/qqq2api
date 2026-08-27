@@ -3,8 +3,8 @@ package service
 import (
 	"math"
 
-	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/shopspring/decimal"
+	"github.com/th3ee9ine/qqq2api/internal/payment"
 )
 
 const defaultBalanceRechargeMultiplier = 1.0

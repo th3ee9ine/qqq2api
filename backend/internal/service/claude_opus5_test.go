@@ -3,11 +3,11 @@ package service
 import (
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/domain"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/domain"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/claude"
 )
 
 // Claude Opus 5 官方定价（USD per token）：$5 输入 / $25 输出 per MTok。

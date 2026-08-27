@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	openaiwsv2 "github.com/th3ee9ine/qqq2api/internal/service/openai_ws_v2"
 )
 
 const openAIWSMessageReadLimitBytes int64 = 16 * 1024 * 1024

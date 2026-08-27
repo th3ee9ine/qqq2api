@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/payment"
 )
 
 func TestNewAirwallexValidatesConfig(t *testing.T) {

@@ -3,7 +3,7 @@ package service
 import (
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/apicompat"
 )
 
 func NormalizeOpenAICompatRequestedModel(model string) string {

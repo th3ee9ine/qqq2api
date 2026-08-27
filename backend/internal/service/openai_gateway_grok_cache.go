@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -418,14 +418,6 @@ func isGrokFreeCacheFunctionToolIntent(tools, toolChoice gjson.Result) bool {
 	default:
 		return false
 	}
-}
-
-func appendMissingGrokFreeCacheNativeTools(body []byte) ([]byte, error) {
-	return appendGrokFreeCacheNativeTools(body, false)
-}
-
-func appendGrokFreeCacheNativeTools(body []byte, allowPureClientTools bool) ([]byte, error) {
-	return appendGrokFreeCacheNativeToolsWithPolicy(body, allowPureClientTools, true)
 }
 
 func appendGrokFreeCacheNativeToolsWithPolicy(body []byte, allowPureClientTools, allowFunctionSearch bool) ([]byte, error) {
