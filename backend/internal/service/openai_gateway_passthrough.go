@@ -622,6 +622,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 				req.Header.Add(key, v)
 			}
 		}
+		if account.UsesOpenAICodexProtocol() {
+			copyOpenAICodexResidencyHeader(req.Header, c.Request.Header)
+			copyOpenAIMemgenRequestHeader(req.Header, c.Request.Header)
+		}
 	}
 
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），

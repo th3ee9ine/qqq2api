@@ -82,6 +82,10 @@ type openAIWSAcquireRequest struct {
 
 type openAIWSHandshakeCompatibilityKey struct {
 	betaFeatures        string
+	codexResidency      string
+	responsesTiming     string
+	subagent            string
+	memgenRequest       string
 	codexInstallationID string
 	sessionIDHyphen     string
 	sessionIDUnderscore string
@@ -397,6 +401,9 @@ func (c *openAIWSConn) writeJSON(value any, writeCtx context.Context) error {
 	}
 	if writeCtx == nil {
 		writeCtx = context.Background()
+	}
+	if normalized, changed := normalizeLegacyOpenAIOutboundWSResponseCreateValue(value); changed {
+		value = normalized
 	}
 	if err := c.ws.WriteJSON(writeCtx, value); err != nil {
 		return err
@@ -2174,7 +2181,11 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 
 func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
-		betaFeatures: normalizeOpenAIWSBetaFeatures(headers),
+		betaFeatures:    normalizeOpenAIWSBetaFeatures(headers),
+		codexResidency:  normalizeOpenAIWSStableIdentityHeader(headers, openAICodexResidencyHeader),
+		responsesTiming: normalizeOpenAIWSStableIdentityHeader(headers, openAIResponsesTimingMetricsHeader),
+		subagent:        normalizeOpenAIWSStableIdentityHeader(headers, openAISubagentHeader),
+		memgenRequest:   normalizeOpenAIWSStableIdentityHeader(headers, openAIMemgenRequestHeader),
 	}
 	mode := activeCodexFingerprintMode(account)
 	if mode == codexFingerprintOff {

@@ -246,16 +246,20 @@ gateway:
   #
   # 注意：开启后会影响所有客户端的行为（不仅限于 VS Code / Codex CLI），请谨慎开启。
   force_codex_cli: false
-  # Stop rewriting load-shed Codex originators to the official CLI identity.
-  # 关闭「把落在上游降载桶的 Codex originator 改写为官方 CLI 身份（codex_cli_rs）」。
+  # Disable canonical Codex outbound identity enforcement.
+  # 关闭 Codex 出站身份强制统一。
   #
-  # 上游 /backend-api/codex 按 originator 分桶调度容量：命中降载桶的请求即使 HTTP 200，
-  # 也会立刻推 server_is_overloaded 错误事件，网关据此判定瞬时上游故障并冷却账号，
-  # 对外表现为 Codex 账号频繁过载不可用。归一化只替换身份段，保留版本/OS/架构/终端指纹，
-  # 改写后 originator 与 User-Agent 首段仍然配套。
+  # Default false keeps User-Agent, originator, and version derived from the same
+  # canonical identity on every OpenAI OAuth path. Set true only as a compatibility
+  # rollback while diagnosing an upstream change.
+  # 默认 false：所有 OpenAI OAuth 路径的 User-Agent、originator 与 version
+  # 始终从同一规范身份派生。仅在排查上游兼容性变更时临时置 true 回滚。
   #
-  # 默认 false（即归一化开启）；仅当上游调整分桶、使归一化反而落入降载桶时才置 true。
-  disable_codex_originator_normalization: false
+  # Per-account extra.codex_fingerprint_mode defaults to off. If convergence is
+  # needed, canary device mode on a small account set before wider rollout.
+  # 账号级 extra.codex_fingerprint_mode 默认为 off；如需收敛，建议先在少量
+  # 账号上使用 device 模式灰度观察，再逐步扩大。
+  disable_codex_identity_enforcement: false
   # Enable Codex image-generation bridge injection for /openai/v1/responses.
   # 是否为 Codex /responses 请求自动注入 image_generation 工具与桥接指令。
   #

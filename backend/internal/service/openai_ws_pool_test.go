@@ -975,6 +975,83 @@ func TestOpenAIWSConnPool_AcquireDoesNotReuseDifferentStableIdentity(t *testing.
 	}
 }
 
+func TestOpenAIWSConnPool_AcquireDoesNotReuseDifferentNativeHandshakeOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		prepareOld func(http.Header)
+		prepareNew func(http.Header)
+	}{
+		{
+			name: "residency",
+			prepareNew: func(h http.Header) {
+				h.Set(openAICodexResidencyHeader, "us")
+			},
+		},
+		{
+			name: "timing metrics",
+			prepareNew: func(h http.Header) {
+				h.Set(openAIResponsesTimingMetricsHeader, "true")
+			},
+		},
+		{
+			name: "subagent",
+			prepareNew: func(h http.Header) {
+				h.Set(openAISubagentHeader, "review")
+			},
+		},
+		{
+			name: "memgen flag",
+			prepareOld: func(h http.Header) {
+				h.Set(openAISubagentHeader, "memory_consolidation")
+			},
+			prepareNew: func(h http.Header) {
+				h.Set(openAISubagentHeader, "memory_consolidation")
+				h.Set(openAIMemgenRequestHeader, "true")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+			cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+
+			pool := newOpenAIWSConnPool(cfg)
+			dialer := &openAIWSCountingDialer{}
+			pool.setClientDialerForTest(dialer)
+			account := &Account{ID: 9130, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+
+			oldHeaders := make(http.Header)
+			if tt.prepareOld != nil {
+				tt.prepareOld(oldHeaders)
+			}
+			first, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+				Account: account,
+				WSURL:   "wss://example.com/v1/responses",
+				Headers: oldHeaders,
+			})
+			require.NoError(t, err)
+			firstConnID := first.ConnID()
+			first.Release()
+
+			newHeaders := make(http.Header)
+			tt.prepareNew(newHeaders)
+			second, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+				Account: account,
+				WSURL:   "wss://example.com/v1/responses",
+				Headers: newHeaders,
+			})
+			require.NoError(t, err)
+			require.False(t, second.Reused())
+			require.NotEqual(t, firstConnID, second.ConnID())
+			second.Release()
+			require.Equal(t, 2, dialer.DialCount())
+		})
+	}
+}
+
 func TestOpenAIWSConnPool_AcquireRoutingHintRemainsSoftAffinity(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1

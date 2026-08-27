@@ -274,6 +274,42 @@ type coderOpenAIWSClientConn struct {
 
 var _ openaiwsv2.FrameConn = (*coderOpenAIWSClientConn)(nil)
 
+// openAIWSOutboundMarkerGuardFrameConn is the final client-to-upstream guard
+// for passthrough WS traffic. Pooled JSON writes use openAIWSConn.writeJSON;
+// passthrough writes raw frames and therefore need the same invariant at this
+// separate wire boundary.
+type openAIWSOutboundMarkerGuardFrameConn struct {
+	inner openaiwsv2.FrameConn
+}
+
+var _ openaiwsv2.FrameConn = (*openAIWSOutboundMarkerGuardFrameConn)(nil)
+
+func (c *openAIWSOutboundMarkerGuardFrameConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
+	if c == nil || c.inner == nil {
+		return coderws.MessageText, nil, errOpenAIWSConnClosed
+	}
+	return c.inner.ReadFrame(ctx)
+}
+
+func (c *openAIWSOutboundMarkerGuardFrameConn) WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error {
+	if c == nil || c.inner == nil {
+		return errOpenAIWSConnClosed
+	}
+	if msgType == coderws.MessageText || msgType == coderws.MessageBinary {
+		if normalized, changed := normalizeLegacyOpenAIOutboundWSResponseCreateJSON(payload); changed {
+			payload = normalized
+		}
+	}
+	return c.inner.WriteFrame(ctx, msgType, payload)
+}
+
+func (c *openAIWSOutboundMarkerGuardFrameConn) Close() error {
+	if c == nil || c.inner == nil {
+		return nil
+	}
+	return c.inner.Close()
+}
+
 func (c *coderOpenAIWSClientConn) WriteJSON(ctx context.Context, value any) error {
 	if c == nil || c.conn == nil {
 		return errOpenAIWSConnClosed

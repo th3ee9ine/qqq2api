@@ -113,6 +113,13 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 				headers.Set(name, value)
 			}
 		}
+		if account != nil && account.UsesOpenAICodexProtocol() {
+			// These optional headers are emitted by the native Codex client at
+			// WS handshake time. Keep their exact singleton/value semantics.
+			copyOpenAICodexResidencyHeader(headers, c.Request.Header)
+			copyOpenAIResponsesTimingMetricsHeader(headers, c.Request.Header)
+			copyOpenAIMemgenRequestHeader(headers, c.Request.Header)
+		}
 	}
 	// 真实 Codex 的 WS 握手同样携带会话级 x-codex-beta-features
 	// （client.rs build_websocket_headers 复用 build_responses_headers），
