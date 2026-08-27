@@ -399,6 +399,11 @@ func TestOpenAIGatewayService_Forward_HTTPIngressOAuthKeepsWSv2Decision(t *testi
 	require.True(t, firstPinned, "HTTP facade connection pinning must not depend on store=false")
 
 	continuationContext, continuationRecorder := newHTTPContext()
+	// Request-scoped native headers may change between turns. The OAuth HTTP
+	// facade must still reuse the connection that owns previous_response_id.
+	continuationContext.Request.Header.Set(openAIResponsesTimingMetricsHeader, "true")
+	continuationContext.Request.Header.Set(openAISubagentHeader, "memory_consolidation")
+	continuationContext.Request.Header.Set(openAIMemgenRequestHeader, "true")
 	continuationBody := []byte(`{"model":"gpt-5.1","stream":true,"previous_response_id":"resp_oauth_first","input":[{"type":"input_text","text":"continue"}]}`)
 	continuationResult, err := svc.Forward(context.Background(), continuationContext, account, continuationBody)
 	require.NoError(t, err)

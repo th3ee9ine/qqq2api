@@ -559,6 +559,25 @@ func (c *openAIWSConn) matchesHandshakeCompatibility(compatibility openAIWSHands
 	return c != nil && c.handshakeCompatibility == compatibility
 }
 
+// matchesContinuationHandshakeCompatibility checks the connection-level
+// properties that must remain stable while continuing a response. A pinned
+// connection cannot renegotiate timing, subagent, or memory-generation
+// handshake options, so its original values remain in effect instead of making
+// the still-live response-owning connection look unavailable.
+func (c *openAIWSConn) matchesContinuationHandshakeCompatibility(compatibility openAIWSHandshakeCompatibilityKey) bool {
+	if c == nil {
+		return false
+	}
+	existing := c.handshakeCompatibility
+	existing.responsesTiming = ""
+	existing.subagent = ""
+	existing.memgenRequest = ""
+	compatibility.responsesTiming = ""
+	compatibility.subagent = ""
+	compatibility.memgenRequest = ""
+	return existing == compatibility
+}
+
 func (c *openAIWSConn) matchesRoutingAffinity(routingAffinity string) bool {
 	return c != nil && c.routingAffinity == routingAffinity
 }
@@ -907,7 +926,7 @@ retryAcquire:
 				return nil, errOpenAIWSPreferredConnUnavailable
 			}
 			preferredConn, ok := ap.conns[preferredConnID]
-			if !ok || !preferredConn.matchesHandshakeCompatibility(compatibility) {
+			if !ok || !preferredConn.matchesContinuationHandshakeCompatibility(compatibility) {
 				p.recordConnPickDuration(time.Since(pickStartedAt))
 				ap.mu.Unlock()
 				closeOpenAIWSConns(evicted)

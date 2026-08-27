@@ -1052,6 +1052,153 @@ func TestOpenAIWSConnPool_AcquireDoesNotReuseDifferentNativeHandshakeOptions(t *
 	}
 }
 
+func TestOpenAIWSConnPool_ForcePreferredContinuationIgnoresRequestScopedHandshakeOptions(t *testing.T) {
+	tests := []struct {
+		name       string
+		prepareOld func(http.Header)
+		prepareNew func(http.Header)
+	}{
+		{
+			name: "timing metrics",
+			prepareOld: func(h http.Header) {
+				h.Set(openAIResponsesTimingMetricsHeader, "true")
+			},
+		},
+		{
+			name: "subagent",
+			prepareNew: func(h http.Header) {
+				h.Set(openAISubagentHeader, "review")
+			},
+		},
+		{
+			name: "memgen flag",
+			prepareOld: func(h http.Header) {
+				h.Set(openAISubagentHeader, "memory_consolidation")
+				h.Set(openAIMemgenRequestHeader, "true")
+			},
+			prepareNew: func(h http.Header) {
+				h.Set(openAISubagentHeader, "memory_consolidation")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+			cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+
+			pool := newOpenAIWSConnPool(cfg)
+			t.Cleanup(pool.Close)
+			dialer := &openAIWSCountingDialer{}
+			pool.setClientDialerForTest(dialer)
+			account := &Account{ID: 9131, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+
+			oldHeaders := make(http.Header)
+			oldHeaders.Set(openAICodexResidencyHeader, "us")
+			oldHeaders.Set("X-Codex-Beta-Features", "responses_websockets_v2")
+			if tt.prepareOld != nil {
+				tt.prepareOld(oldHeaders)
+			}
+			first, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+				Account: account,
+				WSURL:   "wss://example.com/v1/responses",
+				Headers: oldHeaders,
+			})
+			require.NoError(t, err)
+			firstConnID := first.ConnID()
+			first.Release()
+
+			newHeaders := make(http.Header)
+			newHeaders.Set(openAICodexResidencyHeader, "us")
+			newHeaders.Set("X-Codex-Beta-Features", "responses_websockets_v2")
+			if tt.prepareNew != nil {
+				tt.prepareNew(newHeaders)
+			}
+			continuation, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+				Account:            account,
+				WSURL:              "wss://example.com/v1/responses",
+				Headers:            newHeaders,
+				PreferredConnID:    firstConnID,
+				ForcePreferredConn: true,
+			})
+			require.NoError(t, err)
+			require.True(t, continuation.Reused())
+			require.Equal(t, firstConnID, continuation.ConnID())
+			continuation.Release()
+			require.Equal(t, 1, dialer.DialCount())
+		})
+	}
+}
+
+func TestOpenAIWSConnPool_ForcePreferredContinuationRejectsResidencyMismatch(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+
+	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	account := &Account{ID: 9132, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+
+	first, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/v1/responses",
+	})
+	require.NoError(t, err)
+	firstConnID := first.ConnID()
+	first.Release()
+
+	continuationHeaders := make(http.Header)
+	continuationHeaders.Set(openAICodexResidencyHeader, "us")
+	_, err = pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account:            account,
+		WSURL:              "wss://example.com/v1/responses",
+		Headers:            continuationHeaders,
+		PreferredConnID:    firstConnID,
+		ForcePreferredConn: true,
+	})
+	require.ErrorIs(t, err, errOpenAIWSPreferredConnUnavailable)
+	require.Equal(t, 1, dialer.DialCount())
+}
+
+func TestOpenAIWSConnPool_ForcePreferredContinuationRejectsFingerprintMismatch(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+
+	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	account := activeCodexFingerprintPoolAccountForTest(9133)
+
+	first, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/v1/responses",
+		Headers: stableOpenAIWSIdentityHeadersForTest(),
+	})
+	require.NoError(t, err)
+	firstConnID := first.ConnID()
+	first.Release()
+
+	continuationHeaders := stableOpenAIWSIdentityHeadersForTest()
+	continuationHeaders.Set("thread-id", "thread-b")
+	_, err = pool.Acquire(context.Background(), openAIWSAcquireRequest{
+		Account:            account,
+		WSURL:              "wss://example.com/v1/responses",
+		Headers:            continuationHeaders,
+		PreferredConnID:    firstConnID,
+		ForcePreferredConn: true,
+	})
+	require.ErrorIs(t, err, errOpenAIWSPreferredConnUnavailable)
+	require.Equal(t, 1, dialer.DialCount())
+}
+
 func TestOpenAIWSConnPool_AcquireRoutingHintRemainsSoftAffinity(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
