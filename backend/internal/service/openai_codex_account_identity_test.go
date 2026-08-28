@@ -23,7 +23,7 @@ func (s *codexAccountIdentityRepoStub) GetByID(_ context.Context, _ int64) (*Acc
 }
 
 func TestCodexRequestBodyIdentityNamespaceIsStablePerOAuthAccount(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.6-codex","prompt_cache_key":"client-session","client_metadata":{"x-codex-installation-id":"client-installation","session_id":"client-session","thread_id":"client-thread","x-codex-window-id":"client-window","x-codex-turn-metadata":"{\"installation_id\":\"client-installation\",\"session_id\":\"client-session\",\"thread_id\":\"client-thread\",\"turn_id\":\"client-turn\",\"window_id\":\"client-window\"}"}}`)
+	body := []byte(`{"model":"gpt-5.6-codex","prompt_cache_key":"client-session","client_metadata":{"x-codex-installation-id":"client-installation","session_id":"client-session","thread_id":"client-thread","x-codex-window-id":"client-window","x-codex-turn-metadata":"{\"installation_id\":\"client-installation\",\"session_id\":\"client-session\",\"thread_id\":\"client-thread\",\"forked_from_thread_id\":\"client-fork-thread\",\"turn_id\":\"client-turn\",\"parent_turn_id\":\"client-parent-turn\",\"root_turn_id\":\"client-root-turn\",\"window_id\":\"client-window\",\"context_window_id\":\"client-context-window\",\"forked_from_ordinal_exclusive\":42}"}}`)
 	account11 := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "chatgpt-account-11"}}
 	account19 := &Account{ID: 19, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "chatgpt-account-19"}}
 
@@ -55,9 +55,20 @@ func TestCodexRequestBodyIdentityNamespaceIsStablePerOAuthAccount(t *testing.T) 
 	var embeddedSecond map[string]any
 	require.NoError(t, json.Unmarshal([]byte(gjson.GetBytes(first, "client_metadata.x-codex-turn-metadata").String()), &embeddedFirst))
 	require.NoError(t, json.Unmarshal([]byte(gjson.GetBytes(second, "client_metadata.x-codex-turn-metadata").String()), &embeddedSecond))
-	for _, field := range []string{"installation_id", "session_id", "thread_id", "turn_id", "window_id"} {
+	for _, field := range []string{
+		"installation_id",
+		"session_id",
+		"thread_id",
+		"forked_from_thread_id",
+		"turn_id",
+		"parent_turn_id",
+		"root_turn_id",
+		"window_id",
+		"context_window_id",
+	} {
 		require.NotEqual(t, embeddedFirst[field], embeddedSecond[field], field)
 	}
+	require.EqualValues(t, 42, embeddedFirst["forked_from_ordinal_exclusive"], "native numeric ancestry is not an identity")
 }
 
 func TestCodexAccountIdentityNamespaceUsesStableCredentialSource(t *testing.T) {

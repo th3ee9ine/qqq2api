@@ -299,6 +299,11 @@ func (c *openAIWSOutboundMarkerGuardFrameConn) WriteFrame(ctx context.Context, m
 		if normalized, changed := normalizeLegacyOpenAIOutboundWSResponseCreateJSON(payload); changed {
 			payload = normalized
 		}
+		// Raw passthrough frames bypass the pooled JSON writer, so apply the
+		// same native send-time metadata at this final wire boundary.
+		if stamped, changed := stampOpenAIWSStreamRequestStartJSON(payload, time.Now()); changed {
+			payload = stamped
+		}
 	}
 	return c.inner.WriteFrame(ctx, msgType, payload)
 }

@@ -84,6 +84,7 @@ type openAIWSHandshakeCompatibilityKey struct {
 	userAgent           string
 	originator          string
 	version             string
+	openAIBeta          string
 	betaFeatures        string
 	codexResidency      string
 	responsesTiming     string
@@ -92,9 +93,11 @@ type openAIWSHandshakeCompatibilityKey struct {
 	codexInstallationID string
 	sessionIDHyphen     string
 	sessionIDUnderscore string
+	conversationID      string
 	threadID            string
 	clientRequestID     string
 	codexWindowID       string
+	parentThreadID      string
 }
 
 type openAIWSConnLease struct {
@@ -408,6 +411,11 @@ func (c *openAIWSConn) writeJSON(value any, writeCtx context.Context) error {
 	if normalized, changed := normalizeLegacyOpenAIOutboundWSResponseCreateValue(value); changed {
 		value = normalized
 	}
+	// Match native Codex: transport timing is stamped immediately before each
+	// socket write, including retries on an already pooled connection.
+	if stamped, changed := stampOpenAIWSStreamRequestStartValue(value, time.Now()); changed {
+		value = stamped
+	}
 	if err := c.ws.WriteJSON(writeCtx, value); err != nil {
 		return err
 	}
@@ -575,6 +583,7 @@ func (c *openAIWSConn) matchesContinuationHandshakeCompatibility(compatibility o
 	existing.responsesTiming = ""
 	existing.subagent = ""
 	existing.memgenRequest = ""
+	existing.openAIBeta = ""
 	// 已 pin 的 continuation 必须在原握手连接上继续；版本同步或
 	// 管理员调整身份后，新 turn 会因完整兼容键变化而建新连接，
 	// 但在途 continuation 不得因无法重谈握手而中断。
@@ -584,6 +593,7 @@ func (c *openAIWSConn) matchesContinuationHandshakeCompatibility(compatibility o
 	compatibility.responsesTiming = ""
 	compatibility.subagent = ""
 	compatibility.memgenRequest = ""
+	compatibility.openAIBeta = ""
 	compatibility.userAgent = ""
 	compatibility.originator = ""
 	compatibility.version = ""
@@ -2210,41 +2220,32 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 	return strings.Join(normalized, ",")
 }
 
-func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
+func normalizeOpenAIWSHandshakeCompatibility(_ *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
 		userAgent:       normalizeOpenAIWSStableIdentityHeader(headers, "user-agent"),
 		originator:      normalizeOpenAIWSStableIdentityHeader(headers, "originator"),
 		version:         normalizeOpenAIWSStableIdentityHeader(headers, "version"),
+		openAIBeta:      normalizeOpenAIWSStableIdentityHeader(headers, "openai-beta"),
 		betaFeatures:    normalizeOpenAIWSBetaFeatures(headers),
 		codexResidency:  normalizeOpenAIWSStableIdentityHeader(headers, openAICodexResidencyHeader),
 		responsesTiming: normalizeOpenAIWSStableIdentityHeader(headers, openAIResponsesTimingMetricsHeader),
 		subagent:        normalizeOpenAIWSStableIdentityHeader(headers, openAISubagentHeader),
 		memgenRequest:   normalizeOpenAIWSStableIdentityHeader(headers, openAIMemgenRequestHeader),
 	}
-	mode := activeCodexFingerprintMode(account)
-	if mode == codexFingerprintOff {
-		return key
-	}
+	// Native Codex reuses a WebSocket across turns of one client session; it
+	// does not multiplex unrelated installation/session/thread handshakes on a
+	// single connection. Keep every non-empty identity component in the pool
+	// key even when convergence is off or device-only. Otherwise immutable
+	// handshake headers from the first lease leak into a later client's frames.
 	key.codexInstallationID = normalizeOpenAIWSStableIdentityHeader(headers, "x-codex-installation-id")
-	if mode == codexFingerprintDevice {
-		return key
-	}
 	key.sessionIDHyphen = normalizeOpenAIWSStableIdentityHeader(headers, "session-id")
 	key.sessionIDUnderscore = normalizeOpenAIWSStableIdentityHeader(headers, "session_id")
+	key.conversationID = normalizeOpenAIWSStableIdentityHeader(headers, "conversation_id")
 	key.threadID = normalizeOpenAIWSStableIdentityHeader(headers, "thread-id")
 	key.clientRequestID = normalizeOpenAIWSStableIdentityHeader(headers, "x-client-request-id")
 	key.codexWindowID = normalizeOpenAIWSStableIdentityHeader(headers, "x-codex-window-id")
+	key.parentThreadID = normalizeOpenAIWSStableIdentityHeader(headers, codexParentThreadIDHeader)
 	return key
-}
-
-func activeCodexFingerprintMode(account *Account) codexFingerprintMode {
-	if account == nil || account.GetCodexFingerprintMode() == codexFingerprintOff {
-		return codexFingerprintOff
-	}
-	if _, ok := codexFingerprintSeed(account.Extra); !ok {
-		return codexFingerprintOff
-	}
-	return account.GetCodexFingerprintMode()
 }
 
 func normalizeOpenAIWSStableIdentityHeader(headers http.Header, name string) string {

@@ -121,10 +121,18 @@ var codexAccountIdentityFields = []struct {
 	// upstream thread after account scoping.
 	{name: "parent_thread_id", kind: "thread"},
 	{name: codexParentThreadIDHeader, kind: "thread"},
+	// Current native Codex metadata carries the complete fork/turn ancestry in
+	// the canonical x-codex-turn-metadata blob. Scope every identifier so an
+	// account failover cannot mix a new credential with ancestry from the old
+	// credential while leaving non-identity numeric ordinals untouched.
+	{name: "forked_from_thread_id", kind: "thread"},
 	{name: "turn_id", kind: "turn"},
 	{name: "turn-id", kind: "turn"},
+	{name: "parent_turn_id", kind: "turn"},
+	{name: "root_turn_id", kind: "turn"},
 	{name: "window_id", kind: "window"},
 	{name: "x-codex-window-id", kind: "window"},
+	{name: "context_window_id", kind: "context-window"},
 	{name: "x-client-request-id", kind: "request"},
 }
 

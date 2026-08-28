@@ -11,6 +11,7 @@ import (
 
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestNormalizeLegacyOpenAIOutboundWSResponseCreateJSONPreservesPayloadAndIsIdempotent(t *testing.T) {
@@ -74,13 +75,13 @@ func TestOpenAIWSPooledWriteAppliesFinalResponseCreateMarkerGuard(t *testing.T) 
 	require.NoError(t, json.Unmarshal(upstream.jsonWrites[0], &written))
 	require.Equal(t, "keep "+openAICompatClaudeCodeTodoGuardMarker+"todo"+openAICompatClaudeCodeTodoGuardClosingMarker, written["instructions"])
 	require.Equal(t, "preserve-me", written["unknown"].(map[string]any)["literal"])
+	require.NotEmpty(t, written["client_metadata"].(map[string]any)[openAIWSStreamRequestStartMSMetadataKey])
 }
 
 func TestOpenAIWSPassthroughWriteAppliesFinalResponseCreateMarkerGuardOnly(t *testing.T) {
 	inner := &openAIWSOutboundMarkerCaptureConn{}
 	guard := &openAIWSOutboundMarkerGuardFrameConn{inner: inner}
 	responseCreate := []byte(`{"type":"response.create","instructions":"` + codexSparkImageUnsupportedLegacyMarker + `keep` + codexSparkImageUnsupportedLegacyClosingMarker + `","unknown":"preserve-me"}`)
-	wantResponseCreate := []byte(`{"type":"response.create","instructions":"` + codexSparkImageUnsupportedMarker + `keep` + codexSparkImageUnsupportedClosingMarker + `","unknown":"preserve-me"}`)
 	unrelated := []byte(`{"type":"session.update","instructions":"` + codexSparkImageUnsupportedLegacyMarker + `"}`)
 	invalid := []byte(`{"type":"response.create","instructions":"` + codexSparkImageUnsupportedLegacyMarker + `"`)
 
@@ -88,7 +89,13 @@ func TestOpenAIWSPassthroughWriteAppliesFinalResponseCreateMarkerGuardOnly(t *te
 	require.NoError(t, guard.WriteFrame(context.Background(), coderws.MessageText, unrelated))
 	require.NoError(t, guard.WriteFrame(context.Background(), coderws.MessageBinary, invalid))
 
-	require.Equal(t, [][]byte{wantResponseCreate, unrelated, invalid}, inner.frameWrites)
+	require.Len(t, inner.frameWrites, 3)
+	require.Equal(t, "response.create", gjson.GetBytes(inner.frameWrites[0], "type").String())
+	require.Equal(t, codexSparkImageUnsupportedMarker+"keep"+codexSparkImageUnsupportedClosingMarker, gjson.GetBytes(inner.frameWrites[0], "instructions").String())
+	require.Equal(t, "preserve-me", gjson.GetBytes(inner.frameWrites[0], "unknown").String())
+	require.NotEmpty(t, gjson.GetBytes(inner.frameWrites[0], "client_metadata."+openAIWSStreamRequestStartMSMetadataKey).String())
+	require.Equal(t, unrelated, inner.frameWrites[1])
+	require.Equal(t, invalid, inner.frameWrites[2])
 }
 
 type openAIWSOutboundMarkerCaptureConn struct {
