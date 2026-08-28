@@ -2454,8 +2454,8 @@ func (h *AccountHandler) GetTodayStats(c *gin.Context) {
 	response.Success(c, stats)
 }
 
-// BatchTodayStatsRequest 批量今日统计请求体。
-type BatchTodayStatsRequest struct {
+// BatchAccountStatsRequest 批量账号统计请求体。
+type BatchAccountStatsRequest struct {
 	AccountIDs []int64 `json:"account_ids" binding:"required"`
 }
 
@@ -2467,7 +2467,7 @@ type BatchUsageRequest struct {
 // GetBatchTodayStats 批量获取多个账号的今日统计。
 // POST /api/v1/admin/accounts/today-stats/batch
 func (h *AccountHandler) GetBatchTodayStats(c *gin.Context) {
-	var req BatchTodayStatsRequest
+	var req BatchAccountStatsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
@@ -2502,6 +2502,52 @@ func (h *AccountHandler) GetBatchTodayStats(c *gin.Context) {
 
 	payload := gin.H{"stats": stats}
 	cached := accountTodayStatsBatchCache.Set(cacheKey, payload)
+	if cached.ETag != "" {
+		c.Header("ETag", cached.ETag)
+		c.Header("Vary", "If-None-Match")
+	}
+	c.Header("X-Snapshot-Cache", "miss")
+	response.Success(c, payload)
+}
+
+// GetBatchLifetimeStats 批量获取多个账号从创建时间到当前时刻的累计统计。
+// POST /api/v1/admin/accounts/lifetime-stats/batch
+func (h *AccountHandler) GetBatchLifetimeStats(c *gin.Context) {
+	var req BatchAccountStatsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	accountIDs := normalizeInt64IDList(req.AccountIDs)
+	if len(accountIDs) == 0 {
+		response.Success(c, gin.H{"stats": map[string]any{}})
+		return
+	}
+
+	cacheKey := buildAccountLifetimeStatsBatchCacheKey(accountIDs)
+	if cached, ok := accountLifetimeStatsBatchCache.Get(cacheKey); ok {
+		if cached.ETag != "" {
+			c.Header("ETag", cached.ETag)
+			c.Header("Vary", "If-None-Match")
+			if ifNoneMatchMatched(c.GetHeader("If-None-Match"), cached.ETag) {
+				c.Status(http.StatusNotModified)
+				return
+			}
+		}
+		c.Header("X-Snapshot-Cache", "hit")
+		response.Success(c, cached.Payload)
+		return
+	}
+
+	stats, err := h.accountUsageService.GetLifetimeStatsBatch(c.Request.Context(), accountIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	payload := gin.H{"stats": stats}
+	cached := accountLifetimeStatsBatchCache.Set(cacheKey, payload)
 	if cached.ETag != "" {
 		c.Header("ETag", cached.ETag)
 		c.Header("Vary", "If-None-Match")

@@ -200,6 +200,7 @@ export default {
         status: 'Status',
         schedulable: 'Schedulable',
         todayStats: 'Today Stats',
+        accountStats: 'Account Stats',
         groups: 'Groups',
         usageWindows: 'Usage Windows',
         proxy: 'Proxy',

@@ -128,6 +128,49 @@ func (r *usageBatchLogRepoStub) GetDailyStatsAggregated(context.Context, int64, 
 	return nil, nil
 }
 
+type lifetimeStatsLogRepoStub struct {
+	*usageBatchLogRepoStub
+	requestedIDs []int64
+	stats        map[int64]*usagestats.AccountStats
+}
+
+func (r *lifetimeStatsLogRepoStub) GetAccountLifetimeStatsBatch(_ context.Context, accountIDs []int64) (map[int64]*usagestats.AccountStats, error) {
+	r.requestedIDs = append([]int64(nil), accountIDs...)
+	return r.stats, nil
+}
+
+func TestAccountUsageService_GetLifetimeStatsBatch(t *testing.T) {
+	t.Parallel()
+
+	repo := &lifetimeStatsLogRepoStub{
+		usageBatchLogRepoStub: &usageBatchLogRepoStub{},
+		stats: map[int64]*usagestats.AccountStats{
+			42: {
+				Requests:     7,
+				Tokens:       1234,
+				Cost:         1.25,
+				StandardCost: 1.0,
+				UserCost:     1.75,
+			},
+		},
+	}
+	svc := &AccountUsageService{usageLogRepo: repo}
+
+	got, err := svc.GetLifetimeStatsBatch(context.Background(), []int64{42, 0, 99, 42, -1})
+	if err != nil {
+		t.Fatalf("GetLifetimeStatsBatch() error = %v", err)
+	}
+	if len(repo.requestedIDs) != 2 || repo.requestedIDs[0] != 42 || repo.requestedIDs[1] != 99 {
+		t.Fatalf("batch IDs = %v, want [42 99]", repo.requestedIDs)
+	}
+	if got[42] == nil || got[42].Requests != 7 || got[42].Tokens != 1234 || got[42].Cost != 1.25 || got[42].UserCost != 1.75 {
+		t.Fatalf("account 42 stats = %#v", got[42])
+	}
+	if got[99] == nil || got[99].Requests != 0 || got[99].Tokens != 0 || got[99].Cost != 0 || got[99].UserCost != 0 {
+		t.Fatalf("account 99 zero stats = %#v", got[99])
+	}
+}
+
 func TestAccountUsageService_GetUsageBatch_BestEffortByAccount(t *testing.T) {
 	t.Parallel()
 

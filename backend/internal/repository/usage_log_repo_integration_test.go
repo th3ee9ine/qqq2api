@@ -1308,6 +1308,27 @@ func (s *UsageLogRepoSuite) TestGetAccountWindowStats() {
 	s.Require().Equal(int64(70), stats.Tokens) // (10+20) + (15+25)
 }
 
+func (s *UsageLogRepoSuite) TestGetAccountLifetimeStatsBatchUsesEachAccountCreatedAt() {
+	user := mustCreateUser(s.T(), s.client, &service.User{Email: "lifetimestats@test.com"})
+	apiKey := mustCreateApiKey(s.T(), s.client, &service.APIKey{UserID: user.ID, Key: "sk-lifetimestats", Name: "k"})
+	createdAt := time.Now().Add(-1 * time.Hour).UTC()
+	account := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-lifetimestats", CreatedAt: createdAt})
+	emptyAccount := mustCreateAccount(s.T(), s.client, &service.Account{Name: "acc-lifetimestats-empty", CreatedAt: createdAt})
+
+	s.createUsageLog(user, apiKey, account, 10, 20, 0.5, createdAt.Add(-time.Minute)) // before account creation
+	s.createUsageLog(user, apiKey, account, 15, 25, 0.6, createdAt.Add(time.Minute))
+	s.createUsageLog(user, apiKey, account, 20, 30, 0.7, createdAt.Add(2*time.Minute))
+
+	statsByAccount, err := s.repo.GetAccountLifetimeStatsBatch(s.ctx, []int64{account.ID, emptyAccount.ID})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), statsByAccount[account.ID].Requests)
+	s.Require().Equal(int64(90), statsByAccount[account.ID].Tokens)
+	s.Require().InDelta(1.3, statsByAccount[account.ID].Cost, 1e-9)
+	s.Require().InDelta(1.3, statsByAccount[account.ID].UserCost, 1e-9)
+	s.Require().Equal(int64(0), statsByAccount[emptyAccount.ID].Requests)
+	s.Require().Equal(int64(0), statsByAccount[emptyAccount.ID].Tokens)
+}
+
 // --- GetUserUsageTrendByUserID ---
 
 func (s *UsageLogRepoSuite) TestGetUserUsageTrendByUserID() {

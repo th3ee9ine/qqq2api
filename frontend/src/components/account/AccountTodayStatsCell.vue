@@ -5,6 +5,7 @@
       <div class="h-3 w-12 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
       <div class="h-3 w-16 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
       <div class="h-3 w-10 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
+      <div class="h-3 w-14 animate-pulse rounded bg-gray-200 dark:bg-gray-700"></div>
     </div>
 
     <!-- Error state -->

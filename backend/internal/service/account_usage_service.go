@@ -84,6 +84,10 @@ type accountWindowStatsBatchReader interface {
 	GetAccountWindowStatsBatch(ctx context.Context, accountIDs []int64, startTime time.Time) (map[int64]*usagestats.AccountStats, error)
 }
 
+type accountLifetimeStatsBatchReader interface {
+	GetAccountLifetimeStatsBatch(ctx context.Context, accountIDs []int64) (map[int64]*usagestats.AccountStats, error)
+}
+
 // apiUsageCache 缓存从 Anthropic API 获取的使用率数据（utilization, resets_at）
 // 同时支持缓存错误响应（负缓存），防止 429 等错误导致的重试风暴
 type apiUsageCache struct {
@@ -1466,6 +1470,75 @@ func (s *AccountUsageService) GetTodayStatsBatch(ctx context.Context, accountIDs
 	}
 
 	_ = g.Wait()
+
+	for _, accountID := range uniqueIDs {
+		if _, ok := result[accountID]; !ok {
+			result[accountID] = &WindowStats{}
+		}
+	}
+	return result, nil
+}
+
+// GetLifetimeStatsBatch 批量获取账号从各自创建时间到当前时刻的累计统计。
+func (s *AccountUsageService) GetLifetimeStatsBatch(ctx context.Context, accountIDs []int64) (map[int64]*WindowStats, error) {
+	uniqueIDs := make([]int64, 0, len(accountIDs))
+	seen := make(map[int64]struct{}, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if accountID <= 0 {
+			continue
+		}
+		if _, exists := seen[accountID]; exists {
+			continue
+		}
+		seen[accountID] = struct{}{}
+		uniqueIDs = append(uniqueIDs, accountID)
+	}
+
+	result := make(map[int64]*WindowStats, len(uniqueIDs))
+	if len(uniqueIDs) == 0 {
+		return result, nil
+	}
+
+	if batchReader, ok := s.usageLogRepo.(accountLifetimeStatsBatchReader); ok {
+		statsByAccount, err := batchReader.GetAccountLifetimeStatsBatch(ctx, uniqueIDs)
+		if err != nil {
+			return nil, fmt.Errorf("get account lifetime stats batch failed: %w", err)
+		}
+		for _, accountID := range uniqueIDs {
+			result[accountID] = windowStatsFromAccountStats(statsByAccount[accountID])
+		}
+		return result, nil
+	}
+
+	// 兼容未实现批量接口的仓储（例如外部实现和测试替身）。
+	accounts, err := s.accountRepo.GetByIDs(ctx, uniqueIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get accounts for lifetime stats failed: %w", err)
+	}
+
+	var mu sync.Mutex
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(8)
+	for _, account := range accounts {
+		if account == nil {
+			continue
+		}
+		accountID := account.ID
+		createdAt := account.CreatedAt
+		g.Go(func() error {
+			stats, queryErr := s.usageLogRepo.GetAccountWindowStats(gctx, accountID, createdAt)
+			if queryErr != nil {
+				return queryErr
+			}
+			mu.Lock()
+			result[accountID] = windowStatsFromAccountStats(stats)
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("get account lifetime stats failed: %w", err)
+	}
 
 	for _, accountID := range uniqueIDs {
 		if _, ok := result[accountID]; !ok {

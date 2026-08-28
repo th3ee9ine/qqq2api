@@ -311,6 +311,13 @@
               :error="todayStatsError"
             />
           </template>
+          <template #cell-account_stats="{ row }">
+            <AccountTodayStatsCell
+              :stats="lifetimeStatsByAccountId[String(row.id)] ?? null"
+              :loading="lifetimeStatsLoading"
+              :error="lifetimeStatsError"
+            />
+          </template>
           <template #cell-groups="{ row }">
             <AccountGroupsCell :groups="row.groups" :max-display="4" />
           </template>
@@ -646,7 +653,7 @@ const accountToolsDropdownStyle = computed(() => ({
   width: `${accountToolsDropdownPosition.width}px`
 }))
 const hiddenColumns = reactive<Set<string>>(new Set())
-const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'scheduler_score', 'rate_multiplier']
+const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'account_stats', 'proxy', 'notes', 'scheduler_score', 'rate_multiplier']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
 // One-time migration: hide scheduler score for existing admins too, because showing it opt-ins to heavy backend scoring.
 const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
@@ -706,7 +713,11 @@ const todayStatsByAccountId = ref<Record<string, WindowStats>>({})
 const todayStatsLoading = ref(false)
 const todayStatsError = ref<string | null>(null)
 const todayStatsReqSeq = ref(0)
-const pendingTodayStatsRefresh = ref(false)
+const lifetimeStatsByAccountId = ref<Record<string, WindowStats>>({})
+const lifetimeStatsLoading = ref(false)
+const lifetimeStatsError = ref<string | null>(null)
+const lifetimeStatsReqSeq = ref(0)
+const pendingStatsRefresh = ref(false)
 const usageManualRefreshToken = ref(0)
 
 const desktopViewportQuery = '(min-width: 768px)'
@@ -727,7 +738,7 @@ let usageBatchFlushTimer: ReturnType<typeof setTimeout> | null = null
 let queuedUsageBatchForce = false
 let usageBatchRequestToken = 0
 
-const buildDefaultTodayStats = (): WindowStats => ({
+const buildDefaultWindowStats = (): WindowStats => ({
   requests: 0,
   tokens: 0,
   cost: 0,
@@ -894,7 +905,7 @@ const refreshTodayStatsBatch = async () => {
     const nextStats: Record<string, WindowStats> = {}
     for (const accountID of accountIDs) {
       const key = String(accountID)
-      nextStats[key] = serverStats[key] ?? buildDefaultTodayStats()
+      nextStats[key] = serverStats[key] ?? buildDefaultWindowStats()
     }
     todayStatsByAccountId.value = nextStats
   } catch (error) {
@@ -906,6 +917,50 @@ const refreshTodayStatsBatch = async () => {
       todayStatsLoading.value = false
     }
   }
+}
+
+const refreshLifetimeStatsBatch = async () => {
+  if (hiddenColumns.has('account_stats')) {
+    lifetimeStatsLoading.value = false
+    lifetimeStatsError.value = null
+    return
+  }
+
+  const accountIDs = accounts.value.map(account => account.id)
+  const reqSeq = ++lifetimeStatsReqSeq.value
+  if (accountIDs.length === 0) {
+    lifetimeStatsByAccountId.value = {}
+    lifetimeStatsError.value = null
+    lifetimeStatsLoading.value = false
+    return
+  }
+
+  lifetimeStatsLoading.value = true
+  lifetimeStatsError.value = null
+
+  try {
+    const result = await adminAPI.accounts.getBatchLifetimeStats(accountIDs)
+    if (reqSeq !== lifetimeStatsReqSeq.value) return
+    const serverStats = result.stats ?? {}
+    const nextStats: Record<string, WindowStats> = {}
+    for (const accountID of accountIDs) {
+      const key = String(accountID)
+      nextStats[key] = serverStats[key] ?? buildDefaultWindowStats()
+    }
+    lifetimeStatsByAccountId.value = nextStats
+  } catch (error) {
+    if (reqSeq !== lifetimeStatsReqSeq.value) return
+    lifetimeStatsError.value = 'Failed'
+    console.error('Failed to load account lifetime stats:', error)
+  } finally {
+    if (reqSeq === lifetimeStatsReqSeq.value) {
+      lifetimeStatsLoading.value = false
+    }
+  }
+}
+
+const refreshVisibleStats = async () => {
+  await Promise.all([refreshTodayStatsBatch(), refreshLifetimeStatsBatch()])
 }
 
 const autoRefreshIntervalLabel = (sec: number) => {
@@ -1050,6 +1105,11 @@ const toggleColumn = (key: string) => {
       console.error('Failed to load account today stats after showing column:', error)
     })
   }
+  if (key === 'account_stats' && wasHidden) {
+    refreshLifetimeStatsBatch().catch((error) => {
+      console.error('Failed to load account lifetime stats after showing column:', error)
+    })
+  }
   if (key === 'scheduler_score') {
     // The server only returns scheduler scores when this column is visible, so reload the current page immediately.
     syncAccountListDerivedParams()
@@ -1183,7 +1243,7 @@ const load = async () => {
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
-  pendingTodayStatsRefresh.value = false
+  pendingStatsRefresh.value = false
   if (isFirstLoad.value) {
     requestParams.lite = '1'
   }
@@ -1192,7 +1252,7 @@ const load = async () => {
     isFirstLoad.value = false
     delete requestParams.lite
   }
-  await refreshTodayStatsBatch()
+  await refreshVisibleStats()
 }
 
 const reload = async () => {
@@ -1200,9 +1260,9 @@ const reload = async () => {
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
-  pendingTodayStatsRefresh.value = false
+  pendingStatsRefresh.value = false
   await baseReload()
-  await refreshTodayStatsBatch()
+  await refreshVisibleStats()
 }
 
 const refreshUpstreamBillingSortedList = async (force = false) => {
@@ -1223,7 +1283,7 @@ const debouncedReload = () => {
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
-  pendingTodayStatsRefresh.value = true
+  pendingStatsRefresh.value = true
   baseDebouncedReload()
 }
 
@@ -1231,7 +1291,7 @@ const handlePageChange = (page: number) => {
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
-  pendingTodayStatsRefresh.value = true
+  pendingStatsRefresh.value = true
   baseHandlePageChange(page)
 }
 
@@ -1239,7 +1299,7 @@ const handlePageSizeChange = (size: number) => {
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
-  pendingTodayStatsRefresh.value = true
+  pendingStatsRefresh.value = true
   baseHandlePageSizeChange(size)
 }
 
@@ -1253,7 +1313,7 @@ const handleSort = (key: string, order: AccountSortOrder) => {
   pagination.page = 1
   hasPendingListSync.value = false
   resetAutoRefreshCache()
-  pendingTodayStatsRefresh.value = true
+  pendingStatsRefresh.value = true
   load()
 }
 
@@ -1261,10 +1321,10 @@ watch(loading, (isLoading, wasLoading) => {
   if (wasLoading && !isLoading) {
     upstreamBillingNow.value = Date.now()
   }
-  if (wasLoading && !isLoading && pendingTodayStatsRefresh.value) {
-    pendingTodayStatsRefresh.value = false
-    refreshTodayStatsBatch().catch((error) => {
-      console.error('Failed to refresh account today stats after table load:', error)
+  if (wasLoading && !isLoading && pendingStatsRefresh.value) {
+    pendingStatsRefresh.value = false
+    refreshVisibleStats().catch((error) => {
+      console.error('Failed to refresh account stats after table load:', error)
     })
   }
 })
@@ -1406,7 +1466,7 @@ const refreshAccountsIncrementally = async () => {
     }
     upstreamBillingNow.value = Date.now()
 
-    await refreshTodayStatsBatch()
+    await refreshVisibleStats()
   } catch (error) {
     console.error('Auto refresh failed:', error)
   } finally {
@@ -1598,7 +1658,8 @@ const allColumns = computed(() => {
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
-    { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false }
+    { key: 'today_stats', label: t('admin.accounts.columns.todayStats'), sortable: false },
+    { key: 'account_stats', label: t('admin.accounts.columns.accountStats'), sortable: false }
   ]
   if (!authStore.isSimpleMode) {
     c.push({ key: 'groups', label: t('admin.accounts.columns.groups'), sortable: false })
