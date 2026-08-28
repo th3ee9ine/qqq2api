@@ -686,10 +686,12 @@ export async function exportData(options?: {
 export async function importData(payload: {
   data: AdminDataPayload
   skip_default_group_bind?: boolean
+  auto_assign_proxy?: boolean
 }): Promise<AdminDataImportResult> {
   const { data } = await apiClient.post<AdminDataImportResult>('/admin/accounts/data', {
     data: payload.data,
-    skip_default_group_bind: payload.skip_default_group_bind
+    skip_default_group_bind: payload.skip_default_group_bind,
+    auto_assign_proxy: payload.auto_assign_proxy
   })
   return data
 }

@@ -53,6 +53,8 @@ type accountRepository struct {
 	schedulerCache service.SchedulerCache
 }
 
+var _ service.AccountAutomaticProxyRepository = (*accountRepository)(nil)
+
 var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_primary_",
 	"codex_secondary_",
@@ -130,6 +132,77 @@ func (r *accountRepository) Create(ctx context.Context, account *service.Account
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account create failed: account=%d err=%v", account.ID, err)
+	}
+	return nil
+}
+
+// CreateWithAutomaticProxy creates an account and assigns it to an active
+// proxy with available automatic-assignment capacity in one transaction.
+func (r *accountRepository) CreateWithAutomaticProxy(ctx context.Context, account *service.Account) error {
+	if account == nil {
+		return service.ErrAccountNilInput
+	}
+	if account.ProxyID != nil {
+		return service.ErrProxyAssignmentModeConflict
+	}
+
+	contextTx := dbent.TxFromContext(ctx)
+	client := r.client
+	exec := r.sql
+	var tx *dbent.Tx
+	if contextTx != nil {
+		client = contextTx.Client()
+		exec = client
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+			exec = client
+		} else {
+			exec = client
+		}
+	}
+
+	capacities, err := loadAndLockAutomaticProxyCapacities(ctx, exec)
+	if err != nil {
+		return err
+	}
+	if err := createAccountRecord(ctx, client, account); err != nil {
+		return err
+	}
+	if err := loadAutomaticProxyBaselineCounts(ctx, exec, capacities, []int64{account.ID}); err != nil {
+		return err
+	}
+	assignments, err := planAutomaticProxyAssignments(capacities, []automaticProxyTarget{{
+		AccountID: account.ID,
+		MemberIDs: []int64{account.ID},
+	}})
+	if err != nil {
+		return err
+	}
+	assignedRows, _, err := applyAutomaticProxyAssignments(ctx, exec, assignments)
+	if err != nil {
+		return err
+	}
+	if assignedRows != 1 {
+		return fmt.Errorf("automatic proxy assignment updated %d accounts, expected 1", assignedRows)
+	}
+	proxyID := assignments[0].ProxyID
+	account.ProxyID = &proxyID
+	account.Proxy = nil
+	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -448,6 +521,110 @@ func (r *accountRepository) UpdateWithAccountBillingSettings(
 	rateMultiplier *float64,
 ) error {
 	return r.updateAccount(ctx, account, probeEnabled, rateSyncEnabled, rateMultiplier)
+}
+
+// UpdateWithAccountBillingSettingsAndAutomaticProxy applies the account edit,
+// chooses a capacity-safe proxy, and propagates that proxy to linked shadows in
+// one transaction.
+func (r *accountRepository) UpdateWithAccountBillingSettingsAndAutomaticProxy(
+	ctx context.Context,
+	account *service.Account,
+	explicitProbeEnabled *bool,
+	explicitRateSyncEnabled *bool,
+	explicitRateMultiplier *float64,
+) error {
+	if account == nil {
+		return service.ErrAccountNilInput
+	}
+
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := r.client
+	exec := r.sql
+	var tx *dbent.Tx
+	if contextTx != nil {
+		client = contextTx.Client()
+		exec = client
+	} else {
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+			exec = client
+		} else {
+			exec = client
+		}
+	}
+
+	capacities, err := loadAndLockAutomaticProxyCapacities(ctx, exec)
+	if err != nil {
+		return err
+	}
+	targets, excludedAccountIDs, err := loadAndLockAutomaticProxyTargets(ctx, exec, []int64{account.ID})
+	if err != nil {
+		return err
+	}
+	if err := loadAutomaticProxyBaselineCounts(ctx, exec, capacities, excludedAccountIDs); err != nil {
+		return err
+	}
+	assignments, err := planAutomaticProxyAssignments(capacities, targets)
+	if err != nil {
+		return err
+	}
+	for _, assignment := range assignments {
+		if assignment.AccountID == account.ID {
+			proxyID := assignment.ProxyID
+			account.ProxyID = &proxyID
+			account.Proxy = nil
+			break
+		}
+	}
+	if account.ProxyID == nil {
+		return fmt.Errorf("automatic proxy assignment did not include account %d", account.ID)
+	}
+
+	updated, err := r.updateLockedAccount(
+		ctx,
+		client,
+		account,
+		explicitProbeEnabled,
+		explicitRateSyncEnabled,
+		explicitRateMultiplier,
+	)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+	}
+	assignedRows, assignmentIDs, err := applyAutomaticProxyAssignments(ctx, exec, assignments)
+	if err != nil {
+		return err
+	}
+	if assignedRows != int64(len(assignments)) {
+		return fmt.Errorf("automatic proxy assignment updated %d accounts, expected %d", assignedRows, len(assignments))
+	}
+	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
+		return err
+	}
+	if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, map[string]any{
+		"account_ids": uniquePositiveInt64s(assignmentIDs),
+	}); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	account.UpdatedAt = updated.UpdatedAt
+	if contextTx == nil {
+		r.syncSchedulerAccountSnapshots(baseCtx, assignmentIDs)
+	}
+	return nil
 }
 
 func (r *accountRepository) updateAccount(

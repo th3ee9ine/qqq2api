@@ -1245,7 +1245,16 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="proxyId" :proxies="proxies" />
+        <label class="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-600"
+          :class="autoAssignProxy && 'border-primary-400 bg-primary-50/60 dark:border-primary-600 dark:bg-primary-900/20'">
+          <input v-model="autoAssignProxy" type="checkbox" data-testid="edit-auto-assign-proxy"
+            class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          <span>
+            <span class="block font-medium text-gray-800 dark:text-dark-100">{{ t('admin.accounts.autoAssignProxy') }}</span>
+            <span class="mt-0.5 block text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accounts.autoAssignProxyHint') }}</span>
+          </span>
+        </label>
+        <ProxySelector v-if="!autoAssignProxy" v-model="proxyId" :proxies="proxies" />
       </div>
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
@@ -2624,6 +2633,7 @@ const concurrency = ref(1)
 const priority = ref(0)
 const rateMultiplier = ref(1)
 const proxyId = ref<number | null>(null)
+const autoAssignProxy = ref(false)
 const groupIds = ref<number[]>([])
 const allowedModels = ref<string[]>([])
 const preservedModelMappings = ref<ModelMappingEntry[]>([])
@@ -3050,6 +3060,7 @@ function hydrate() {
   priority.value = account.priority || 0
   rateMultiplier.value = account.rate_multiplier ?? 1
   proxyId.value = account.proxy_id ?? null
+  autoAssignProxy.value = false
   groupIds.value = [...(account.group_ids || [])]
   loadFactor.value = account.load_factor ?? null
   expiresAt.value = account.expires_at ?? null
@@ -3851,14 +3862,18 @@ async function handleSubmit() {
     status: status.value,
     credentials,
     extra,
-    // UpdateAccount treats nil as "leave unchanged" and 0 as "clear proxy".
-    proxy_id: proxyId.value ?? 0,
     concurrency: concurrency.value,
     load_factor: loadFactor.value ?? 0,
     priority: priority.value,
     group_ids: groupIds.value,
     expires_at: expiresAt.value ?? 0,
     auto_pause_on_expired: autoPauseOnExpired.value
+  }
+  if (autoAssignProxy.value) {
+    updates.auto_assign_proxy = true
+  } else {
+    // UpdateAccount treats nil as "leave unchanged" and 0 as "clear proxy".
+    updates.proxy_id = proxyId.value ?? 0
   }
   if (isApiKey.value) {
     updates.upstream_billing_probe_enabled = upstreamBillingProbeEnabled.value
@@ -3875,6 +3890,10 @@ async function handleSubmit() {
     emit('updated', updated)
     handleClose()
   } catch (error: any) {
+    if (error.response?.data?.reason === 'PROXY_CAPACITY_INSUFFICIENT' || error.reason === 'PROXY_CAPACITY_INSUFFICIENT') {
+      appStore.showError(t('admin.accounts.autoAssignProxyCapacityInsufficient'))
+      return
+    }
     appStore.showError(
       error.response?.data?.message ||
       error.response?.data?.detail ||

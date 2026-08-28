@@ -174,6 +174,7 @@ type OpenAICodexPATCreateRequest struct {
 	Notes                   *string        `json:"notes"`
 	GroupIDs                []int64        `json:"group_ids"`
 	ProxyID                 *int64         `json:"proxy_id"`
+	AutoAssignProxy         bool           `json:"auto_assign_proxy"`
 	Concurrency             *int           `json:"concurrency"`
 	Priority                *int           `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
@@ -385,6 +386,10 @@ func (h *OpenAIOAuthHandler) CreateAccountFromCodexPAT(c *gin.Context) {
 		response.BadRequest(c, "load_factor must be <= 10000")
 		return
 	}
+	if req.AutoAssignProxy && req.ProxyID != nil {
+		response.ErrorFrom(c, service.ErrProxyAssignmentModeConflict)
+		return
+	}
 
 	var proxyURL string
 	if req.ProxyID != nil {
@@ -436,6 +441,7 @@ func (h *OpenAIOAuthHandler) CreateAccountFromCodexPAT(c *gin.Context) {
 		Credentials:           credentials,
 		Extra:                 extra,
 		ProxyID:               req.ProxyID,
+		AutoAssignProxy:       req.AutoAssignProxy,
 		Concurrency:           concurrency,
 		Priority:              priority,
 		RateMultiplier:        req.RateMultiplier,

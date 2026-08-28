@@ -1945,7 +1945,16 @@
           <label class="input-label mb-0">{{ t('admin.accounts.proxy') }}</label>
           <ProxyAdBanner />
         </div>
-        <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <label class="mb-2 flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-600"
+          :class="autoAssignProxy && 'border-primary-400 bg-primary-50/60 dark:border-primary-600 dark:bg-primary-900/20'">
+          <input v-model="autoAssignProxy" type="checkbox" data-testid="create-auto-assign-proxy"
+            class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          <span>
+            <span class="block font-medium text-gray-800 dark:text-dark-100">{{ t('admin.accounts.autoAssignProxy') }}</span>
+            <span class="mt-0.5 block text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accounts.autoAssignProxyHint') }}</span>
+          </span>
+        </label>
+        <ProxySelector v-if="!autoAssignProxy" v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -2543,7 +2552,7 @@
         :loading="currentOAuthLoading"
         :error="currentOAuthError"
         :show-help="form.platform === 'anthropic'"
-        :show-proxy-warning="form.platform === 'anthropic' && !!form.proxy_id"
+        :show-proxy-warning="form.platform === 'anthropic' && !!effectiveProxyId"
         :allow-multiple="form.platform === 'anthropic'"
         :show-cookie-option="form.platform === 'anthropic'"
         :show-refresh-token-option="form.platform === 'openai'"
@@ -2754,6 +2763,8 @@ const form = reactive({
   rate_multiplier: 1,
   group_ids: [] as number[]
 })
+const autoAssignProxy = ref(false)
+const effectiveProxyId = computed(() => autoAssignProxy.value ? null : form.proxy_id)
 
 const apiKeyValue = ref('')
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
@@ -3477,7 +3488,8 @@ function buildBasePayload(
     type,
     credentials,
     extra,
-    proxy_id: form.proxy_id,
+    proxy_id: autoAssignProxy.value ? undefined : form.proxy_id,
+    auto_assign_proxy: autoAssignProxy.value,
     concurrency: form.concurrency,
     load_factor: loadFactor.value,
     priority: form.priority,
@@ -3506,6 +3518,10 @@ async function createAndFinish(payload: CreateAccountRequest) {
     emit('created')
     handleClose()
   } catch (error: any) {
+    if (error.response?.data?.reason === 'PROXY_CAPACITY_INSUFFICIENT' || error.reason === 'PROXY_CAPACITY_INSUFFICIENT') {
+      appStore.showError(t('admin.accounts.autoAssignProxyCapacityInsufficient'))
+      return
+    }
     appStore.showError(
       error.response?.data?.message ||
       error.response?.data?.detail ||
@@ -3614,9 +3630,9 @@ async function handleSubmit() {
 
 async function handleGenerateAuthUrl() {
   if (form.platform === 'openai') {
-    await openaiOAuth.generateAuthUrl(form.proxy_id)
+    await openaiOAuth.generateAuthUrl(effectiveProxyId.value)
   } else {
-    await anthropicOAuth.generateAuthUrl(addMethod.value, form.proxy_id)
+    await anthropicOAuth.generateAuthUrl(addMethod.value, effectiveProxyId.value)
   }
 }
 
@@ -3651,7 +3667,7 @@ async function handleExchangeOAuthCode() {
       code,
       openaiOAuth.sessionId.value,
       state,
-      form.proxy_id
+      effectiveProxyId.value
     )
     if (tokenInfo) {
       await createOAuthAccount(
@@ -3662,7 +3678,7 @@ async function handleExchangeOAuthCode() {
     return
   }
   anthropicOAuth.authCode.value = code
-  const tokenInfo = await anthropicOAuth.exchangeAuthCode(addMethod.value, form.proxy_id)
+  const tokenInfo = await anthropicOAuth.exchangeAuthCode(addMethod.value, effectiveProxyId.value)
   if (tokenInfo) {
     await createOAuthAccount(
       { ...tokenInfo },
@@ -3683,7 +3699,7 @@ async function handleCookieAuth(input: string) {
   try {
     for (let index = 0; index < keys.length; index += 1) {
       try {
-        const tokenInfo = await anthropicOAuth.cookieAuth(addMethod.value, keys[index], form.proxy_id)
+        const tokenInfo = await anthropicOAuth.cookieAuth(addMethod.value, keys[index], effectiveProxyId.value)
         if (!tokenInfo) {
           failedCount += 1
           errors.push(`#${index + 1}: ${anthropicOAuth.error.value || t('admin.accounts.oauth.authFailed')}`)
@@ -3742,7 +3758,7 @@ async function handleOpenAIRefreshTokens(input: string, clientId?: string) {
   try {
     for (let index = 0; index < tokens.length; index += 1) {
       try {
-        const tokenInfo = await openaiOAuth.validateRefreshToken(tokens[index], form.proxy_id, clientId)
+        const tokenInfo = await openaiOAuth.validateRefreshToken(tokens[index], effectiveProxyId.value, clientId)
         if (!tokenInfo) {
           failedCount += 1
           errors.push(`#${index + 1}: ${openaiOAuth.error.value || t('admin.accounts.oauth.authFailed')}`)
@@ -3843,7 +3859,8 @@ async function handleOpenAIImportCodexSession(content: string) {
       content: trimmed,
       name: form.name.trim(),
       notes: form.notes.trim() || null,
-      proxy_id: form.proxy_id,
+      proxy_id: autoAssignProxy.value ? undefined : form.proxy_id,
+      auto_assign_proxy: autoAssignProxy.value,
       concurrency: form.concurrency,
       priority: form.priority,
       rate_multiplier: form.rate_multiplier,
@@ -3905,7 +3922,8 @@ async function handleOpenAIImportCodexPAT(accessToken: string) {
       access_token: trimmed,
       name: form.name.trim(),
       notes: form.notes.trim() || null,
-      proxy_id: form.proxy_id,
+      proxy_id: autoAssignProxy.value ? undefined : form.proxy_id,
+      auto_assign_proxy: autoAssignProxy.value,
       concurrency: form.concurrency,
       priority: form.priority,
       rate_multiplier: form.rate_multiplier,
@@ -3933,6 +3951,7 @@ function resetForm() {
   form.notes = ''
   form.platform = 'anthropic'
   form.proxy_id = null
+  autoAssignProxy.value = false
   form.concurrency = 10
   form.priority = 1
   form.rate_multiplier = 1

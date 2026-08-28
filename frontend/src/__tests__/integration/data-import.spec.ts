@@ -130,7 +130,8 @@ describe('ImportDataModal', () => {
       data: expect.objectContaining({
         accounts: [{ name: 'a' }]
       }),
-      skip_default_group_bind: true
+      skip_default_group_bind: true,
+      auto_assign_proxy: false
     })
   })
 
@@ -170,9 +171,36 @@ describe('ImportDataModal', () => {
         proxies: [{ proxy_key: 'p' }],
         accounts: [{ name: 'a' }, { name: 'b' }]
       }),
-      skip_default_group_bind: true
+      skip_default_group_bind: true,
+      auto_assign_proxy: false
     })
     expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
+  })
+
+  it('forwards automatic available-proxy assignment for imported accounts', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
+      proxy_created: 0,
+      proxy_reused: 0,
+      proxy_failed: 0,
+      account_created: 1,
+      account_failed: 0
+    })
+
+    const wrapper = mountModal()
+    const input = wrapper.find('input[type="file"]')
+    setInputFiles(input.element, [makeJsonFile(
+      'data.json',
+      JSON.stringify({ exported_at: '2026-07-05T00:00:00Z', proxies: [], accounts: [{ name: 'a' }] })
+    )])
+    await input.trigger('change')
+    await wrapper.get('[data-testid="import-auto-assign-proxy"]').setValue(true)
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(adminAPI.accounts.importData).toHaveBeenCalledWith(expect.objectContaining({
+      auto_assign_proxy: true
+    }))
   })
 
   it('部分成功时关闭弹窗仍通知父组件刷新', async () => {

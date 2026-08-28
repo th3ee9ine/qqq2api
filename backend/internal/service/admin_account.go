@@ -468,6 +468,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if input == nil {
 		return nil, errors.New("account input is required")
 	}
+	if input.AutoAssignProxy && input.ProxyID != nil {
+		return nil, ErrProxyAssignmentModeConflict
+	}
 	if err := requireActiveAccountPlatform(input.Platform); err != nil {
 		return nil, err
 	}
@@ -518,7 +521,27 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
-	if err := s.accountRepo.Create(ctx, account); err != nil {
+	if input.AutoAssignProxy {
+		if automaticRepo, ok := s.accountRepo.(AccountAutomaticProxyRepository); ok {
+			if err := automaticRepo.CreateWithAutomaticProxy(ctx, account); err != nil {
+				return nil, err
+			}
+		} else {
+			// Narrow unit-test repositories may not expose the atomic capability.
+			// Keep their behavior functional while production uses the transactionally
+			// safe implementation above.
+			if err := s.accountRepo.Create(ctx, account); err != nil {
+				return nil, err
+			}
+			if _, err := s.accountRepo.BulkUpdate(ctx, []int64{account.ID}, AccountBulkUpdate{AutoAssignProxy: true}); err != nil {
+				_ = s.accountRepo.Delete(ctx, account.ID)
+				return nil, err
+			}
+			if assigned, err := s.accountRepo.GetByID(ctx, account.ID); err == nil && assigned != nil {
+				account = assigned
+			}
+		}
+	} else if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}
 
@@ -558,6 +581,12 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 }
 
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
+	if input == nil {
+		return nil, ErrAccountNilInput
+	}
+	if input.AutoAssignProxy && input.ProxyID != nil {
+		return nil, ErrProxyAssignmentModeConflict
+	}
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -589,6 +618,10 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// 安全/身份不变量(影子账号):通用更新路径被 edit/re-auth/refresh/batch 共用,
 	// 必须在此守住,否则仅在创建时的保证可被这些路径绕过。
 	if account.IsCredentialShadow() {
+		if input.AutoAssignProxy {
+			return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_PROXY_INHERITED",
+				"spark shadow account %d proxy is inherited from its parent; manage it on the parent account", account.ID)
+		}
 		// 影子绝不持有凭据(凭据只在母账号)——外审 F5。
 		if !isAllowedSparkShadowCredentialsUpdate(input.Credentials) {
 			return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_NO_CREDENTIALS",
@@ -742,6 +775,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		account.Proxy = nil // 清除关联对象，防止 GORM Save 时根据 Proxy.ID 覆盖 ProxyID
 	}
+	if input.AutoAssignProxy && account.Extra != nil {
+		// The concrete proxy is chosen under repository locks, so identity-change
+		// invalidation cannot rely on comparing ProxyID in this service layer.
+		delete(account.Extra, UpstreamBillingProbeExtraKey)
+		delete(account.Extra, OllamaCloudUsageSnapshotExtraKey)
+	}
 	if !reflect.DeepEqual(previousProbeIdentity, upstreamBillingProbeIdentity(account)) && account.Extra != nil {
 		delete(account.Extra, UpstreamBillingProbeExtraKey)
 		if !isUpstreamBillingProbeAccount(account) {
@@ -820,24 +859,39 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	billingSettingsAppliedAtomically := false
-	updater := s.accountBillingRepo
-	if updater == nil {
-		// Unit tests and narrow internal callers may construct adminServiceImpl
-		// directly; production wiring requires this capability through
-		// AdminAccountRepository.
-		updater, _ = s.accountRepo.(AccountBillingSettingsRepository)
-	}
-	if updater != nil {
-		if err := updater.UpdateWithAccountBillingSettings(
-			ctx,
-			account,
-			requestedProbeEnabledUpdate,
-			requestedRateSyncEnabledUpdate,
-			input.RateMultiplier,
-		); err != nil {
-			return nil, err
+	if input.AutoAssignProxy {
+		if automaticRepo, ok := s.accountRepo.(AccountAutomaticProxyRepository); ok {
+			if err := automaticRepo.UpdateWithAccountBillingSettingsAndAutomaticProxy(
+				ctx,
+				account,
+				requestedProbeEnabledUpdate,
+				requestedRateSyncEnabledUpdate,
+				input.RateMultiplier,
+			); err != nil {
+				return nil, err
+			}
+			billingSettingsAppliedAtomically = true
 		}
-		billingSettingsAppliedAtomically = true
+	} else {
+		updater := s.accountBillingRepo
+		if updater == nil {
+			// Unit tests and narrow internal callers may construct adminServiceImpl
+			// directly; production wiring requires this capability through
+			// AdminAccountRepository.
+			updater, _ = s.accountRepo.(AccountBillingSettingsRepository)
+		}
+		if updater != nil {
+			if err := updater.UpdateWithAccountBillingSettings(
+				ctx,
+				account,
+				requestedProbeEnabledUpdate,
+				requestedRateSyncEnabledUpdate,
+				input.RateMultiplier,
+			); err != nil {
+				return nil, err
+			}
+			billingSettingsAppliedAtomically = true
+		}
 	}
 	if !billingSettingsAppliedAtomically {
 		if err := s.accountRepo.Update(ctx, account); err != nil {
@@ -853,6 +907,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				settings[UpstreamBillingRateSyncEnabledExtraKey] = *requestedRateSyncEnabledUpdate
 			}
 			if err := s.accountRepo.UpdateExtra(ctx, account.ID, settings); err != nil {
+				return nil, err
+			}
+		}
+		if input.AutoAssignProxy {
+			if _, err := s.accountRepo.BulkUpdate(ctx, []int64{account.ID}, AccountBulkUpdate{AutoAssignProxy: true}); err != nil {
 				return nil, err
 			}
 		}

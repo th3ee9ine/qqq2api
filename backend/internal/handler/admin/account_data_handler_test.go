@@ -378,6 +378,42 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
 }
 
+func TestImportDataAutoAssignProxyOverridesExportedAccountBinding(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+
+	dataPayload := map[string]any{
+		"data": map[string]any{
+			"type":    dataType,
+			"version": dataVersion,
+			"proxies": []any{},
+			"accounts": []map[string]any{
+				{
+					"name":        "acc",
+					"platform":    service.PlatformOpenAI,
+					"type":        service.AccountTypeOAuth,
+					"credentials": map[string]any{"token": "x"},
+					"proxy_key":   "missing-exported-proxy",
+					"concurrency": 3,
+					"priority":    50,
+				},
+			},
+		},
+		"skip_default_group_bind": true,
+		"auto_assign_proxy":       true,
+	}
+
+	body, _ := json.Marshal(dataPayload)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/data", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	require.Len(t, adminSvc.createdAccounts, 1)
+	require.True(t, adminSvc.createdAccounts[0].AutoAssignProxy)
+	require.Nil(t, adminSvc.createdAccounts[0].ProxyID)
+}
+
 func TestValidateDataAccountAllowsOnlyCurrentPlatformTypePairs(t *testing.T) {
 	valid := []struct {
 		platform    string

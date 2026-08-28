@@ -76,6 +76,7 @@ type DataAccount struct {
 type DataImportRequest struct {
 	Data                 DataPayload `json:"data"`
 	SkipDefaultGroupBind *bool       `json:"skip_default_group_bind"`
+	AutoAssignProxy      bool        `json:"auto_assign_proxy"`
 }
 
 type DataImportResult struct {
@@ -456,7 +457,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 		}
 
 		var proxyID *int64
-		if item.ProxyKey != nil && *item.ProxyKey != "" {
+		if !req.AutoAssignProxy && item.ProxyKey != nil && *item.ProxyKey != "" {
 			if id, ok := proxyKeyToID[*item.ProxyKey]; ok {
 				proxyID = &id
 			} else {
@@ -481,6 +482,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			Credentials:          item.Credentials,
 			Extra:                item.Extra,
 			ProxyID:              proxyID,
+			AutoAssignProxy:      req.AutoAssignProxy,
 			Concurrency:          item.Concurrency,
 			Priority:             item.Priority,
 			RateMultiplier:       item.RateMultiplier,

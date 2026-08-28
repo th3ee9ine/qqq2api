@@ -144,6 +144,22 @@ type AccountBillingSettingsRepository interface {
 	) error
 }
 
+// AccountAutomaticProxyRepository applies automatic proxy placement in the
+// same database transaction as an account create or edit. Implementations must
+// serialize against other automatic assigners and honor Proxy.MaxAccounts.
+// Keeping this as a narrow optional capability avoids widening read-only
+// AccountRepository test doubles.
+type AccountAutomaticProxyRepository interface {
+	CreateWithAutomaticProxy(ctx context.Context, account *Account) error
+	UpdateWithAccountBillingSettingsAndAutomaticProxy(
+		ctx context.Context,
+		account *Account,
+		probeEnabled *bool,
+		rateSyncEnabled *bool,
+		rateMultiplier *float64,
+	) error
+}
+
 // AdminAccountRepository makes the account-duplication write capability an explicit
 // construction dependency without forcing read-only gateway test doubles to implement it.
 type AdminAccountRepository interface {

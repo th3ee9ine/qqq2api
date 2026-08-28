@@ -51,6 +51,26 @@
         />
       </div>
 
+      <label
+        class="flex cursor-pointer items-start gap-2 rounded-lg border border-gray-200 p-3 text-sm dark:border-dark-600"
+        :class="autoAssignProxy && 'border-primary-400 bg-primary-50/60 dark:border-primary-600 dark:bg-primary-900/20'"
+      >
+        <input
+          v-model="autoAssignProxy"
+          type="checkbox"
+          data-testid="import-auto-assign-proxy"
+          class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+        />
+        <span>
+          <span class="block font-medium text-gray-800 dark:text-dark-100">
+            {{ t('admin.accounts.dataImportAutoAssignProxy') }}
+          </span>
+          <span class="mt-0.5 block text-xs text-gray-500 dark:text-dark-400">
+            {{ t('admin.accounts.dataImportAutoAssignProxyHint') }}
+          </span>
+        </span>
+      </label>
+
       <div
         v-if="result"
         class="space-y-2 rounded-xl border border-gray-200 p-4 dark:border-dark-700"
@@ -124,6 +144,7 @@ const dragDepth = ref(0)
 const dragActive = computed(() => dragDepth.value > 0)
 const hasCreatedData = ref(false)
 const result = ref<AdminDataImportResult | null>(null)
+const autoAssignProxy = ref(false)
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const selectedFilesLabel = computed(() => {
@@ -143,6 +164,7 @@ watch(
       dragDepth.value = 0
       hasCreatedData.value = false
       result.value = null
+      autoAssignProxy.value = false
       if (fileInput.value) {
         fileInput.value.value = ''
       }
@@ -295,7 +317,8 @@ const handleImport = async () => {
 
     const res = await adminAPI.accounts.importData({
       data: dataPayload,
-      skip_default_group_bind: true
+      skip_default_group_bind: true,
+      auto_assign_proxy: autoAssignProxy.value
     })
 
     result.value = res

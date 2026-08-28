@@ -28,6 +28,7 @@ type CodexSessionImportRequest struct {
 	Notes                   *string        `json:"notes"`
 	GroupIDs                []int64        `json:"group_ids"`
 	ProxyID                 *int64         `json:"proxy_id"`
+	AutoAssignProxy         bool           `json:"auto_assign_proxy"`
 	Concurrency             *int           `json:"concurrency"`
 	Priority                *int           `json:"priority"`
 	RateMultiplier          *float64       `json:"rate_multiplier"`
@@ -139,6 +140,10 @@ func (h *AccountHandler) ImportCodexSession(c *gin.Context) {
 	}
 	if req.LoadFactor != nil && *req.LoadFactor > 10000 {
 		response.BadRequest(c, "load_factor must be <= 10000")
+		return
+	}
+	if req.AutoAssignProxy && req.ProxyID != nil {
+		response.ErrorFrom(c, service.ErrProxyAssignmentModeConflict)
 		return
 	}
 
@@ -285,6 +290,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 				LoadFactor:         req.LoadFactor,
 				ExpiresAt:          effectiveExpiresAt,
 				AutoPauseOnExpired: autoPauseOnExpired,
+				AutoAssignProxy:    req.AutoAssignProxy,
 			}
 			if req.ProxyID != nil {
 				updateInput.ProxyID = req.ProxyID
@@ -336,6 +342,7 @@ func (h *AccountHandler) importCodexSessions(ctx context.Context, req CodexSessi
 			Credentials:           credentials,
 			Extra:                 extra,
 			ProxyID:               req.ProxyID,
+			AutoAssignProxy:       req.AutoAssignProxy,
 			Concurrency:           concurrency,
 			Priority:              priority,
 			RateMultiplier:        req.RateMultiplier,

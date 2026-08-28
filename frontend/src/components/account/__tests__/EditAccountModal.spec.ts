@@ -420,6 +420,21 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.proxy_id).toBe(0)
   })
 
+  it('requests automatic reassignment to an available proxy when selected', async () => {
+    const account = buildAccount()
+    account.proxy_id = 9
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-auto-assign-proxy"]').setValue(true)
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.auto_assign_proxy).toBe(true)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.proxy_id).toBeUndefined()
+  })
+
   it('submits OpenAI compact mode and compact-only model mapping', async () => {
     const account = buildAccount()
     account.extra = {
