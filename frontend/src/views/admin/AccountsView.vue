@@ -344,13 +344,35 @@
             <span v-else class="text-sm text-gray-400">-</span>
           </template>
           <template #cell-proxy="{ row }">
-            <div class="flex flex-col gap-1">
-              <div v-if="row.proxy" class="flex items-center gap-2">
-                <span class="text-sm text-gray-700 dark:text-gray-300">{{ row.proxy.name }}</span>
-                <span v-if="row.proxy.country_code" class="text-xs text-gray-500 dark:text-gray-400">
-                  ({{ row.proxy.country_code }})
+            <div class="flex min-w-[12rem] flex-col gap-1">
+              <div v-if="row.proxy" class="flex min-w-0 flex-col gap-0.5">
+                <div class="flex min-w-0 items-center gap-1.5">
+                  <span
+                    class="truncate text-sm font-medium text-gray-700 dark:text-gray-300"
+                    :title="row.proxy.name"
+                  >
+                    {{ row.proxy.name }}
+                  </span>
+                  <span class="shrink-0 text-[11px] text-gray-400 dark:text-dark-400">#{{ row.proxy.id }}</span>
+                  <span v-if="row.proxy.country_code" class="shrink-0 text-xs text-gray-500 dark:text-gray-400">
+                    ({{ row.proxy.country_code }})
+                  </span>
+                </div>
+                <span
+                  class="block max-w-[18rem] truncate font-mono text-xs text-gray-600 dark:text-gray-400"
+                  :title="formatProxyEndpoint(row.proxy)"
+                  data-testid="account-proxy-endpoint"
+                >
+                  {{ formatProxyEndpoint(row.proxy) }}
                 </span>
               </div>
+              <span
+                v-else-if="row.proxy_id"
+                class="text-xs text-gray-500 dark:text-gray-400"
+                :title="t('admin.accounts.proxyDetailsUnavailable')"
+              >
+                #{{ row.proxy_id }} · {{ t('admin.accounts.proxyDetailsUnavailable') }}
+              </span>
               <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
               <div v-if="row.proxy && row.proxy.expires_at" class="flex items-center gap-2 text-xs">
                 <span class="text-gray-600 dark:text-gray-300">{{ formatDateTime(row.proxy.expires_at) }}</span>
@@ -653,11 +675,14 @@ const accountToolsDropdownStyle = computed(() => ({
   width: `${accountToolsDropdownPosition.width}px`
 }))
 const hiddenColumns = reactive<Set<string>>(new Set())
-const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'account_stats', 'proxy', 'notes', 'scheduler_score', 'rate_multiplier']
+const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'account_stats', 'notes', 'scheduler_score', 'rate_multiplier']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
 // One-time migration: hide scheduler score for existing admins too, because showing it opt-ins to heavy backend scoring.
 const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
 const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
+// One-time migration: the bound proxy endpoint is now a primary account-list field, so reveal it for existing layouts.
+const PROXY_COLUMN_VERSION_KEY = 'account-proxy-column-version'
+const PROXY_COLUMN_CURRENT_VERSION = 'proxy-endpoint-visible-by-default'
 
 // Sorting settings
 const ACCOUNT_SORT_STORAGE_KEY = 'account-table-sort'
@@ -1001,6 +1026,14 @@ const formatSchedulerScoreGroup = (score: AccountSchedulerGroupScore): string =>
   return t('admin.accounts.schedulerScore.ungrouped')
 }
 
+const formatProxyEndpoint = (proxy: AccountProxy): string => {
+  const protocol = proxy.protocol ? `${proxy.protocol}://` : ''
+  const username = proxy.username?.trim() ? `${proxy.username.trim()}@` : ''
+  const rawHost = proxy.host?.trim() || '-'
+  const host = rawHost.includes(':') && !rawHost.startsWith('[') ? `[${rawHost}]` : rawHost
+  return `${protocol}${username}${host}:${proxy.port}`
+}
+
 const loadSavedColumns = () => {
   try {
     const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY)
@@ -1015,11 +1048,17 @@ const loadSavedColumns = () => {
         localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
         localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
       }
+      if (localStorage.getItem(PROXY_COLUMN_VERSION_KEY) !== PROXY_COLUMN_CURRENT_VERSION) {
+        hiddenColumns.delete('proxy')
+        localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
+        localStorage.setItem(PROXY_COLUMN_VERSION_KEY, PROXY_COLUMN_CURRENT_VERSION)
+      }
     } else {
       DEFAULT_HIDDEN_COLUMNS.forEach(key => {
         hiddenColumns.add(key)
       })
       localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
+      localStorage.setItem(PROXY_COLUMN_VERSION_KEY, PROXY_COLUMN_CURRENT_VERSION)
     }
   } catch (e) {
     console.error('Failed to load saved columns:', e)
@@ -1033,6 +1072,7 @@ const saveColumnsToStorage = () => {
   try {
     localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
     localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
+    localStorage.setItem(PROXY_COLUMN_VERSION_KEY, PROXY_COLUMN_CURRENT_VERSION)
   } catch (e) {
     console.error('Failed to save columns:', e)
   }
