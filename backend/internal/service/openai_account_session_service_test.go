@@ -5,11 +5,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
 func TestDecodeOpenAIAccountSessionsAcceptsEnvelopeAliases(t *testing.T) {
@@ -158,6 +160,58 @@ func TestOpenAIAccountSessionServiceListsAndRevokes(t *testing.T) {
 	require.Equal(t, []string{http.MethodGet, http.MethodPost}, methods)
 	require.Equal(t, []string{"/backend-api/accounts/sessions", "/backend-api/accounts/sessions/revoke"}, paths)
 	require.Equal(t, map[string]string{"session_id": "us_session-test"}, revokeBody)
+}
+
+func TestOpenAIAccountSessionServiceBatchRevokeReportsPartialSuccess(t *testing.T) {
+	account := &Account{
+		ID:       72,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "acct-batch-test",
+		},
+	}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	cache := &stubQuotaTokenCache{tokens: map[string]string{OpenAITokenCacheKey(account): "access-batch-test"}}
+	tokenProvider := NewOpenAITokenProvider(repo, cache, nil)
+
+	var revokedIDs []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		revokedIDs = append(revokedIDs, body["session_id"])
+		w.Header().Set("content-type", "application/json")
+		if body["session_id"] == "sess-b" {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"revoked_unified_sessions":1}`))
+	}))
+	defer srv.Close()
+
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	result, err := svc.RevokeSessions(context.Background(), account.ID, []string{"sess-a", "sess-b", "sess-a", " sess-c "})
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"sess-a", "sess-b", "sess-c"}, revokedIDs)
+	require.Equal(t, 3, result.RequestedCount)
+	require.Equal(t, 2, result.SuccessCount)
+	require.Equal(t, 1, result.FailedCount)
+	require.Equal(t, []string{"sess-a", "sess-c"}, result.RevokedSessionIDs)
+	require.Equal(t, []OpenAIAccountSessionRevokeFailure{{SessionID: "sess-b", Code: "OPENAI_SESSION_NOT_FOUND"}}, result.Failures)
+}
+
+func TestNormalizeOpenAIAccountSessionIDsRejectsInvalidBatch(t *testing.T) {
+	_, err := normalizeOpenAIAccountSessionIDs(nil)
+	require.Equal(t, "OPENAI_SESSIONS_BATCH_EMPTY", infraerrors.Reason(err))
+
+	tooMany := make([]string, maxOpenAIAccountSessionBatchSize+1)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("sess-%d", index)
+	}
+	_, err = normalizeOpenAIAccountSessionIDs(tooMany)
+	require.Equal(t, "OPENAI_SESSIONS_BATCH_TOO_LARGE", infraerrors.Reason(err))
 }
 
 func TestDecodeOpenAIAccountSessionsRejectsMissingCollection(t *testing.T) {

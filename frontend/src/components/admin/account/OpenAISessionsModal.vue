@@ -19,11 +19,43 @@
         <button
           type="button"
           class="btn btn-secondary shrink-0"
-          :disabled="loading || revokingId !== null"
+          :disabled="loading || revokingId !== null || batchRevoking"
           @click="loadSessions"
         >
           <Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />
           {{ t('admin.accounts.sessions.refresh') }}
+        </button>
+      </div>
+
+      <div
+        v-if="!loading && !loadError && sessions.length > 0"
+        class="flex flex-col gap-3 rounded-xl border border-gray-200 bg-gray-50/80 p-3 dark:border-dark-700 dark:bg-dark-900/40 sm:flex-row sm:items-center sm:justify-between"
+      >
+        <label class="inline-flex cursor-pointer items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+          <input
+            type="checkbox"
+            data-testid="select-all-sessions"
+            class="h-4 w-4 rounded border-gray-300 text-cyan-600 focus:ring-cyan-500 dark:border-dark-600 dark:bg-dark-800"
+            :checked="allRevokableSelected"
+            :disabled="revokableSessions.length === 0 || batchRevoking || revokingId !== null"
+            @change="toggleAllSessions"
+          />
+          <span>{{ t('admin.accounts.sessions.selectAll') }}</span>
+          <span class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.sessions.selectedCount', { count: selectedSessionIds.length }) }}
+          </span>
+        </label>
+        <button
+          v-if="selectedSessionIds.length > 0"
+          type="button"
+          data-testid="bulk-session-logout"
+          class="btn bg-red-600 text-white hover:bg-red-700"
+          :disabled="batchRevoking || revokingId !== null"
+          @click="batchRevokeConfirm = true"
+        >
+          <Icon v-if="batchRevoking" name="refresh" size="sm" class="animate-spin" />
+          <Icon v-else name="login" size="sm" />
+          {{ t('admin.accounts.sessions.logoutSelected') }}
         </button>
       </div>
 
@@ -48,10 +80,42 @@
                 type="button"
                 data-testid="confirm-session-logout"
                 class="btn bg-red-600 text-white hover:bg-red-700"
-                :disabled="revokingId !== null"
+                :disabled="revokingId !== null || batchRevoking"
                 @click="confirmRevoke"
               >
                 {{ t('admin.accounts.sessions.logout') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        v-if="batchRevokeConfirm"
+        class="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/60 dark:bg-red-950/20"
+      >
+        <div class="flex items-start gap-3">
+          <Icon name="exclamationTriangle" size="md" class="mt-0.5 shrink-0 text-red-600 dark:text-red-400" />
+          <div class="min-w-0 flex-1">
+            <div class="text-sm font-semibold text-red-800 dark:text-red-200">
+              {{ t('admin.accounts.sessions.logoutSelectedTitle') }}
+            </div>
+            <p class="mt-1 text-sm text-red-700 dark:text-red-300">
+              {{ t('admin.accounts.sessions.logoutSelectedConfirm', { count: selectedSessionIds.length }) }}
+            </p>
+            <div class="mt-3 flex flex-wrap justify-end gap-2">
+              <button type="button" class="btn btn-secondary" :disabled="batchRevoking" @click="batchRevokeConfirm = false">
+                {{ t('common.cancel') }}
+              </button>
+              <button
+                type="button"
+                data-testid="confirm-bulk-session-logout"
+                class="btn bg-red-600 text-white hover:bg-red-700"
+                :disabled="batchRevoking || selectedSessionIds.length === 0"
+                @click="confirmBatchRevoke"
+              >
+                <Icon v-if="batchRevoking" name="refresh" size="sm" class="animate-spin" />
+                {{ t('admin.accounts.sessions.logoutSelected') }}
               </button>
             </div>
           </div>
@@ -86,11 +150,24 @@
         <article
           v-for="(session, index) in sessions"
           :key="session.id || `session-${index}`"
-          class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800"
+          class="rounded-xl border bg-white p-4 shadow-sm transition-colors dark:bg-dark-800"
+          :class="selectedSessionIds.includes(session.id)
+            ? 'border-cyan-400 ring-1 ring-cyan-300 dark:border-cyan-600 dark:ring-cyan-800'
+            : 'border-gray-200 dark:border-dark-700'"
         >
           <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
+                <input
+                  v-if="session.can_revoke && !session.current"
+                  type="checkbox"
+                  data-testid="session-select"
+                  class="h-4 w-4 shrink-0 rounded border-gray-300 text-cyan-600 focus:ring-cyan-500 dark:border-dark-600 dark:bg-dark-800"
+                  :checked="selectedSessionIds.includes(session.id)"
+                  :disabled="batchRevoking || revokingId !== null"
+                  :aria-label="sessionTitle(session)"
+                  @change="toggleSession(session.id)"
+                />
                 <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">
                   <Icon name="server" size="sm" />
                 </div>
@@ -137,7 +214,7 @@
               type="button"
               data-testid="session-logout"
               class="btn shrink-0 border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-900/40"
-              :disabled="revokingId !== null"
+              :disabled="revokingId !== null || batchRevoking"
               @click="revokeTarget = session"
             >
               <Icon v-if="revokingId === session.id" name="refresh" size="sm" class="animate-spin" />
@@ -153,6 +230,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
@@ -178,7 +256,15 @@ const loading = ref(false)
 const loadError = ref('')
 const revokeTarget = ref<OpenAIAccountSession | null>(null)
 const revokingId = ref<string | null>(null)
+const selectedSessionIds = ref<string[]>([])
+const batchRevokeConfirm = ref(false)
+const batchRevoking = ref(false)
 let requestSequence = 0
+
+const revokableSessions = computed(() => sessions.value.filter(session => session.can_revoke && !session.current))
+const allRevokableSelected = computed(() =>
+  revokableSessions.value.length > 0 && revokableSessions.value.every(session => selectedSessionIds.value.includes(session.id))
+)
 
 const loadSessions = async () => {
   const accountId = props.account?.id
@@ -190,6 +276,8 @@ const loadSessions = async () => {
     const result = await adminAPI.accounts.listOpenAISessions(accountId)
     if (sequence !== requestSequence) return
     sessions.value = Array.isArray(result.sessions) ? result.sessions : []
+    selectedSessionIds.value = []
+    batchRevokeConfirm.value = false
   } catch (error) {
     if (sequence !== requestSequence) return
     loadError.value = extractI18nErrorMessage(
@@ -212,6 +300,7 @@ const confirmRevoke = async () => {
   try {
     await adminAPI.accounts.revokeOpenAISession(accountId, target.id)
     sessions.value = sessions.value.filter(session => session.id !== target.id)
+    selectedSessionIds.value = selectedSessionIds.value.filter(id => id !== target.id)
     appStore.showSuccess(t('admin.accounts.sessions.logoutSuccess'))
   } catch (error) {
     appStore.showError(
@@ -224,6 +313,53 @@ const confirmRevoke = async () => {
     )
   } finally {
     revokingId.value = null
+  }
+}
+
+const toggleSession = (sessionId: string) => {
+  if (!sessionId || batchRevoking.value || revokingId.value !== null) return
+  selectedSessionIds.value = selectedSessionIds.value.includes(sessionId)
+    ? selectedSessionIds.value.filter(id => id !== sessionId)
+    : [...selectedSessionIds.value, sessionId]
+}
+
+const toggleAllSessions = () => {
+  if (batchRevoking.value || revokingId.value !== null) return
+  selectedSessionIds.value = allRevokableSelected.value
+    ? []
+    : revokableSessions.value.map(session => session.id)
+}
+
+const confirmBatchRevoke = async () => {
+  const accountId = props.account?.id
+  const ids = [...selectedSessionIds.value]
+  if (!accountId || ids.length === 0 || batchRevoking.value) return
+  batchRevokeConfirm.value = false
+  batchRevoking.value = true
+  try {
+    const result = await adminAPI.accounts.revokeOpenAISessions(accountId, ids)
+    const revoked = new Set(result.revoked_session_ids || [])
+    sessions.value = sessions.value.filter(session => !revoked.has(session.id))
+    selectedSessionIds.value = ids.filter(id => !revoked.has(id))
+    if (result.failed_count > 0) {
+      appStore.showWarning(t('admin.accounts.sessions.logoutPartialSuccess', {
+        success: result.success_count,
+        failed: result.failed_count
+      }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.sessions.logoutSelectedSuccess', { count: result.success_count }))
+    }
+  } catch (error) {
+    appStore.showError(
+      extractI18nErrorMessage(
+        error,
+        t,
+        'admin.accounts.sessions.errors',
+        t('admin.accounts.sessions.logoutFailed')
+      )
+    )
+  } finally {
+    batchRevoking.value = false
   }
 }
 
@@ -256,8 +392,10 @@ watch(
   ([visible]) => {
     requestSequence++
     sessions.value = []
+    selectedSessionIds.value = []
     loadError.value = ''
     revokeTarget.value = null
+    batchRevokeConfirm.value = false
     if (visible) void loadSessions()
   },
   { immediate: true }

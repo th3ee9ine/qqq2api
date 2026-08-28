@@ -34,6 +34,7 @@ type openAIQuotaService interface {
 type openAIAccountSessionService interface {
 	ListSessions(ctx context.Context, accountID int64) (*service.OpenAIAccountSessionList, error)
 	RevokeSession(ctx context.Context, accountID int64, sessionID string) error
+	RevokeSessions(ctx context.Context, accountID int64, sessionIDs []string) (*service.OpenAIAccountSessionBatchRevokeResult, error)
 }
 
 type openAIAccountStateRecoverer interface {
@@ -154,6 +155,36 @@ func (h *OpenAIOAuthHandler) RevokeSession(c *gin.Context) {
 		return
 	}
 	response.Success(c, gin.H{"message": "Session logged out successfully"})
+}
+
+type openAIRevokeSessionsRequest struct {
+	SessionIDs []string `json:"session_ids"`
+}
+
+// RevokeSessions logs multiple device/browser sessions out of ChatGPT.
+// POST /api/v1/admin/openai/accounts/:id/sessions/revoke
+func (h *OpenAIOAuthHandler) RevokeSessions(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h.sessionService == nil {
+		response.BadRequest(c, "openai account session service is not enabled")
+		return
+	}
+
+	var req openAIRevokeSessionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.sessionService.RevokeSessions(c.Request.Context(), accountID, req.SessionIDs)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 // OpenAIGenerateAuthURLRequest represents the request for generating OpenAI auth URL

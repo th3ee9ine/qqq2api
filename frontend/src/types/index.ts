@@ -1283,6 +1283,19 @@ export interface OpenAIAccountSessionList {
   fetched_at: number
 }
 
+export interface OpenAIAccountSessionRevokeFailure {
+  session_id: string
+  code: string
+}
+
+export interface OpenAIAccountSessionBatchRevokeResult {
+  requested_count: number
+  success_count: number
+  failed_count: number
+  revoked_session_ids: string[]
+  failures: OpenAIAccountSessionRevokeFailure[]
+}
+
 export interface AccountSchedulerGroupScore {
   group_id?: number | null
   group_name?: string

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/imroc/req/v3"
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
@@ -19,6 +20,8 @@ var (
 	chatGPTAccountSessionsURL      = "https://chatgpt.com/backend-api/accounts/sessions"
 	chatGPTAccountSessionRevokeURL = "https://chatgpt.com/backend-api/accounts/sessions/revoke"
 )
+
+const maxOpenAIAccountSessionBatchSize = 50
 
 // OpenAIAccountSession is the stable, privacy-conscious projection exposed to
 // the admin UI. Upstream has used both snake_case and camelCase names, so the
@@ -43,6 +46,21 @@ type OpenAIAccountSession struct {
 type OpenAIAccountSessionList struct {
 	Sessions  []OpenAIAccountSession `json:"sessions"`
 	FetchedAt int64                  `json:"fetched_at"`
+}
+
+type OpenAIAccountSessionRevokeFailure struct {
+	SessionID string `json:"session_id"`
+	Code      string `json:"code"`
+}
+
+// OpenAIAccountSessionBatchRevokeResult reports partial success instead of
+// hiding successfully revoked sessions when one upstream request fails.
+type OpenAIAccountSessionBatchRevokeResult struct {
+	RequestedCount    int                                 `json:"requested_count"`
+	SuccessCount      int                                 `json:"success_count"`
+	FailedCount       int                                 `json:"failed_count"`
+	RevokedSessionIDs []string                            `json:"revoked_session_ids"`
+	Failures          []OpenAIAccountSessionRevokeFailure `json:"failures"`
 }
 
 // ListSessions queries ChatGPT's Active sessions control-plane endpoint using
@@ -97,24 +115,92 @@ func (s *OpenAIQuotaService) RevokeSession(ctx context.Context, accountID int64,
 	if sessionID == "" || len(sessionID) > 512 {
 		return infraerrors.New(http.StatusBadRequest, "OPENAI_SESSION_INVALID_ID", "session id is invalid")
 	}
-	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
-	if err != nil {
-		return err
-	}
-	client, err := s.privacyClientFactory(proxyURL)
-	if err != nil {
-		return infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSIONS_CLIENT_ERROR", "failed to build upstream client: %v", err)
-	}
 
 	callCtx, cancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
 	defer cancel()
-	headers, _, err := s.buildCodexQuotaHeaders(callCtx, accountID, accessToken, chatGPTAccountID, fedRAMP)
+	client, headers, proxyURL, err := s.prepareSessionRevoke(callCtx, accountID)
 	if err != nil {
-		return infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSIONS_AUTH_FAILED", "failed to build upstream authentication: %v", err)
+		return err
+	}
+	return revokeOpenAIAccountSession(callCtx, client, headers, proxyURL, accountID, sessionID)
+}
+
+// RevokeSessions ends multiple ChatGPT sessions while reusing one refreshed
+// credential and one upstream client. Individual failures are returned in the
+// result so the UI can remove successful rows and keep failed rows selected.
+func (s *OpenAIQuotaService) RevokeSessions(ctx context.Context, accountID int64, sessionIDs []string) (*OpenAIAccountSessionBatchRevokeResult, error) {
+	normalizedIDs, err := normalizeOpenAIAccountSessionIDs(sessionIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	prepareCtx, cancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
+	client, headers, proxyURL, err := s.prepareSessionRevoke(prepareCtx, accountID)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+
+	result := &OpenAIAccountSessionBatchRevokeResult{
+		RequestedCount:    len(normalizedIDs),
+		RevokedSessionIDs: make([]string, 0, len(normalizedIDs)),
+		Failures:          make([]OpenAIAccountSessionRevokeFailure, 0),
+	}
+	for _, sessionID := range normalizedIDs {
+		callCtx, callCancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
+		revokeErr := revokeOpenAIAccountSession(callCtx, client, headers, proxyURL, accountID, sessionID)
+		callCancel()
+		if revokeErr != nil {
+			code := infraerrors.Reason(revokeErr)
+			if code == "" {
+				code = "OPENAI_SESSION_REVOKE_FAILED"
+			}
+			result.Failures = append(result.Failures, OpenAIAccountSessionRevokeFailure{
+				SessionID: sessionID,
+				Code:      code,
+			})
+			continue
+		}
+		result.RevokedSessionIDs = append(result.RevokedSessionIDs, sessionID)
+	}
+	result.SuccessCount = len(result.RevokedSessionIDs)
+	result.FailedCount = len(result.Failures)
+	slog.Info("openai_sessions_batch_revoke_complete",
+		"account_id", accountID,
+		"requested_count", result.RequestedCount,
+		"success_count", result.SuccessCount,
+		"failed_count", result.FailedCount,
+	)
+	return result, nil
+}
+
+func (s *OpenAIQuotaService) prepareSessionRevoke(ctx context.Context, accountID int64) (*req.Client, map[string]string, string, error) {
+	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	client, err := s.privacyClientFactory(proxyURL)
+	if err != nil {
+		return nil, nil, "", infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSIONS_CLIENT_ERROR", "failed to build upstream client: %v", err)
+	}
+	headers, _, err := s.buildCodexQuotaHeaders(ctx, accountID, accessToken, chatGPTAccountID, fedRAMP)
+	if err != nil {
+		return nil, nil, "", infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSIONS_AUTH_FAILED", "failed to build upstream authentication: %v", err)
 	}
 	prepareChatGPTSessionHeaders(headers)
+	return client, headers, proxyURL, nil
+}
+
+func revokeOpenAIAccountSession(
+	ctx context.Context,
+	client *req.Client,
+	headers map[string]string,
+	proxyURL string,
+	accountID int64,
+	sessionID string,
+) error {
 	resp, err := client.R().
-		SetContext(callCtx).
+		SetContext(ctx).
 		SetHeaders(headers).
 		SetBody(map[string]string{"session_id": sessionID}).
 		Post(chatGPTAccountSessionRevokeURL)
@@ -134,6 +220,30 @@ func (s *OpenAIQuotaService) RevokeSession(ctx context.Context, accountID int64,
 	}
 	slog.Info("openai_session_revoke_success", "account_id", accountID)
 	return nil
+}
+
+func normalizeOpenAIAccountSessionIDs(sessionIDs []string) ([]string, error) {
+	if len(sessionIDs) == 0 {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_SESSIONS_BATCH_EMPTY", "at least one session id is required")
+	}
+	if len(sessionIDs) > maxOpenAIAccountSessionBatchSize {
+		return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_SESSIONS_BATCH_TOO_LARGE", "at most %d sessions can be revoked at once", maxOpenAIAccountSessionBatchSize)
+	}
+
+	seen := make(map[string]struct{}, len(sessionIDs))
+	normalized := make([]string, 0, len(sessionIDs))
+	for _, rawID := range sessionIDs {
+		sessionID := strings.TrimSpace(rawID)
+		if sessionID == "" || len(sessionID) > 512 {
+			return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_SESSION_INVALID_ID", "session id is invalid")
+		}
+		if _, exists := seen[sessionID]; exists {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		normalized = append(normalized, sessionID)
+	}
+	return normalized, nil
 }
 
 func decodeOpenAIAccountSessions(body []byte) (*OpenAIAccountSessionList, error) {

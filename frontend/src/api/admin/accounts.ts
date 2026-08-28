@@ -25,7 +25,8 @@ import type {
   UpstreamBillingProbeSettings,
   OllamaCloudUsageSettings,
   OllamaCloudUsageState,
-  OpenAIAccountSessionList
+  OpenAIAccountSessionList,
+  OpenAIAccountSessionBatchRevokeResult
 } from '@/types'
 
 /**
@@ -267,6 +268,18 @@ export async function revokeOpenAISession(id: number, sessionId: string): Promis
   const encodedSessionId = encodeURIComponent(sessionId)
   const { data } = await apiClient.delete<{ message: string }>(
     `/admin/openai/accounts/${id}/sessions/${encodedSessionId}`
+  )
+  return data
+}
+
+/** End multiple active ChatGPT sessions and return per-session results. */
+export async function revokeOpenAISessions(
+  id: number,
+  sessionIds: string[]
+): Promise<OpenAIAccountSessionBatchRevokeResult> {
+  const { data } = await apiClient.post<OpenAIAccountSessionBatchRevokeResult>(
+    `/admin/openai/accounts/${id}/sessions/revoke`,
+    { session_ids: sessionIds }
   )
   return data
 }
@@ -1025,6 +1038,7 @@ export const accountsAPI = {
   refreshCredentials,
   listOpenAISessions,
   revokeOpenAISession,
+  revokeOpenAISessions,
   applyOAuthCredentials,
   getStats,
   clearError,

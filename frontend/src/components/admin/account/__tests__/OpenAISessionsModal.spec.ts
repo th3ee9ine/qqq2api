@@ -3,11 +3,13 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Account } from '@/types'
 
-const { listSessionsMock, revokeSessionMock, showSuccessMock, showErrorMock } = vi.hoisted(() => ({
+const { listSessionsMock, revokeSessionMock, revokeSessionsMock, showSuccessMock, showErrorMock, showWarningMock } = vi.hoisted(() => ({
   listSessionsMock: vi.fn(),
   revokeSessionMock: vi.fn(),
+  revokeSessionsMock: vi.fn(),
   showSuccessMock: vi.fn(),
   showErrorMock: vi.fn(),
+  showWarningMock: vi.fn(),
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -15,12 +17,13 @@ vi.mock('@/api/admin', () => ({
     accounts: {
       listOpenAISessions: listSessionsMock,
       revokeOpenAISession: revokeSessionMock,
+      revokeOpenAISessions: revokeSessionsMock,
     },
   },
 }))
 
 vi.mock('@/stores/app', () => ({
-  useAppStore: () => ({ showSuccess: showSuccessMock, showError: showErrorMock }),
+  useAppStore: () => ({ showSuccess: showSuccessMock, showError: showErrorMock, showWarning: showWarningMock }),
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -29,7 +32,7 @@ vi.mock('vue-i18n', async () => {
     ...actual,
     useI18n: () => ({
       t: (key: string, params?: Record<string, unknown>) =>
-        params?.device ? `${key}:${String(params.device)}` : key,
+        params ? `${key}:${Object.values(params).join(':')}` : key,
     }),
   }
 })
@@ -85,6 +88,13 @@ describe('OpenAISessionsModal', () => {
       fetched_at: 1,
     })
     revokeSessionMock.mockResolvedValue({ message: 'ok' })
+    revokeSessionsMock.mockResolvedValue({
+      requested_count: 1,
+      success_count: 1,
+      failed_count: 0,
+      revoked_session_ids: ['sess-1'],
+      failures: [],
+    })
   })
 
   it('打开时查询会话，并在确认后退出选中会话', async () => {
@@ -110,5 +120,24 @@ describe('OpenAISessionsModal', () => {
     expect(wrapper.text()).not.toContain('MacBook Pro')
     expect(showSuccessMock).toHaveBeenCalledWith('admin.accounts.sessions.logoutSuccess')
     expect(showErrorMock).not.toHaveBeenCalled()
+  })
+
+  it('支持选择会话并批量退出', async () => {
+    const wrapper = mount(OpenAISessionsModal, {
+      props: { show: true, account },
+      global: { stubs: { BaseDialog: BaseDialogStub } },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="session-select"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-session-logout"]').trigger('click')
+    expect(wrapper.text()).toContain('admin.accounts.sessions.logoutSelectedConfirm')
+
+    await wrapper.get('[data-testid="confirm-bulk-session-logout"]').trigger('click')
+    await flushPromises()
+
+    expect(revokeSessionsMock).toHaveBeenCalledWith(42, ['sess-1'])
+    expect(showSuccessMock).toHaveBeenCalledWith('admin.accounts.sessions.logoutSelectedSuccess:1')
+    expect(wrapper.text()).not.toContain('MacBook Pro')
   })
 })

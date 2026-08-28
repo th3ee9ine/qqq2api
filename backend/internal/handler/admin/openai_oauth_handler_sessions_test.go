@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -17,11 +18,14 @@ import (
 )
 
 type openAIAccountSessionServiceStub struct {
-	list      *service.OpenAIAccountSessionList
-	listErr   error
-	revokeErr error
-	accountID int64
-	sessionID string
+	list              *service.OpenAIAccountSessionList
+	listErr           error
+	revokeErr         error
+	revokeSessionsErr error
+	batchResult       *service.OpenAIAccountSessionBatchRevokeResult
+	accountID         int64
+	sessionID         string
+	sessionIDs        []string
 }
 
 func (s *openAIAccountSessionServiceStub) ListSessions(_ context.Context, accountID int64) (*service.OpenAIAccountSessionList, error) {
@@ -33,6 +37,12 @@ func (s *openAIAccountSessionServiceStub) RevokeSession(_ context.Context, accou
 	s.accountID = accountID
 	s.sessionID = sessionID
 	return s.revokeErr
+}
+
+func (s *openAIAccountSessionServiceStub) RevokeSessions(_ context.Context, accountID int64, sessionIDs []string) (*service.OpenAIAccountSessionBatchRevokeResult, error) {
+	s.accountID = accountID
+	s.sessionIDs = append([]string(nil), sessionIDs...)
+	return s.batchResult, s.revokeSessionsErr
 }
 
 func TestOpenAIListSessions(t *testing.T) {
@@ -70,6 +80,37 @@ func TestOpenAIRevokeSession(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.Equal(t, int64(42), stub.accountID)
 	require.Equal(t, "sess-1", stub.sessionID)
+}
+
+func TestOpenAIRevokeSessions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := &openAIAccountSessionServiceStub{batchResult: &service.OpenAIAccountSessionBatchRevokeResult{
+		RequestedCount:    2,
+		SuccessCount:      2,
+		RevokedSessionIDs: []string{"sess-1", "sess-2"},
+		Failures:          []service.OpenAIAccountSessionRevokeFailure{},
+	}}
+	handler := &OpenAIOAuthHandler{sessionService: stub}
+	router := gin.New()
+	router.POST("/api/v1/admin/openai/accounts/:id/sessions/revoke", handler.RevokeSessions)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/openai/accounts/42/sessions/revoke",
+		strings.NewReader(`{"session_ids":["sess-1","sess-2"]}`),
+	)
+	request.Header.Set("content-type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, int64(42), stub.accountID)
+	require.Equal(t, []string{"sess-1", "sess-2"}, stub.sessionIDs)
+	var envelope struct {
+		Data service.OpenAIAccountSessionBatchRevokeResult `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Equal(t, 2, envelope.Data.SuccessCount)
 }
 
 func TestOpenAIListSessionsPropagatesServiceError(t *testing.T) {
