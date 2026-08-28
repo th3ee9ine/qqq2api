@@ -24,7 +24,8 @@ import type {
   UpstreamBillingProbeResult,
   UpstreamBillingProbeSettings,
   OllamaCloudUsageSettings,
-  OllamaCloudUsageState
+  OllamaCloudUsageState,
+  OpenAIAccountSessionList
 } from '@/types'
 
 /**
@@ -252,6 +253,21 @@ export async function testAccount(id: number): Promise<{
  */
 export async function refreshCredentials(id: number): Promise<Account> {
   const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/refresh`)
+  return data
+}
+
+/** Query active ChatGPT device/browser sessions for an OpenAI OAuth account. */
+export async function listOpenAISessions(id: number): Promise<OpenAIAccountSessionList> {
+  const { data } = await apiClient.get<OpenAIAccountSessionList>(`/admin/openai/accounts/${id}/sessions`)
+  return data
+}
+
+/** End a single active ChatGPT session. */
+export async function revokeOpenAISession(id: number, sessionId: string): Promise<{ message: string }> {
+  const encodedSessionId = encodeURIComponent(sessionId)
+  const { data } = await apiClient.delete<{ message: string }>(
+    `/admin/openai/accounts/${id}/sessions/${encodedSessionId}`
+  )
   return data
 }
 
@@ -1007,6 +1023,8 @@ export const accountsAPI = {
   toggleStatus,
   testAccount,
   refreshCredentials,
+  listOpenAISessions,
+  revokeOpenAISession,
   applyOAuthCredentials,
   getStats,
   clearError,

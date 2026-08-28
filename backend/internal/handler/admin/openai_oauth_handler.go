@@ -21,6 +21,7 @@ type OpenAIOAuthHandler struct {
 	openaiOAuthService *service.OpenAIOAuthService
 	adminService       service.AdminService
 	quotaService       openAIQuotaService
+	sessionService     openAIAccountSessionService
 	rateLimitService   openAIAccountStateRecoverer
 }
 
@@ -28,6 +29,11 @@ type openAIQuotaService interface {
 	QueryUsage(ctx context.Context, accountID int64) (*service.OpenAIQuotaUsage, error)
 	CacheResetCreditsSnapshot(ctx context.Context, accountID int64, credits *service.OpenAIRateLimitResetCredits) error
 	ResetCredit(ctx context.Context, accountID int64) (*service.OpenAIQuotaResetResult, error)
+}
+
+type openAIAccountSessionService interface {
+	ListSessions(ctx context.Context, accountID int64) (*service.OpenAIAccountSessionList, error)
+	RevokeSession(ctx context.Context, accountID int64, sessionID string) error
 }
 
 type openAIAccountStateRecoverer interface {
@@ -91,11 +97,63 @@ func NewOpenAIOAuthHandler(
 	// `== nil` capability guards below and panic instead of returning 400.
 	if quotaService != nil {
 		h.quotaService = quotaService
+		h.sessionService = quotaService
 	}
 	if rateLimitService != nil {
 		h.rateLimitService = rateLimitService
 	}
 	return h
+}
+
+// ListSessions returns the active ChatGPT sessions associated with an OpenAI
+// OAuth account.
+// GET /api/v1/admin/openai/accounts/:id/sessions
+func (h *OpenAIOAuthHandler) ListSessions(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h.sessionService == nil {
+		response.BadRequest(c, "openai account session service is not enabled")
+		return
+	}
+
+	sessions, err := h.sessionService.ListSessions(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if sessions == nil {
+		response.Error(c, http.StatusInternalServerError, "openai session query returned an empty result")
+		return
+	}
+	response.Success(c, sessions)
+}
+
+// RevokeSession logs a single device/browser session out of ChatGPT.
+// DELETE /api/v1/admin/openai/accounts/:id/sessions/:session_id
+func (h *OpenAIOAuthHandler) RevokeSession(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	sessionID := strings.TrimSpace(c.Param("session_id"))
+	if sessionID == "" || len(sessionID) > 512 {
+		response.BadRequest(c, "Invalid session ID")
+		return
+	}
+	if h.sessionService == nil {
+		response.BadRequest(c, "openai account session service is not enabled")
+		return
+	}
+
+	if err := h.sessionService.RevokeSession(c.Request.Context(), accountID, sessionID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "Session logged out successfully"})
 }
 
 // OpenAIGenerateAuthURLRequest represents the request for generating OpenAI auth URL

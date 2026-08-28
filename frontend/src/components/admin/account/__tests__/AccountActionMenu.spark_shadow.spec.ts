@@ -128,6 +128,40 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
     wrapper.unmount()
   })
 
+  it('仅 OpenAI OAuth 母账号显示登录设备入口', () => {
+    const parent = makeAccount({ platform: 'openai', type: 'oauth', parent_account_id: null })
+    const parentWrapper = mount(AccountActionMenu, {
+      props: { show: true, account: parent, position },
+      attachTo: document.body,
+    })
+    expect(getBodyText()).toContain('admin.accounts.sessions.action')
+    parentWrapper.unmount()
+
+    const shadow = makeAccount({ platform: 'openai', type: 'oauth', parent_account_id: 42 })
+    const shadowWrapper = mount(AccountActionMenu, {
+      props: { show: true, account: shadow, position },
+      attachTo: document.body,
+    })
+    expect(getBodyText()).not.toContain('admin.accounts.sessions.action')
+    shadowWrapper.unmount()
+  })
+
+  it('点击登录设备入口触发 sessions 事件', async () => {
+    const account = makeAccount({ platform: 'openai', type: 'oauth', parent_account_id: null })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, position },
+      attachTo: document.body,
+    })
+    const sessionsBtn = getBodyButtons().find(b => b.textContent?.includes('admin.accounts.sessions.action'))
+    expect(sessionsBtn).toBeDefined()
+
+    sessionsBtn!.click()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('sessions')?.[0]?.[0]).toMatchObject({ id: account.id })
+    wrapper.unmount()
+  })
+
   it('影子账号隐藏凭据/隐私类操作(重授权/刷新token/隐私)— 外审 G4', () => {
     const account = makeAccount({ platform: 'openai', type: 'oauth', parent_account_id: 42 })
     const wrapper = mount(AccountActionMenu, {

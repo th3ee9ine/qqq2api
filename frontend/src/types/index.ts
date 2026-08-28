@@ -1260,6 +1260,29 @@ export interface Account {
   parent_chatgpt_account_id?: string
 }
 
+/** Active ChatGPT device/browser session returned for an OpenAI OAuth account. */
+export interface OpenAIAccountSession {
+  id: string
+  device_name?: string
+  device_type?: string
+  os?: string
+  browser?: string
+  app_name?: string
+  location?: string
+  signed_in_at?: string
+  last_active_at?: string
+  current: boolean
+  trusted: boolean
+  status?: string
+  status_available: boolean
+  can_revoke: boolean
+}
+
+export interface OpenAIAccountSessionList {
+  sessions: OpenAIAccountSession[]
+  fetched_at: number
+}
+
 export interface AccountSchedulerGroupScore {
   group_id?: number | null
   group_name?: string
