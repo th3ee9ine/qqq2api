@@ -252,6 +252,34 @@ func (h *ProxyHandler) BatchDelete(c *gin.Context) {
 	response.Success(c, result)
 }
 
+// BatchUpdateMaxAccounts handles changing the automatic-assignment limit for
+// multiple proxies at once.
+// POST /api/v1/admin/proxies/batch-update-max-accounts
+func (h *ProxyHandler) BatchUpdateMaxAccounts(c *gin.Context) {
+	type BatchUpdateMaxAccountsRequest struct {
+		IDs         []int64 `json:"ids" binding:"required,min=1"`
+		MaxAccounts *int    `json:"max_accounts" binding:"required,gte=0"`
+	}
+
+	var req BatchUpdateMaxAccountsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if req.MaxAccounts == nil {
+		response.BadRequest(c, "max_accounts is required")
+		return
+	}
+
+	result, err := h.adminService.BatchUpdateProxyMaxAccounts(c.Request.Context(), req.IDs, *req.MaxAccounts)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, result)
+}
+
 // Test handles testing proxy connectivity
 // POST /api/v1/admin/proxies/:id/test
 func (h *ProxyHandler) Test(c *gin.Context) {

@@ -202,6 +202,39 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 	return result, nil
 }
 
+// BatchUpdateProxyMaxAccounts updates only the automatic-assignment limit on
+// each selected proxy. Loading the complete entity before saving preserves
+// unrelated proxy settings such as credentials, expiry and fallback policy.
+func (s *adminServiceImpl) BatchUpdateProxyMaxAccounts(ctx context.Context, ids []int64, maxAccounts int) (*ProxyBatchUpdateMaxAccountsResult, error) {
+	if maxAccounts < 0 {
+		return nil, infraerrors.BadRequest("PROXY_MAX_ACCOUNTS_INVALID", "max_accounts must be >= 0")
+	}
+
+	result := &ProxyBatchUpdateMaxAccountsResult{}
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+
+		proxy, err := s.proxyRepo.GetByID(ctx, id)
+		if err != nil {
+			result.Skipped = append(result.Skipped, ProxyBatchUpdateMaxAccountsSkipped{ID: id, Reason: err.Error()})
+			continue
+		}
+		updatedProxy := *proxy
+		updatedProxy.MaxAccounts = maxAccounts
+		if err := s.proxyRepo.Update(ctx, &updatedProxy); err != nil {
+			result.Skipped = append(result.Skipped, ProxyBatchUpdateMaxAccountsSkipped{ID: id, Reason: err.Error()})
+			continue
+		}
+		result.UpdatedIDs = append(result.UpdatedIDs, id)
+	}
+
+	return result, nil
+}
+
 func (s *adminServiceImpl) GetProxyAccounts(ctx context.Context, proxyID int64) ([]ProxyAccountSummary, error) {
 	return s.proxyRepo.ListAccountSummariesByProxyID(ctx, proxyID)
 }

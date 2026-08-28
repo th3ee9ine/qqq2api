@@ -53,6 +53,7 @@ func setupAdminRouter() (*gin.Engine, *stubAdminService) {
 	router.PUT("/api/v1/admin/proxies/:id", proxyHandler.Update)
 	router.DELETE("/api/v1/admin/proxies/:id", proxyHandler.Delete)
 	router.POST("/api/v1/admin/proxies/batch-delete", proxyHandler.BatchDelete)
+	router.POST("/api/v1/admin/proxies/batch-update-max-accounts", proxyHandler.BatchUpdateMaxAccounts)
 	router.POST("/api/v1/admin/proxies/:id/test", proxyHandler.Test)
 	router.POST("/api/v1/admin/proxies/:id/quality-check", proxyHandler.CheckQuality)
 	router.GET("/api/v1/admin/proxies/:id/stats", proxyHandler.GetStats)
@@ -302,6 +303,12 @@ func TestProxyHandlerEndpoints(t *testing.T) {
 	require.NotEmpty(t, adminSvc.updatedProxies)
 	require.NotNil(t, adminSvc.updatedProxies[len(adminSvc.updatedProxies)-1].MaxAccounts)
 	require.Equal(t, 8, *adminSvc.updatedProxies[len(adminSvc.updatedProxies)-1].MaxAccounts)
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/proxies/batch-update-max-accounts", bytes.NewBufferString(`{"ids":[1,2],"max_accounts":13}`))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/admin/proxies/4", nil)

@@ -224,6 +224,21 @@ export async function batchDelete(ids: number[]): Promise<{
   return data
 }
 
+/**
+ * Batch update the automatic-assignment account limit for selected proxies.
+ * A value of 0 means unlimited.
+ */
+export async function batchUpdateMaxAccounts(ids: number[], max_accounts: number): Promise<{
+  updated_ids: number[]
+  skipped: Array<{ id: number; reason: string }>
+}> {
+  const { data } = await apiClient.post<{
+    updated_ids: number[]
+    skipped: Array<{ id: number; reason: string }>
+  }>('/admin/proxies/batch-update-max-accounts', { ids, max_accounts })
+  return data
+}
+
 export async function exportData(options?: {
   ids?: number[]
   filters?: {
@@ -271,6 +286,7 @@ export const proxiesAPI = {
   getProxyAccounts,
   batchCreate,
   batchDelete,
+  batchUpdateMaxAccounts,
   exportData,
   importData
 }

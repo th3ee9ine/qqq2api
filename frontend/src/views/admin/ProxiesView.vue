@@ -74,6 +74,15 @@
               <Icon name="trash" size="md" class="mr-2" />
               {{ t('admin.proxies.batchDeleteAction') }}
             </button>
+            <button
+              @click="openBatchMaxAccounts"
+              :disabled="selectedCount === 0"
+              class="btn btn-secondary"
+              :title="t('admin.proxies.batchMaxAccounts')"
+            >
+              <Icon name="edit" size="md" class="mr-2" />
+              {{ t('admin.proxies.batchMaxAccounts') }}
+            </button>
             <button @click="showImportData = true" class="btn btn-secondary">
               {{ t('admin.proxies.dataImport') }}
             </button>
@@ -874,6 +883,61 @@
       @confirm="confirmBatchDelete"
       @cancel="showBatchDeleteDialog = false"
     />
+    <BaseDialog
+      :show="showBatchMaxAccountsDialog"
+      :title="t('admin.proxies.batchMaxAccounts')"
+      width="normal"
+      @close="closeBatchMaxAccounts"
+    >
+      <div class="space-y-4">
+        <p class="text-sm text-gray-600 dark:text-gray-300">
+          {{ t('admin.proxies.batchMaxAccountsDescription', { count: selectedCount }) }}
+        </p>
+        <div>
+          <label for="batch-max-accounts" class="input-label">
+            {{ t('admin.proxies.maxAccounts') }}
+          </label>
+          <input
+            id="batch-max-accounts"
+            v-model.number="batchMaxAccountsValue"
+            type="number"
+            min="0"
+            step="1"
+            class="input"
+            :placeholder="t('admin.proxies.maxAccounts')"
+          />
+          <p class="input-hint mt-1">{{ t('admin.proxies.maxAccountsHint') }}</p>
+        </div>
+      </div>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button @click="closeBatchMaxAccounts" type="button" class="btn btn-secondary">
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            @click="confirmBatchMaxAccounts"
+            type="button"
+            class="btn btn-primary"
+            :disabled="submitting || !isBatchMaxAccountsValid"
+          >
+            <svg
+              v-if="submitting"
+              class="-ml-1 mr-2 h-4 w-4 animate-spin"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+            {{ submitting ? t('admin.proxies.updating') : t('common.update') }}
+          </button>
+        </div>
+      </template>
+    </BaseDialog>
     <ConfirmDialog
       :show="showExportDataDialog"
       :title="t('admin.proxies.dataExport')"
@@ -1126,6 +1190,7 @@ const editPasswordDirty = ref(false)
 const showImportData = ref(false)
 const showDeleteDialog = ref(false)
 const showBatchDeleteDialog = ref(false)
+const showBatchMaxAccountsDialog = ref(false)
 const showExportDataDialog = ref(false)
 const showAccountsModal = ref(false)
 const submitting = ref(false)
@@ -1169,6 +1234,10 @@ const qualityReport = ref<ProxyQualityCheckResult | null>(null)
 const createMode = ref<'standard' | 'batch'>('standard')
 const batchInput = ref('')
 const batchMaxAccounts = ref(0)
+const batchMaxAccountsValue = ref<number | null>(null)
+const isBatchMaxAccountsValid = computed(() =>
+  Number.isInteger(batchMaxAccountsValue.value) && (batchMaxAccountsValue.value ?? -1) >= 0
+)
 const batchParseResult = reactive({
   total: 0,
   valid: 0,
@@ -2051,6 +2120,49 @@ const openBatchDelete = () => {
     return
   }
   showBatchDeleteDialog.value = true
+}
+
+const openBatchMaxAccounts = () => {
+  if (selectedCount.value === 0) return
+  batchMaxAccountsValue.value = null
+  showBatchMaxAccountsDialog.value = true
+}
+
+const closeBatchMaxAccounts = () => {
+  showBatchMaxAccountsDialog.value = false
+  batchMaxAccountsValue.value = null
+}
+
+const confirmBatchMaxAccounts = async () => {
+  if (!isBatchMaxAccountsValid.value) {
+    appStore.showError(t('admin.proxies.maxAccountsInvalid'))
+    return
+  }
+  const ids = Array.from(selectedProxyIds.value)
+  if (ids.length === 0) {
+    closeBatchMaxAccounts()
+    return
+  }
+
+  submitting.value = true
+  try {
+    const result = await adminAPI.proxies.batchUpdateMaxAccounts(ids, batchMaxAccountsValue.value as number)
+    const updated = result.updated_ids?.length || 0
+    const skipped = result.skipped?.length || 0
+    if (updated > 0) {
+      appStore.showSuccess(t('admin.proxies.batchMaxAccountsDone', { updated, skipped }))
+    } else if (skipped > 0) {
+      appStore.showInfo(t('admin.proxies.batchMaxAccountsSkipped', { skipped }))
+    }
+    clearSelectedProxies()
+    closeBatchMaxAccounts()
+    loadProxies()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.proxies.batchMaxAccountsFailed'))
+    console.error('Error batch updating proxy account limits:', error)
+  } finally {
+    submitting.value = false
+  }
 }
 
 const confirmDelete = async () => {

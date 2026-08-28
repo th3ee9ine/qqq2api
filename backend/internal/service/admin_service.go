@@ -122,6 +122,7 @@ type AdminService interface {
 	UpdateProxy(ctx context.Context, id int64, input *UpdateProxyInput) (*Proxy, error)
 	DeleteProxy(ctx context.Context, id int64) error
 	BatchDeleteProxies(ctx context.Context, ids []int64) (*ProxyBatchDeleteResult, error)
+	BatchUpdateProxyMaxAccounts(ctx context.Context, ids []int64, maxAccounts int) (*ProxyBatchUpdateMaxAccountsResult, error)
 	GetProxyAccounts(ctx context.Context, proxyID int64) ([]ProxyAccountSummary, error)
 	CheckProxyExists(ctx context.Context, host string, port int, username, password string) (bool, error)
 	TestProxy(ctx context.Context, id int64) (*ProxyTestResult, error)
@@ -532,6 +533,20 @@ type ProxyBatchDeleteResult struct {
 }
 
 type ProxyBatchDeleteSkipped struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason"`
+}
+
+// ProxyBatchUpdateMaxAccountsResult describes the outcome of updating the
+// automatic-assignment limit for a set of proxies. Individual failures are
+// reported so one missing or otherwise invalid proxy does not hide successful
+// updates for the rest of the selection.
+type ProxyBatchUpdateMaxAccountsResult struct {
+	UpdatedIDs []int64                              `json:"updated_ids"`
+	Skipped    []ProxyBatchUpdateMaxAccountsSkipped `json:"skipped"`
+}
+
+type ProxyBatchUpdateMaxAccountsSkipped struct {
 	ID     int64  `json:"id"`
 	Reason string `json:"reason"`
 }

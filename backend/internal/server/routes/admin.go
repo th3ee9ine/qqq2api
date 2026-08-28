@@ -389,6 +389,7 @@ func registerProxyRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth
 		proxies.GET("/:id/stats", h.Admin.Proxy.GetStats)
 		proxies.GET("/:id/accounts", h.Admin.Proxy.GetProxyAccounts)
 		proxies.POST("/batch-delete", middleware.AdminOnly(), h.Admin.Proxy.BatchDelete)
+		proxies.POST("/batch-update-max-accounts", h.Admin.Proxy.BatchUpdateMaxAccounts)
 		proxies.POST("/batch", h.Admin.Proxy.BatchCreate)
 	}
 }
