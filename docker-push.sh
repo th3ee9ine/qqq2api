@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
-REPO="th3ee9ine/qqq2api"
+REPO="qqqrouter1/qqq2api"
 PROXY="http://127.0.0.1:7890"
 HOST_PROXY="http://host.docker.internal:7890"
 VERSION=$(tr -d '[:space:]' < "$PROJECT_DIR/VERSION")
@@ -21,6 +21,8 @@ docker buildx build \
   --build-arg "VERSION=$VERSION" \
   --build-arg "http_proxy=$HOST_PROXY" \
   --build-arg "https_proxy=$HOST_PROXY" \
+  --provenance=false \
+  --sbom=false \
   -t "${REPO}:${VERSION}" \
   -t "${REPO}:latest" \
   --push \
