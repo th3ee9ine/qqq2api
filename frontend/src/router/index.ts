@@ -223,6 +223,19 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/jailbreak-guard',
+    name: 'AdminJailbreakGuard',
+    component: () => import('@/features/prompt-audit/JailbreakGuardView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Jailbreak Guard',
+      titleKey: 'admin.promptAudit.localGuard.title',
+      descriptionKey: 'admin.promptAudit.localGuard.pageDescription',
+      requiresRiskControl: true
+    }
+  },
+  {
     path: '/admin/usage',
     name: 'AdminUsage',
     component: () => import('@/views/admin/UsageView.vue'),

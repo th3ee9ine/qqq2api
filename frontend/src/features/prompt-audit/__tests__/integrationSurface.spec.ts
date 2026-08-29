@@ -24,6 +24,18 @@ describe('Prompt Audit integration surface', () => {
     expect(group).toContain('expandOnly: true')
     expect(group).toContain("path: '/admin/risk-control'")
     expect(group).toContain("path: '/admin/prompt-audit'")
+    expect(group).toContain("path: '/admin/jailbreak-guard'")
+    expect(group).toContain('nav.jailbreakGuard')
+  })
+
+  it('registers the dedicated jailbreak guard route with the same admin and risk-control gates', () => {
+    const router = read('../../../router/index.ts')
+    expect(router).toContain("path: '/admin/jailbreak-guard'")
+    const route = router.slice(router.indexOf("path: '/admin/jailbreak-guard'"), router.indexOf("path: '/admin/usage'"))
+    expect(route).toContain("JailbreakGuardView.vue")
+    expect(route).toContain('requiresAuth: true')
+    expect(route).toContain('requiresAdmin: true')
+    expect(route).toContain('requiresRiskControl: true')
   })
 
   it('keeps Prompt Audit locale trees symmetric and all operational controls named', () => {

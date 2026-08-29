@@ -16,6 +16,8 @@ import (
 
 type prefixEncryptor struct{}
 
+func boolPointer(value bool) *bool { return &value }
+
 func (prefixEncryptor) Encrypt(value string) (string, error) { return "enc:" + value, nil }
 func (prefixEncryptor) Decrypt(value string) (string, error) {
 	if !strings.HasPrefix(value, "enc:") {
@@ -35,14 +37,19 @@ func TestDefaultConfigIsOff(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, storage.Enabled)
 	require.False(t, storage.BlockingLatestTurnOnly)
+	require.True(t, storage.LocalJailbreakGuardEnabled)
 	active, err := ActiveFromStorage(storage, true, prefixEncryptor{})
 	require.NoError(t, err)
 	require.Equal(t, ModeOff, active.EffectiveMode())
+	require.True(t, active.LocalJailbreakGuardEnabled)
 	require.Equal(t, AllScannerIDs, storage.Scanners)
 	publicJSON, err := json.Marshal(PublicFromStorage(storage, true, nil))
 	require.NoError(t, err)
 	require.Contains(t, string(publicJSON), `"group_ids":[]`)
 	require.Contains(t, string(publicJSON), `"endpoints":[]`)
+	public := PublicFromStorage(storage, true, nil)
+	require.True(t, public.LocalJailbreakGuardEnabled)
+	require.Equal(t, localPromptInjectionPolicyID, public.LocalJailbreakPolicyID)
 }
 
 func TestBlockingLatestTurnOnlyConfigRoundTrip(t *testing.T) {
@@ -65,6 +72,42 @@ func TestBlockingLatestTurnOnlyConfigRoundTrip(t *testing.T) {
 	require.True(t, active.BlockingLatestTurnOnly)
 	public := PublicFromStorage(next, true, nil)
 	require.True(t, public.BlockingLatestTurnOnly)
+}
+
+func TestLocalJailbreakGuardSwitchPersistsAndLegacyRequestsPreserveState(t *testing.T) {
+	manager := &ConfigManager{encryptor: prefixEncryptor{}, encryptionKeyConfigured: true}
+	current := DefaultStorageConfig()
+
+	disabledRequest := UpdateConfigRequest{
+		ExpectedConfigVersion: 1, LocalJailbreakGuardEnabled: boolPointer(false), Strategy: "priority",
+		WorkerCount: 1, QueueCapacity: 10, Scanners: []string{"jailbreak"}, AllGroups: true,
+	}
+	disabled, err := manager.buildNextStorage(current, disabledRequest, 9)
+	require.NoError(t, err)
+	require.False(t, disabled.LocalJailbreakGuardEnabled)
+	require.False(t, PublicFromStorage(disabled, true, nil).LocalJailbreakGuardEnabled)
+
+	legacyRequest := disabledRequest
+	legacyRequest.LocalJailbreakGuardEnabled = nil
+	preserved, err := manager.buildNextStorage(disabled, legacyRequest, 9)
+	require.NoError(t, err)
+	require.False(t, preserved.LocalJailbreakGuardEnabled)
+
+	raw, err := json.Marshal(disabled)
+	require.NoError(t, err)
+	parsed, err := ParseStorageConfig(string(raw))
+	require.NoError(t, err)
+	require.False(t, parsed.LocalJailbreakGuardEnabled)
+
+	legacyParsed, err := ParseStorageConfig(`{"enabled":false,"config_version":4}`)
+	require.NoError(t, err)
+	require.True(t, legacyParsed.LocalJailbreakGuardEnabled)
+}
+
+func TestLocalJailbreakGuardChangeSummaryIncludesSwitchState(t *testing.T) {
+	cfg := DefaultStorageConfig()
+	cfg.LocalJailbreakGuardEnabled = false
+	require.Contains(t, changeSummary(cfg), `"local_jailbreak_guard_enabled":false`)
 }
 
 func TestConfigRejectsBlockingWithoutAudit(t *testing.T) {

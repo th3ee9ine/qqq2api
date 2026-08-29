@@ -228,8 +228,9 @@ func configAuditFields(request UpdateConfigRequest, saved *PublicConfig) map[str
 	}
 	return map[string]any{
 		"enabled": request.Enabled, "blocking_enabled": request.BlockingEnabled,
-		"blocking_latest_turn_only": request.BlockingLatestTurnOnly,
-		"config_version":            version, "endpoint_count": len(request.Endpoints),
+		"blocking_latest_turn_only":     request.BlockingLatestTurnOnly,
+		"local_jailbreak_guard_enabled": request.LocalJailbreakGuardEnabled,
+		"config_version":                version, "endpoint_count": len(request.Endpoints),
 		"scanner_count": len(request.Scanners), "all_groups": request.AllGroups,
 		"group_count": len(request.GroupIDs),
 	}

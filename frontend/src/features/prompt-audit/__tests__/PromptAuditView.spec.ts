@@ -99,6 +99,7 @@ describe('PromptAuditView', () => {
     expect(wrapper.find('[data-test="pass-events-disabled-notice"]').exists()).toBe(true)
     expect(wrapper.get('[data-test="tab-events"]').text()).toContain('admin.promptAudit.tabs.events')
     expect(wrapper.get('[data-test="tab-config"]').text()).toContain('admin.promptAudit.tabs.config')
+    expect(wrapper.find('[data-test="local-jailbreak-guard"]').exists()).toBe(true)
 
     await wrapper.get('[data-test="tab-config"]').trigger('click')
     await flushPromises()
@@ -106,6 +107,7 @@ describe('PromptAuditView', () => {
     expect(wrapper.get('[data-test="tab-panel-config"]').attributes('style') || '').not.toContain('display: none')
     expect(wrapper.get('[data-test="tab-panel-events"]').attributes('style') || '').toContain('display: none')
     expect(wrapper.find('[data-test="save-config"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="local-jailbreak-guard-status"]').text()).toContain('admin.promptAudit.localGuard.enabled')
 
     await wrapper.get('[data-test="tab-events"]').trigger('click')
     await flushPromises()
@@ -178,7 +180,7 @@ describe('PromptAuditView', () => {
     await flushPromises()
     await wrapper.get('[data-test="tab-config"]').trigger('click')
     const switches = wrapper.findAll('[role="switch"]')
-    expect(switches).toHaveLength(4)
+    expect(switches).toHaveLength(5)
     expect(switches.every((item) => Boolean(item.attributes('aria-label')))).toBe(true)
     expect(wrapper.html()).toContain('fixed inset-x-0 bottom-0')
     expect(wrapper.html()).toContain('flex-wrap')

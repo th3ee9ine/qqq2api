@@ -107,6 +107,20 @@ func (s *PromptService) EffectiveMode() Mode {
 	return s.config.EffectiveMode()
 }
 
+// LocalJailbreakGuardEnabled exposes the local ingress guard state to the
+// coordinator. Missing or not-yet-loaded configuration stays fail-closed so a
+// startup or reload problem cannot silently turn off the local protection.
+func (s *PromptService) LocalJailbreakGuardEnabled() bool {
+	if s == nil || s.config == nil {
+		return true
+	}
+	cfg, ok := s.config.Active()
+	if !ok {
+		return true
+	}
+	return cfg.LocalJailbreakGuardEnabled
+}
+
 func (s *PromptService) Enqueue(_ context.Context, req Request) error {
 	if s == nil || s.enqueuer == nil || s.EffectiveMode() != ModeAsync {
 		return nil

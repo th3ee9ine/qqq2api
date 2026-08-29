@@ -68,6 +68,16 @@ func TestPromptServiceStartReportsDependencyFailureWithoutPanic(t *testing.T) {
 	require.NoError(t, service.Shutdown(ctx))
 }
 
+func TestPromptServiceLocalJailbreakGuardDefaultsClosedAndFollowsActiveConfig(t *testing.T) {
+	require.True(t, (&PromptService{}).LocalJailbreakGuardEnabled())
+
+	service := &PromptService{config: &fakeConfigStore{active: true, cfg: ActiveConfig{LocalJailbreakGuardEnabled: false}}}
+	require.False(t, service.LocalJailbreakGuardEnabled())
+
+	service.config = &fakeConfigStore{active: false, cfg: ActiveConfig{LocalJailbreakGuardEnabled: false}}
+	require.True(t, service.LocalJailbreakGuardEnabled())
+}
+
 func TestPromptServiceBlockingLatestTurnOnlyUsesNarrowSnapshot(t *testing.T) {
 	seen := make([]string, 0, 2)
 	evaluator := newGuardEvaluator(PromptScannerFunc(func(_ context.Context, _ ActiveEndpoint, chunk string, _ []string) (*NormalizedResult, error) {

@@ -30,6 +30,21 @@ func (c *Coordinator) Check(ctx context.Context, req Request) Decision {
 	if c == nil {
 		return allowDecision(nil, nil)
 	}
+	// Keep the ingress jailbreak guard independent from the optional remote
+	// audit service. A caller must not be able to turn off or bypass the
+	// configured prompt-audit dependency by switching the audit mode to off.
+	// The detector is deliberately high-confidence and only emits a block for
+	// a classic override or a corroborated group of jailbreak indicators.
+	localGuardEnabled := true
+	if guardState, ok := c.prompt.(interface{ LocalJailbreakGuardEnabled() bool }); ok {
+		localGuardEnabled = guardState.LocalJailbreakGuardEnabled()
+	}
+	if localGuardEnabled {
+		if local := DetectPromptInjection(req); local != nil {
+			legacy, _ := c.checkLegacy(ctx, req)
+			return prioritize(legacy, local)
+		}
+	}
 	mode := ModeOff
 	if c.prompt != nil {
 		mode = c.prompt.EffectiveMode()

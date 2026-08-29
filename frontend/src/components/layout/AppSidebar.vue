@@ -201,6 +201,7 @@ const baseAdminNavItems = computed<NavItem[]>(() => [
     children: [
       { path: '/admin/risk-control', label: t('nav.contentModeration'), icon: 'shield' },
       { path: '/admin/prompt-audit', label: t('nav.promptAudit'), icon: 'shield' },
+      { path: '/admin/jailbreak-guard', label: t('nav.jailbreakGuard'), icon: 'shield' },
     ],
   },
   { path: '/admin/usage', label: t('nav.usage'), icon: 'chart' },

@@ -6,6 +6,7 @@ import PolicyPanel from '../components/PolicyPanel.vue'
 import EventWorkspace from '../components/EventWorkspace.vue'
 import EventDetailDialog from '../components/EventDetailDialog.vue'
 import FilterDeleteDialog from '../components/FilterDeleteDialog.vue'
+import LocalJailbreakGuardPanel from '../components/LocalJailbreakGuardPanel.vue'
 import type { PromptAuditDraft, PromptAuditEndpointDraft, PromptAuditEvent, PromptEventFilters } from '../types'
 import { emptyEventFilters, resolveDeleteRangeFilters, SCANNER_CATALOG } from '../viewModel'
 
@@ -25,6 +26,17 @@ const endpoint = (): PromptAuditEndpointDraft => ({
 
 describe('Prompt Audit components', () => {
   beforeEach(() => vi.restoreAllMocks())
+
+  it('shows the local jailbreak guard as an always-on, read-only control', () => {
+    const wrapper = mount(LocalJailbreakGuardPanel, {
+      props: { enabled: true, policyId: 'local-jailbreak-v1' },
+    })
+    expect(wrapper.get('[data-test="local-jailbreak-guard-status"]').text()).toContain('admin.promptAudit.localGuard.enabled')
+    expect(wrapper.text()).toContain('local-jailbreak-v1')
+    expect(wrapper.text()).toContain('admin.promptAudit.localGuard.alwaysOn')
+    expect(wrapper.findAll('button')).toHaveLength(0)
+    expect(wrapper.findAll('[role="switch"]')).toHaveLength(0)
+  })
 
   it('edits a saved endpoint with blank-secret keep, explicit clear, replacement, and probe actions', async () => {
     const wrapper = mount(EndpointPool, {
