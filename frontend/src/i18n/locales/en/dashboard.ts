@@ -48,13 +48,6 @@ export default {
     noUsageRecords: 'No usage records',
     startUsingApi: 'Start using the API to see your usage history here.',
     viewAllUsage: 'View all usage',
-    quickActions: 'Quick Actions',
-    createApiKey: 'Create API Key',
-    generateNewKey: 'Generate a new API key',
-    viewUsage: 'View Usage',
-    checkDetailedLogs: 'Check detailed usage logs',
-    redeemCode: 'Redeem Code',
-    addBalanceWithCode: 'Add balance with a code'
   },
 
   // Groups (shared)

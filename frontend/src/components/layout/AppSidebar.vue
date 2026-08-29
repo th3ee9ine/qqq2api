@@ -185,7 +185,6 @@ const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRela
 const siteVersion = computed(() => appStore.siteVersion)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 const flagRiskControl = makeSidebarFlag(FeatureFlags.riskControl)
-const flagPluginManagement = makeSidebarFlag(FeatureFlags.pluginManagement)
 const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
 
 const baseAdminNavItems = computed<NavItem[]>(() => [
@@ -193,7 +192,6 @@ const baseAdminNavItems = computed<NavItem[]>(() => [
   { path: '/admin/ops', label: t('nav.ops'), icon: 'chart', featureFlag: flagOpsMonitoring },
   { path: '/admin/groups', label: t('nav.groups'), icon: 'folder', hideInSimpleMode: true },
   { path: '/admin/accounts', label: t('nav.accounts'), icon: 'globe', requiredPermission: 'accounts.manage' },
-  { path: '/admin/plugins', label: t('nav.plugins'), icon: 'cube', featureFlag: flagPluginManagement },
   { path: '/admin/proxies', label: t('nav.proxies'), icon: 'server', requiredPermission: 'proxies.manage' },
   { path: '/admin/account-admins', label: t('nav.accountAdmins'), icon: 'users' },
   {

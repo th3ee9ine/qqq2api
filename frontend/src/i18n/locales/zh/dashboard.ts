@@ -48,15 +48,6 @@ export default {
     noUsageRecords: '暂无使用记录',
     startUsingApi: '开始使用 API 后，您的使用历史将显示在这里。',
     viewAllUsage: '查看全部',
-    quickActions: '快捷操作',
-    createApiKey: '创建 API 密钥',
-    generateNewKey: '生成新的 API 密钥',
-    batchImageAgent: '批量生图助手',
-    batchImageAgentDesc: '复制给 Agent 的任务说明',
-    viewUsage: '查看使用记录',
-    checkDetailedLogs: '查看详细的使用日志',
-    redeemCode: '兑换码',
-    addBalanceWithCode: '使用兑换码充值'
   },
 
   // Groups (shared)

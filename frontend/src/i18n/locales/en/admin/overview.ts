@@ -56,17 +56,6 @@ export default {
       noUsageRecords: 'No usage records',
       startUsingApi: 'Once you start using the API, your usage history will appear here.',
       viewAllUsage: 'View all',
-      quickActions: 'Quick Actions',
-      manageUsers: 'Manage Users',
-      viewUserAccounts: 'View and manage user accounts',
-      manageAccounts: 'Manage Accounts',
-      configureAiAccounts: 'Configure AI platform accounts',
-      batchImage: 'Batch Image',
-      batchImageDesc: 'Submit jobs and copy agent instructions',
-      groupPricing: 'Group Pricing',
-      groupPricingDesc: 'Configure batch discount and hold ratio',
-      systemSettings: 'System Settings',
-      configureSystem: 'Configure system settings',
       failedToLoad: 'Failed to load dashboard statistics'
     },
 

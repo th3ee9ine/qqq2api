@@ -56,17 +56,6 @@ export default {
       noUsageRecords: '暂无使用记录',
       startUsingApi: '开始使用 API 后，使用历史将显示在这里。',
       viewAllUsage: '查看全部',
-      quickActions: '快捷操作',
-      manageUsers: '管理用户',
-      viewUserAccounts: '查看和管理用户账户',
-      manageAccounts: '管理账号',
-      configureAiAccounts: '配置 AI 平台账号',
-      batchImage: '批量生图',
-      batchImageDesc: '提交任务、复制 Agent 调用说明',
-      groupPricing: '分组定价',
-      groupPricingDesc: '设置批量折扣和冻结比例',
-      systemSettings: '系统设置',
-      configureSystem: '配置系统设置',
       failedToLoad: '加载仪表盘数据失败'
     },
 
