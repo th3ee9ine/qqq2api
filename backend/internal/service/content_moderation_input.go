@@ -24,6 +24,30 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 		collectLastAnthropicUserMessage(gjson.GetBytes(body, "messages"), &parts, &images)
 	case ContentModerationProtocolOpenAIChat:
 		collectLastRoleMessage(gjson.GetBytes(body, "messages"), "user", &parts, &images)
+	case ContentModerationProtocolOpenAICompletions:
+		// Legacy Completions uses a top-level prompt.  It may be a string or
+		// an array of strings, both of which are valid OpenAI inputs.
+		collectContentValue(gjson.GetBytes(body, "prompt"), &parts, &images)
+	case ContentModerationProtocolOpenAIEmbeddings:
+		// Embeddings accepts `input` as a string, an array of strings, or
+		// nested token arrays.  collectContentValue naturally handles all
+		// textual forms while ignoring numeric token IDs.
+		collectContentValue(gjson.GetBytes(body, "input"), &parts, &images)
+	case ContentModerationProtocolOpenAIModerations:
+		// The Moderations API accepts a string, an array of strings, and (for
+		// multimodal models) text/image content blocks.
+		collectContentValue(gjson.GetBytes(body, "input"), &parts, &images)
+	case ContentModerationProtocolOpenAIAlphaSearch:
+		// Alpha search currently uses a Responses-shaped body. Keep this
+		// explicit so future payload changes do not silently alter the
+		// protocol recorded in audit events.
+		collectLastResponsesInput(gjson.GetBytes(body, "input"), &parts, &images)
+		collectAlphaSearchQueries(gjson.GetBytes(body, "commands.search_query"), &parts)
+	case ContentModerationProtocolOpenAILive:
+		// Realtime/Live session setup uses caller-provided instructions and may
+		// optionally include a Responses-shaped input value.
+		collectContentValue(gjson.GetBytes(body, "instructions"), &parts, &images)
+		collectLiveInputValue(gjson.GetBytes(body, "input"), &parts, &images)
 	case ContentModerationProtocolOpenAIResponses:
 		collectLastResponsesInput(gjson.GetBytes(body, "input"), &parts, &images)
 	case ContentModerationProtocolGemini:
@@ -42,6 +66,62 @@ func ExtractContentModerationInput(protocol string, body []byte) ContentModerati
 	}
 	out.Normalize()
 	return out
+}
+
+// collectAlphaSearchQueries includes the caller's explicit web-search query
+// terms in addition to any conversational input. Search commands are part of
+// the user prompt even when the surrounding `input` array only contains
+// context metadata.
+func collectAlphaSearchQueries(value gjson.Result, parts *[]string) {
+	if !value.IsArray() {
+		return
+	}
+	value.ForEach(func(_, item gjson.Result) bool {
+		addModerationText(parts, item.Get("q").String())
+		return true
+	})
+}
+
+// collectLiveInputValue extracts text from Realtime input items without
+// treating arbitrary `data` fields (for example input_audio base64 payloads)
+// as images. The generic Responses collector intentionally supports a wider
+// set of media shapes, while Realtime has audio-specific objects that must
+// never be sent to the image moderation endpoint.
+func collectLiveInputValue(value gjson.Result, parts *[]string, images *[]string) {
+	switch {
+	case !value.Exists():
+		return
+	case value.Type == gjson.String:
+		addModerationText(parts, value.String())
+	case value.IsArray():
+		value.ForEach(func(_, item gjson.Result) bool {
+			collectLiveInputValue(item, parts, images)
+			return true
+		})
+	case value.IsObject():
+		typ := strings.ToLower(strings.TrimSpace(value.Get("type").String()))
+		switch typ {
+		case "input_text", "text":
+			addModerationText(parts, value.Get("text").String())
+			collectLiveInputValue(value.Get("content"), parts, images)
+		case "message":
+			collectLiveInputValue(value.Get("content"), parts, images)
+		case "image_url", "input_image", "image":
+			// Images remain eligible for the legacy OpenAI Moderations path;
+			// only audio/data objects are excluded here.
+			collectContentValue(value, parts, images)
+		default:
+			// Some clients omit `type` for a text content object. Restrict the
+			// fallback to explicit text/content fields and never inspect a raw
+			// `data` field, which is commonly audio/base64.
+			if value.Get("text").Exists() {
+				addModerationText(parts, value.Get("text").String())
+			}
+			if value.Get("content").Exists() {
+				collectLiveInputValue(value.Get("content"), parts, images)
+			}
+		}
+	}
 }
 
 func collectLastRoleMessage(messages gjson.Result, role string, parts *[]string, images *[]string) {

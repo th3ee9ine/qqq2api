@@ -387,6 +387,11 @@
                 <input v-model.trim="configForm.model" type="text" class="input" placeholder="omni-moderation-latest" />
               </div>
               <div>
+                <label class="input-label">{{ t('admin.riskControl.protocol') }}</label>
+                <Select v-model="configForm.protocol" :options="protocolOptions" />
+                <p class="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.protocolHint') }}</p>
+              </div>
+              <div>
                 <label class="input-label">{{ t('admin.riskControl.timeoutMs') }}</label>
                 <input v-model.number="configForm.timeout_ms" type="number" min="500" max="30000" class="input" />
               </div>
@@ -1082,6 +1087,7 @@ import type {
   ContentModerationAPIKeyLoad,
   ContentModerationAPIKeyStatus,
   ContentModerationConfig,
+  ContentModerationEndpointProtocol,
   ContentModerationLog,
   ContentModerationModelFilter,
   ContentModerationModelFilterType,
@@ -1175,6 +1181,7 @@ const configForm = reactive({
   mode: 'pre_block' as ModerationMode,
   base_url: 'https://api.openai.com',
   model: 'omni-moderation-latest',
+  protocol: 'moderations' as ContentModerationEndpointProtocol,
   proxy_id: null as number | null,
   api_keys_text: '',
   api_key_configured: false,
@@ -1234,6 +1241,12 @@ const modeOptions = computed<SelectOption[]>(() => [
   { value: 'pre_block', label: t('admin.riskControl.modePreBlock') },
   { value: 'observe', label: t('admin.riskControl.modeObserve') },
   { value: 'off', label: t('admin.riskControl.modeOff') },
+])
+
+const protocolOptions = computed<SelectOption[]>(() => [
+  { value: 'moderations', label: t('admin.riskControl.protocolModerations') },
+  { value: 'chat_completions', label: t('admin.riskControl.protocolChatCompletions') },
+  { value: 'responses', label: t('admin.riskControl.protocolResponses') },
 ])
 
 const keywordBlockingModeOptions = computed<Array<{ value: KeywordBlockingMode; label: string; description: string }>>(() => [
@@ -1644,6 +1657,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.mode = config.mode
   configForm.base_url = config.base_url || 'https://api.openai.com'
   configForm.model = config.model || 'omni-moderation-latest'
+  configForm.protocol = config.protocol || 'moderations'
   configForm.proxy_id = config.proxy_id || null
   configForm.api_keys_text = ''
   configForm.api_key_configured = config.api_key_configured
@@ -1734,6 +1748,7 @@ async function saveConfig() {
       mode: configForm.mode,
       base_url: configForm.base_url,
       model: configForm.model,
+      protocol: configForm.protocol,
       // 后端语义：0 清除代理（直连），>0 指定代理
       proxy_id: configForm.proxy_id ?? 0,
       timeout_ms: Number(configForm.timeout_ms) || 3000,
@@ -1907,6 +1922,7 @@ async function testApiKeys(useInputKeys: boolean) {
       api_keys: keys,
       base_url: configForm.base_url,
       model: configForm.model,
+      protocol: configForm.protocol,
       timeout_ms: Number(configForm.timeout_ms) || 3000,
       // 与保存语义一致：0 强制直连，>0 指定代理，确保测试与实际审计走同一条链路
       proxy_id: configForm.proxy_id ?? 0,

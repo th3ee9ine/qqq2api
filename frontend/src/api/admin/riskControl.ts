@@ -1,6 +1,7 @@
 import { apiClient } from '../client'
 
 export type ModerationMode = 'off' | 'observe' | 'pre_block'
+export type ContentModerationEndpointProtocol = 'moderations' | 'chat_completions' | 'responses'
 export type KeywordBlockingMode = 'keyword_only' | 'keyword_and_api' | 'api_only'
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
 
@@ -14,6 +15,7 @@ export interface ContentModerationConfig {
   mode: ModerationMode
   base_url: string
   model: string
+  protocol?: ContentModerationEndpointProtocol
   proxy_id: number | null
   api_key_configured: boolean
   api_key_masked: string
@@ -61,6 +63,7 @@ export interface TestContentModerationAPIKeysPayload {
   api_keys?: string[]
   base_url?: string
   model?: string
+  protocol?: ContentModerationEndpointProtocol
   timeout_ms?: number
   // null/undefined 沿用已保存配置的代理；0 强制直连；>0 指定代理
   proxy_id?: number
@@ -88,6 +91,7 @@ export interface UpdateContentModerationConfig {
   mode?: ModerationMode
   base_url?: string
   model?: string
+  protocol?: ContentModerationEndpointProtocol
   // undefined 不修改；0 清除（直连）；>0 指定代理
   proxy_id?: number
   api_key?: string

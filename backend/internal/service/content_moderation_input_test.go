@@ -94,6 +94,83 @@ func TestExtractContentModerationInput_OpenAIChatMultiTurnExtractsLatestUser(t *
 	require.Equal(t, "Q2", input.Text)
 }
 
+func TestExtractContentModerationInput_OpenAICompletionsSupportsPromptArray(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5",
+		"prompt":["first prompt", "latest prompt"]
+	}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolOpenAICompletions, body)
+
+	// Legacy Completions has no role metadata; preserve all textual prompts in
+	// their deterministic request order so a batched request is fully audited.
+	require.Equal(t, "first prompt latest prompt", input.Text)
+}
+
+func TestExtractContentModerationInput_OpenAIEmbeddingsSupportsStringAndTokenInputs(t *testing.T) {
+	stringInput := ExtractContentModerationInput(ContentModerationProtocolOpenAIEmbeddings,
+		[]byte(`{"model":"text-embedding-3-small","input":["first", "second"]}`))
+	require.Equal(t, "first second", stringInput.Text)
+
+	// Numeric token IDs are valid Embeddings input but are not auditable text;
+	// they should be ignored rather than stringified into the audit payload.
+	tokenInput := ExtractContentModerationInput(ContentModerationProtocolOpenAIEmbeddings,
+		[]byte(`{"model":"text-embedding-3-small","input":[[123,456],[789]]}`))
+	require.Empty(t, tokenInput.Text)
+	require.Empty(t, tokenInput.Images)
+}
+
+func TestExtractContentModerationInput_OpenAIModerationsSupportsMultimodalInput(t *testing.T) {
+	body := []byte(`{
+		"model":"omni-moderation-latest",
+		"input":[
+			{"type":"text","text":"inspect this"},
+			{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}
+		]
+	}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolOpenAIModerations, body)
+
+	require.Equal(t, "inspect this", input.Text)
+	require.Equal(t, []string{"https://example.com/image.png"}, input.Images)
+}
+
+func TestExtractContentModerationInput_OpenAIAlphaSearchUsesResponsesInput(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.5",
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"search latest release"}]}
+		],
+		"commands":{"search_query":[{"q":"OpenAI news"}]}
+	}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolOpenAIAlphaSearch, body)
+	require.Equal(t, "search latest release OpenAI news", input.Text)
+}
+
+func TestExtractContentModerationInput_OpenAILiveIncludesInstructions(t *testing.T) {
+	body := []byte(`{
+		"type":"realtime",
+		"model":"gpt-4o-realtime-preview",
+		"instructions":"answer briefly and safely",
+		"input":[{"type":"input_text","text":"hello"}]
+	}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolOpenAILive, body)
+	require.Equal(t, "answer briefly and safely hello", input.Text)
+}
+
+func TestExtractContentModerationInput_OpenAILiveDoesNotTreatAudioDataAsImage(t *testing.T) {
+	body := []byte(`{
+		"type":"realtime",
+		"input":[{"type":"input_audio","audio":"BASE64_AUDIO_CANARY","data":"BASE64_AUDIO_CANARY"}]
+	}`)
+
+	input := ExtractContentModerationInput(ContentModerationProtocolOpenAILive, body)
+	require.Empty(t, input.Text)
+	require.Empty(t, input.Images)
+}
+
 func TestExtractContentModerationInput_GeminiAgentToolLoopSkipsAudit(t *testing.T) {
 	body := []byte(`{
 		"contents": [

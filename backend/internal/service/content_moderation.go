@@ -54,8 +54,39 @@ const (
 	ContentModerationProtocolAnthropicMessages = "anthropic_messages"
 	ContentModerationProtocolOpenAIResponses   = "openai_responses"
 	ContentModerationProtocolOpenAIChat        = "openai_chat_completions"
-	ContentModerationProtocolGemini            = "gemini"
-	ContentModerationProtocolOpenAIImages      = "openai_images"
+	// ContentModerationProtocolOpenAICompletions is the legacy OpenAI
+	// Completions wire format (the request uses a top-level `prompt`).  Keep
+	// protocol identifiers explicit rather than relying on the generic
+	// extractor fallback so callers can preserve the original protocol in
+	// audit records.
+	ContentModerationProtocolOpenAICompletions = "openai_completions"
+	// ContentModerationProtocolOpenAIEmbeddings identifies the OpenAI
+	// Embeddings input format.  Embeddings accepts either a string or an array
+	// of strings; both forms are handled by the content extractor.
+	ContentModerationProtocolOpenAIEmbeddings = "openai_embeddings"
+	// ContentModerationProtocolOpenAIModerations identifies an OpenAI
+	// Moderations-shaped input (string, string array, or multimodal content
+	// blocks).  It is useful to integrations that reuse the audit extractor.
+	ContentModerationProtocolOpenAIModerations = "openai_moderations"
+	// ContentModerationProtocolOpenAIAlphaSearch identifies the standalone
+	// Codex alpha search request. Its payload is Responses-shaped, but keeping a
+	// distinct identifier makes audit records accurately reflect the route.
+	ContentModerationProtocolOpenAIAlphaSearch = "openai_alpha_search"
+	// ContentModerationProtocolOpenAILive identifies the OpenAI Realtime/Live
+	// session setup payload. Live carries caller-provided instructions instead
+	// of a chat `messages` array.
+	ContentModerationProtocolOpenAILive   = "openai_live"
+	ContentModerationProtocolGemini       = "gemini"
+	ContentModerationProtocolOpenAIImages = "openai_images"
+
+	// ContentModerationEndpointProtocol selects the wire protocol used when
+	// sending content to the configured moderation provider. Moderations is the
+	// backwards-compatible default; chat_completions and responses are useful
+	// for OpenAI-compatible gateways that expose classification through those
+	// routes instead of /v1/moderations.
+	ContentModerationEndpointProtocolModerations     = "moderations"
+	ContentModerationEndpointProtocolChatCompletions = "chat_completions"
+	ContentModerationEndpointProtocolResponses       = "responses"
 
 	defaultContentModerationBaseURL   = "https://api.openai.com"
 	defaultContentModerationModel     = "omni-moderation-latest"
@@ -139,10 +170,11 @@ func ContentModerationCategories() []string {
 }
 
 type ContentModerationConfig struct {
-	Enabled bool   `json:"enabled"`
-	Mode    string `json:"mode"`
-	BaseURL string `json:"base_url"`
-	Model   string `json:"model"`
+	Enabled  bool   `json:"enabled"`
+	Mode     string `json:"mode"`
+	BaseURL  string `json:"base_url"`
+	Model    string `json:"model"`
+	Protocol string `json:"protocol"`
 	// ProxyID 指定审计请求使用的代理服务器（IP管理-代理服务器），nil 表示直连。
 	ProxyID              *int64                       `json:"proxy_id,omitempty"`
 	APIKey               string                       `json:"api_key,omitempty"`
@@ -179,6 +211,7 @@ type ContentModerationConfigView struct {
 	Mode                           string                          `json:"mode"`
 	BaseURL                        string                          `json:"base_url"`
 	Model                          string                          `json:"model"`
+	Protocol                       string                          `json:"protocol"`
 	ProxyID                        *int64                          `json:"proxy_id"`
 	APIKeyConfigured               bool                            `json:"api_key_configured"`
 	APIKeyMasked                   string                          `json:"api_key_masked"`
@@ -243,6 +276,7 @@ type TestContentModerationAPIKeysInput struct {
 	APIKeys   []string `json:"api_keys"`
 	BaseURL   string   `json:"base_url"`
 	Model     string   `json:"model"`
+	Protocol  string   `json:"protocol"`
 	TimeoutMS int      `json:"timeout_ms"`
 	// ProxyID nil 表示沿用已保存配置的代理；<=0 表示强制直连测试；>0 表示指定代理测试。
 	ProxyID *int64   `json:"proxy_id"`
@@ -266,10 +300,11 @@ type ContentModerationTestAuditResult struct {
 }
 
 type UpdateContentModerationConfigInput struct {
-	Enabled *bool   `json:"enabled"`
-	Mode    *string `json:"mode"`
-	BaseURL *string `json:"base_url"`
-	Model   *string `json:"model"`
+	Enabled  *bool   `json:"enabled"`
+	Mode     *string `json:"mode"`
+	BaseURL  *string `json:"base_url"`
+	Model    *string `json:"model"`
+	Protocol *string `json:"protocol"`
 	// ProxyID nil 表示不修改；<=0 表示清除代理（恢复直连）；>0 表示指定代理。
 	ProxyID                        *int64                        `json:"proxy_id"`
 	APIKey                         *string                       `json:"api_key"`
@@ -628,6 +663,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	if input.Model != nil {
 		cfg.Model = strings.TrimSpace(*input.Model)
 	}
+	if input.Protocol != nil {
+		cfg.Protocol = strings.TrimSpace(*input.Protocol)
+	}
 	if input.ProxyID != nil {
 		if *input.ProxyID > 0 {
 			id := *input.ProxyID
@@ -749,6 +787,9 @@ func (s *ContentModerationService) TestAPIKeys(ctx context.Context, input TestCo
 	if strings.TrimSpace(input.Model) != "" {
 		cfg.Model = input.Model
 	}
+	if strings.TrimSpace(input.Protocol) != "" {
+		cfg.Protocol = input.Protocol
+	}
 	if input.TimeoutMS > 0 {
 		cfg.TimeoutMS = input.TimeoutMS
 	}
@@ -761,6 +802,9 @@ func (s *ContentModerationService) TestAPIKeys(ctx context.Context, input TestCo
 		}
 	}
 	cfg.normalize()
+	if err := validateContentModerationEndpointProtocol(cfg.Protocol); err != nil {
+		return nil, err
+	}
 	testInput, imageCount, err := buildModerationTestInput(input.Prompt, input.Images)
 	if err != nil {
 		return nil, err
@@ -1644,6 +1688,9 @@ func (s *ContentModerationService) validateConfig(ctx context.Context, cfg *Cont
 		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_CONFIG", "内容审计配置不能为空")
 	}
 	cfg.normalize()
+	if err := validateContentModerationEndpointProtocol(cfg.Protocol); err != nil {
+		return err
+	}
 	switch cfg.Mode {
 	case ContentModerationModeOff, ContentModerationModeObserve, ContentModerationModePreBlock:
 	default:
@@ -1725,6 +1772,19 @@ func (s *ContentModerationService) callModeration(ctx context.Context, cfg *Cont
 }
 
 func (s *ContentModerationService) callModerationOnceWithInput(ctx context.Context, cfg *ContentModerationConfig, apiKey string, input any, httpStatus *int) (*moderationAPIResult, error) {
+	if cfg == nil {
+		return nil, errors.New("content moderation config is nil")
+	}
+	// Normalize here as well as at config load/update boundaries. This keeps
+	// direct callers (including API-key probes and tests) compatible with
+	// path-shaped aliases such as /v1/responses.
+	protocol := normalizeContentModerationEndpointProtocol(cfg.Protocol)
+	if protocol == ContentModerationEndpointProtocolChatCompletions {
+		return s.callChatCompletionsModerationOnce(ctx, cfg, apiKey, input, httpStatus)
+	}
+	if protocol == ContentModerationEndpointProtocolResponses {
+		return s.callResponsesModerationOnce(ctx, cfg, apiKey, input, httpStatus)
+	}
 	base := strings.TrimRight(cfg.BaseURL, "/")
 	endpoint, err := url.JoinPath(base, "/v1/moderations")
 	if err != nil {
@@ -2051,6 +2111,7 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		Mode:                 ContentModerationModePreBlock,
 		BaseURL:              defaultContentModerationBaseURL,
 		Model:                defaultContentModerationModel,
+		Protocol:             ContentModerationEndpointProtocolModerations,
 		TimeoutMS:            defaultContentModerationTimeoutMS,
 		SampleRate:           100,
 		AllGroups:            true,
@@ -2117,6 +2178,7 @@ func (cfg *ContentModerationConfig) normalize() {
 		cfg.Model = defaultContentModerationModel
 	}
 	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.Protocol = normalizeContentModerationEndpointProtocol(cfg.Protocol)
 	if cfg.ProxyID != nil && *cfg.ProxyID <= 0 {
 		cfg.ProxyID = nil
 	}
@@ -2180,6 +2242,28 @@ func (cfg *ContentModerationConfig) normalize() {
 	cfg.BlockedKeywords = normalizeBlockedKeywords(cfg.BlockedKeywords)
 	cfg.KeywordBlockingMode = normalizeKeywordBlockingMode(cfg.KeywordBlockingMode)
 	cfg.ModelFilter = normalizeContentModerationModelFilter(cfg.ModelFilter)
+}
+
+func normalizeContentModerationEndpointProtocol(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", ContentModerationEndpointProtocolModerations, "openai_moderations", "/v1/moderations":
+		return ContentModerationEndpointProtocolModerations
+	case ContentModerationEndpointProtocolChatCompletions, "openai_chat_completions", "chat", "/v1/chat/completions":
+		return ContentModerationEndpointProtocolChatCompletions
+	case ContentModerationEndpointProtocolResponses, "openai_responses", "response", "/v1/responses":
+		return ContentModerationEndpointProtocolResponses
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func validateContentModerationEndpointProtocol(value string) error {
+	switch value {
+	case ContentModerationEndpointProtocolModerations, ContentModerationEndpointProtocolChatCompletions, ContentModerationEndpointProtocolResponses:
+		return nil
+	default:
+		return infraerrors.BadRequest("INVALID_CONTENT_MODERATION_PROTOCOL", "内容审计协议仅支持 /v1/moderations、/v1/chat/completions 或 /v1/responses")
+	}
 }
 
 func (cfg *ContentModerationConfig) includesGroup(groupID *int64) bool {
@@ -2383,6 +2467,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		Mode:                           cfg.Mode,
 		BaseURL:                        cfg.BaseURL,
 		Model:                          cfg.Model,
+		Protocol:                       cfg.Protocol,
 		ProxyID:                        cloneInt64Ptr(cfg.ProxyID),
 		APIKeyConfigured:               len(keys) > 0,
 		APIKeyMasked:                   apiKeyMasked,
