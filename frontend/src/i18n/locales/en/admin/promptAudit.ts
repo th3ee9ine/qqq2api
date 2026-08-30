@@ -22,7 +22,7 @@ export default {
       action: 'On match',
       blockBeforeUpstream: 'Block before upstream',
       coverageTitle: 'Detection coverage',
-      coverage: 'Covers high-risk patterns such as instruction override, role override, safety bypass, refusal suppression, system-prompt exfiltration, fixture laundering, and unrestricted-output requests.',
+      coverage: 'Covers high-risk patterns such as instruction override, role override, safety bypass, refusal suppression, system-prompt exfiltration, fixture laundering, unrestricted output, agent/tool control, and encoded or confusable payloads.',
       behaviorTitle: 'Guard behavior',
       remoteIndependent: 'This guard is independent of remote Prompt Audit configuration. When enabled, it continues to run even if remote auditing is disabled or its nodes are unavailable.',
       behaviors: {
@@ -30,6 +30,8 @@ export default {
         roleOverride: 'Detects developer mode, jailbreak mode, and unrestricted role switching.',
         safetyBypass: 'Detects combined requests to bypass safety rules, filters, or moderation.',
         promptExfiltration: 'Detects requests for system prompts, developer messages, or hidden instructions.',
+        agentControl: 'Detects forced skill/tool calls, priority impersonation, and attempts to control the agent execution flow.',
+        evasionResistance: 'Normalizes Unicode, zero-width characters, punctuation splitting, confusables, common substitutions, and marked Base64 payloads.',
       },
     },
     actions: { refresh: 'Refresh runtime', retry: 'Retry', Allow: 'Allow', Warn: 'Warn', Block: 'Block' },

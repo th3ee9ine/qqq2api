@@ -67,6 +67,8 @@ const behaviorItems = [
   'admin.promptAudit.localGuard.behaviors.roleOverride',
   'admin.promptAudit.localGuard.behaviors.safetyBypass',
   'admin.promptAudit.localGuard.behaviors.promptExfiltration',
+  'admin.promptAudit.localGuard.behaviors.agentControl',
+  'admin.promptAudit.localGuard.behaviors.evasionResistance',
 ]
 
 onMounted(async () => {

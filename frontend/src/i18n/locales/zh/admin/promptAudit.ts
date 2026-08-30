@@ -22,7 +22,7 @@ export default {
       action: '命中动作',
       blockBeforeUpstream: '访问上游前阻止',
       coverageTitle: '检测覆盖',
-      coverage: '覆盖指令覆盖、角色覆盖、安全限制绕过、拒答压制、系统提示词窃取、样本话术伪装和无限制输出等高风险模式。',
+      coverage: '覆盖指令覆盖、角色覆盖、安全限制绕过、拒答压制、系统提示词窃取、样本话术伪装、无限制输出、代理工具控制，以及编码载荷和同形字符混淆等高风险模式。',
       behaviorTitle: '防护行为',
       remoteIndependent: '该 Guard 独立于远程提示词审计配置；开关启用时，即使关闭远程审计或远程节点不可用，本地防护仍会运行。',
       behaviors: {
@@ -30,6 +30,8 @@ export default {
         roleOverride: '识别开发者模式、越狱模式和不受限制角色切换。',
         safetyBypass: '识别绕过安全规则、过滤器或内容审查的组合表达。',
         promptExfiltration: '识别索取系统提示词、开发者消息或隐藏指令的请求。',
+        agentControl: '识别强制调用工具或技能、伪造优先级和控制代理执行流程的表达。',
+        evasionResistance: '归一化 Unicode、零宽字符、标点拆分、同形字符、常见替换字符和带标记的 Base64 载荷。',
       },
     },
     actions: { refresh: '刷新运行态', retry: '重试', Allow: '放行', Warn: '警告', Block: '阻止' },
