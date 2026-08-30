@@ -15,12 +15,14 @@ import (
 type PrivacyClientFactory func(proxyURL string) (*req.Client, error)
 
 const (
-	openAISettingsURL = "https://chatgpt.com/backend-api/settings/account_user_setting"
-
 	PrivacyModeTrainingOff = "training_off"
 	PrivacyModeFailed      = "training_set_failed"
 	PrivacyModeCFBlocked   = "training_set_cf_blocked"
 )
+
+// openAISettingsURL is a variable so account-management tests can keep all
+// provider calls inside their local httptest fixture.
+var openAISettingsURL = "https://chatgpt.com/backend-api/settings/account_user_setting"
 
 func shouldSkipOpenAIPrivacyEnsure(extra map[string]any) bool {
 	if extra == nil {
@@ -217,9 +219,18 @@ func fetchChatGPTAccountInfo(ctx context.Context, clientFactory PrivacyClientFac
 // ChatGPT/Codex clients. Some Plus accounts no longer expose entitlement.expires_at in
 // accounts/check, but this endpoint still returns active_until.
 func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL, accountID string) string {
+	activeUntil, _ := fetchChatGPTSubscription(ctx, clientFactory, accessToken, proxyURL, accountID)
+	return activeUntil
+}
+
+// fetchChatGPTSubscription is the status-aware variant used by the explicit
+// account-management refresh.  The second return value is true when the
+// provider responded successfully, including a successful response with no
+// active subscription (which must clear any stale locally cached date).
+func fetchChatGPTSubscription(ctx context.Context, clientFactory PrivacyClientFactory, accessToken, proxyURL, accountID string) (string, bool) {
 	accountID = strings.TrimSpace(accountID)
 	if accessToken == "" || accountID == "" || clientFactory == nil {
-		return ""
+		return "", false
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -228,7 +239,7 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 	client, err := clientFactory(proxyURL)
 	if err != nil {
 		slog.Debug("chatgpt_subscription_client_error", "error", err.Error())
-		return ""
+		return "", false
 	}
 
 	var result struct {
@@ -248,25 +259,25 @@ func fetchChatGPTSubscriptionExpiresAt(ctx context.Context, clientFactory Privac
 		Get(chatGPTSubscriptionsURL)
 	if err != nil {
 		slog.Debug("chatgpt_subscription_request_error", "error", err.Error())
-		return ""
+		return "", false
 	}
 	if !resp.IsSuccessState() {
 		slog.Debug("chatgpt_subscription_failed", "status", resp.StatusCode, "body", truncate(resp.String(), 200))
-		return ""
+		return "", false
 	}
 
 	activeUntil := strings.TrimSpace(result.ActiveUntil)
 	if activeUntil == "" {
 		slog.Debug("chatgpt_subscription_no_active_until", "plan_type", result.PlanType, "has_subscription_id", strings.TrimSpace(result.ID) != "", "will_renew", result.WillRenew)
-		return ""
+		return "", true
 	}
 	if _, err := time.Parse(time.RFC3339, activeUntil); err != nil {
 		slog.Debug("chatgpt_subscription_bad_active_until", "active_until", activeUntil, "error", err.Error())
-		return ""
+		return "", false
 	}
 
 	slog.Info("chatgpt_subscription_success", "plan_type", result.PlanType, "subscription_expires_at", activeUntil, "account_id", accountID)
-	return activeUntil
+	return activeUntil, true
 }
 
 // fillAccountInfo 从单个 account 对象中提取 plan_type 和 subscription_expires_at。

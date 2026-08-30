@@ -381,6 +381,75 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	response.Success(c, dto.AccountFromService(updatedAccount))
 }
 
+// RefreshAccountSubscription fetches the latest ChatGPT subscription expiry
+// (active_until) and persists it in the account credentials.  The regular token
+// refresh intentionally reuses cached subscription data when it is still
+// present; this explicit account-management action always performs a fresh
+// subscription lookup so stale dates can be corrected.
+// POST /api/v1/admin/openai/accounts/:id/subscription/refresh
+func (h *OpenAIOAuthHandler) RefreshAccountSubscription(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if account.Platform != oauthPlatformFromPath(c) {
+		response.BadRequest(c, "Account platform does not match OAuth endpoint")
+		return
+	}
+	if !account.IsOAuth() {
+		response.BadRequest(c, "Cannot refresh subscription for non-OAuth account")
+		return
+	}
+	if account.IsOpenAIPersonalAccessToken() {
+		response.BadRequest(c, "ChatGPT subscription expiry is not available for personal access token accounts")
+		return
+	}
+	if account.IsCredentialShadow() {
+		response.BadRequest(c, "Cannot refresh subscription for a spark shadow account")
+		return
+	}
+	if h.openaiOAuthService == nil {
+		response.Error(c, http.StatusInternalServerError, "OpenAI OAuth service is not configured")
+		return
+	}
+
+	tokenInfo, err := h.openaiOAuthService.RefreshAccountSubscription(c.Request.Context(), account)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	newCredentials := h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
+	// Preserve provider credentials and account-level settings that are not part
+	// of the token response (for example model_mapping and custom headers).
+	for k, v := range account.Credentials {
+		if _, exists := newCredentials[k]; !exists {
+			newCredentials[k] = v
+		}
+	}
+	if tokenInfo.SubscriptionFetched && strings.TrimSpace(tokenInfo.SubscriptionExpiresAt) == "" {
+		delete(newCredentials, "subscription_expires_at")
+	}
+	newCredentials = service.NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
+
+	updatedAccount, err := h.adminService.UpdateAccount(c.Request.Context(), accountID, &service.UpdateAccountInput{
+		Credentials: newCredentials,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, dto.AccountFromService(updatedAccount))
+}
+
 // CreateAccountFromOAuth creates a new OpenAI OAuth account from token info
 // POST /api/v1/admin/openai/create-from-oauth
 func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {

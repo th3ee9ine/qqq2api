@@ -127,6 +127,9 @@ type OpenAITokenInfo struct {
 	PlanType              string `json:"plan_type,omitempty"`
 	SubscriptionExpiresAt string `json:"subscription_expires_at,omitempty"`
 	PrivacyMode           string `json:"privacy_mode,omitempty"`
+	// SubscriptionFetched is set only by RefreshAccountSubscription after a
+	// successful provider response. It is intentionally omitted from JSON.
+	SubscriptionFetched bool `json:"-"`
 }
 
 // ExchangeCode exchanges authorization code for tokens
@@ -387,6 +390,54 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 
 	clientID := account.GetCredential("client_id")
 	return s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
+}
+
+// RefreshAccountSubscription fetches the current ChatGPT subscription expiry for
+// an account and returns token information suitable for persisting.  Unlike the
+// normal token refresh path, this method always queries the subscriptions
+// endpoint, even when a previously cached subscription_expires_at value exists.
+// This gives account management an explicit way to correct stale expiry dates
+// without requiring a full re-authorization flow.
+func (s *OpenAIOAuthService) RefreshAccountSubscription(ctx context.Context, account *Account) (*OpenAITokenInfo, error) {
+	if account != nil && account.IsOpenAIPersonalAccessToken() {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_SUBSCRIPTION_UNAVAILABLE", "ChatGPT subscription expiry is not available for personal access token accounts")
+	}
+	tokenInfo, err := s.RefreshAccountToken(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	if tokenInfo == nil || tokenInfo.AccessToken == "" || s.privacyClientFactory == nil {
+		return tokenInfo, nil
+	}
+
+	var proxyURL string
+	if account != nil && account.ProxyID != nil && s.proxyRepo != nil {
+		if proxy, proxyErr := s.proxyRepo.GetByID(ctx, *account.ProxyID); proxyErr == nil && proxy != nil {
+			proxyURL = proxy.URL()
+		}
+	}
+
+	orgID := tokenInfo.OrganizationID
+	if orgID == "" {
+		if atClaims, decodeErr := openai.DecodeIDToken(tokenInfo.AccessToken); decodeErr == nil && atClaims.OpenAIAuth != nil {
+			orgID = atClaims.OpenAIAuth.POID
+		}
+	}
+	expiresAt, fetched := fetchChatGPTSubscription(
+		ctx,
+		s.privacyClientFactory,
+		tokenInfo.AccessToken,
+		proxyURL,
+		resolveChatGPTSubscriptionAccountID(tokenInfo, orgID),
+	)
+	if fetched {
+		tokenInfo.SubscriptionFetched = true
+		// A successful response without active_until means the subscription
+		// ended; avoid retaining an obsolete cached expiry date.
+		tokenInfo.SubscriptionExpiresAt = expiresAt
+	}
+
+	return tokenInfo, nil
 }
 
 // BuildAccountCredentials builds credentials map from token info

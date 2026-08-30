@@ -36,6 +36,10 @@
                 <Icon name="refresh" size="sm" />
                 {{ t('admin.accounts.refreshToken') }}
               </button>
+              <button v-if="canRefreshSubscription" @click="$emit('refresh-subscription', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-cyan-600 hover:bg-gray-100 dark:hover:bg-dark-700">
+                <Icon name="clock" size="sm" />
+                {{ t('admin.accounts.refreshSubscription') }}
+              </button>
             </template>
             <button v-if="isOpenAIOAuthParent" @click="$emit('create-spark-shadow', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-amber-600 hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="sparkles" size="sm" />
@@ -72,7 +76,7 @@ import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
 
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'sessions'])
+const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'refresh-subscription', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'sessions'])
 const { t } = useI18n()
 const isSupportedPlatform = computed(() =>
   props.account?.platform === 'anthropic' || props.account?.platform === 'openai'
@@ -102,6 +106,11 @@ const hasRecoverableState = computed(() => {
 const isOpenAIOAuth = computed(() => props.account?.platform === 'openai' && props.account?.type === 'oauth')
 // 影子账号(链接型,持 parent_account_id)不持凭据、type 不可变,凭据/隐私类操作对其无效。
 const isShadow = computed(() => props.account?.parent_account_id != null)
+const canRefreshSubscription = computed(() => {
+  if (!isOpenAIOAuth.value || isShadow.value) return false
+  const authMode = String(props.account?.credentials?.auth_mode || '').trim().toLowerCase().replace(/[\s_-]+/g, '')
+  return authMode !== 'personalaccesstoken'
+})
 // A "parent" OpenAI OAuth account is one that is NOT itself a shadow (parent_account_id == null)
 const isOpenAIOAuthParent = computed(() => isOpenAIOAuth.value && !isShadow.value)
 const supportsPrivacy = computed(() => isOpenAIOAuth.value && !isShadow.value)

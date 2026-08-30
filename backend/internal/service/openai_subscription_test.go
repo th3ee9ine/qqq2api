@@ -41,6 +41,51 @@ func TestFetchChatGPTSubscriptionExpiresAt(t *testing.T) {
 	require.Equal(t, wantExpiresAt, got)
 }
 
+func TestRefreshAccountSubscriptionForcesFreshLookup(t *testing.T) {
+	const (
+		accountID = "acct-refresh"
+		fresh     = "2027-01-02T03:04:05Z"
+	)
+	lookupCalls := 0
+	server := newChatGPTBackendTestServer(t, chatGPTBackendTestServerConfig{
+		accountsCheck: map[string]any{
+			"accounts": map[string]any{
+				accountID: map[string]any{
+					"account":     map[string]any{"account_id": accountID, "plan_type": "plus"},
+					"entitlement": map[string]any{"expires_at": "2026-12-01T00:00:00Z"},
+				},
+			},
+		},
+		onSubscription: func(id string) map[string]any {
+			lookupCalls++
+			require.Equal(t, accountID, id)
+			return map[string]any{"plan_type": "plus", "active_until": fresh, "will_renew": true}
+		},
+	})
+	defer server.Close()
+	oldSettingsURL := openAISettingsURL
+	openAISettingsURL = server.URL + "/backend-api/settings/account_user_setting"
+	t.Cleanup(func() { openAISettingsURL = oldSettingsURL })
+
+	svc := &OpenAIOAuthService{privacyClientFactory: newTestPrivacyClientFactory()}
+	account := &Account{
+		ID:       1,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":            "access-token",
+			"chatgpt_account_id":      accountID,
+			"plan_type":               "plus",
+			"subscription_expires_at": "2026-12-01T00:00:00Z",
+		},
+	}
+
+	info, err := svc.RefreshAccountSubscription(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, fresh, info.SubscriptionExpiresAt)
+	require.Equal(t, 1, lookupCalls, "explicit subscription refresh must bypass the cached expiry")
+}
+
 func TestFetchChatGPTAccountInfo_SkipsExpiredWorkspaceCandidate(t *testing.T) {
 	expiredAt := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
 
@@ -322,6 +367,9 @@ func newChatGPTBackendTestServer(t *testing.T, cfg chatGPTBackendTestServerConfi
 				body = cfg.onSubscription(r.URL.Query().Get("account_id"))
 			}
 			_ = json.NewEncoder(w).Encode(body)
+		case "/backend-api/settings/account_user_setting":
+			// Keep the privacy best-effort call inside the local fixture too.
+			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -336,9 +384,8 @@ func newChatGPTBackendTestServer(t *testing.T, cfg chatGPTBackendTestServerConfi
 	return server
 }
 
-// enrichTokenInfo 收尾还会调用 disableOpenAITraining，它的 URL 是常量、指向真实
-// chatgpt.com，测试无法接管。给客户端一个短超时让它快速失败——该调用只写
-// PrivacyMode，不影响本组用例的断言。
+// enrichTokenInfo 收尾还会调用 disableOpenAITraining；测试服务器同时接管该
+// URL，因此整个账号刷新链路都留在本地 fixture 内。
 func newTestPrivacyClientFactory() PrivacyClientFactory {
 	return func(string) (*req.Client, error) {
 		return req.C().SetTimeout(time.Second), nil

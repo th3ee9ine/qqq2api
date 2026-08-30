@@ -203,8 +203,12 @@ type Account struct {
 	Type     string  `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
-	Credentials             map[string]any                 `json:"credentials"`
-	CredentialsStatus       map[string]bool                `json:"credentials_status,omitempty"`
+	Credentials       map[string]any  `json:"credentials"`
+	CredentialsStatus map[string]bool `json:"credentials_status,omitempty"`
+	// SubscriptionExpiresAt is the provider-reported ChatGPT subscription
+	// expiry (active_until), distinct from the locally configured account
+	// scheduling expiry in ExpiresAt.
+	SubscriptionExpiresAt   string                         `json:"subscription_expires_at,omitempty"`
 	Extra                   map[string]any                 `json:"extra"`
 	OllamaCloudUsage        *service.OllamaCloudUsageState `json:"ollama_cloud_usage,omitempty"`
 	ProxyID                 *int64                         `json:"proxy_id"`

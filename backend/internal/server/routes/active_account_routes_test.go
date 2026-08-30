@@ -47,6 +47,7 @@ func TestAdminRoutesClaudeAndOpenAIAccountCapabilitiesAreRegistered(t *testing.T
 		"POST /api/v1/admin/openai/generate-auth-url",
 		"POST /api/v1/admin/openai/exchange-code",
 		"POST /api/v1/admin/openai/refresh-token",
+		"POST /api/v1/admin/openai/accounts/:id/subscription/refresh",
 		"POST /api/v1/admin/openai/create-from-oauth",
 		"POST /api/v1/admin/openai/create-from-codex-pat",
 		"GET /api/v1/admin/openai/accounts/:id/quota",

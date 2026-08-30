@@ -58,6 +58,21 @@ func TestAccountFromServiceShallow_RedactsSensitiveCredentials(t *testing.T) {
 	require.Equal(t, "rt-secret", src.Credentials["refresh_token"])
 }
 
+func TestAccountFromServiceShallow_ExposesSubscriptionExpiry(t *testing.T) {
+	src := &service.Account{
+		ID:       42,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Credentials: map[string]any{
+			"subscription_expires_at": "2027-01-02T03:04:05Z",
+		},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.Equal(t, "2027-01-02T03:04:05Z", got.SubscriptionExpiresAt)
+	require.Equal(t, "2027-01-02T03:04:05Z", got.Credentials["subscription_expires_at"])
+}
+
 func TestAccountFromServiceShallow_RedactsOllamaCloudManagedExtra(t *testing.T) {
 	snapshot := map[string]any{
 		"status":          service.OllamaCloudUsageStatusOK,

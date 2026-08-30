@@ -187,6 +187,31 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
     wrapper.unmount()
   })
 
+  it('普通 OpenAI OAuth 母账号显示刷新订阅到期时间入口', () => {
+    const account = makeAccount({ platform: 'openai', type: 'oauth', parent_account_id: null })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, position },
+      attachTo: document.body,
+    })
+    expect(getBodyText()).toContain('admin.accounts.refreshSubscription')
+    wrapper.unmount()
+  })
+
+  it('OpenAI PAT 账号不显示订阅到期时间刷新入口', () => {
+    const account = makeAccount({
+      platform: 'openai',
+      type: 'oauth',
+      parent_account_id: null,
+      credentials: { auth_mode: 'personal_access_token' },
+    })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, position },
+      attachTo: document.body,
+    })
+    expect(getBodyText()).not.toContain('admin.accounts.refreshSubscription')
+    wrapper.unmount()
+  })
+
   it('点击按钮触发 create-spark-shadow 事件并携带 account', async () => {
     const account = makeAccount({ platform: 'openai', type: 'oauth', parent_account_id: null })
     const wrapper = mount(AccountActionMenu, {
