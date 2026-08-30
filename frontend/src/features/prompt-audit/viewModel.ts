@@ -57,14 +57,18 @@ export function createDefaultEndpoint(index = 1): PromptAuditEndpointDraft {
   }
 }
 
-export function buildUpdateRequest(draft: PromptAuditDraft): PromptAuditUpdateRequest {
-  return {
+export interface BuildUpdateRequestOptions {
+  /** Include the field owned by the dedicated Jailbreak Guard page. */
+  includeLocalJailbreakGuard?: boolean
+}
+
+export function buildUpdateRequest(draft: PromptAuditDraft, options: BuildUpdateRequestOptions = {}): PromptAuditUpdateRequest {
+  const request: PromptAuditUpdateRequest = {
     expected_config_version: draft.config_version,
     enabled: draft.enabled,
     blocking_enabled: draft.enabled && draft.blocking_enabled,
     blocking_latest_turn_only: draft.blocking_latest_turn_only,
     store_pass_events: draft.store_pass_events,
-    local_jailbreak_guard_enabled: draft.local_jailbreak_guard_enabled !== false,
     strategy: 'priority',
     worker_count: Number(draft.worker_count),
     queue_capacity: Number(draft.queue_capacity),
@@ -84,6 +88,10 @@ export function buildUpdateRequest(draft: PromptAuditDraft): PromptAuditUpdateRe
       enabled: endpoint.enabled,
     })),
   }
+  if (options.includeLocalJailbreakGuard) {
+    request.local_jailbreak_guard_enabled = draft.local_jailbreak_guard_enabled !== false
+  }
+  return request
 }
 
 export function draftFingerprint(draft: PromptAuditDraft | null): string {

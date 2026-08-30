@@ -64,12 +64,13 @@ describe('Prompt Audit view model', () => {
     expect(buildUpdateRequest(draft)).toMatchObject({ blocking_latest_turn_only: true })
   })
 
-  it('keeps the local jailbreak guard enabled by default and serializes an explicit switch state', () => {
+  it('keeps the local jailbreak guard out of Prompt Audit updates while allowing the dedicated page to serialize it', () => {
     const legacyDraft = configToDraft(config())
-    expect(buildUpdateRequest(legacyDraft).local_jailbreak_guard_enabled).toBe(true)
+    expect(buildUpdateRequest(legacyDraft)).not.toHaveProperty('local_jailbreak_guard_enabled')
 
     legacyDraft.local_jailbreak_guard_enabled = false
-    expect(buildUpdateRequest(legacyDraft).local_jailbreak_guard_enabled).toBe(false)
+    expect(buildUpdateRequest(legacyDraft)).not.toHaveProperty('local_jailbreak_guard_enabled')
+    expect(buildUpdateRequest(legacyDraft, { includeLocalJailbreakGuard: true }).local_jailbreak_guard_enabled).toBe(false)
   })
 
   it('tracks dirty state from the full normalized save payload', () => {

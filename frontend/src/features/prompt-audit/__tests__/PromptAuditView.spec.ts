@@ -99,7 +99,7 @@ describe('PromptAuditView', () => {
     expect(wrapper.find('[data-test="pass-events-disabled-notice"]').exists()).toBe(true)
     expect(wrapper.get('[data-test="tab-events"]').text()).toContain('admin.promptAudit.tabs.events')
     expect(wrapper.get('[data-test="tab-config"]').text()).toContain('admin.promptAudit.tabs.config')
-    expect(wrapper.find('[data-test="local-jailbreak-guard"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="local-jailbreak-guard"]').exists()).toBe(false)
 
     await wrapper.get('[data-test="tab-config"]').trigger('click')
     await flushPromises()
@@ -107,7 +107,7 @@ describe('PromptAuditView', () => {
     expect(wrapper.get('[data-test="tab-panel-config"]').attributes('style') || '').not.toContain('display: none')
     expect(wrapper.get('[data-test="tab-panel-events"]').attributes('style') || '').toContain('display: none')
     expect(wrapper.find('[data-test="save-config"]').exists()).toBe(true)
-    expect(wrapper.get('[data-test="local-jailbreak-guard-status"]').text()).toContain('admin.promptAudit.localGuard.enabled')
+    expect(wrapper.find('[data-test="local-jailbreak-guard-status"]').exists()).toBe(false)
 
     await wrapper.get('[data-test="tab-events"]').trigger('click')
     await flushPromises()
@@ -146,6 +146,7 @@ describe('PromptAuditView', () => {
     await wrapper.get('[data-test="save-config"]').trigger('click')
     await flushPromises()
     expect(mocks.updateConfig).toHaveBeenCalledWith(expect.objectContaining({ endpoints: [expect.objectContaining({ token: 'PROMPT_AUDIT_CANARY_SECRET_DO_NOT_PERSIST' })] }))
+    expect(mocks.updateConfig.mock.calls[0][0]).not.toHaveProperty('local_jailbreak_guard_enabled')
     const endpointProps = wrapper.getComponent(EndpointStub).props('endpoints') as Array<{ token: string }>
     expect(endpointProps[0].token).toBe('')
     expect(wrapper.html()).not.toContain('PROMPT_AUDIT_CANARY_SECRET_DO_NOT_PERSIST')
@@ -180,7 +181,7 @@ describe('PromptAuditView', () => {
     await flushPromises()
     await wrapper.get('[data-test="tab-config"]').trigger('click')
     const switches = wrapper.findAll('[role="switch"]')
-    expect(switches).toHaveLength(5)
+    expect(switches).toHaveLength(4)
     expect(switches.every((item) => Boolean(item.attributes('aria-label')))).toBe(true)
     expect(wrapper.html()).toContain('fixed inset-x-0 bottom-0')
     expect(wrapper.html()).toContain('flex-wrap')

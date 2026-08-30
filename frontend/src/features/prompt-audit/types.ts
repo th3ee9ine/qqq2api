@@ -51,7 +51,7 @@ export interface PromptAuditUpdateRequest {
   blocking_enabled: boolean
   blocking_latest_turn_only: boolean
   store_pass_events: boolean
-  local_jailbreak_guard_enabled: boolean
+  local_jailbreak_guard_enabled?: boolean
   strategy: 'priority'
   worker_count: number
   queue_capacity: number

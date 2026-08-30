@@ -93,7 +93,7 @@ async function saveGuard() {
   try {
     const next = cloneData(serverConfig.value)
     next.local_jailbreak_guard_enabled = guardEnabled.value
-    const saved = await promptAuditAPI.updateConfig(buildUpdateRequest(next))
+    const saved = await promptAuditAPI.updateConfig(buildUpdateRequest(next, { includeLocalJailbreakGuard: true }))
     serverConfig.value = configToDraft(saved)
     guardEnabled.value = saved.local_jailbreak_guard_enabled !== false
     policyId.value = saved.local_jailbreak_policy_id || policyId.value
