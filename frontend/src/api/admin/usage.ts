@@ -34,6 +34,7 @@ export interface SimpleApiKey {
 export interface UsageCleanupFilters {
   start_time: string
   end_time: string
+  record_type?: 'all' | 'usage' | 'errors'
   api_key_id?: number
   account_id?: number
   group_id?: number
@@ -41,6 +42,9 @@ export interface UsageCleanupFilters {
   request_type?: UsageRequestType | null
   stream?: boolean | null
   billing_type?: number | null
+  error_phases?: string[]
+  error_types?: string[]
+  status_codes?: number[]
 }
 
 export interface UsageCleanupTask {
@@ -61,6 +65,7 @@ export interface UsageCleanupTask {
 export interface CreateUsageCleanupTaskRequest {
   start_date: string
   end_date: string
+  record_type?: 'all' | 'usage' | 'errors'
   api_key_id?: number
   account_id?: number
   group_id?: number
@@ -69,6 +74,10 @@ export interface CreateUsageCleanupTaskRequest {
   stream?: boolean | null
   billing_type?: number | null
   timezone?: string
+  error_phase?: string | null
+  error_category?: string | null
+  status_code?: number | null
+  status_codes?: number[]
 }
 
 export interface AdminUsageQueryParams extends UsageQueryParams {

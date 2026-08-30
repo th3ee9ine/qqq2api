@@ -1781,6 +1781,7 @@ export interface AdminUsageLog extends UsageLog {
 export interface UsageCleanupFilters {
   start_time: string
   end_time: string
+  record_type?: 'all' | 'usage' | 'errors'
   user_id?: number
   api_key_id?: number
   account_id?: number
@@ -1789,6 +1790,9 @@ export interface UsageCleanupFilters {
   request_type?: UsageRequestType | null
   stream?: boolean | null
   billing_type?: number | null
+  error_phases?: string[]
+  error_types?: string[]
+  status_codes?: number[]
 }
 
 export interface UsageCleanupTask {

@@ -221,6 +221,18 @@ func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLo
 			opsErrorLogSanitized.Add(1)
 		}
 	}
+	if entry.RequestDetailsJSON != nil && strings.TrimSpace(*entry.RequestDetailsJSON) != "" {
+		originalDetails := *entry.RequestDetailsJSON
+		details, changed := service.SanitizeOpsRequestDetailsForQueue(originalDetails)
+		if strings.TrimSpace(details) == "" {
+			entry.RequestDetailsJSON = nil
+		} else {
+			entry.RequestDetailsJSON = &details
+		}
+		if changed || details != originalDetails {
+			opsErrorLogSanitized.Add(1)
+		}
+	}
 	if err := service.SanitizeOpsUpstreamErrorsForQueue(entry); err != nil {
 		opsErrorLogDropped.Add(1)
 		maybeLogOpsErrorLogDrop()
@@ -415,6 +427,9 @@ func estimateOpsErrorLogJobBytes(entry *service.OpsInsertErrorLogInput) int64 {
 	}
 	if entry.UpstreamErrorsJSON != nil {
 		size += len(*entry.UpstreamErrorsJSON)
+	}
+	if entry.RequestDetailsJSON != nil {
+		size += len(*entry.RequestDetailsJSON)
 	}
 	return int64(size)
 }
@@ -1076,6 +1091,7 @@ func (state *opsCaptureWriterState) shouldCapture() bool {
 // - Streaming errors after the response has started (SSE) may still need explicit logging.
 func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		requestCapture := installOpsRequestBodyCapture(c)
 		originalWriter := c.Writer
 		w := acquireOpsCaptureWriter(originalWriter)
 		w.setContext(c)
@@ -1089,6 +1105,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 		}()
 		c.Writer = w
 		c.Next()
+		finishOpsRequestBodyCapture(c, requestCapture)
 		w.finalizeCapture()
 
 		if _, rejected := middleware2.GetIngressRejectReason(c); rejected {
@@ -1269,6 +1286,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			entry.ClientIP = &clientIP
 		}
 
+		attachOpsRequestDetails(c, entry)
 		enqueueOpsErrorLog(ops, entry)
 	}
 }
@@ -1385,6 +1403,7 @@ func logOpsRecoveredUpstream(c *gin.Context, ops *service.OpsService, finalStatu
 		entry.ClientIP = &clientIP
 	}
 	applyOpsLatencyFieldsFromContext(c, entry)
+	attachOpsRequestDetails(c, entry)
 	enqueueOpsErrorLog(ops, entry)
 }
 
@@ -1553,6 +1572,7 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		entry.ClientIP = &clientIP
 	}
 
+	attachOpsRequestDetails(c, entry)
 	enqueueOpsErrorLog(ops, entry)
 }
 

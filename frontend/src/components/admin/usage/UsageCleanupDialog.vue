@@ -1,14 +1,51 @@
 <template>
   <BaseDialog :show="show" :title="t('admin.usage.cleanup.title')" width="wide" @close="handleClose">
     <div class="space-y-4">
+      <div class="rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+        <label class="input-label">{{ t('admin.usage.cleanup.recordType') }}</label>
+        <div class="mt-2 max-w-sm">
+          <Select
+            v-model="selectedRecordType"
+            :options="recordTypeOptions"
+            :aria-label="t('admin.usage.cleanup.recordType')"
+          />
+        </div>
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.usage.cleanup.recordTypeHint') }}
+        </p>
+      </div>
+
       <UsageFilters
         v-model="localFilters"
-        v-model:startDate="localStartDate"
-        v-model:endDate="localEndDate"
+        :start-date="localStartDate"
+        :end-date="localEndDate"
+        :mode="filterMode"
+        cleanup
         :exporting="false"
         :show-actions="false"
         @change="noop"
       />
+
+      <div v-if="selectedRecordType !== 'errors'" class="rounded-xl border border-gray-200 p-4 dark:border-dark-700">
+        <label class="input-label">{{ t('admin.usage.billingType') }}</label>
+        <div class="mt-2 max-w-sm">
+          <Select
+            v-model="localFilters.billing_type"
+            :options="billingTypeOptions"
+            :aria-label="t('admin.usage.billingType')"
+          />
+        </div>
+        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.usage.cleanup.billingTypeHint') }}
+        </p>
+      </div>
+
+      <div
+        v-if="selectedRecordType === 'all' && localFilters.billing_type != null"
+        class="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/10 dark:text-sky-200"
+      >
+        {{ t('admin.usage.cleanup.billingFilterNotice') }}
+      </div>
 
       <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
         {{ t('admin.usage.cleanup.warning') }}
@@ -43,6 +80,9 @@
                     {{ statusLabel(task.status) }}
                   </span>
                   <span class="text-xs text-gray-400">#{{ task.id }}</span>
+                  <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-500 dark:bg-dark-700 dark:text-gray-300">
+                    {{ recordTypeLabel(task.filters.record_type) }}
+                  </span>
                   <button
                     v-if="canCancel(task)"
                     type="button"
@@ -116,13 +156,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
 import { adminUsageAPI } from '@/api/admin/usage'
 import type { AdminUsageQueryParams, UsageCleanupTask, CreateUsageCleanupTaskRequest } from '@/api/admin/usage'
 import { requestTypeToLegacyStream } from '@/utils/usageRequestType'
@@ -132,6 +173,7 @@ interface Props {
   filters: AdminUsageQueryParams
   startDate: string
   endDate: string
+  recordType?: 'all' | 'usage' | 'errors'
 }
 
 const props = defineProps<Props>()
@@ -143,6 +185,19 @@ const appStore = useAppStore()
 const localFilters = ref<AdminUsageQueryParams>({})
 const localStartDate = ref('')
 const localEndDate = ref('')
+const selectedRecordType = ref<'all' | 'usage' | 'errors'>('usage')
+
+const recordTypeOptions: SelectOption[] = [
+  { value: 'all', label: t('admin.usage.cleanup.recordTypeAll') },
+  { value: 'usage', label: t('admin.usage.cleanup.recordTypeUsage') },
+  { value: 'errors', label: t('admin.usage.cleanup.recordTypeErrors') }
+]
+const billingTypeOptions: SelectOption[] = [
+  { value: null, label: t('admin.usage.allBillingTypes') },
+  { value: 0, label: t('admin.usage.billingTypeBalance') },
+  { value: 1, label: t('admin.usage.billingTypeSubscription') }
+]
+const filterMode = computed<'usage' | 'errors' | 'all'>(() => selectedRecordType.value)
 
 const tasks = ref<UsageCleanupTask[]>([])
 const tasksLoading = ref(false)
@@ -164,6 +219,7 @@ const resetFilters = () => {
   localEndDate.value = props.endDate
   localFilters.value.start_date = localStartDate.value
   localFilters.value.end_date = localEndDate.value
+  selectedRecordType.value = props.recordType || (props.filters.error_phase || props.filters.error_category || props.filters.status_code != null ? 'errors' : 'usage')
   tasksPage.value = 1
   tasksTotal.value = 0
 }
@@ -225,6 +281,15 @@ const formatRange = (task: UsageCleanupTask) => {
   const start = formatDateTime(task.filters.start_time)
   const end = formatDateTime(task.filters.end_time)
   return `${start} ~ ${end}`
+}
+
+const recordTypeLabel = (value?: 'all' | 'usage' | 'errors') => {
+  switch (value) {
+    case 'all': return t('admin.usage.cleanup.recordTypeAll')
+    case 'errors': return t('admin.usage.cleanup.recordTypeErrors')
+    case 'usage': return t('admin.usage.cleanup.recordTypeUsage')
+    default: return t('admin.usage.cleanup.recordTypeUsage')
+  }
 }
 
 const getUserTimezone = () => {
@@ -293,6 +358,7 @@ const buildPayload = (): CreateUsageCleanupTaskRequest | null => {
   const payload: CreateUsageCleanupTaskRequest = {
     start_date: localStartDate.value,
     end_date: localEndDate.value,
+    record_type: selectedRecordType.value,
     timezone: getUserTimezone()
   }
 
@@ -308,17 +374,27 @@ const buildPayload = (): CreateUsageCleanupTaskRequest | null => {
   if (localFilters.value.model) {
     payload.model = localFilters.value.model
   }
-  if (localFilters.value.request_type) {
-    payload.request_type = localFilters.value.request_type
-    const legacyStream = requestTypeToLegacyStream(localFilters.value.request_type)
-    if (legacyStream !== null && legacyStream !== undefined) {
-      payload.stream = legacyStream
+  if (selectedRecordType.value !== 'errors') {
+    if (localFilters.value.request_type) {
+      payload.request_type = localFilters.value.request_type
+      const legacyStream = requestTypeToLegacyStream(localFilters.value.request_type)
+      if (legacyStream !== null && legacyStream !== undefined) {
+        payload.stream = legacyStream
+      }
+    } else if (localFilters.value.stream !== null && localFilters.value.stream !== undefined) {
+      payload.stream = localFilters.value.stream
     }
-  } else if (localFilters.value.stream !== null && localFilters.value.stream !== undefined) {
-    payload.stream = localFilters.value.stream
+    if (localFilters.value.billing_type !== null && localFilters.value.billing_type !== undefined) {
+      payload.billing_type = localFilters.value.billing_type
+    }
   }
-  if (localFilters.value.billing_type !== null && localFilters.value.billing_type !== undefined) {
-    payload.billing_type = localFilters.value.billing_type
+  if (selectedRecordType.value !== 'usage') {
+    if (localFilters.value.error_phase) payload.error_phase = localFilters.value.error_phase
+    if (localFilters.value.error_category) payload.error_category = localFilters.value.error_category
+    if (localFilters.value.status_code !== null && localFilters.value.status_code !== undefined) {
+      payload.status_code = Number(localFilters.value.status_code)
+      payload.status_codes = [Number(localFilters.value.status_code)]
+    }
   }
 
   return payload
@@ -375,6 +451,14 @@ watch(
     } else {
       stopPolling()
     }
+  }
+)
+
+watch(
+  () => props.recordType,
+  (value) => {
+    if (value && !props.show) selectedRecordType.value = value
+    if (value && props.show) resetFilters()
   }
 )
 

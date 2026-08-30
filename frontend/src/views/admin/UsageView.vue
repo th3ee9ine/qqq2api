@@ -156,6 +156,7 @@
     :filters="filters"
     :start-date="startDate"
     :end-date="endDate"
+    :record-type="cleanupRecordType"
     @close="cleanupDialogVisible = false"
   />
 </template>
@@ -210,6 +211,7 @@ let statsReqSeq = 0
 let modelStatsReqSeq = 0
 const exportProgress = reactive({ show: false, progress: 0, current: 0, total: 0, estimatedTime: '' })
 const cleanupDialogVisible = ref(false)
+const cleanupRecordType = ref<'usage' | 'errors'>('usage')
 const breakdownFilters = computed(() => {
   const result: Record<string, unknown> = {}
   if (filters.value.api_key_id) result.api_key_id = filters.value.api_key_id
@@ -471,7 +473,10 @@ const handleIpGeoBatchFailed = () => {
   appStore.showError(t('usage.ipGeo.batchFailed'))
 }
 const cancelExport = () => exportAbortController?.abort()
-const openCleanupDialog = () => { cleanupDialogVisible.value = true }
+const openCleanupDialog = () => {
+  cleanupRecordType.value = activeTab.value === 'errors' ? 'errors' : 'usage'
+  cleanupDialogVisible.value = true
+}
 const getRequestTypeLabel = (log: AdminUsageLog): string => {
   const requestType = resolveUsageRequestType(log)
   if (requestType === 'cyber') return t('usage.cyber')

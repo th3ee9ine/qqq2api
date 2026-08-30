@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -400,6 +401,93 @@ func TestUsageCleanupRepositoryDeleteUsageLogsBatchMissingRange(t *testing.T) {
 
 	_, err := repo.DeleteUsageLogsBatch(context.Background(), service.UsageCleanupFilters{}, 10)
 	require.Error(t, err)
+}
+
+func TestUsageCleanupRepositoryDeleteErrorLogsBatchMissingRange(t *testing.T) {
+	db, _ := newSQLMock(t)
+	repo := &usageCleanupRepository{sql: db}
+
+	_, err := repo.DeleteErrorLogsBatch(context.Background(), service.UsageCleanupFilters{}, 10)
+	require.Error(t, err)
+}
+
+func TestBuildErrorCleanupWhereAllFields(t *testing.T) {
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	userID, apiKeyID, accountID, groupID := int64(1), int64(2), int64(3), int64(4)
+	model := " gpt-4 "
+	requestType := int16(service.RequestTypeStream)
+	stream := true
+	where, args := buildErrorCleanupWhere(service.UsageCleanupFilters{
+		StartTime:   start,
+		EndTime:     end,
+		UserID:      &userID,
+		APIKeyID:    &apiKeyID,
+		AccountID:   &accountID,
+		GroupID:     &groupID,
+		Model:       &model,
+		RequestType: &requestType,
+		Stream:      &stream,
+		ErrorPhases: []string{"upstream", "network"},
+		ErrorTypes:  []string{"api_error"},
+		StatusCodes: []int{502, 503},
+	})
+
+	require.Equal(t, "created_at >= $1 AND created_at <= $2 AND user_id = $3 AND api_key_id = $4 AND account_id = $5 AND group_id = $6 AND COALESCE(NULLIF(TRIM(requested_model), ''), model) = $7 AND (request_type = $8 OR (COALESCE(request_type, 0) = 0 AND stream = TRUE)) AND error_phase = ANY($9) AND error_type = ANY($10) AND COALESCE(upstream_status_code, status_code, 0) = ANY($11)", where)
+	require.Len(t, args, 11)
+	require.Equal(t, start, args[0])
+	require.Equal(t, end, args[1])
+	require.Equal(t, userID, args[2])
+	require.Equal(t, apiKeyID, args[3])
+	require.Equal(t, accountID, args[4])
+	require.Equal(t, groupID, args[5])
+	require.Equal(t, "gpt-4", args[6])
+	require.Equal(t, requestType, args[7])
+	require.NotNil(t, args[8])
+	require.NotNil(t, args[9])
+	require.NotNil(t, args[10])
+	require.NotContains(t, where, "billing_type")
+}
+
+func TestUsageCleanupRepositoryDeleteErrorLogsBatch(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageCleanupRepository{sql: db}
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(24 * time.Hour)
+	userID := int64(8)
+	filters := service.UsageCleanupFilters{
+		StartTime:   start,
+		EndTime:     end,
+		UserID:      &userID,
+		ErrorPhases: []string{"request"},
+		StatusCodes: []int{400},
+	}
+
+	mock.ExpectQuery(`(?s)WITH target AS \(.*FROM ops_error_logs.*DELETE FROM ops_error_logs.*RETURNING id`).
+		WithArgs(start, end, userID, sqlmock.AnyArg(), sqlmock.AnyArg(), 2).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(10)).AddRow(int64(11)))
+
+	deleted, err := repo.DeleteErrorLogsBatch(context.Background(), filters, 2)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), deleted)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestBuildErrorCleanupWhereUsesEffectiveStatusAndModelFallback(t *testing.T) {
+	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	model := "gpt-test"
+	where, args := buildErrorCleanupWhere(service.UsageCleanupFilters{
+		StartTime:   start,
+		EndTime:     end,
+		Model:       &model,
+		StatusCodes: []int{429},
+	})
+	require.Contains(t, where, "COALESCE(NULLIF(TRIM(requested_model), ''), model)")
+	require.Contains(t, where, "COALESCE(upstream_status_code, status_code, 0) = ANY($4)")
+	require.Equal(t, "gpt-test", args[2])
+	require.Len(t, args, 4)
+	require.True(t, strings.Contains(where, "created_at >= $1"))
 }
 
 func TestUsageCleanupRepositoryDeleteUsageLogsBatch(t *testing.T) {

@@ -21,12 +21,19 @@ const (
 
 // AuditLogService 管理面操作审计日志服务。
 // 写入端为非阻塞异步批量落库（不拖慢管理请求）；
-// 读取端提供分页查询；清空端点由 handler 层做 TOTP 强校验后调用 ClearAll。
+// 读取端提供分页查询；清空端点由 handler 层确认已认证管理员后调用 ClearAll。
 type AuditLogService struct {
 	repo           AuditLogRepository
 	settingService *SettingService
 
-	queue chan *AuditLog
+	queue chan auditLogQueueItem
+
+	// writeMu serializes destructive clearing with asynchronous writes.  A
+	// read lock is held while a batch is handed to the repository; ClearAll
+	// takes the write lock so a batch can either land before TRUNCATE (and be
+	// removed) or be discarded as stale after the clear generation advances.
+	writeMu         sync.RWMutex
+	clearGeneration atomic.Uint64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -42,10 +49,15 @@ func NewAuditLogService(repo AuditLogRepository, settingService *SettingService)
 	return &AuditLogService{
 		repo:           repo,
 		settingService: settingService,
-		queue:          make(chan *AuditLog, auditLogQueueCapacity),
+		queue:          make(chan auditLogQueueItem, auditLogQueueCapacity),
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+}
+
+type auditLogQueueItem struct {
+	entry      *AuditLog
+	generation uint64
 }
 
 // Start 启动异步写入与保留期清理协程。
@@ -63,7 +75,9 @@ func (s *AuditLogService) Stop() {
 	if s == nil {
 		return
 	}
-	s.cancel()
+	if s.cancel != nil {
+		s.cancel()
+	}
 	s.wg.Wait()
 }
 
@@ -75,13 +89,22 @@ func (s *AuditLogService) Record(entry *AuditLog) {
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
 	}
-	select {
-	case <-s.ctx.Done():
-		return
-	default:
+
+	// Keep the generation read and enqueue in the same read-side critical
+	// section. This prevents ClearAll from advancing the generation between
+	// those operations and then accidentally retaining a pre-clear item.
+	s.writeMu.RLock()
+	defer s.writeMu.RUnlock()
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
 	}
+	item := auditLogQueueItem{entry: entry, generation: s.clearGeneration.Load()}
 	select {
-	case s.queue <- entry:
+	case s.queue <- item:
 	default:
 		atomic.AddUint64(&s.droppedCount, 1)
 	}
@@ -98,10 +121,21 @@ func (s *AuditLogService) GetByID(ctx context.Context, id int64) (*AuditLog, err
 }
 
 // ClearAll 全量清空审计日志并写入留痕记录。
-// 调用方（handler）必须先完成 TOTP 验证；本方法负责：
+// 调用方（handler）必须先完成管理员身份校验；本方法负责：
 //  1. 统计并清空全表
 //  2. 同步写入一条 "audit_log.clear" 留痕记录（绕过异步队列，保证落库）
 func (s *AuditLogService) ClearAll(ctx context.Context, trace *AuditLog) (int64, error) {
+	if s == nil || s.repo == nil {
+		return 0, fmt.Errorf("audit log service not ready")
+	}
+
+	// Block both Record enqueue and writer repository calls for the complete
+	// clear sequence. Items already moved into a writer-local batch are
+	// rejected by the generation check in flushAuditLogBatch after this lock is
+	// released; items still in the channel are drained below.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	deleted, err := s.repo.Count(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("count audit logs: %w", err)
@@ -109,6 +143,19 @@ func (s *AuditLogService) ClearAll(ctx context.Context, trace *AuditLog) (int64,
 	if err := s.repo.TruncateAll(ctx); err != nil {
 		return 0, fmt.Errorf("truncate audit logs: %w", err)
 	}
+
+	s.clearGeneration.Add(1)
+	for {
+		select {
+		case <-s.queue:
+			// Every item currently in the channel belongs to the pre-clear
+			// generation because Record is blocked by writeMu.
+		default:
+			goto queueDrained
+		}
+	}
+
+queueDrained:
 
 	if trace != nil {
 		trace.Action = AuditActionAuditLogClear
@@ -133,21 +180,33 @@ func (s *AuditLogService) runWriter() {
 	ticker := time.NewTicker(auditLogFlushInterval)
 	defer ticker.Stop()
 
-	batch := make([]*AuditLog, 0, auditLogBatchSize)
+	batch := make([]auditLogQueueItem, 0, auditLogBatchSize)
 	flush := func() {
 		if len(batch) == 0 {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		inserted, err := s.repo.BatchInsert(ctx, batch)
-		cancel()
-		if err != nil {
-			atomic.AddUint64(&s.writeFailed, uint64(len(batch)))
-			_, _ = fmt.Fprintf(os.Stderr, "time=%s level=WARN msg=\"audit log flush failed\" err=%v batch=%d\n",
-				time.Now().Format(time.RFC3339Nano), err, len(batch))
-		} else {
-			atomic.AddUint64(&s.writtenCount, uint64(inserted))
+		s.writeMu.RLock()
+		currentGeneration := s.clearGeneration.Load()
+		fresh := make([]*AuditLog, 0, len(batch))
+		for _, item := range batch {
+			if item.entry == nil || item.generation < currentGeneration {
+				continue
+			}
+			fresh = append(fresh, item.entry)
 		}
+		if len(fresh) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			inserted, err := s.repo.BatchInsert(ctx, fresh)
+			cancel()
+			if err != nil {
+				atomic.AddUint64(&s.writeFailed, uint64(len(fresh)))
+				_, _ = fmt.Fprintf(os.Stderr, "time=%s level=WARN msg=\"audit log flush failed\" err=%v batch=%d\n",
+					time.Now().Format(time.RFC3339Nano), err, len(fresh))
+			} else {
+				atomic.AddUint64(&s.writtenCount, uint64(inserted))
+			}
+		}
+		s.writeMu.RUnlock()
 		batch = batch[:0]
 	}
 
@@ -158,7 +217,7 @@ func (s *AuditLogService) runWriter() {
 			for {
 				select {
 				case item := <-s.queue:
-					if item == nil {
+					if item.entry == nil {
 						continue
 					}
 					batch = append(batch, item)
@@ -171,7 +230,7 @@ func (s *AuditLogService) runWriter() {
 				}
 			}
 		case item := <-s.queue:
-			if item == nil {
+			if item.entry == nil {
 				continue
 			}
 			batch = append(batch, item)
@@ -224,7 +283,9 @@ func (s *AuditLogService) runRetentionOnce() {
 	}
 	cutoff := time.Now().UTC().AddDate(0, 0, -days)
 	for {
+		s.writeMu.RLock()
 		deleted, err := s.repo.DeleteBefore(ctx, cutoff, auditRetentionBatchSize)
+		s.writeMu.RUnlock()
 		if err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "time=%s level=WARN msg=\"audit log retention cleanup failed\" err=%v\n",
 				time.Now().Format(time.RFC3339Nano), err)

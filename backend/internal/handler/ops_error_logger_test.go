@@ -2,6 +2,8 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +97,13 @@ func TestEstimateOpsErrorLogJobBytesIncludesVariablePayloads(t *testing.T) {
 	}
 }
 
+func TestEstimateOpsErrorLogJobBytesIncludesRequestDetails(t *testing.T) {
+	base := estimateOpsErrorLogJobBytes(&service.OpsInsertErrorLogInput{})
+	details := `{"method":"POST","path":"/v1/responses","body":{"prompt":"hello"}}`
+	got := estimateOpsErrorLogJobBytes(&service.OpsInsertErrorLogInput{RequestDetailsJSON: &details})
+	require.Equal(t, int64(len(details)), got-base)
+}
+
 func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	t.Helper()
 
@@ -116,6 +125,7 @@ func resetOpsErrorLoggerStateForTest(t *testing.T) {
 	opsErrorLogStopping = false
 
 	opsErrorLogQueueLen.Store(0)
+	opsErrorLogQueueBytes.Store(0)
 	opsErrorLogEnqueued.Store(0)
 	opsErrorLogDropped.Store(0)
 	opsErrorLogProcessed.Store(0)
@@ -308,6 +318,102 @@ func TestOpsErrorLoggerMiddleware_DedicatedCyberSessionBlockRecordsExactlyOnce(t
 	job := <-opsErrorLogQueue
 	require.Equal(t, "cyber_policy_session_blocked", job.entry.ErrorType)
 	require.Equal(t, http.StatusForbidden, job.entry.StatusCode)
+}
+
+func TestOpsErrorLoggerMiddleware_CapturesCompleteSanitizedClientRequest(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 2)
+	gin.SetMode(gin.TestMode)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.POST("/v1/responses", func(c *gin.Context) {
+		_, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "bad request"}})
+	})
+
+	body := `{"model":"gpt-test","prompt":"keep this prompt","api_key":"do-not-store","key":"also-secret"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses?trace=1&token=query-secret", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer header-secret")
+	req.Header.Set("User-Agent", "fixture-client/1.0")
+	req.Header.Set("X-Request-ID", "req-fixture")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, int64(1), OpsErrorLogQueueLength())
+	job := <-opsErrorLogQueue
+	require.NotNil(t, job.entry.RequestDetailsJSON)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(*job.entry.RequestDetailsJSON), &details))
+	require.Equal(t, "POST", details["method"])
+	require.Equal(t, "/v1/responses", details["path"])
+	require.Equal(t, true, details["body_read"])
+	require.Equal(t, "keep this prompt", details["body"].(map[string]any)["prompt"])
+	require.Equal(t, "[REDACTED]", details["body"].(map[string]any)["api_key"])
+	require.Equal(t, "[REDACTED]", details["body"].(map[string]any)["key"])
+	require.NotContains(t, *job.entry.RequestDetailsJSON, "header-secret")
+	require.NotContains(t, *job.entry.RequestDetailsJSON, "query-secret")
+	require.Contains(t, *job.entry.RequestDetailsJSON, "fixture-client/1.0")
+	require.LessOrEqual(t, len(*job.entry.RequestDetailsJSON), service.OpsErrorLogRequestDetailsQueueMaxBytes)
+}
+
+func TestOpsErrorLoggerMiddleware_CapturesBodyForEarlyCyberPolicyRejection(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 2)
+	gin.SetMode(gin.TestMode)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := &OpenAIGatewayHandler{opsService: ops}
+	apiKey := &service.APIKey{ID: 42, Key: "sk-early-block"}
+
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.POST("/v1/responses", func(c *gin.Context) {
+		h.enqueueCyberSessionBlockedOpsEntry(c, apiKey, "gpt-test", "fixture-session")
+		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"code": "session_blocked_by_cyber_policy"}})
+	})
+
+	body := `{"model":"gpt-test","input":[{"type":"text","text":"blocked prompt"}]}`
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusForbidden, recorder.Code)
+	require.Equal(t, int64(1), OpsErrorLogQueueLength())
+	job := <-opsErrorLogQueue
+	require.NotNil(t, job.entry.RequestDetailsJSON)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(*job.entry.RequestDetailsJSON), &details))
+	require.Equal(t, true, details["body_read"], "the bounded known-length body should be drained for early policy failures")
+	require.Equal(t, "blocked prompt", details["body"].(map[string]any)["input"].([]any)[0].(map[string]any)["text"])
+}
+
+func TestOpsErrorLoggerMiddlewareOmitsOversizedRequestBody(t *testing.T) {
+	setupOpsErrorLogTestQueue(t, 2)
+	gin.SetMode(gin.TestMode)
+	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.Use(OpsErrorLoggerMiddleware(ops))
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "too large"}})
+	})
+
+	body := `{"prompt":"` + strings.Repeat("x", opsRequestBodyCaptureLimit) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	job := <-opsErrorLogQueue
+	require.NotNil(t, job.entry.RequestDetailsJSON)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(*job.entry.RequestDetailsJSON), &details))
+	require.Equal(t, true, details["body_omitted"])
+	require.Equal(t, "truncated", details["body_omitted_reason"])
+	require.LessOrEqual(t, len(*job.entry.RequestDetailsJSON), service.OpsErrorLogRequestDetailsQueueMaxBytes)
 }
 
 func TestOpsErrorLoggerMiddleware_OrdinaryPermissionStillRecords(t *testing.T) {

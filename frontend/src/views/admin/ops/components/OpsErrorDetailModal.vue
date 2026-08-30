@@ -130,6 +130,12 @@
         <div class="mt-3 break-words text-sm font-medium text-amber-900 dark:text-amber-100">{{ rootCauseMessage }}</div>
       </div>
 
+      <div v-if="meaningfulPayload(detail.request_details)" class="rounded-xl bg-blue-50 p-6 dark:bg-blue-900/10">
+        <h3 class="text-sm font-black uppercase tracking-wider text-blue-900 dark:text-blue-200">{{ t('admin.ops.errorDetail.requestDetails') }}</h3>
+        <p class="mt-2 text-xs text-blue-700 dark:text-blue-300">{{ t('admin.ops.errorDetail.requestDetailsHint') }}</p>
+        <pre class="mt-4 max-h-[680px] overflow-auto rounded-xl border border-blue-200 bg-white p-4 text-xs text-gray-800 dark:border-blue-500/30 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(detail.request_details) }}</code></pre>
+      </div>
+
       <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
         <h3 class="text-sm font-black uppercase tracking-wider text-gray-900 dark:text-white">{{ t('admin.ops.errorDetail.diagnosticPayloads') }}</h3>
         <div v-if="!diagnosticPayloadSections.length" class="mt-4 text-sm text-gray-500 dark:text-gray-400">{{ t('common.noData') }}</div>

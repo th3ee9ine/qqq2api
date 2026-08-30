@@ -33,26 +33,28 @@ type cleanupMarkCall struct {
 }
 
 type cleanupRepoStub struct {
-	mu            sync.Mutex
-	created       []*UsageCleanupTask
-	createErr     error
-	listTasks     []UsageCleanupTask
-	listResult    *pagination.PaginationResult
-	listErr       error
-	claimQueue    []*UsageCleanupTask
-	claimErr      error
-	deleteQueue   []cleanupDeleteResponse
-	deleteCalls   []cleanupDeleteCall
-	markSucceeded []cleanupMarkCall
-	markFailed    []cleanupMarkCall
-	statusByID    map[int64]string
-	statusErr     error
-	progressCalls []cleanupMarkCall
-	updateErr     error
-	cancelCalls   []int64
-	cancelErr     error
-	cancelResult  *bool
-	markFailedErr error
+	mu               sync.Mutex
+	created          []*UsageCleanupTask
+	createErr        error
+	listTasks        []UsageCleanupTask
+	listResult       *pagination.PaginationResult
+	listErr          error
+	claimQueue       []*UsageCleanupTask
+	claimErr         error
+	deleteQueue      []cleanupDeleteResponse
+	deleteCalls      []cleanupDeleteCall
+	errorDeleteQueue []cleanupDeleteResponse
+	errorDeleteCalls []cleanupDeleteCall
+	markSucceeded    []cleanupMarkCall
+	markFailed       []cleanupMarkCall
+	statusByID       map[int64]string
+	statusErr        error
+	progressCalls    []cleanupMarkCall
+	updateErr        error
+	cancelCalls      []int64
+	cancelErr        error
+	cancelResult     *bool
+	markFailedErr    error
 }
 
 type dashboardRepoStub struct {
@@ -228,6 +230,18 @@ func (s *cleanupRepoStub) DeleteUsageLogsBatch(ctx context.Context, filters Usag
 	}
 	resp := s.deleteQueue[0]
 	s.deleteQueue = s.deleteQueue[1:]
+	return resp.deleted, resp.err
+}
+
+func (s *cleanupRepoStub) DeleteErrorLogsBatch(ctx context.Context, filters UsageCleanupFilters, limit int) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.errorDeleteCalls = append(s.errorDeleteCalls, cleanupDeleteCall{filters: filters, limit: limit})
+	if len(s.errorDeleteQueue) == 0 {
+		return 0, nil
+	}
+	resp := s.errorDeleteQueue[0]
+	s.errorDeleteQueue = s.errorDeleteQueue[1:]
 	return resp.deleted, resp.err
 }
 
@@ -408,6 +422,194 @@ func TestUsageCleanupServiceRunOnceSuccess(t *testing.T) {
 	require.Equal(t, 2, repo.deleteCalls[0].limit)
 	require.Equal(t, start, repo.deleteCalls[0].filters.StartTime)
 	require.Equal(t, end, repo.deleteCalls[0].filters.EndTime)
+}
+
+func TestUsageCleanupServiceExecuteTaskAllDeletesBothRecordFamilies(t *testing.T) {
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	repo := &cleanupRepoStub{
+		deleteQueue: []cleanupDeleteResponse{
+			{deleted: 1},
+			{deleted: 0},
+		},
+		errorDeleteQueue: []cleanupDeleteResponse{
+			{deleted: 2},
+			{deleted: 0},
+		},
+	}
+	svc := NewUsageCleanupService(repo, nil, nil, &config.Config{
+		UsageCleanup: config.UsageCleanupConfig{Enabled: true, BatchSize: 2},
+	})
+	task := &UsageCleanupTask{
+		ID: 21,
+		Filters: UsageCleanupFilters{
+			StartTime:  start,
+			EndTime:    end,
+			RecordType: UsageCleanupRecordTypeAll,
+		},
+	}
+
+	svc.executeTask(context.Background(), task)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Len(t, repo.deleteCalls, 2)
+	require.Len(t, repo.errorDeleteCalls, 2)
+	require.Len(t, repo.markSucceeded, 1)
+	require.Equal(t, int64(3), repo.markSucceeded[0].deletedRows)
+	require.Empty(t, repo.markFailed)
+}
+
+func TestUsageCleanupServiceExecuteTaskAllContinuesWhileEitherFamilyIsFull(t *testing.T) {
+	repo := &cleanupRepoStub{
+		deleteQueue: []cleanupDeleteResponse{
+			{deleted: 2}, // usage remains full on the first batch
+			{deleted: 0},
+			{deleted: 0},
+		},
+		errorDeleteQueue: []cleanupDeleteResponse{
+			{deleted: 0}, // errors become full on the second batch
+			{deleted: 2},
+			{deleted: 0},
+		},
+	}
+	svc := NewUsageCleanupService(repo, nil, nil, &config.Config{
+		UsageCleanup: config.UsageCleanupConfig{Enabled: true, BatchSize: 2},
+	})
+	task := &UsageCleanupTask{
+		ID: 22,
+		Filters: UsageCleanupFilters{
+			StartTime:  time.Now().UTC(),
+			EndTime:    time.Now().UTC().Add(time.Hour),
+			RecordType: UsageCleanupRecordTypeAll,
+		},
+	}
+
+	svc.executeTask(context.Background(), task)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Len(t, repo.deleteCalls, 3)
+	require.Len(t, repo.errorDeleteCalls, 3)
+	require.Len(t, repo.markSucceeded, 1)
+	require.Equal(t, int64(4), repo.markSucceeded[0].deletedRows)
+}
+
+func TestUsageCleanupServiceExecuteTaskErrorsOnlySkipsUsageAndDashboard(t *testing.T) {
+	dashboardRepo := &dashboardRepoStub{}
+	dashboard := NewDashboardAggregationService(dashboardRepo, nil, &config.Config{
+		DashboardAgg: config.DashboardAggregationConfig{Enabled: true},
+	})
+	repo := &cleanupRepoStub{
+		errorDeleteQueue: []cleanupDeleteResponse{
+			{deleted: 1},
+			{deleted: 0},
+		},
+	}
+	svc := NewUsageCleanupService(repo, nil, dashboard, &config.Config{
+		UsageCleanup: config.UsageCleanupConfig{Enabled: true, BatchSize: 2},
+	})
+	task := &UsageCleanupTask{
+		ID: 23,
+		Filters: UsageCleanupFilters{
+			StartTime:  time.Now().UTC(),
+			EndTime:    time.Now().UTC().Add(time.Hour),
+			RecordType: UsageCleanupRecordTypeErrors,
+		},
+	}
+
+	svc.executeTask(context.Background(), task)
+
+	repo.mu.Lock()
+	require.Empty(t, repo.deleteCalls)
+	require.Len(t, repo.errorDeleteCalls, 1)
+	require.Len(t, repo.markSucceeded, 1)
+	require.Equal(t, int64(1), repo.markSucceeded[0].deletedRows)
+	repo.mu.Unlock()
+	require.Equal(t, 0, dashboardRepo.recomputeCalls)
+}
+
+func TestUsageCleanupServiceExecuteTaskAllPreservesPartialProgressWhenErrorFamilyFails(t *testing.T) {
+	repo := &cleanupRepoStub{
+		deleteQueue:      []cleanupDeleteResponse{{deleted: 2}},
+		errorDeleteQueue: []cleanupDeleteResponse{{err: errors.New("error log delete failed")}},
+	}
+	svc := NewUsageCleanupService(repo, nil, nil, &config.Config{
+		UsageCleanup: config.UsageCleanupConfig{Enabled: true, BatchSize: 2},
+	})
+	task := &UsageCleanupTask{
+		ID: 24,
+		Filters: UsageCleanupFilters{
+			StartTime:  time.Now().UTC(),
+			EndTime:    time.Now().UTC().Add(time.Hour),
+			RecordType: UsageCleanupRecordTypeAll,
+		},
+	}
+
+	svc.executeTask(context.Background(), task)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Len(t, repo.progressCalls, 1)
+	require.Equal(t, int64(2), repo.progressCalls[0].deletedRows)
+	require.Empty(t, repo.markSucceeded)
+	require.Len(t, repo.markFailed, 1)
+	require.Equal(t, int64(2), repo.markFailed[0].deletedRows)
+	require.Contains(t, repo.markFailed[0].errMsg, "error log delete failed")
+}
+
+func TestUsageCleanupServiceExecuteTaskRejectsCorruptPersistedFilters(t *testing.T) {
+	cases := []struct {
+		name    string
+		filters UsageCleanupFilters
+		reason  string
+	}{
+		{
+			name: "record type",
+			filters: UsageCleanupFilters{
+				StartTime:  time.Now().UTC(),
+				EndTime:    time.Now().UTC().Add(time.Hour),
+				RecordType: UsageCleanupRecordType("unknown"),
+			},
+			reason: "USAGE_CLEANUP_INVALID_RECORD_TYPE",
+		},
+		{
+			name: "request type",
+			filters: UsageCleanupFilters{
+				StartTime:   time.Now().UTC(),
+				EndTime:     time.Now().UTC().Add(time.Hour),
+				RequestType: func() *int16 { v := int16(99); return &v }(),
+			},
+			reason: "USAGE_CLEANUP_INVALID_REQUEST_TYPE",
+		},
+		{
+			name: "status code",
+			filters: UsageCleanupFilters{
+				StartTime:   time.Now().UTC(),
+				EndTime:     time.Now().UTC().Add(time.Hour),
+				StatusCodes: []int{1000},
+			},
+			reason: "USAGE_CLEANUP_INVALID_STATUS_CODE",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &cleanupRepoStub{}
+			svc := NewUsageCleanupService(repo, nil, nil, &config.Config{
+				UsageCleanup: config.UsageCleanupConfig{Enabled: true, BatchSize: 2},
+			})
+			svc.executeTask(context.Background(), &UsageCleanupTask{ID: 25, Filters: tc.filters})
+
+			repo.mu.Lock()
+			defer repo.mu.Unlock()
+			require.Empty(t, repo.deleteCalls)
+			require.Empty(t, repo.errorDeleteCalls)
+			require.Empty(t, repo.markSucceeded)
+			require.Len(t, repo.markFailed, 1)
+			require.Contains(t, repo.markFailed[0].errMsg, tc.reason)
+		})
+	}
 }
 
 func TestUsageCleanupServiceRunOnceClaimError(t *testing.T) {
@@ -870,7 +1072,7 @@ func TestDescribeUsageCleanupFiltersAllFields(t *testing.T) {
 	}
 
 	desc := describeUsageCleanupFilters(filters)
-	require.Equal(t, "start=2024-02-01T10:00:00Z end=2024-02-01T12:00:00Z user_id=1 api_key_id=2 account_id=3 group_id=4 model=gpt-4 stream=true billing_type=2", desc)
+	require.Equal(t, "start=2024-02-01T10:00:00Z end=2024-02-01T12:00:00Z record_type=usage user_id=1 api_key_id=2 account_id=3 group_id=4 model=gpt-4 stream=true billing_type=2", desc)
 }
 
 func TestUsageCleanupServiceIsTaskCanceledNotFound(t *testing.T) {

@@ -53,6 +53,9 @@ func describeUsageCleanupFilters(filters UsageCleanupFilters) string {
 	var parts []string
 	parts = append(parts, "start="+filters.StartTime.UTC().Format(time.RFC3339))
 	parts = append(parts, "end="+filters.EndTime.UTC().Format(time.RFC3339))
+	// Always include the record family in the operator trace. In particular,
+	// `all` must be distinguishable from the legacy empty value (usage-only).
+	parts = append(parts, "record_type="+string(filters.RecordType.Normalize()))
 	if filters.UserID != nil {
 		parts = append(parts, fmt.Sprintf("user_id=%d", *filters.UserID))
 	}
@@ -76,6 +79,15 @@ func describeUsageCleanupFilters(filters UsageCleanupFilters) string {
 	}
 	if filters.BillingType != nil {
 		parts = append(parts, fmt.Sprintf("billing_type=%d", *filters.BillingType))
+	}
+	if len(filters.ErrorPhases) > 0 {
+		parts = append(parts, "error_phases="+strings.Join(filters.ErrorPhases, ","))
+	}
+	if len(filters.ErrorTypes) > 0 {
+		parts = append(parts, "error_types="+strings.Join(filters.ErrorTypes, ","))
+	}
+	if len(filters.StatusCodes) > 0 {
+		parts = append(parts, fmt.Sprintf("status_codes=%v", filters.StatusCodes))
 	}
 	return strings.Join(parts, " ")
 }
@@ -134,6 +146,13 @@ func (s *UsageCleanupService) CreateTask(ctx context.Context, filters UsageClean
 	}
 
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] create_task requested: operator=%d %s", createdBy, describeUsageCleanupFilters(filters))
+	// Validate caller-supplied values before the compatibility sanitizer can
+	// drop malformed optional fields. Silently dropping an invalid status/type
+	// would turn a narrow cleanup into a wider one.
+	if err := validateUsageCleanupFilterValues(filters); err != nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] create_task rejected: operator=%d err=%v %s", createdBy, err, describeUsageCleanupFilters(filters))
+		return nil, err
+	}
 	sanitizeUsageCleanupFilters(&filters)
 	if err := s.validateFilters(filters); err != nil {
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] create_task rejected: operator=%d err=%v %s", createdBy, err, describeUsageCleanupFilters(filters))
@@ -156,7 +175,8 @@ func (s *UsageCleanupService) CreateTask(ctx context.Context, filters UsageClean
 
 func (s *UsageCleanupService) runOnce() {
 	svc := s
-	if svc == nil {
+	if svc == nil || svc.repo == nil {
+		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] run_once skipped: service_not_ready=true")
 		return
 	}
 	if !atomic.CompareAndSwapInt32(&svc.running, 0, 1) {
@@ -187,14 +207,22 @@ func (s *UsageCleanupService) runOnce() {
 }
 
 func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanupTask) {
-	if task == nil {
+	if s == nil || s.repo == nil || task == nil {
 		return
 	}
 
 	batchSize := s.batchSize()
+	recordType := task.Filters.RecordType.Normalize()
 	deletedTotal := task.DeletedRows
 	start := time.Now()
 	logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task started: task=%d batch_size=%d deleted_rows=%d %s", task.ID, batchSize, deletedTotal, describeUsageCleanupFilters(task.Filters))
+	// Tasks are persisted as JSON and may outlive the process that created
+	// them. Validate the stored filters again before the first destructive
+	// query so a manually corrupted/old task fails closed.
+	if err := s.validateFilters(task.Filters); err != nil {
+		s.markTaskFailed(task.ID, deletedTotal, err)
+		return
+	}
 	var batchNum int
 
 	for {
@@ -213,28 +241,32 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 		}
 
 		batchNum++
-		deleted, err := s.repo.DeleteUsageLogsBatch(ctx, task.Filters, batchSize)
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				// 任务被中断（例如服务停止/超时），保持 running 状态，后续通过 stale reclaim 续跑。
-				logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task interrupted: task=%d err=%v", task.ID, err)
-				return
-			}
-			s.markTaskFailed(task.ID, deletedTotal, err)
-			return
-		}
-		deletedTotal += deleted
+		usageDeleted, errorDeleted, deleteErr := s.deleteCleanupBatch(ctx, recordType, task.Filters, batchSize)
+		deleted := usageDeleted + errorDeleted
 		if deleted > 0 {
+			deletedTotal += deleted
 			updateCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			if err := s.repo.UpdateTaskProgress(updateCtx, task.ID, deletedTotal); err != nil {
 				logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task progress update failed: task=%d deleted_rows=%d err=%v", task.ID, deletedTotal, err)
 			}
 			cancel()
 		}
-		if batchNum <= 3 || batchNum%20 == 0 || deleted < int64(batchSize) {
-			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task batch done: task=%d batch=%d deleted=%d deleted_total=%d", task.ID, batchNum, deleted, deletedTotal)
+		if deleteErr != nil {
+			if errors.Is(deleteErr, context.Canceled) || errors.Is(deleteErr, context.DeadlineExceeded) {
+				// 任务被中断（例如服务停止/超时），保持 running 状态，后续通过 stale reclaim 续跑。
+				logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task interrupted: task=%d err=%v", task.ID, deleteErr)
+				return
+			}
+			s.markTaskFailed(task.ID, deletedTotal, deleteErr)
+			return
 		}
-		if deleted == 0 || deleted < int64(batchSize) {
+		if batchNum <= 3 || batchNum%20 == 0 || (usageDeleted < int64(batchSize) && errorDeleted < int64(batchSize)) {
+			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task batch done: task=%d batch=%d usage_deleted=%d error_deleted=%d deleted_total=%d", task.ID, batchNum, usageDeleted, errorDeleted, deletedTotal)
+		}
+		// For an all-record task each table is independently limited.  Continue
+		// while either table returned a full batch; stopping on the sum would
+		// leave one table partially cleaned when the other is empty.
+		if deleted == 0 || (usageDeleted < int64(batchSize) && errorDeleted < int64(batchSize)) {
 			break
 		}
 	}
@@ -247,7 +279,10 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 		logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] task succeeded: task=%d deleted_rows=%d duration=%s", task.ID, deletedTotal, time.Since(start))
 	}
 
-	if s.dashboard != nil {
+	// Error rows do not contribute to usage rollups. Avoid scheduling an
+	// unnecessary recomputation for an errors-only cleanup while retaining the
+	// existing invalidation behavior for usage and all-record tasks.
+	if s.dashboard != nil && recordType != UsageCleanupRecordTypeErrors {
 		if err := s.dashboard.TriggerRecomputeRange(task.Filters.StartTime, task.Filters.EndTime); err != nil {
 			logger.LegacyPrintf("service.usage_cleanup", "[UsageCleanup] trigger dashboard recompute failed: task=%d err=%v", task.ID, err)
 		} else {
@@ -256,8 +291,42 @@ func (s *UsageCleanupService) executeTask(ctx context.Context, task *UsageCleanu
 	}
 }
 
+// deleteCleanupBatch deletes one bounded batch from the selected record
+// families.  A single task can cover both tables while preserving the same
+// cancellation/progress semantics as the original usage-only worker.
+func (s *UsageCleanupService) deleteCleanupBatch(ctx context.Context, recordType UsageCleanupRecordType, filters UsageCleanupFilters, limit int) (usageDeleted, errorDeleted int64, err error) {
+	if s == nil || s.repo == nil {
+		return 0, 0, fmt.Errorf("cleanup service not ready")
+	}
+	recordType = recordType.Normalize()
+	if recordType == UsageCleanupRecordTypeUsage || recordType == UsageCleanupRecordTypeAll {
+		usageDeleted, err = s.repo.DeleteUsageLogsBatch(ctx, filters, limit)
+		if err != nil {
+			return usageDeleted, 0, err
+		}
+	}
+	if recordType == UsageCleanupRecordTypeErrors || recordType == UsageCleanupRecordTypeAll {
+		errorDeleted, err = s.repo.DeleteErrorLogsBatch(ctx, filters, limit)
+		if err != nil {
+			return usageDeleted, errorDeleted, err
+		}
+	} else if recordType != UsageCleanupRecordTypeUsage {
+		return 0, 0, fmt.Errorf("invalid cleanup record type %q", recordType)
+	}
+	return usageDeleted, errorDeleted, nil
+}
+
 func (s *UsageCleanupService) markTaskFailed(taskID int64, deletedRows int64, err error) {
-	msg := strings.TrimSpace(err.Error())
+	if s == nil || s.repo == nil {
+		return
+	}
+	msg := "cleanup task failed"
+	if err != nil {
+		msg = strings.TrimSpace(err.Error())
+	}
+	if msg == "" {
+		msg = "cleanup task failed"
+	}
 	if len(msg) > 500 {
 		msg = msg[:500]
 	}
@@ -289,6 +358,15 @@ func (s *UsageCleanupService) isTaskCanceled(ctx context.Context, taskID int64) 
 }
 
 func (s *UsageCleanupService) validateFilters(filters UsageCleanupFilters) error {
+	switch filters.RecordType.Normalize() {
+	case UsageCleanupRecordTypeAll, UsageCleanupRecordTypeUsage, UsageCleanupRecordTypeErrors:
+		// supported
+	default:
+		return infraerrors.BadRequest("USAGE_CLEANUP_INVALID_RECORD_TYPE", "record_type must be all, usage, or errors")
+	}
+	if err := validateUsageCleanupFilterValues(filters); err != nil {
+		return err
+	}
 	if filters.StartTime.IsZero() || filters.EndTime.IsZero() {
 		return infraerrors.BadRequest("USAGE_CLEANUP_MISSING_RANGE", "start_date and end_date are required")
 	}
@@ -300,6 +378,23 @@ func (s *UsageCleanupService) validateFilters(filters UsageCleanupFilters) error
 		delta := filters.EndTime.Sub(filters.StartTime)
 		if delta > time.Duration(maxDays)*24*time.Hour {
 			return infraerrors.BadRequest("USAGE_CLEANUP_RANGE_TOO_LARGE", fmt.Sprintf("date range exceeds %d days", maxDays))
+		}
+	}
+	return nil
+}
+
+// validateUsageCleanupFilterValues checks values that must never be silently
+// widened by the compatibility sanitizer. Optional IDs retain their historic
+// "ignore non-positive" behavior for direct service callers, but the public
+// handler rejects them before reaching this layer. Request-type/status values
+// are always rejected here because dropping them would change the delete scope.
+func validateUsageCleanupFilterValues(filters UsageCleanupFilters) error {
+	if filters.RequestType != nil && !RequestType(*filters.RequestType).IsValid() {
+		return infraerrors.BadRequest("USAGE_CLEANUP_INVALID_REQUEST_TYPE", "invalid request_type")
+	}
+	for _, code := range filters.StatusCodes {
+		if code < 0 || code > 999 {
+			return infraerrors.BadRequest("USAGE_CLEANUP_INVALID_STATUS_CODE", "status_codes must be between 0 and 999")
 		}
 	}
 	return nil
@@ -351,6 +446,7 @@ func sanitizeUsageCleanupFilters(filters *UsageCleanupFilters) {
 	if filters == nil {
 		return
 	}
+	filters.RecordType = filters.RecordType.Normalize()
 	if filters.UserID != nil && *filters.UserID <= 0 {
 		filters.UserID = nil
 	}
@@ -384,6 +480,50 @@ func sanitizeUsageCleanupFilters(filters *UsageCleanupFilters) {
 	if filters.BillingType != nil && *filters.BillingType < 0 {
 		filters.BillingType = nil
 	}
+	filters.ErrorPhases = sanitizeCleanupStringList(filters.ErrorPhases, 64, 32)
+	filters.ErrorTypes = sanitizeCleanupStringList(filters.ErrorTypes, 128, 64)
+	if len(filters.StatusCodes) > 0 {
+		codes := make([]int, 0, len(filters.StatusCodes))
+		seen := make(map[int]struct{}, len(filters.StatusCodes))
+		for _, code := range filters.StatusCodes {
+			if code < 0 || code > 999 {
+				continue
+			}
+			if _, exists := seen[code]; exists {
+				continue
+			}
+			seen[code] = struct{}{}
+			codes = append(codes, code)
+		}
+		filters.StatusCodes = codes
+	}
+}
+
+func sanitizeCleanupStringList(values []string, maxLen, maxItems int) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if value == "" {
+			continue
+		}
+		value = truncateString(value, maxLen)
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+		if maxItems > 0 && len(out) >= maxItems {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (s *UsageCleanupService) maxRangeDays() int {

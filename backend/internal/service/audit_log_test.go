@@ -1,10 +1,104 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+type auditServiceRepoStub struct {
+	mu sync.Mutex
+
+	logs []*AuditLog
+
+	countOverride *int64
+	countErr      error
+	truncateErr   error
+	insertErr     error
+	batchErr      error
+
+	batchStarted chan struct{}
+	batchRelease chan struct{}
+	batchOnce    sync.Once
+}
+
+func (r *auditServiceRepoStub) BatchInsert(ctx context.Context, logs []*AuditLog) (int64, error) {
+	if r.batchStarted != nil {
+		r.batchOnce.Do(func() { close(r.batchStarted) })
+	}
+	if r.batchRelease != nil {
+		select {
+		case <-r.batchRelease:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+	if r.batchErr != nil {
+		return 0, r.batchErr
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = append(r.logs, logs...)
+	return int64(len(logs)), nil
+}
+
+func (r *auditServiceRepoStub) Insert(_ context.Context, log *AuditLog) error {
+	if r.insertErr != nil {
+		return r.insertErr
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = append(r.logs, log)
+	return nil
+}
+
+func (r *auditServiceRepoStub) List(context.Context, *AuditLogFilter) (*AuditLogList, error) {
+	return &AuditLogList{}, nil
+}
+
+func (r *auditServiceRepoStub) GetByID(context.Context, int64) (*AuditLog, error) {
+	return nil, ErrAuditLogNotFound
+}
+
+func (r *auditServiceRepoStub) Count(context.Context) (int64, error) {
+	if r.countErr != nil {
+		return 0, r.countErr
+	}
+	if r.countOverride != nil {
+		return *r.countOverride, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return int64(len(r.logs)), nil
+}
+
+func (r *auditServiceRepoStub) TruncateAll(context.Context) error {
+	if r.truncateErr != nil {
+		return r.truncateErr
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = nil
+	return nil
+}
+
+func (r *auditServiceRepoStub) DeleteBefore(context.Context, time.Time, int) (int64, error) {
+	return 0, nil
+}
+
+func (r *auditServiceRepoStub) snapshotLogs() []*AuditLog {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]*AuditLog(nil), r.logs...)
+}
+
+var _ AuditLogRepository = (*auditServiceRepoStub)(nil)
 
 func TestMaskAuditCredential(t *testing.T) {
 	cases := []struct {
@@ -197,4 +291,113 @@ func TestParseAuditLogRetentionDays(t *testing.T) {
 			t.Fatalf("parseAuditLogRetentionDays(%q) = %d, want %d", in, got, want)
 		}
 	}
+}
+
+func TestAuditLogServiceClearAllDropsQueuedPreClearEntries(t *testing.T) {
+	repo := &auditServiceRepoStub{}
+	svc := NewAuditLogService(repo, nil)
+
+	svc.Record(&AuditLog{Action: "before-clear"})
+	deleted, err := svc.ClearAll(context.Background(), &AuditLog{})
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+
+	// Start after clearing so the test exercises the queue drain performed by
+	// ClearAll rather than relying on a running writer to consume the item.
+	svc.Start()
+	svc.Stop()
+
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, AuditActionAuditLogClear, logs[0].Action)
+}
+
+func TestAuditLogServiceClearAllAllowsOnlyPostClearEntries(t *testing.T) {
+	repo := &auditServiceRepoStub{}
+	svc := NewAuditLogService(repo, nil)
+
+	svc.Record(&AuditLog{Action: "before-clear"})
+	deleted, err := svc.ClearAll(context.Background(), &AuditLog{})
+	require.NoError(t, err)
+	require.Zero(t, deleted)
+
+	svc.Start()
+	svc.Record(&AuditLog{Action: "after-clear"})
+	svc.Stop()
+
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 2)
+	require.Equal(t, AuditActionAuditLogClear, logs[0].Action)
+	require.Equal(t, "after-clear", logs[1].Action)
+}
+
+func TestAuditLogServiceClearAllFailureLeavesQueueIntact(t *testing.T) {
+	repo := &auditServiceRepoStub{countErr: errors.New("count failed")}
+	svc := NewAuditLogService(repo, nil)
+	svc.Record(&AuditLog{Action: "before-clear"})
+
+	_, err := svc.ClearAll(context.Background(), &AuditLog{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "count audit logs")
+
+	svc.Start()
+	svc.Stop()
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, "before-clear", logs[0].Action)
+}
+
+func TestAuditLogServiceClearAllSerializesWithInFlightBatch(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	repo := &auditServiceRepoStub{
+		batchStarted: started,
+		batchRelease: release,
+	}
+	svc := NewAuditLogService(repo, nil)
+	svc.Start()
+	defer svc.Stop()
+
+	// Fill a complete batch so the writer hands it to the repository
+	// immediately, where the stub deliberately blocks.
+	for i := 0; i < auditLogBatchSize; i++ {
+		svc.Record(&AuditLog{Action: "before-clear"})
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("audit writer did not start the batch")
+	}
+
+	clearDone := make(chan struct{})
+	var deleted int64
+	var clearErr error
+	go func() {
+		deleted, clearErr = svc.ClearAll(context.Background(), &AuditLog{})
+		close(clearDone)
+	}()
+
+	// ClearAll must wait for the in-flight repository write instead of
+	// truncating concurrently with it.
+	select {
+	case <-clearDone:
+		t.Fatal("ClearAll returned while a batch write was still in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+
+	select {
+	case <-clearDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ClearAll did not finish after releasing the batch")
+	}
+	require.NoError(t, clearErr)
+	require.Equal(t, int64(auditLogBatchSize), deleted)
+
+	// Stop flushes only the clear trace; the pre-clear batch was removed by
+	// TruncateAll while the write lock was held.
+	svc.Stop()
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Equal(t, AuditActionAuditLogClear, logs[0].Action)
 }

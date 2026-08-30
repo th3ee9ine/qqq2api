@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -95,5 +96,120 @@ func TestShrinkToEssentials_IncludesThinking(t *testing.T) {
 	out := shrinkToEssentials(root)
 	if _, ok := out["thinking"]; !ok {
 		t.Fatalf("expected thinking to be included in essentials: %#v", out)
+	}
+}
+
+func TestIsSensitiveOpsFieldNameNormalizesCommonSeparators(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{
+		"api-key",
+		"apiKey",
+		"privateKey",
+		"x-api-key",
+		"authorization",
+		"client.secret",
+	} {
+		if !IsSensitiveOpsFieldName(key) {
+			t.Fatalf("expected field %q to be classified as sensitive", key)
+		}
+	}
+	for _, key := range []string{"max-output-tokens", "budget_tokens", "prompt_tokens", "model"} {
+		if IsSensitiveOpsFieldName(key) {
+			t.Fatalf("expected diagnostic field %q to remain visible", key)
+		}
+	}
+}
+
+func TestSanitizeOpsRequestDetailsForQueueRedactsNestedSecrets(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"method":"POST","path":"/v1/responses","body":{"model":"gpt-test","prompt":"keep me","apiKey":"body-secret","nested":{"privateKey":"pem-secret"},"max_output_tokens":256},"query":{"trace":"fixture"}}`
+	out, changed := SanitizeOpsRequestDetailsForQueue(raw)
+	if !changed {
+		t.Fatal("expected sanitization to report a change")
+	}
+	if len(out) > OpsErrorLogRequestDetailsQueueMaxBytes {
+		t.Fatalf("sanitized details exceed queue bound: %d", len(out))
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("sanitized details are not valid JSON: %v", err)
+	}
+	body, ok := decoded["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected body object, got %#v", decoded["body"])
+	}
+	if body["apiKey"] != "[REDACTED]" {
+		t.Fatalf("apiKey was not redacted: %#v", body["apiKey"])
+	}
+	nested, ok := body["nested"].(map[string]any)
+	if !ok || nested["privateKey"] != "[REDACTED]" {
+		t.Fatalf("privateKey was not redacted: %#v", body["nested"])
+	}
+	if body["prompt"] != "keep me" {
+		t.Fatalf("non-sensitive prompt was not preserved: %#v", body["prompt"])
+	}
+	if body["max_output_tokens"] != float64(256) {
+		t.Fatalf("token budget was unexpectedly redacted: %#v", body["max_output_tokens"])
+	}
+}
+
+func TestSanitizeOpsRequestDetailsInvalidJSONUsesValidMarker(t *testing.T) {
+	t.Parallel()
+
+	out, changed := SanitizeOpsRequestDetailsForQueue(`{"method":`)
+	if !changed {
+		t.Fatal("invalid JSON should be reported as changed")
+	}
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("omission marker is not valid JSON: %q", out)
+	}
+	var marker map[string]any
+	if err := json.Unmarshal([]byte(out), &marker); err != nil {
+		t.Fatal(err)
+	}
+	if marker["payload_omitted"] != true || marker["reason"] != "invalid_json" {
+		t.Fatalf("unexpected omission marker: %#v", marker)
+	}
+}
+
+func TestSanitizeOpsRequestDetailsCompactsOversizedBody(t *testing.T) {
+	t.Parallel()
+
+	message := strings.Repeat("message-", 400)
+	raw := `{"method":"POST","path":"/v1/responses","body":{"model":"gpt-test","messages":[{"role":"user","content":"` + message + `"},{"role":"assistant","content":"last"}]}}`
+	out, changed := sanitizeOpsRequestDetails(raw, 1024)
+	if !changed {
+		t.Fatal("oversized details should be compacted")
+	}
+	if len(out) > 1024 {
+		t.Fatalf("compacted details exceed requested bound: %d", len(out))
+	}
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("compacted details are not valid JSON: %q", out)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["method"] != "POST" || decoded["path"] != "/v1/responses" {
+		t.Fatalf("route metadata was lost during compaction: %#v", decoded)
+	}
+}
+
+func TestSanitizeOpsRequestDetailsInputLimit(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"body":"` + strings.Repeat("x", opsMaxRequestDetailsInputBytes) + `"}`
+	out, changed := SanitizeOpsRequestDetailsForQueue(raw)
+	if !changed {
+		t.Fatal("input over the defensive ceiling should be marked changed")
+	}
+	if len(out) > OpsErrorLogRequestDetailsQueueMaxBytes {
+		t.Fatalf("input-limit marker exceeds queue bound: %d", len(out))
+	}
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("input-limit marker is not valid JSON: %q", out)
 	}
 }

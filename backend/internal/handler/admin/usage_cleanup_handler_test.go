@@ -102,6 +102,10 @@ func (s *cleanupRepoStub) DeleteUsageLogsBatch(ctx context.Context, filters serv
 	return 0, nil
 }
 
+func (s *cleanupRepoStub) DeleteErrorLogsBatch(ctx context.Context, filters service.UsageCleanupFilters, limit int) (int64, error) {
+	return 0, nil
+}
+
 var _ service.UsageCleanupRepository = (*cleanupRepoStub)(nil)
 
 func setupCleanupRouter(cleanupService *service.UsageCleanupService, userID int64) *gin.Engine {
@@ -349,6 +353,98 @@ func TestUsageHandlerCreateCleanupTaskSuccess(t *testing.T) {
 	end := time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC).Add(24*time.Hour - time.Nanosecond)
 	require.True(t, created.Filters.StartTime.Equal(start))
 	require.True(t, created.Filters.EndTime.Equal(end))
+}
+
+func TestUsageHandlerCreateCleanupTaskAllRecordFamiliesAndErrorFilters(t *testing.T) {
+	repo := &cleanupRepoStub{}
+	cfg := &config.Config{UsageCleanup: config.UsageCleanupConfig{Enabled: true, MaxRangeDays: 31}}
+	cleanupService := service.NewUsageCleanupService(repo, nil, nil, cfg)
+	router := setupCleanupRouter(cleanupService, 99)
+
+	payload := map[string]any{
+		"start_date":     "2024-01-01",
+		"end_date":       "2024-01-02",
+		"timezone":       "UTC",
+		"record_type":    "all",
+		"api_key_id":     7,
+		"model":          "gpt-test",
+		"error_phase":    " network ",
+		"error_category": "upstream",
+		"status_code":    502,
+		"status_codes":   []int{502, 503},
+	}
+	body, err := json.Marshal(payload)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/usage/cleanup-tasks", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	require.Len(t, repo.created, 1)
+	filters := repo.created[0].Filters
+	require.Equal(t, service.UsageCleanupRecordTypeAll, filters.RecordType)
+	require.NotNil(t, filters.APIKeyID)
+	require.Equal(t, int64(7), *filters.APIKeyID)
+	require.Equal(t, "gpt-test", *filters.Model)
+	require.Equal(t, []string{"network"}, filters.ErrorPhases)
+	require.Empty(t, filters.ErrorTypes)
+	require.Equal(t, []int{502, 503}, filters.StatusCodes)
+}
+
+func TestUsageHandlerCreateCleanupTaskRejectsInvalidCleanupValues(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "invalid record type",
+			payload: map[string]any{
+				"start_date": "2024-01-01", "end_date": "2024-01-02", "record_type": "bad",
+			},
+		},
+		{
+			name: "invalid id",
+			payload: map[string]any{
+				"start_date": "2024-01-01", "end_date": "2024-01-02", "api_key_id": 0,
+			},
+		},
+		{
+			name: "invalid status",
+			payload: map[string]any{
+				"start_date": "2024-01-01", "end_date": "2024-01-02", "record_type": "errors", "status_code": 1000,
+			},
+		},
+		{
+			name: "invalid category",
+			payload: map[string]any{
+				"start_date": "2024-01-01", "end_date": "2024-01-02", "record_type": "errors", "error_category": "unknown",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &cleanupRepoStub{}
+			cleanupService := service.NewUsageCleanupService(repo, nil, nil, &config.Config{
+				UsageCleanup: config.UsageCleanupConfig{Enabled: true, MaxRangeDays: 31},
+			})
+			router := setupCleanupRouter(cleanupService, 99)
+			body, err := json.Marshal(tc.payload)
+			require.NoError(t, err)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/usage/cleanup-tasks", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, req)
+
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			repo.mu.Lock()
+			require.Empty(t, repo.created)
+			repo.mu.Unlock()
+		})
+	}
 }
 
 func TestUsageHandlerListCleanupTasksUnavailable(t *testing.T) {

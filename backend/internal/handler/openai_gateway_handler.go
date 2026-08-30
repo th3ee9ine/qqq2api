@@ -3423,22 +3423,23 @@ const cyberPolicyRecordedKey = "ops_cyber_recorded"
 // cyberPolicyOpsErrorMeta carries request-scoped fields captured outside the
 // async goroutine for building the cyber ops_error_logs entry.
 type cyberPolicyOpsErrorMeta struct {
-	RequestID       string
-	ClientRequestID string
-	Platform        string
-	Model           string
-	RequestPath     string
-	Stream          bool
-	InboundEndpoint string
-	UserAgent       string
-	APIKeyPrefix    string
-	UserID          int64
-	APIKeyID        int64
-	AccountID       int64
-	GroupID         *int64
-	ClientIP        string
-	CreatedAt       time.Time
-	SessionBlockKey string
+	RequestID          string
+	ClientRequestID    string
+	Platform           string
+	Model              string
+	RequestPath        string
+	Stream             bool
+	InboundEndpoint    string
+	UserAgent          string
+	APIKeyPrefix       string
+	UserID             int64
+	APIKeyID           int64
+	AccountID          int64
+	GroupID            *int64
+	ClientIP           string
+	RequestDetailsJSON string
+	CreatedAt          time.Time
+	SessionBlockKey    string
 }
 
 // buildCyberPolicyOpsErrorEntry builds the ops_error_logs entry for an upstream
@@ -3481,6 +3482,9 @@ func buildCyberPolicyOpsErrorEntry(meta cyberPolicyOpsErrorMeta, mark *service.C
 	entry.GroupID = meta.GroupID
 	if meta.ClientIP != "" {
 		entry.ClientIP = &meta.ClientIP
+	}
+	if details := strings.TrimSpace(meta.RequestDetailsJSON); details != "" {
+		entry.RequestDetailsJSON = &details
 	}
 	return entry
 }
@@ -3661,7 +3665,18 @@ func (h *OpenAIGatewayHandler) enqueueCyberSessionBlockedOpsEntry(c *gin.Context
 	if apiKey.User != nil {
 		meta.UserID = apiKey.User.ID
 	}
-	enqueueOpsErrorLog(h.opsService, buildCyberSessionBlockedOpsEntry(meta))
+	entry := buildCyberSessionBlockedOpsEntry(meta)
+	// This policy branch can return before any gateway parser reads the body.
+	// Drain only a known, bounded body so the diagnostic snapshot contains the
+	// client payload without allowing an unbounded/streaming read to block the
+	// request path.
+	if value, ok := c.Get(opsRequestBodyCaptureKey); ok {
+		if capture, ok := value.(*opsRequestBodyCapture); ok {
+			capture.drainIfSafe()
+		}
+	}
+	attachOpsRequestDetails(c, entry)
+	enqueueOpsErrorLog(h.opsService, entry)
 }
 
 // recordCyberPolicyIfMarked 在 gateway forward 返回后检查 cyber 标记，异步写风控日志/邮件，
@@ -3750,6 +3765,21 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		ClientIP:        clientIPStr,
 		CreatedAt:       time.Now(),
 	}
+	// Snapshot the original client request before the asynchronous cyber event
+	// writer starts. The gin context and request body must not escape this
+	// goroutine.
+	if value, ok := c.Get(opsRequestBodyCaptureKey); ok {
+		if capture, ok := value.(*opsRequestBodyCapture); ok {
+			capture.drainIfSafe()
+		}
+	}
+	opsMeta.RequestDetailsJSON = buildOpsRequestDetailsJSON(c, func() *opsRequestBodyCapture {
+		if value, ok := c.Get(opsRequestBodyCaptureKey); ok {
+			capture, _ := value.(*opsRequestBodyCapture)
+			return capture
+		}
+		return nil
+	}())
 	if gwSvc != nil && apiKey != nil {
 		plan := buildCyberSessionBlockWritePlan(apiKey.ID, c, cyberBlockBody)
 		if len(plan.keys) > 0 {

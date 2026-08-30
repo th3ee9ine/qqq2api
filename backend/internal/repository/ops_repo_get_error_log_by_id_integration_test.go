@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -30,19 +31,26 @@ func TestGetErrorLogByID_APIKeyPrefixAndUpstreamStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, plain.APIKeyPrefix)
 
+	details := `{"method":"POST","path":"/v1/responses","body":{"model":"gpt-test"}}`
 	validID, err := repo.InsertErrorLog(ctx, &service.OpsInsertErrorLogInput{
-		ErrorPhase:   "request",
-		ErrorType:    "api_error",
-		Severity:     "error",
-		StatusCode:   402,
-		CreatedAt:    time.Now(),
-		APIKeyPrefix: "sk-valid",
+		ErrorPhase:         "request",
+		ErrorType:          "api_error",
+		Severity:           "error",
+		StatusCode:         402,
+		CreatedAt:          time.Now(),
+		APIKeyPrefix:       "sk-valid",
+		RequestDetailsJSON: &details,
 	})
 	require.NoError(t, err)
 
 	valid, err := repo.GetErrorLogByID(ctx, validID)
 	require.NoError(t, err)
 	require.Equal(t, "sk-valid", valid.APIKeyPrefix)
+	var gotDetails any
+	var wantDetails any
+	require.NoError(t, json.Unmarshal([]byte(valid.RequestDetails), &gotDetails))
+	require.NoError(t, json.Unmarshal([]byte(details), &wantDetails))
+	require.Equal(t, wantDetails, gotDetails)
 
 	zero := 0
 	credentialFailureID, err := repo.InsertErrorLog(ctx, &service.OpsInsertErrorLogInput{

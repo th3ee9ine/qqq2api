@@ -54,6 +54,7 @@ describe('OpsErrorDetailModal', () => {
       upstream_error_message: 'provider rate limit exhausted',
       upstream_error_detail: '{"error":"same"}',
       upstream_errors: '[]',
+      request_details: '{"method":"POST","path":"/v1/responses","body":{"model":"gpt-test"}}',
       account_name: 'account',
       group_name: 'group',
       is_business_limited: false
@@ -73,7 +74,10 @@ describe('OpsErrorDetailModal', () => {
     expect(wrapper.text()).toContain('provider rate limit exhausted')
     expect(wrapper.text()).toContain('admin.ops.errorDetail.upstreamStatus')
     expect(wrapper.text()).toContain('429')
-    expect(wrapper.findAll('pre')).toHaveLength(2)
+    expect(wrapper.text()).toContain('admin.ops.errorDetail.requestDetails')
+    expect(wrapper.text()).toContain('/v1/responses')
+    expect(wrapper.text()).toContain('gpt-test')
+    expect(wrapper.findAll('pre')).toHaveLength(3)
     expect(wrapper.text()).not.toContain('admin.ops.errorDetail.payloads.upstream_detail')
   })
 })

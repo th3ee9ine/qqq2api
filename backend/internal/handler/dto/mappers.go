@@ -737,6 +737,7 @@ func UsageCleanupTaskFromService(task *service.UsageCleanupTask) *UsageCleanupTa
 		Filters: UsageCleanupFilters{
 			StartTime:   task.Filters.StartTime,
 			EndTime:     task.Filters.EndTime,
+			RecordType:  string(task.Filters.RecordType.Normalize()),
 			UserID:      task.Filters.UserID,
 			APIKeyID:    task.Filters.APIKeyID,
 			AccountID:   task.Filters.AccountID,
@@ -745,6 +746,9 @@ func UsageCleanupTaskFromService(task *service.UsageCleanupTask) *UsageCleanupTa
 			RequestType: requestTypeStringPtr(task.Filters.RequestType),
 			Stream:      task.Filters.Stream,
 			BillingType: task.Filters.BillingType,
+			ErrorPhases: append([]string(nil), task.Filters.ErrorPhases...),
+			ErrorTypes:  append([]string(nil), task.Filters.ErrorTypes...),
+			StatusCodes: append([]int(nil), task.Filters.StatusCodes...),
 		},
 		CreatedBy:    task.CreatedBy,
 		DeletedRows:  task.DeletedRows,

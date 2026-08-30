@@ -55,9 +55,10 @@ INSERT INTO ops_error_logs (
   response_latency_ms,
   time_to_first_token_ms,
   created_at,
-  api_key_prefix
+  api_key_prefix,
+  request_details
 ) VALUES (
-  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38
+  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
 )`
 
 func NewOpsRepository(db *sql.DB) service.OpsRepository {
@@ -167,6 +168,7 @@ func opsInsertErrorLogArgs(input *service.OpsInsertErrorLogInput) []any {
 		opsNullInt64(input.TimeToFirstTokenMs),
 		input.CreatedAt,
 		opsNullString(input.APIKeyPrefix),
+		opsNullString(input.RequestDetailsJSON),
 	}
 }
 
@@ -416,6 +418,7 @@ SELECT
   COALESCE(e.request_id, ''),
   COALESCE(e.error_message, ''),
   COALESCE(e.error_body, ''),
+  COALESCE(e.request_details::text, ''),
   e.upstream_status_code,
   COALESCE(e.upstream_error_message, ''),
   COALESCE(e.upstream_error_detail, ''),
@@ -454,6 +457,7 @@ LIMIT 1`
 	var out service.OpsErrorLogDetail
 	var statusCode sql.NullInt64
 	var upstreamStatusCode sql.NullInt64
+	var requestDetails string
 	var resolvedAt sql.NullTime
 	var resolvedBy sql.NullInt64
 	var clientIP sql.NullString
@@ -488,6 +492,7 @@ LIMIT 1`
 		&out.RequestID,
 		&out.Message,
 		&out.ErrorBody,
+		&requestDetails,
 		&upstreamStatusCode,
 		&out.UpstreamErrorMessage,
 		&out.UpstreamErrorDetail,
@@ -585,6 +590,10 @@ LIMIT 1`
 	out.UpstreamErrors = strings.TrimSpace(out.UpstreamErrors)
 	if out.UpstreamErrors == "null" {
 		out.UpstreamErrors = ""
+	}
+	out.RequestDetails = strings.TrimSpace(requestDetails)
+	if out.RequestDetails == "null" {
+		out.RequestDetails = ""
 	}
 
 	return &out, nil

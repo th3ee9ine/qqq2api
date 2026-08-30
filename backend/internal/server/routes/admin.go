@@ -138,7 +138,7 @@ func registerAuditLogRoutes(admin *gin.RouterGroup, h *handler.Handlers, _ middl
 	{
 		auditLogs.GET("", h.Admin.AuditLog.List)
 		auditLogs.GET("/:id", h.Admin.AuditLog.Get)
-		// 清空需现场 TOTP 校验（在 handler 内强制），不复用 step-up sudo 窗口
+		// 清空由 handler 校验已认证管理员身份，不要求启用二次验证
 		auditLogs.POST("/clear", h.Admin.AuditLog.Clear)
 	}
 }

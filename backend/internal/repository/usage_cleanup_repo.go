@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
 	dbent "github.com/th3ee9ine/qqq2api/ent"
 	dbusagecleanuptask "github.com/th3ee9ine/qqq2api/ent/usagecleanuptask"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
@@ -283,8 +284,14 @@ func (r *usageCleanupRepository) MarkTaskFailed(ctx context.Context, taskID int6
 }
 
 func (r *usageCleanupRepository) DeleteUsageLogsBatch(ctx context.Context, filters service.UsageCleanupFilters, limit int) (int64, error) {
+	if r == nil || r.sql == nil {
+		return 0, fmt.Errorf("nil usage cleanup repository")
+	}
 	if filters.StartTime.IsZero() || filters.EndTime.IsZero() {
 		return 0, fmt.Errorf("cleanup filters missing time range")
+	}
+	if limit <= 0 {
+		limit = 5000
 	}
 	whereClause, args := buildUsageCleanupWhere(filters)
 	if whereClause == "" {
@@ -313,6 +320,56 @@ func (r *usageCleanupRepository) DeleteUsageLogsBatch(ctx context.Context, filte
 	}
 	defer func() { _ = rows.Close() }()
 
+	var deleted int64
+	for rows.Next() {
+		deleted++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
+// DeleteErrorLogsBatch deletes one bounded batch from the request-error
+// history.  Error records do not participate in usage rollups, so this path
+// intentionally uses a direct bounded DELETE and does not acquire the usage
+// rollup lock.
+func (r *usageCleanupRepository) DeleteErrorLogsBatch(ctx context.Context, filters service.UsageCleanupFilters, limit int) (int64, error) {
+	if r == nil || r.sql == nil {
+		return 0, fmt.Errorf("nil usage cleanup repository")
+	}
+	if filters.StartTime.IsZero() || filters.EndTime.IsZero() {
+		return 0, fmt.Errorf("cleanup filters missing time range")
+	}
+	// ops_error_logs has no billing_type dimension.  The billing predicate is
+	// intentionally ignored here; an all-record task still applies it to the
+	// usage table while removing matching error rows from the selected window.
+	if limit <= 0 {
+		limit = 5000
+	}
+	whereClause, args := buildErrorCleanupWhere(filters)
+	if whereClause == "" {
+		return 0, fmt.Errorf("cleanup filters missing time range")
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
+		WITH target AS (
+			SELECT id
+			FROM ops_error_logs
+			WHERE %s
+			ORDER BY created_at ASC, id ASC
+			LIMIT $%d
+		)
+		DELETE FROM ops_error_logs
+		WHERE id IN (SELECT id FROM target)
+		RETURNING id
+	`, whereClause, len(args))
+
+	rows, err := r.sql.QueryContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
 	var deleted int64
 	for rows.Next() {
 		deleted++
@@ -440,6 +497,93 @@ func buildUsageCleanupWhere(filters service.UsageCleanupFilters) (string, []any)
 	if filters.BillingType != nil {
 		conditions = append(conditions, fmt.Sprintf("billing_type = $%d", idx))
 		args = append(args, *filters.BillingType)
+	}
+	return strings.Join(conditions, " AND "), args
+}
+
+// ops_error_logs only stores request_type and stream (it has no
+// openai_ws_mode legacy column), so request-type matching uses the fields that
+// are actually present and keeps old request_type=0 rows searchable.
+func buildErrorRequestTypeFilterCondition(startArgIndex int, requestType int16) (string, []any) {
+	normalized := service.RequestTypeFromInt16(requestType)
+	arg := int16(normalized)
+	switch normalized {
+	case service.RequestTypeSync:
+		return fmt.Sprintf("(request_type = $%d OR (COALESCE(request_type, 0) = 0 AND stream = FALSE))", startArgIndex), []any{arg}
+	case service.RequestTypeStream:
+		return fmt.Sprintf("(request_type = $%d OR (COALESCE(request_type, 0) = 0 AND stream = TRUE))", startArgIndex), []any{arg}
+	default:
+		return fmt.Sprintf("request_type = $%d", startArgIndex), []any{arg}
+	}
+}
+
+// buildErrorCleanupWhere maps the shared admin filters to ops_error_logs
+// columns.  The status expression matches the value displayed and filtered
+// by the Ops error list (upstream status takes precedence).
+func buildErrorCleanupWhere(filters service.UsageCleanupFilters) (string, []any) {
+	conditions := make([]string, 0, 12)
+	args := make([]any, 0, 12)
+	idx := 1
+	if !filters.StartTime.IsZero() {
+		conditions = append(conditions, fmt.Sprintf("created_at >= $%d", idx))
+		args = append(args, filters.StartTime)
+		idx++
+	}
+	if !filters.EndTime.IsZero() {
+		conditions = append(conditions, fmt.Sprintf("created_at <= $%d", idx))
+		args = append(args, filters.EndTime)
+		idx++
+	}
+	if filters.UserID != nil {
+		conditions = append(conditions, fmt.Sprintf("user_id = $%d", idx))
+		args = append(args, *filters.UserID)
+		idx++
+	}
+	if filters.APIKeyID != nil {
+		conditions = append(conditions, fmt.Sprintf("api_key_id = $%d", idx))
+		args = append(args, *filters.APIKeyID)
+		idx++
+	}
+	if filters.AccountID != nil {
+		conditions = append(conditions, fmt.Sprintf("account_id = $%d", idx))
+		args = append(args, *filters.AccountID)
+		idx++
+	}
+	if filters.GroupID != nil {
+		conditions = append(conditions, fmt.Sprintf("group_id = $%d", idx))
+		args = append(args, *filters.GroupID)
+		idx++
+	}
+	if filters.Model != nil {
+		if model := strings.TrimSpace(*filters.Model); model != "" {
+			conditions = append(conditions, fmt.Sprintf("COALESCE(NULLIF(TRIM(requested_model), ''), model) = $%d", idx))
+			args = append(args, model)
+			idx++
+		}
+	}
+	if filters.RequestType != nil {
+		condition, conditionArgs := buildErrorRequestTypeFilterCondition(idx, *filters.RequestType)
+		conditions = append(conditions, condition)
+		args = append(args, conditionArgs...)
+		idx += len(conditionArgs)
+	} else if filters.Stream != nil {
+		conditions = append(conditions, fmt.Sprintf("stream = $%d", idx))
+		args = append(args, *filters.Stream)
+		idx++
+	}
+	if len(filters.ErrorPhases) > 0 {
+		conditions = append(conditions, fmt.Sprintf("error_phase = ANY($%d)", idx))
+		args = append(args, pq.Array(filters.ErrorPhases))
+		idx++
+	}
+	if len(filters.ErrorTypes) > 0 {
+		conditions = append(conditions, fmt.Sprintf("error_type = ANY($%d)", idx))
+		args = append(args, pq.Array(filters.ErrorTypes))
+		idx++
+	}
+	if len(filters.StatusCodes) > 0 {
+		conditions = append(conditions, fmt.Sprintf("COALESCE(upstream_status_code, status_code, 0) = ANY($%d)", idx))
+		args = append(args, pq.Array(filters.StatusCodes))
 	}
 	return strings.Join(conditions, " AND "), args
 }

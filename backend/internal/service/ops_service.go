@@ -23,6 +23,17 @@ const (
 	// OpsErrorLogQueueBodyMaxBytes bounds attacker-controlled response data while
 	// it waits in the asynchronous error-log queue.
 	OpsErrorLogQueueBodyMaxBytes = 8 * 1024
+	// opsMaxStoredRequestDetailsBytes bounds the sanitized client-request
+	// snapshot persisted in ops_error_logs. The snapshot is diagnostic data,
+	// not a replayable request.
+	opsMaxStoredRequestDetailsBytes = 256 * 1024
+	// OpsErrorLogRequestDetailsQueueMaxBytes keeps request metadata from
+	// monopolizing the asynchronous error-log queue.
+	OpsErrorLogRequestDetailsQueueMaxBytes = 128 * 1024
+	// Do not parse arbitrarily large caller-provided JSON while preparing an
+	// error record. Gateway captures are already much smaller; this ceiling is
+	// for defensive callers of the exported sanitizer.
+	opsMaxRequestDetailsInputBytes = 2 * 1024 * 1024
 
 	opsRuntimeSettingsRefreshInterval = 30 * time.Second
 	opsRuntimeSettingsRefreshJitter   = 20
@@ -388,6 +399,165 @@ func SanitizeOpsErrorBodyForQueue(raw string) (string, bool) {
 	return sanitizeErrorBodyForStorage(raw, OpsErrorLogQueueBodyMaxBytes)
 }
 
+// SanitizeOpsRequestDetailsForQueue removes credential-shaped fields and
+// guarantees that a non-empty request snapshot is valid JSON before it enters
+// the asynchronous queue. Invalid JSON is represented by a small marker so
+// the JSONB insert cannot fail because of a captured client payload.
+func SanitizeOpsRequestDetailsForQueue(raw string) (string, bool) {
+	return sanitizeOpsRequestDetails(raw, OpsErrorLogRequestDetailsQueueMaxBytes)
+}
+
+// IsSensitiveOpsFieldName exposes the same credential-field classifier used
+// by request-body sanitization to the HTTP metadata collector. Keeping the
+// classifier in one place prevents query parameters from becoming a bypass.
+func IsSensitiveOpsFieldName(key string) bool {
+	return isSensitiveKey(key)
+}
+
+func sanitizeOpsRequestDetailsForStorage(raw string) (string, bool) {
+	return sanitizeOpsRequestDetails(raw, opsMaxStoredRequestDetailsBytes)
+}
+
+func sanitizeOpsRequestDetails(raw string, maxBytes int) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+	if maxBytes <= 0 {
+		return requestDetailsOmissionMarker("size_limit", maxBytes), true
+	}
+	if len(raw) > opsMaxRequestDetailsInputBytes {
+		return requestDetailsOmissionMarker("input_too_large", maxBytes), true
+	}
+
+	// Unlike error_body, request_details is stored as JSONB. Decode the
+	// complete wrapper first so an oversized body can be compacted without
+	// discarding method/path/query metadata.
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return requestDetailsOmissionMarker("invalid_json", maxBytes), true
+	}
+	decoded = redactSensitiveJSON(decoded)
+	if encoded, err := json.Marshal(decoded); err == nil && len(encoded) <= maxBytes {
+		return string(encoded), string(encoded) != raw
+	}
+	if root, ok := decoded.(map[string]any); ok {
+		if out, ok := compactOpsRequestDetails(root, maxBytes); ok {
+			return out, true
+		}
+	}
+
+	return requestDetailsOmissionMarker("size_limit", maxBytes), true
+}
+
+// compactOpsRequestDetails keeps the diagnostic wrapper intact while reducing
+// only the unbounded portions (body, headers and query values). The normal
+// gateway capture is below the limit; this path handles large JSON bodies and
+// defensive direct callers without turning the result into an unrelated `{}`.
+func compactOpsRequestDetails(root map[string]any, maxBytes int) (string, bool) {
+	if maxBytes <= 0 {
+		return "", false
+	}
+
+	// Drop unknown top-level fields supplied by external callers. Captured
+	// requests use only this allowlist, and keeping it bounded avoids persisting
+	// arbitrary diagnostic data under a trusted wrapper.
+	allowed := map[string]struct{}{
+		"method": {}, "path": {}, "content_type": {}, "content_encoding": {},
+		"content_length": {}, "query": {}, "query_truncated": {}, "headers": {},
+		"headers_truncated": {}, "body_read": {}, "body_bytes_read": {},
+		"body_truncated": {}, "body_omitted": {}, "body_omitted_reason": {},
+		"body_parse_error": {}, "body": {},
+	}
+	compact := make(map[string]any, len(root))
+	for key, value := range root {
+		if _, ok := allowed[key]; ok {
+			compact[key] = value
+		}
+	}
+
+	// First compact the body itself, retaining the most recent conversation
+	// entries where the standard JSON payload shape permits it.
+	if body, ok := compact["body"]; ok {
+		if bodyRaw, err := json.Marshal(body); err == nil {
+			bodyBudget := maxBytes * 3 / 4
+			if bodyBudget <= 0 {
+				bodyBudget = maxBytes
+			}
+			if bodyOut, truncated, _ := sanitizeAndTrimJSONPayload(bodyRaw, bodyBudget); bodyOut != "" && json.Valid([]byte(bodyOut)) {
+				var compactBody any
+				if json.Unmarshal([]byte(bodyOut), &compactBody) == nil {
+					compact["body"] = compactBody
+					if truncated || bodyOut != string(bodyRaw) {
+						compact["body_truncated"] = true
+					}
+				}
+			} else {
+				delete(compact, "body")
+				compact["body_omitted"] = true
+				compact["body_omitted_reason"] = "size_limit"
+			}
+		}
+	}
+
+	if out, ok := marshalRequestDetailsIfFits(compact, maxBytes); ok {
+		return out, true
+	}
+
+	// Metadata collections can still be large when a caller supplies many
+	// values. Remove them as a last-resort compaction while preserving an
+	// explicit marker for the operator.
+	for _, key := range []string{"headers", "query"} {
+		if _, exists := compact[key]; exists {
+			delete(compact, key)
+			compact[key+"_truncated"] = true
+			if out, ok := marshalRequestDetailsIfFits(compact, maxBytes); ok {
+				return out, true
+			}
+		}
+	}
+
+	// Keep only small scalar identity fields and an omission marker. This is
+	// still more useful than a generic payload marker for diagnosing a route.
+	minimal := make(map[string]any)
+	for _, key := range []string{"method", "path", "content_type", "content_encoding", "content_length", "body_read", "body_bytes_read"} {
+		if value, exists := compact[key]; exists {
+			minimal[key] = value
+		}
+	}
+	minimal["body_omitted"] = true
+	minimal["body_omitted_reason"] = "size_limit"
+	if out, ok := marshalRequestDetailsIfFits(minimal, maxBytes); ok {
+		return out, true
+	}
+	return "", false
+}
+
+func marshalRequestDetailsIfFits(value any, maxBytes int) (string, bool) {
+	encoded, err := json.Marshal(value)
+	if err != nil || len(encoded) > maxBytes || !json.Valid(encoded) {
+		return "", false
+	}
+	return string(encoded), true
+}
+
+func requestDetailsOmissionMarker(reason string, maxBytes int) string {
+	marker := map[string]any{"payload_omitted": true, "reason": reason}
+	if encoded, err := json.Marshal(marker); err == nil && len(encoded) <= maxBytes {
+		return string(encoded)
+	}
+	minimal := []byte(`{"payload_omitted":true}`)
+	if len(minimal) <= maxBytes {
+		return string(minimal)
+	}
+	if maxBytes >= 2 {
+		return `{}`
+	}
+	// There is no valid JSON object shorter than two bytes. Returning an empty
+	// string lets callers omit the JSONB field instead of violating the bound.
+	return ""
+}
+
 // SanitizeOpsUpstreamErrorsForQueue bounds and serializes attempt-level data
 // before the entry can consume asynchronous queue capacity.
 func SanitizeOpsUpstreamErrorsForQueue(entry *OpsInsertErrorLogInput) error {
@@ -502,6 +672,17 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 	if strings.TrimSpace(entry.ErrorBody) != "" {
 		sanitized, _ := sanitizeErrorBodyForStorage(entry.ErrorBody, opsMaxStoredErrorBodyBytes)
 		entry.ErrorBody = sanitized
+	}
+
+	// Request details are JSONB and must remain valid JSON even when a caller
+	// supplied a malformed or oversized diagnostic payload.
+	if entry.RequestDetailsJSON != nil {
+		details, _ := sanitizeOpsRequestDetails(*entry.RequestDetailsJSON, opsMaxStoredRequestDetailsBytes)
+		if strings.TrimSpace(details) == "" {
+			entry.RequestDetailsJSON = nil
+		} else {
+			entry.RequestDetailsJSON = &details
+		}
 	}
 
 	// Sanitize upstream error context if provided by gateway services.
@@ -826,10 +1007,15 @@ func redactSensitiveJSON(v any) any {
 }
 
 func isSensitiveKey(key string) bool {
-	k := strings.ToLower(strings.TrimSpace(key))
-	if k == "" {
+	raw := strings.ToLower(strings.TrimSpace(key))
+	if raw == "" {
 		return false
 	}
+	// Treat common separators uniformly so api-key, api_key and apiKey-like
+	// fields receive the same decision. Keep underscores in k for the explicit
+	// token-budget allowlist and use compact for separator-insensitive checks.
+	k := strings.NewReplacer("-", "_", ".", "_", " ", "_").Replace(raw)
+	compact := strings.ReplaceAll(k, "_", "")
 
 	// Token 计数 / 预算字段不是凭据，应保留用于排错。
 	// 白名单保持尽量窄，避免误把真实敏感信息"反脱敏"。
@@ -854,8 +1040,9 @@ func isSensitiveKey(key string) bool {
 	// Exact matches (common credential fields).
 	switch k {
 	case "authorization",
-		"proxy-authorization",
-		"x-api-key",
+		"proxy_authorization",
+		"x_api_key",
+		"key",
 		"api_key",
 		"apikey",
 		"access_token",
@@ -889,7 +1076,7 @@ func isSensitiveKey(key string) bool {
 		"secret_key",
 		"private_key",
 	} {
-		if strings.HasSuffix(k, suffix) {
+		if strings.HasSuffix(k, suffix) || strings.HasSuffix(compact, strings.ReplaceAll(suffix, "_", "")) {
 			return true
 		}
 	}
@@ -914,7 +1101,7 @@ func isSensitiveKey(key string) bool {
 		"jwt",
 		"signature",
 	} {
-		if strings.Contains(k, sub) {
+		if strings.Contains(k, sub) || strings.Contains(compact, strings.ReplaceAll(sub, "_", "")) {
 			return true
 		}
 	}

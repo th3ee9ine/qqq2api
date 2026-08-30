@@ -597,6 +597,7 @@ type AdminUsageLog struct {
 type UsageCleanupFilters struct {
 	StartTime   time.Time `json:"start_time"`
 	EndTime     time.Time `json:"end_time"`
+	RecordType  string    `json:"record_type"`
 	UserID      *int64    `json:"-"`
 	APIKeyID    *int64    `json:"api_key_id,omitempty"`
 	AccountID   *int64    `json:"account_id,omitempty"`
@@ -605,6 +606,9 @@ type UsageCleanupFilters struct {
 	RequestType *string   `json:"request_type,omitempty"`
 	Stream      *bool     `json:"stream,omitempty"`
 	BillingType *int8     `json:"billing_type,omitempty"`
+	ErrorPhases []string  `json:"error_phases,omitempty"`
+	ErrorTypes  []string  `json:"error_types,omitempty"`
+	StatusCodes []int     `json:"status_codes,omitempty"`
 }
 
 type UsageCleanupTask struct {

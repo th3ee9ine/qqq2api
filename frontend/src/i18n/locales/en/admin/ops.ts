@@ -269,6 +269,7 @@ export default {
         typeAuth: 'Auth',
         typeAccountAuth: 'Account Auth',
         typeRouting: 'Routing',
+        typeNetwork: 'Network',
         typeInternal: 'Internal',
         endpoint: 'Endpoint',
         requestType: 'Type',
@@ -343,6 +344,8 @@ export default {
         upstreamStatus: 'Upstream Status',
         message: 'Message',
         rootCause: 'Root Cause',
+        requestDetails: 'Client Request Details',
+        requestDetailsHint: 'Sanitized and size-limited diagnostic data; it cannot be replayed directly.',
         diagnosticPayloads: 'Diagnostic Payloads',
         payloads: {
           client: 'Client Response',

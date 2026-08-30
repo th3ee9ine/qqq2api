@@ -91,30 +91,30 @@
         </div>
 
         <!-- Billing Mode Filter (usage only) -->
-        <div v-if="mode === 'usage'" class="w-full sm:w-auto sm:min-w-[200px]">
+        <div v-if="mode !== 'errors' && !cleanup" class="w-full sm:w-auto sm:min-w-[200px]">
           <label class="input-label">{{ t('admin.usage.billingMode') }}</label>
           <Select v-model="filters.billing_mode" :options="billingModeOptions" @change="emitChange" />
         </div>
 
-        <div v-if="mode === 'usage'" class="w-full sm:w-auto sm:min-w-[220px]">
+        <div v-if="mode !== 'errors' && !cleanup" class="w-full sm:w-auto sm:min-w-[220px]">
           <label class="input-label">{{ t('admin.usage.upstreamModelAudit') }}</label>
           <Select v-model="filters.upstream_model_mismatch" :options="upstreamModelMismatchOptions" @change="emitChange" />
         </div>
 
         <!-- Error Phase Filter (errors only) -->
-        <div v-if="mode === 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
+        <div v-if="mode !== 'usage'" class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('admin.ops.errorLog.type') }}</label>
           <Select v-model="filters.error_phase" :options="errorPhaseOptions" @change="emitChange" />
         </div>
 
         <!-- Error Category Filter (errors only) -->
-        <div v-if="mode === 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
+        <div v-if="mode !== 'usage'" class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('usage.errors.category') }}</label>
           <Select v-model="filters.error_category" :options="errorCategoryOptions" @change="emitChange" />
         </div>
 
         <!-- Status Code Filter (errors only) -->
-        <div v-if="mode === 'errors'" class="w-full sm:w-auto sm:min-w-[180px]">
+        <div v-if="mode !== 'usage'" class="w-full sm:w-auto sm:min-w-[180px]">
           <label class="input-label">{{ t('admin.ops.errorLog.status') }}</label>
           <Select v-model="filters.status_code" :options="statusCodeOptions" @change="emitChange" />
         </div>
@@ -136,14 +136,14 @@
           {{ t('common.reset') }}
         </button>
         <slot name="after-reset" />
-        <template v-if="mode === 'usage'">
-          <button type="button" @click="$emit('cleanup')" class="btn btn-danger">
-            {{ t('admin.usage.cleanup.button') }}
-          </button>
+        <template v-if="mode !== 'errors'">
           <button type="button" @click="$emit('export')" :disabled="exporting" class="btn btn-primary">
             {{ t('usage.exportExcel') }}
           </button>
         </template>
+        <button type="button" @click="$emit('cleanup')" class="btn btn-danger">
+          {{ t('admin.usage.cleanup.button') }}
+        </button>
       </div>
     </div>
   </div>
@@ -168,16 +168,20 @@ interface Props {
   modelOptions?: string[]
   /**
    * errors 模式:隐藏用量专属字段/按钮,显示错误类型+状态码(错误请求 tab 用)
+   * all 模式:清理对话框中同时展示两类筛选字段
    */
-  mode?: 'usage' | 'errors'
+  mode?: 'usage' | 'errors' | 'all'
   /** 嵌入统一卡片内使用：去掉自身卡片外观 */
   flat?: boolean
+  /** 清理对话框使用：隐藏只用于查询/审计、不会参与清理的筛选项 */
+  cleanup?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   showActions: true,
   mode: 'usage',
-  flat: false
+  flat: false,
+  cleanup: false
 })
 const emit = defineEmits([
   'update:modelValue',
@@ -231,6 +235,7 @@ const errorPhaseOptions = computed<SelectOption[]>(() => [
   { value: 'request', label: t('admin.ops.errorLog.typeRequest') },
   { value: 'auth', label: t('admin.ops.errorLog.typeAuth') },
   { value: 'routing', label: t('admin.ops.errorLog.typeRouting') },
+  { value: 'network', label: t('admin.ops.errorLog.typeNetwork') },
   { value: 'internal', label: t('admin.ops.errorLog.typeInternal') },
 ])
 

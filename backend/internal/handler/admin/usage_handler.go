@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ func NewUsageHandler(
 type CreateUsageCleanupTaskRequest struct {
 	StartDate   string  `json:"start_date"`
 	EndDate     string  `json:"end_date"`
+	RecordType  string  `json:"record_type"`
 	APIKeyID    *int64  `json:"api_key_id"`
 	AccountID   *int64  `json:"account_id"`
 	GroupID     *int64  `json:"group_id"`
@@ -54,6 +56,12 @@ type CreateUsageCleanupTaskRequest struct {
 	Stream      *bool   `json:"stream"`
 	BillingType *int8   `json:"billing_type"`
 	Timezone    string  `json:"timezone"`
+	// Error-tab filters.  They are applied only to ops_error_logs; usage-log
+	// filters remain shared with the original cleanup task.
+	ErrorPhase    *string `json:"error_phase"`
+	ErrorCategory *string `json:"error_category"`
+	StatusCode    *int    `json:"status_code"`
+	StatusCodes   []int   `json:"status_codes"`
 }
 
 // List handles listing all usage records with filters
@@ -496,7 +504,21 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		response.BadRequest(c, "Invalid end_date format, use YYYY-MM-DD")
 		return
 	}
-	endTime = endTime.Add(24*time.Hour - time.Nanosecond)
+	// Advance the calendar date in the requested location rather than adding a
+	// fixed 24-hour duration.  A DST transition can make a local day 23 or 25
+	// hours; using AddDate keeps the inclusive end-of-day boundary correct.
+	endTime = endTime.AddDate(0, 0, 1).Add(-time.Nanosecond)
+
+	if err := validateUsageCleanupRequestValues(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	recordType, err := service.ParseUsageCleanupRecordType(req.RecordType)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 
 	var requestType *int16
 	stream := req.Stream
@@ -511,9 +533,20 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		stream = nil
 	}
 
+	// Convert the error-tab's phase/category/status filters into the compact
+	// storage filters used by the cleanup repository.  Category filters are
+	// intersected with an explicitly selected phase, matching the list API's
+	// AND semantics.
+	errorPhases, errorTypes, statusCodes, err := buildUsageCleanupErrorFilters(req.ErrorPhase, req.ErrorCategory, req.StatusCode, req.StatusCodes)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
 	filters := service.UsageCleanupFilters{
 		StartTime:   startTime,
 		EndTime:     endTime,
+		RecordType:  recordType,
 		APIKeyID:    req.APIKeyID,
 		AccountID:   req.AccountID,
 		GroupID:     req.GroupID,
@@ -521,6 +554,9 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		RequestType: requestType,
 		Stream:      stream,
 		BillingType: req.BillingType,
+		ErrorPhases: errorPhases,
+		ErrorTypes:  errorTypes,
+		StatusCodes: statusCodes,
 	}
 
 	var apiKeyID any
@@ -560,8 +596,9 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		Body:       req,
 	}
 	executeAdminIdempotentJSON(c, "admin.usage.cleanup_tasks.create", idempotencyPayload, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
-		logger.LegacyPrintf("handler.admin.usage", "[UsageCleanup] 请求创建清理任务: operator=%d start=%s end=%s api_key_id=%v account_id=%v group_id=%v model=%v request_type=%v stream=%v billing_type=%v tz=%q",
+		logger.LegacyPrintf("handler.admin.usage", "[UsageCleanup] 请求创建清理任务: operator=%d record_type=%s start=%s end=%s api_key_id=%v account_id=%v group_id=%v model=%v request_type=%v stream=%v billing_type=%v error_phase=%v error_category=%v status_codes=%v tz=%q",
 			subject.UserID,
+			filters.RecordType,
 			filters.StartTime.Format(time.RFC3339),
 			filters.EndTime.Format(time.RFC3339),
 			apiKeyID,
@@ -571,6 +608,9 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 			requestTypeName,
 			streamValue,
 			billingType,
+			req.ErrorPhase,
+			req.ErrorCategory,
+			filters.StatusCodes,
 			req.Timezone,
 		)
 
@@ -582,6 +622,107 @@ func (h *UsageHandler) CreateCleanupTask(c *gin.Context) {
 		logger.LegacyPrintf("handler.admin.usage", "[UsageCleanup] 清理任务已创建: task=%d operator=%d status=%s", task.ID, subject.UserID, task.Status)
 		return dto.UsageCleanupTaskFromService(task), nil
 	})
+}
+
+// buildUsageCleanupErrorFilters converts the error tab's public filters to
+// bounded repository predicates.  Category and phase use the same
+// intersection semantics as the admin error list.
+func buildUsageCleanupErrorFilters(phaseRaw, categoryRaw *string, statusCode *int, statusCodesRaw []int) ([]string, []string, []int, error) {
+	var phases, errorTypes []string
+	if categoryRaw != nil {
+		category := strings.ToLower(strings.TrimSpace(*categoryRaw))
+		if category != "" {
+			known := map[string]bool{
+				"auth": true, "rate_limit": true, "quota": true, "invalid_request": true,
+				"service_unavailable": true, "upstream": true, "internal": true, "cyber": true,
+			}
+			if !known[category] {
+				return nil, nil, nil, fmt.Errorf("invalid error_category %q", *categoryRaw)
+			}
+			phases, errorTypes = service.CategoryToFilter(category)
+		}
+	}
+	if phaseRaw != nil {
+		phase := strings.ToLower(strings.TrimSpace(*phaseRaw))
+		if phase != "" {
+			allowed := map[string]bool{
+				"request": true, "auth": true, "account_auth": true, "routing": true,
+				"upstream": true, "network": true, "internal": true,
+			}
+			if !allowed[phase] {
+				return nil, nil, nil, fmt.Errorf("invalid error_phase %q", *phaseRaw)
+			}
+			if len(phases) == 0 {
+				phases = []string{phase}
+			} else {
+				matched := false
+				for _, candidate := range phases {
+					if candidate == phase {
+						matched = true
+						break
+					}
+				}
+				if matched {
+					phases = []string{phase}
+				} else {
+					// A valid but disjoint combination is an empty result, not a
+					// widened delete.  A sentinel keeps the SQL predicate bounded.
+					phases = []string{"__no_matching_error_phase__"}
+				}
+			}
+		}
+	}
+
+	statusCodes := append([]int(nil), statusCodesRaw...)
+	if statusCode != nil {
+		statusCodes = append(statusCodes, *statusCode)
+	}
+	if len(statusCodes) > 0 {
+		if len(statusCodes) > 64 {
+			return nil, nil, nil, fmt.Errorf("too many status codes; maximum is 64")
+		}
+		seen := make(map[int]struct{}, len(statusCodes))
+		clean := make([]int, 0, len(statusCodes))
+		for _, code := range statusCodes {
+			if code < 0 || code > 999 {
+				return nil, nil, nil, fmt.Errorf("invalid status code %d", code)
+			}
+			if _, exists := seen[code]; exists {
+				continue
+			}
+			seen[code] = struct{}{}
+			clean = append(clean, code)
+		}
+		statusCodes = clean
+	}
+	return phases, errorTypes, statusCodes, nil
+}
+
+func validateUsageCleanupRequestValues(req *CreateUsageCleanupTaskRequest) error {
+	if req == nil {
+		return fmt.Errorf("invalid cleanup request")
+	}
+	// Keep validation order stable so clients and tests receive deterministic
+	// diagnostics when more than one identifier is malformed.
+	for _, item := range []struct {
+		name  string
+		value *int64
+	}{
+		{name: "api_key_id", value: req.APIKeyID},
+		{name: "account_id", value: req.AccountID},
+		{name: "group_id", value: req.GroupID},
+	} {
+		if item.value != nil && *item.value <= 0 {
+			return fmt.Errorf("%s must be positive", item.name)
+		}
+	}
+	if req.BillingType != nil && *req.BillingType != service.BillingTypeBalance && *req.BillingType != service.BillingTypeSubscription {
+		return fmt.Errorf("billing_type must be 0 or 1")
+	}
+	if len(req.StatusCodes) > 64 {
+		return fmt.Errorf("too many status codes; maximum is 64")
+	}
+	return nil
 }
 
 // CancelCleanupTask handles canceling a usage cleanup task

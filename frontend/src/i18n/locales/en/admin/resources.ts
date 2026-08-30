@@ -566,6 +566,13 @@ export default {
       cleanup: {
         button: 'Cleanup',
         title: 'Cleanup Usage Records',
+        recordType: 'Record type',
+        recordTypeHint: 'Choose usage records, error requests, or both record families.',
+        recordTypeAll: 'All records',
+        recordTypeUsage: 'Usage records',
+        recordTypeErrors: 'Error requests',
+        billingTypeHint: 'Billing type applies to usage records only.',
+        billingFilterNotice: 'The billing-type filter applies only to usage records and is ignored for error requests.',
         warning: 'Cleanup is irreversible and will affect historical stats.',
         submit: 'Submit Cleanup',
         submitting: 'Submitting...',

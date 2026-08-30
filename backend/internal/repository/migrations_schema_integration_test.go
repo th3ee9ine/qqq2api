@@ -152,6 +152,8 @@ WHERE ns.nspname = 'public'
 	// ops_system_logs: API key id index for operational log triage
 	requireColumn(t, tx, "ops_system_logs", "api_key_id", "bigint", 0, true)
 	requireIndex(t, tx, "ops_system_logs", "idx_ops_system_logs_api_key_id_created_at")
+	// ops_error_logs: bounded, sanitized client request diagnostics
+	requireColumn(t, tx, "ops_error_logs", "request_details", "jsonb", 0, true)
 
 	// Bounded ingress rejection security aggregates.
 	requireColumn(t, tx, "ops_ingress_reject_aggregates", "bucket_start", "timestamp with time zone", 0, false)

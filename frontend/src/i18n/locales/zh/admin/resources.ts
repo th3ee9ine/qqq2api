@@ -563,6 +563,13 @@ export default {
       cleanup: {
         button: '清理',
         title: '清理使用记录',
+        recordType: '清理记录类型',
+        recordTypeHint: '可分别清理用量记录、错误请求，或同时清理两类记录。',
+        recordTypeAll: '全部记录',
+        recordTypeUsage: '用量记录',
+        recordTypeErrors: '错误请求',
+        billingTypeHint: '计费类型只适用于用量记录。',
+        billingFilterNotice: '计费类型筛选仅适用于用量记录；清理错误请求时会忽略该条件。',
         warning: '清理不可恢复，且会影响历史统计回看。',
         submit: '提交清理',
         submitting: '提交中...',

@@ -13,7 +13,7 @@ import (
 )
 
 // auditLogRepository 审计日志仓储（raw SQL，append-only）。
-// 刻意不实现单条删除：审计日志只允许追加、按保留期批量清理、以及带 2FA 的全量清空。
+// 刻意不实现单条删除：审计日志只允许追加、按保留期批量清理、以及已认证管理员发起的全量清空。
 type auditLogRepository struct {
 	db *sql.DB
 }

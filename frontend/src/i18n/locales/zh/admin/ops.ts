@@ -269,6 +269,7 @@ export default {
         typeAuth: '认证',
         typeAccountAuth: '账号认证',
         typeRouting: '路由',
+        typeNetwork: '网络',
         typeInternal: '内部',
         endpoint: '端点',
         requestType: '类型',
@@ -343,6 +344,8 @@ export default {
         upstreamStatus: '上游状态码',
         message: '消息',
         rootCause: '根因',
+        requestDetails: '用户请求明细',
+        requestDetailsHint: '已脱敏并限制大小，仅用于诊断，不可直接重放。',
         diagnosticPayloads: '诊断载荷',
         payloads: {
           client: '客户端响应',
