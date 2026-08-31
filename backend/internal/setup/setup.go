@@ -353,11 +353,36 @@ func createInstallLock() error {
 }
 
 func initializeDatabase(cfg *SetupConfig) error {
-	dsn := fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Database.Host, cfg.Database.Port, cfg.Database.User,
-		cfg.Database.Password, cfg.Database.DBName, cfg.Database.SSLMode,
-	)
+	// Keep the migration session in the same timezone that the runtime uses.
+	// Account daily rollups derive their bucket date from PostgreSQL's
+	// `TimeZone` setting; omitting it here would backfill a fresh installation
+	// in the server default timezone (usually UTC), while InitEnt later queries
+	// in cfg.Timezone (Asia/Shanghai by default).
+	tz := strings.TrimSpace(cfg.Timezone)
+	if tz == "" {
+		tz = "Asia/Shanghai"
+	}
+	// Keep the normalized value for the config file written after migrations;
+	// otherwise a whitespace-padded value could make the migration session and
+	// the later runtime connections use different timezone settings.
+	cfg.Timezone = tz
+	// Keep empty passwords omitted (libpq treats an explicit `password=`
+	// differently on some installations) while applying the timezone parameter
+	// on every connection path.
+	var dsn string
+	if cfg.Database.Password == "" {
+		dsn = fmt.Sprintf(
+			"host=%s port=%d user=%s dbname=%s sslmode=%s TimeZone=%s",
+			cfg.Database.Host, cfg.Database.Port, cfg.Database.User,
+			cfg.Database.DBName, cfg.Database.SSLMode, tz,
+		)
+	} else {
+		dsn = fmt.Sprintf(
+			"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s TimeZone=%s",
+			cfg.Database.Host, cfg.Database.Port, cfg.Database.User,
+			cfg.Database.Password, cfg.Database.DBName, cfg.Database.SSLMode, tz,
+		)
+	}
 
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {

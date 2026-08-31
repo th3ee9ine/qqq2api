@@ -16,6 +16,296 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
+const usageRollupDateLayout = "2006-01-02"
+
+// usageRollupDate converts a timestamp to the application's natural date
+// before it is sent to PostgreSQL.  The rollup trigger stores bucket_date in
+// the session/application timezone; sending a DATE-shaped value here avoids
+// relying on a connection's implicit timestamptz->date cast (which can differ
+// for externally-created repository connections).
+func usageRollupDate(value time.Time) string {
+	return value.In(timezone.Location()).Format(usageRollupDateLayout)
+}
+
+// usageRollupDateRangeBounds is the date-range variant used by the SQL
+// reconciliation query.  In addition to DATE-shaped bounds it returns the
+// corresponding half-open timestamptz interval, allowing PostgreSQL to use the
+// existing (account_id, created_at) index when scanning retained rows.
+func usageRollupDateRangeBounds(startTime, endTime time.Time) (startDate, endDate string, startBound, endBound time.Time) {
+	loc := timezone.Location()
+	startLocal := startTime.In(loc)
+	endLocal := endTime.In(loc)
+	startDay := time.Date(startLocal.Year(), startLocal.Month(), startLocal.Day(), 0, 0, 0, 0, loc)
+	endDay := time.Date(endLocal.Year(), endLocal.Month(), endLocal.Day(), 0, 0, 0, 0, loc)
+
+	if !endTime.After(startTime) {
+		// Keep an empty date interval when callers provide a reversed/equal
+		// timestamp range; `bucket_date >= D AND bucket_date < D` is empty.
+		endDay = startDay
+	} else if endLocal.After(endDay) {
+		// A non-midnight end intersects its local end day, so include that day
+		// by making the date bound exclusive at the following midnight.
+		endDay = endDay.AddDate(0, 0, 1)
+	}
+
+	return startDay.Format(usageRollupDateLayout), endDay.Format(usageRollupDateLayout), startDay, endDay
+}
+
+// accountDailyUsageStats is the subset of usage counters needed by the
+// account-facing statistics endpoints.  The durable rollup contains the
+// counters for every row ever written; the raw aggregate is used below to
+// preserve exact timestamp-range semantics for rows that are still retained.
+type accountDailyUsageStats struct {
+	Requests            int64
+	InputTokens         int64
+	OutputTokens        int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
+	StandardCost        float64
+	AccountCost         float64
+	UserCost            float64
+	TotalDurationMs     int64
+	DurationCount       int64
+}
+
+type accountDailyRawUsageStats struct {
+	All     accountDailyUsageStats
+	InRange accountDailyUsageStats
+}
+
+func hasAccountDailyUsage(stats accountDailyUsageStats) bool {
+	return stats.Requests != 0 ||
+		stats.InputTokens != 0 ||
+		stats.OutputTokens != 0 ||
+		stats.CacheCreationTokens != 0 ||
+		stats.CacheReadTokens != 0 ||
+		stats.StandardCost != 0 ||
+		stats.AccountCost != 0 ||
+		stats.UserCost != 0 ||
+		stats.TotalDurationMs != 0 ||
+		stats.DurationCount != 0
+}
+
+func combineAccountDailyUsageStats(durable accountDailyUsageStats, raw accountDailyRawUsageStats) accountDailyUsageStats {
+	// The rollup is populated by the INSERT trigger for every normal write, so
+	// subtracting the retained raw rows removes their contribution before the
+	// exact in-range subset is added back.  A direct INSERT into a partition
+	// that predates the child-trigger installation can make raw.All temporarily
+	// larger than the durable bucket.  Treat raw.All as the lower bound before
+	// subtraction so those retained rows are not lost from the result.  Clamp
+	// counters at zero to keep malformed/direct-import data from producing
+	// negative UI values.
+	durable.Requests = maxInt64(0, maxInt64(durable.Requests, raw.All.Requests)-raw.All.Requests+raw.InRange.Requests)
+	durable.InputTokens = maxInt64(0, maxInt64(durable.InputTokens, raw.All.InputTokens)-raw.All.InputTokens+raw.InRange.InputTokens)
+	durable.OutputTokens = maxInt64(0, maxInt64(durable.OutputTokens, raw.All.OutputTokens)-raw.All.OutputTokens+raw.InRange.OutputTokens)
+	durable.CacheCreationTokens = maxInt64(0, maxInt64(durable.CacheCreationTokens, raw.All.CacheCreationTokens)-raw.All.CacheCreationTokens+raw.InRange.CacheCreationTokens)
+	durable.CacheReadTokens = maxInt64(0, maxInt64(durable.CacheReadTokens, raw.All.CacheReadTokens)-raw.All.CacheReadTokens+raw.InRange.CacheReadTokens)
+	durable.TotalDurationMs = maxInt64(0, maxInt64(durable.TotalDurationMs, raw.All.TotalDurationMs)-raw.All.TotalDurationMs+raw.InRange.TotalDurationMs)
+	durable.DurationCount = maxInt64(0, maxInt64(durable.DurationCount, raw.All.DurationCount)-raw.All.DurationCount+raw.InRange.DurationCount)
+
+	durable.StandardCost = maxFloat64(0, maxFloat64(durable.StandardCost, raw.All.StandardCost)-raw.All.StandardCost+raw.InRange.StandardCost)
+	durable.AccountCost = maxFloat64(0, maxFloat64(durable.AccountCost, raw.All.AccountCost)-raw.All.AccountCost+raw.InRange.AccountCost)
+	durable.UserCost = maxFloat64(0, maxFloat64(durable.UserCost, raw.All.UserCost)-raw.All.UserCost+raw.InRange.UserCost)
+	return durable
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxFloat64(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// loadAccountDailyUsageStats combines durable daily counters with retained raw
+// rows in one PostgreSQL statement.  Keeping both aggregates in the same
+// statement gives them one MVCC snapshot: a concurrent INSERT or cleanup
+// DELETE therefore cannot be observed on only one side of the reconciliation.
+// For each bucket, the result is:
+//
+//	durable_total - retained_rows_in_day + retained_rows_in_requested_range
+//
+// Daily rollups intentionally provide whole-day values after raw retention has
+// removed the source rows.  While rows are still retained, the raw subset keeps
+// arbitrary half-open timestamp ranges exact.  If a legacy/import path has no
+// durable bucket, the retained in-range rows are used as a compatibility
+// fallback.
+func (r *usageLogRepository) loadAccountDailyUsageStats(ctx context.Context, accountID int64, startTime, endTime time.Time) (result map[string]accountDailyUsageStats, err error) {
+	result = make(map[string]accountDailyUsageStats)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	startDate, endDate, startBound, endBound := usageRollupDateRangeBounds(startTime, endTime)
+	if !endTime.After(startTime) {
+		return result, nil
+	}
+
+	// The raw CTE is restricted to the complete natural-day interval so the
+	// date expression can be used for grouping without broadening the scan to
+	// every retained row for the account.  The absolute timestamptz bounds are
+	// sargable against idx_usage_logs_account_created_at (and its equivalent
+	// partition-local indexes).
+	query := `
+		WITH durable AS (
+			SELECT
+				TO_CHAR(bucket_date, 'YYYY-MM-DD') AS bucket_date,
+				total_requests,
+				input_tokens,
+				output_tokens,
+				cache_creation_tokens,
+				cache_read_tokens,
+				standard_cost,
+				account_cost,
+				user_cost,
+				total_duration_ms,
+				duration_count
+			FROM usage_account_daily_rollups
+			WHERE account_id = $1 AND bucket_date >= $2::date AND bucket_date < $3::date
+		), raw AS (
+			SELECT
+				TO_CHAR((created_at AT TIME ZONE current_setting('TimeZone'))::date, 'YYYY-MM-DD') AS bucket_date,
+				COUNT(*) AS all_requests,
+				COUNT(*) FILTER (WHERE created_at >= $4 AND created_at < $5) AS range_requests,
+				COALESCE(SUM(input_tokens), 0) AS all_input_tokens,
+				COALESCE(SUM(input_tokens) FILTER (WHERE created_at >= $4 AND created_at < $5), 0) AS range_input_tokens,
+				COALESCE(SUM(output_tokens), 0) AS all_output_tokens,
+				COALESCE(SUM(output_tokens) FILTER (WHERE created_at >= $4 AND created_at < $5), 0) AS range_output_tokens,
+				COALESCE(SUM(cache_creation_tokens), 0) AS all_cache_creation_tokens,
+				COALESCE(SUM(cache_creation_tokens) FILTER (WHERE created_at >= $4 AND created_at < $5), 0) AS range_cache_creation_tokens,
+				COALESCE(SUM(cache_read_tokens), 0) AS all_cache_read_tokens,
+				COALESCE(SUM(cache_read_tokens) FILTER (WHERE created_at >= $4 AND created_at < $5), 0) AS range_cache_read_tokens,
+				COALESCE(SUM(total_cost), 0) AS all_standard_cost,
+				COALESCE(SUM(total_cost) FILTER (WHERE created_at >= $4 AND created_at < $5), 0) AS range_standard_cost,
+				COALESCE(SUM(COALESCE(account_stats_cost, total_cost, 0) * COALESCE(account_rate_multiplier, 1)), 0) AS all_account_cost,
+				COALESCE(SUM(COALESCE(account_stats_cost, total_cost, 0) * COALESCE(account_rate_multiplier, 1)) FILTER (WHERE created_at >= $4 AND created_at < $5), 0) AS range_account_cost,
+				COALESCE(SUM(actual_cost), 0) AS all_user_cost,
+				COALESCE(SUM(actual_cost) FILTER (WHERE created_at >= $4 AND created_at < $5), 0) AS range_user_cost,
+				COALESCE(SUM(COALESCE(duration_ms, 0)), 0) AS all_duration_ms,
+				COALESCE(SUM(COALESCE(duration_ms, 0)) FILTER (WHERE created_at >= $4 AND created_at < $5), 0) AS range_duration_ms,
+				COUNT(duration_ms) AS all_duration_count,
+				COUNT(duration_ms) FILTER (WHERE created_at >= $4 AND created_at < $5) AS range_duration_count
+			FROM usage_logs
+			WHERE account_id = $1 AND created_at >= $6 AND created_at < $7
+			GROUP BY 1
+		)
+		SELECT
+			COALESCE(d.bucket_date, raw.bucket_date) AS bucket_date,
+			(d.bucket_date IS NOT NULL) AS has_durable,
+			COALESCE(d.total_requests, 0) AS durable_requests,
+			COALESCE(d.input_tokens, 0) AS durable_input_tokens,
+			COALESCE(d.output_tokens, 0) AS durable_output_tokens,
+			COALESCE(d.cache_creation_tokens, 0) AS durable_cache_creation_tokens,
+			COALESCE(d.cache_read_tokens, 0) AS durable_cache_read_tokens,
+			COALESCE(d.standard_cost, 0) AS durable_standard_cost,
+			COALESCE(d.account_cost, 0) AS durable_account_cost,
+			COALESCE(d.user_cost, 0) AS durable_user_cost,
+			COALESCE(d.total_duration_ms, 0) AS durable_duration_ms,
+			COALESCE(d.duration_count, 0) AS durable_duration_count,
+			COALESCE(raw.all_requests, 0) AS all_requests,
+			COALESCE(raw.range_requests, 0) AS range_requests,
+			COALESCE(raw.all_input_tokens, 0) AS all_input_tokens,
+			COALESCE(raw.range_input_tokens, 0) AS range_input_tokens,
+			COALESCE(raw.all_output_tokens, 0) AS all_output_tokens,
+			COALESCE(raw.range_output_tokens, 0) AS range_output_tokens,
+			COALESCE(raw.all_cache_creation_tokens, 0) AS all_cache_creation_tokens,
+			COALESCE(raw.range_cache_creation_tokens, 0) AS range_cache_creation_tokens,
+			COALESCE(raw.all_cache_read_tokens, 0) AS all_cache_read_tokens,
+			COALESCE(raw.range_cache_read_tokens, 0) AS range_cache_read_tokens,
+			COALESCE(raw.all_standard_cost, 0) AS all_standard_cost,
+			COALESCE(raw.range_standard_cost, 0) AS range_standard_cost,
+			COALESCE(raw.all_account_cost, 0) AS all_account_cost,
+			COALESCE(raw.range_account_cost, 0) AS range_account_cost,
+			COALESCE(raw.all_user_cost, 0) AS all_user_cost,
+			COALESCE(raw.range_user_cost, 0) AS range_user_cost,
+			COALESCE(raw.all_duration_ms, 0) AS all_duration_ms,
+			COALESCE(raw.range_duration_ms, 0) AS range_duration_ms,
+			COALESCE(raw.all_duration_count, 0) AS all_duration_count,
+			COALESCE(raw.range_duration_count, 0) AS range_duration_count
+		FROM durable d
+		FULL OUTER JOIN raw ON raw.bucket_date = d.bucket_date
+		ORDER BY 1
+	`
+
+	rows, err := r.sql.QueryContext(ctx, query, accountID, startDate, endDate, startTime, endTime, startBound, endBound)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = closeErr
+			result = nil
+		}
+	}()
+
+	for rows.Next() {
+		var (
+			date       string
+			hasDurable bool
+			durable    accountDailyUsageStats
+			rawAll     accountDailyUsageStats
+			rawInRange accountDailyUsageStats
+		)
+		if err := rows.Scan(
+			&date,
+			&hasDurable,
+			&durable.Requests,
+			&durable.InputTokens,
+			&durable.OutputTokens,
+			&durable.CacheCreationTokens,
+			&durable.CacheReadTokens,
+			&durable.StandardCost,
+			&durable.AccountCost,
+			&durable.UserCost,
+			&durable.TotalDurationMs,
+			&durable.DurationCount,
+			&rawAll.Requests,
+			&rawInRange.Requests,
+			&rawAll.InputTokens,
+			&rawInRange.InputTokens,
+			&rawAll.OutputTokens,
+			&rawInRange.OutputTokens,
+			&rawAll.CacheCreationTokens,
+			&rawInRange.CacheCreationTokens,
+			&rawAll.CacheReadTokens,
+			&rawInRange.CacheReadTokens,
+			&rawAll.StandardCost,
+			&rawInRange.StandardCost,
+			&rawAll.AccountCost,
+			&rawInRange.AccountCost,
+			&rawAll.UserCost,
+			&rawInRange.UserCost,
+			&rawAll.TotalDurationMs,
+			&rawInRange.TotalDurationMs,
+			&rawAll.DurationCount,
+			&rawInRange.DurationCount,
+		); err != nil {
+			return nil, err
+		}
+
+		if hasDurable {
+			stats := combineAccountDailyUsageStats(durable, accountDailyRawUsageStats{All: rawAll, InRange: rawInRange})
+			if hasAccountDailyUsage(stats) {
+				result[date] = stats
+			}
+			continue
+		}
+		// No durable bucket: only retained rows can be represented exactly.
+		if hasAccountDailyUsage(rawInRange) {
+			result[date] = rawInRange
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetUserStatsAggregated returns aggregated usage statistics for a user using database-level aggregation
 func (r *usageLogRepository) GetUserStatsAggregated(ctx context.Context, userID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
 	query := `
@@ -94,52 +384,36 @@ func (r *usageLogRepository) GetAPIKeyStatsAggregated(ctx context.Context, apiKe
 	return &stats, nil
 }
 
-// GetAccountStatsAggregated 使用 SQL 聚合统计账号使用数据
+// GetAccountStatsAggregated 使用持久化日汇总和保留日志聚合统计账号使用数据。
 //
-// 性能优化说明：
-// 原实现先查询所有日志记录，再在应用层循环计算统计值：
-// 1. 需要传输大量数据到应用层
-// 2. 应用层循环计算增加 CPU 和内存开销
-//
-// 新实现使用 SQL 聚合函数：
-// 1. 在数据库层完成 COUNT/SUM/AVG 计算
-// 2. 只返回单行聚合结果，大幅减少数据传输量
-// 3. 利用数据库索引优化聚合查询性能
+// loadAccountDailyUsageStats 在一个 SQL 快照中合并 durable rollup 与仍保留的
+// usage_logs 行：已清理的日期直接从汇总表读取，未清理的日期仍保留原有的
+// 时间范围精度。这样账号历史统计不会随着 usage_logs 清理而归零。
 func (r *usageLogRepository) GetAccountStatsAggregated(ctx context.Context, accountID int64, startTime, endTime time.Time) (*usagestats.UsageStats, error) {
-	query := `
-		SELECT
-			COUNT(*) as total_requests,
-			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
-			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
-			COALESCE(SUM(cache_creation_tokens + cache_read_tokens), 0) as total_cache_tokens,
-			COALESCE(SUM(cache_creation_tokens), 0) as total_cache_creation_tokens,
-			COALESCE(SUM(cache_read_tokens), 0) as total_cache_read_tokens,
-			COALESCE(SUM(total_cost), 0) as total_cost,
-			COALESCE(SUM(actual_cost), 0) as total_actual_cost,
-			COALESCE(AVG(COALESCE(duration_ms, 0)), 0) as avg_duration_ms
-		FROM usage_logs
-		WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
-	`
-
-	var stats usagestats.UsageStats
-	if err := scanSingleRow(
-		ctx,
-		r.sql,
-		query,
-		[]any{accountID, startTime, endTime},
-		&stats.TotalRequests,
-		&stats.TotalInputTokens,
-		&stats.TotalOutputTokens,
-		&stats.TotalCacheTokens,
-		&stats.TotalCacheCreationTokens,
-		&stats.TotalCacheReadTokens,
-		&stats.TotalCost,
-		&stats.TotalActualCost,
-		&stats.AverageDurationMs,
-	); err != nil {
+	buckets, err := r.loadAccountDailyUsageStats(ctx, accountID, startTime, endTime)
+	if err != nil {
 		return nil, err
 	}
+	var stats usagestats.UsageStats
+	for _, bucket := range buckets {
+		stats.TotalRequests += bucket.Requests
+		stats.TotalInputTokens += bucket.InputTokens
+		stats.TotalOutputTokens += bucket.OutputTokens
+		stats.TotalCacheCreationTokens += bucket.CacheCreationTokens
+		stats.TotalCacheReadTokens += bucket.CacheReadTokens
+		stats.TotalCacheTokens += bucket.CacheCreationTokens + bucket.CacheReadTokens
+		stats.TotalCost += bucket.StandardCost
+		stats.TotalActualCost += bucket.UserCost
+		stats.AverageDurationMs += float64(bucket.TotalDurationMs)
+	}
 	stats.TotalTokens = stats.TotalInputTokens + stats.TotalOutputTokens + stats.TotalCacheTokens
+	// The previous query used AVG(COALESCE(duration_ms, 0)); its denominator is
+	// therefore every request, including rows with a NULL duration.
+	if stats.TotalRequests > 0 {
+		stats.AverageDurationMs /= float64(stats.TotalRequests)
+	} else {
+		stats.AverageDurationMs = 0
+	}
 	return &stats, nil
 }
 
@@ -278,13 +552,13 @@ func (r *usageLogRepository) GetAccountTodayStats(ctx context.Context, accountID
 
 	query := `
 		SELECT
-			COUNT(*) as requests,
+			COALESCE(SUM(total_requests), 0) as requests,
 			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as cost,
-			COALESCE(SUM(total_cost), 0) as standard_cost,
-			COALESCE(SUM(actual_cost), 0) as user_cost
-		FROM usage_logs
-		WHERE account_id = $1 AND created_at >= $2
+			COALESCE(SUM(account_cost), 0) as cost,
+			COALESCE(SUM(standard_cost), 0) as standard_cost,
+			COALESCE(SUM(user_cost), 0) as user_cost
+		FROM usage_account_daily_rollups
+		WHERE account_id = $1 AND bucket_date = $2::date
 	`
 
 	stats := &usagestats.AccountStats{}
@@ -292,7 +566,7 @@ func (r *usageLogRepository) GetAccountTodayStats(ctx context.Context, accountID
 		ctx,
 		r.sql,
 		query,
-		[]any{accountID, today},
+		[]any{accountID, usageRollupDate(today)},
 		&stats.Requests,
 		&stats.Tokens,
 		&stats.Cost,
@@ -302,6 +576,62 @@ func (r *usageLogRepository) GetAccountTodayStats(ctx context.Context, accountID
 		return nil, err
 	}
 	return stats, nil
+}
+
+// GetAccountTodayStatsBatch 批量读取账号今日统计。
+//
+// This method intentionally lives outside UsageLogRepository's required
+// interface so older in-memory/test implementations remain source compatible;
+// AccountUsageService discovers it through a narrow optional interface.  The
+// data comes from the durable daily rollup, therefore deleting usage_logs rows
+// cannot reset the values shown in the admin account table.
+func (r *usageLogRepository) GetAccountTodayStatsBatch(ctx context.Context, accountIDs []int64) (map[int64]*usagestats.AccountStats, error) {
+	result := make(map[int64]*usagestats.AccountStats, len(accountIDs))
+	if len(accountIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT
+			account_id,
+			COALESCE(total_requests, 0) AS requests,
+			COALESCE(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens, 0) AS tokens,
+			COALESCE(account_cost, 0) AS cost,
+			COALESCE(standard_cost, 0) AS standard_cost,
+			COALESCE(user_cost, 0) AS user_cost
+		FROM usage_account_daily_rollups
+		WHERE account_id = ANY($1) AND bucket_date = $2::date
+	`
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), usageRollupDate(timezone.Today()))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var accountID int64
+		stats := &usagestats.AccountStats{}
+		if err := rows.Scan(
+			&accountID,
+			&stats.Requests,
+			&stats.Tokens,
+			&stats.Cost,
+			&stats.StandardCost,
+			&stats.UserCost,
+		); err != nil {
+			return nil, err
+		}
+		result[accountID] = stats
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, accountID := range accountIDs {
+		if _, ok := result[accountID]; !ok {
+			result[accountID] = &usagestats.AccountStats{}
+		}
+	}
+	return result, nil
 }
 
 // GetAccountWindowStats 获取账号时间窗口内的统计
@@ -400,20 +730,23 @@ func (r *usageLogRepository) GetAccountLifetimeStatsBatch(ctx context.Context, a
 	query := `
 		SELECT
 			a.id AS account_id,
-			COUNT(ul.id) AS requests,
-			COALESCE(SUM(ul.input_tokens + ul.output_tokens + ul.cache_creation_tokens + ul.cache_read_tokens), 0) AS tokens,
-			COALESCE(SUM(COALESCE(ul.account_stats_cost, ul.total_cost) * COALESCE(ul.account_rate_multiplier, 1)), 0) AS cost,
-			COALESCE(SUM(ul.total_cost), 0) AS standard_cost,
-			COALESCE(SUM(ul.actual_cost), 0) AS user_cost
+			COALESCE(SUM(r.lifetime_requests), 0) AS requests,
+			COALESCE(SUM(r.lifetime_input_tokens + r.lifetime_output_tokens + r.lifetime_cache_creation_tokens + r.lifetime_cache_read_tokens), 0) AS tokens,
+			COALESCE(SUM(r.lifetime_account_cost), 0) AS cost,
+			COALESCE(SUM(r.lifetime_standard_cost), 0) AS standard_cost,
+			COALESCE(SUM(r.lifetime_user_cost), 0) AS user_cost
 		FROM accounts a
-		LEFT JOIN usage_logs ul
-			ON ul.account_id = a.id
-			AND ul.created_at >= a.created_at
-			AND ul.created_at <= NOW()
+		LEFT JOIN usage_account_daily_rollups r
+			ON r.account_id = a.id
+			-- Lifetime counters are filtered against the cutoff captured by the
+			-- insert trigger/backfill.  The date guard also keeps a future
+			-- natural-day bucket out of the result, matching the legacy
+			-- created_at <= NOW() query.
+			AND r.bucket_date <= $2::date
 		WHERE a.id = ANY($1)
 		GROUP BY a.id
 	`
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs))
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), usageRollupDate(timezone.Today()))
 	if err != nil {
 		return nil, err
 	}
@@ -979,58 +1312,33 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 	if daysCount <= 0 {
 		daysCount = 30
 	}
-
-	query := `
-		SELECT
-			TO_CHAR(created_at, 'YYYY-MM-DD') as date,
-			COUNT(*) as requests,
-			COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens), 0) as tokens,
-			COALESCE(SUM(total_cost), 0) as cost,
-			COALESCE(SUM(COALESCE(account_stats_cost, total_cost) * COALESCE(account_rate_multiplier, 1)), 0) as actual_cost,
-			COALESCE(SUM(actual_cost), 0) as user_cost
-		FROM usage_logs
-		WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
-		GROUP BY date
-		ORDER BY date ASC
-	`
-
-	rows, err := r.sql.QueryContext(ctx, query, accountID, startTime, endTime)
+	buckets, err := r.loadAccountDailyUsageStats(ctx, accountID, startTime, endTime)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		// 保持主错误优先；仅在无错误时回传 Close 失败。
-		// 同时清空返回值，避免误用不完整结果。
-		if closeErr := rows.Close(); closeErr != nil && err == nil {
-			err = closeErr
-			resp = nil
-		}
-	}()
 
-	history := make([]AccountUsageHistory, 0)
-	for rows.Next() {
-		var date string
-		var requests int64
-		var tokens int64
-		var cost float64
-		var actualCost float64
-		var userCost float64
-		if err = rows.Scan(&date, &requests, &tokens, &cost, &actualCost, &userCost); err != nil {
-			return nil, err
-		}
+	dates := make([]string, 0, len(buckets))
+	for date := range buckets {
+		dates = append(dates, date)
+	}
+	sort.Strings(dates)
+
+	history := make([]AccountUsageHistory, 0, len(dates))
+	var totalDurationMs, durationCount int64
+	for _, date := range dates {
+		bucket := buckets[date]
 		t, _ := time.Parse("2006-01-02", date)
 		history = append(history, AccountUsageHistory{
 			Date:       date,
 			Label:      t.Format("01/02"),
-			Requests:   requests,
-			Tokens:     tokens,
-			Cost:       cost,
-			ActualCost: actualCost,
-			UserCost:   userCost,
+			Requests:   bucket.Requests,
+			Tokens:     bucket.InputTokens + bucket.OutputTokens + bucket.CacheCreationTokens + bucket.CacheReadTokens,
+			Cost:       bucket.StandardCost,
+			ActualCost: bucket.AccountCost,
+			UserCost:   bucket.UserCost,
 		})
-	}
-	if err = rows.Err(); err != nil {
-		return nil, err
+		totalDurationMs += bucket.TotalDurationMs
+		durationCount += bucket.DurationCount
 	}
 
 	var totalAccountCost, totalUserCost, totalStandardCost float64
@@ -1058,10 +1366,9 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		actualDaysUsed = 1
 	}
 
-	avgQuery := "SELECT COALESCE(AVG(duration_ms), 0) as avg_duration_ms FROM usage_logs WHERE account_id = $1 AND created_at >= $2 AND created_at < $3"
 	var avgDuration float64
-	if err := scanSingleRow(ctx, r.sql, avgQuery, []any{accountID, startTime, endTime}, &avgDuration); err != nil {
-		return nil, err
+	if durationCount > 0 {
+		avgDuration = float64(totalDurationMs) / float64(durationCount)
 	}
 
 	summary := AccountUsageSummary{
@@ -1079,7 +1386,7 @@ func (r *usageLogRepository) GetAccountUsageStats(ctx context.Context, accountID
 		AvgDurationMs:     avgDuration,
 	}
 
-	todayStr := timezone.Now().Format("2006-01-02")
+	todayStr := usageRollupDate(timezone.Now())
 	for i := range history {
 		if history[i].Date == todayStr {
 			summary.Today = &struct {

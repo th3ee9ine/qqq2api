@@ -84,6 +84,14 @@ type accountWindowStatsBatchReader interface {
 	GetAccountWindowStatsBatch(ctx context.Context, accountIDs []int64, startTime time.Time) (map[int64]*usagestats.AccountStats, error)
 }
 
+// accountTodayStatsBatchReader is implemented by repositories that retain
+// today's counters independently from usage_logs.  It is deliberately
+// optional so existing repository test doubles and external adapters remain
+// source-compatible.
+type accountTodayStatsBatchReader interface {
+	GetAccountTodayStatsBatch(ctx context.Context, accountIDs []int64) (map[int64]*usagestats.AccountStats, error)
+}
+
 type accountLifetimeStatsBatchReader interface {
 	GetAccountLifetimeStatsBatch(ctx context.Context, accountIDs []int64) (map[int64]*usagestats.AccountStats, error)
 }
@@ -1438,6 +1446,18 @@ func (s *AccountUsageService) GetTodayStatsBatch(ctx context.Context, accountIDs
 	result := make(map[int64]*WindowStats, len(uniqueIDs))
 	if len(uniqueIDs) == 0 {
 		return result, nil
+	}
+
+	// Prefer the durable daily rollup when available.  The legacy window-batch
+	// path below reads usage_logs and would return zeros after retention cleanup.
+	if batchReader, ok := s.usageLogRepo.(accountTodayStatsBatchReader); ok {
+		statsByAccount, err := batchReader.GetAccountTodayStatsBatch(ctx, uniqueIDs)
+		if err == nil {
+			for _, accountID := range uniqueIDs {
+				result[accountID] = windowStatsFromAccountStats(statsByAccount[accountID])
+			}
+			return result, nil
+		}
 	}
 
 	startTime := timezone.Today()

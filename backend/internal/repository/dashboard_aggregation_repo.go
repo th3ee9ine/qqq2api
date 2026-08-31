@@ -675,7 +675,48 @@ func (r *dashboardAggregationRepository) createUsageLogsPartition(ctx context.Co
 		pq.QuoteLiteral(monthStart.Format("2006-01-02")),
 		pq.QuoteLiteral(nextMonth.Format("2006-01-02")),
 	)
-	_, err := r.sql.ExecContext(ctx, query)
+	// Statement-level transition-table triggers defined on a partitioned
+	// parent are used for normal INSERT INTO usage_logs writes, but PostgreSQL
+	// does not clone them to partitions created later.  A maintenance/import
+	// job may address a child table directly, so install the same trigger on
+	// the newly-created child when the durable account rollup migration is
+	// present.  The guarded DO block keeps this partition housekeeping
+	// compatible with installations that have not applied migration 235 yet.
+	quotedTable := pq.QuoteIdentifier(name)
+	regclass := pq.QuoteLiteral(name) + "::regclass"
+	createTrigger := pq.QuoteLiteral(fmt.Sprintf(`CREATE TRIGGER usage_logs_account_daily_rollup_insert
+                 AFTER INSERT ON %s
+                 REFERENCING NEW TABLE AS inserted_usage_logs
+                 FOR EACH STATEMENT
+                 EXECUTE FUNCTION usage_account_daily_rollup_after_insert()`, quotedTable))
+	triggerQuery := fmt.Sprintf(`
+DO $$
+BEGIN
+    IF to_regclass('usage_account_daily_rollups') IS NOT NULL
+       AND to_regprocedure('usage_account_daily_rollup_after_insert()') IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM pg_trigger
+           WHERE tgrelid = %s
+             AND tgname = 'usage_logs_account_daily_rollup_insert'
+       )
+    THEN
+        BEGIN
+            EXECUTE %s;
+        EXCEPTION
+            -- Two scheduler instances can discover the same newly-created
+            -- partition concurrently.  Both may pass the catalog check before
+            -- either CREATE TRIGGER commits; treat that narrow race as
+            -- success because the other transaction installed the trigger.
+            WHEN duplicate_object THEN NULL;
+        END;
+    END IF;
+END;
+$$;`, regclass, createTrigger)
+	// Keep table creation and trigger installation in one statement/transaction.
+	// This prevents a direct child INSERT from becoming visible in the small
+	// interval between two autocommit Exec calls and bypassing the rollup.
+	_, err := r.sql.ExecContext(ctx, query+";\n"+triggerQuery)
 	return err
 }
 
