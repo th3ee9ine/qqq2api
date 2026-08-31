@@ -467,6 +467,7 @@ func compactOpsRequestDetails(root map[string]any, maxBytes int) (string, bool) 
 		"content_length": {}, "query": {}, "query_truncated": {}, "headers": {},
 		"headers_truncated": {}, "body_read": {}, "body_bytes_read": {},
 		"body_truncated": {}, "body_decoded": {}, "body_bytes_decoded": {},
+		"body_normalized": {}, "body_bytes_normalized": {},
 		"body_omitted": {}, "body_omitted_reason": {},
 		"body_parse_error": {}, "body": {},
 	}

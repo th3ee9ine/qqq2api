@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	pkghttputil "github.com/th3ee9ine/qqq2api/internal/pkg/httputil"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
@@ -447,6 +448,10 @@ func requestBodyCanParseJSON(contentType string, body []byte) bool {
 	// Some compatible clients omit Content-Type. Only infer JSON for an
 	// object/array prefix; form, multipart and binary bodies stay omitted.
 	trimmed := bytes.TrimSpace(body)
+	// Match the lenient JSON reader's BOM handling so a content-type-less
+	// request still gets its complete object/array snapshot.
+	trimmed = bytes.TrimPrefix(trimmed, []byte{0xef, 0xbb, 0xbf})
+	trimmed = bytes.TrimSpace(trimmed)
 	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
 }
 
@@ -493,12 +498,32 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 		bodyComplete = rawBodyReadComplete(snapshot) && !snapshot.decodedTruncated
 		decodedBody = true
 	}
+	// The lenient gateway reader can normalize an otherwise valid-looking
+	// client payload (for example by removing a UTF-8 BOM or escaping raw
+	// control bytes inside JSON strings).  The capture intentionally retains
+	// wire bytes, so replay the same bounded normalization here when no
+	// decoder observer supplied a processed body.  This keeps the diagnostic
+	// snapshot aligned with the payload the handler actually parsed instead of
+	// reporting `invalid_json` for requests that the gateway accepted.
+	normalizedBody := false
+	if !decodedBody && !snapshot.truncated && requestBodyCanParseJSON(metadata.contentType, bodyData) {
+		if normalized, err := pkghttputil.NormalizeLenientJSONRequestBody(bodyData, int64(opsRequestBodyCaptureLimit)); err == nil && !bytes.Equal(normalized, bodyData) {
+			bodyData = normalized
+			bodyTotal = int64(len(normalized))
+			bodyTruncated = len(normalized) > opsRequestBodyCaptureLimit
+			normalizedBody = true
+		}
+	}
 	details["body_read"] = snapshot.readStarted
 	details["body_bytes_read"] = snapshot.total
 	details["body_truncated"] = bodyTruncated
 	if decodedBody {
 		details["body_decoded"] = true
 		details["body_bytes_decoded"] = bodyTotal
+	}
+	if normalizedBody {
+		details["body_normalized"] = true
+		details["body_bytes_normalized"] = bodyTotal
 	}
 
 	complete := bodyComplete

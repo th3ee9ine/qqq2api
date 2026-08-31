@@ -142,6 +142,31 @@ func TestBuildOpsRequestDetailsJSONUsesDecodedCompressedBodyAndPreservesWireMeta
 	require.Equal(t, "compressed fixture", body["prompt"])
 }
 
+func TestBuildOpsRequestDetailsJSONUsesLenientNormalizedIdentityBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	// The gateway's lenient reader accepts a BOM and raw control bytes inside
+	// JSON strings after normalizing them. The request capture itself retains
+	// the original wire bytes, so diagnostics must apply the same normalization
+	// before attempting to decode the body.
+	payload := []byte("\xef\xbb\xbf{\"model\":\"gpt-test\",\"prompt\":\"hello\x00world\"}")
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(payload))
+	c.Request.ContentLength = int64(len(payload))
+	c.Request.Header.Set("Content-Type", "application/json")
+	capture := installOpsRequestBodyCapture(c)
+	_, err := io.ReadAll(c.Request.Body)
+	require.NoError(t, err)
+
+	raw := buildOpsRequestDetailsJSON(c, capture)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	require.Equal(t, true, details["body_normalized"])
+	body, ok := details["body"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "hello\x00world", body["prompt"])
+}
+
 func TestBuildOpsRequestDetailsJSONMarksCompressedDecodeFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
