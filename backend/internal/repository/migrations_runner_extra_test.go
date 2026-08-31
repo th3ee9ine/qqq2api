@@ -104,12 +104,24 @@ func TestMigrationChecksumCompatibilityRules_CoverEditedUpgradeCompatibilityMigr
 		"118_wechat_dual_mode_and_auth_source_defaults.sql",
 		"120_enforce_payment_orders_out_trade_no_unique_notx.sql",
 		"123_fix_legacy_auth_source_grant_on_signup_defaults.sql",
+		"233_add_ops_error_request_details.sql",
 	} {
 		rule, ok := migrationChecksumCompatibilityRules[name]
 		require.Truef(t, ok, "missing compatibility rule for %s", name)
 		require.NotEmpty(t, rule.fileChecksum)
 		require.NotEmpty(t, rule.acceptedDBChecksum)
 	}
+}
+
+func TestMigration233ChecksumCompatibility(t *testing.T) {
+	const name = "233_add_ops_error_request_details.sql"
+	const releasedChecksum = "484bcb3ceb635a9d44463453ff7446fe268c572654caf6d40bdc798fa18ac766"
+	const editedChecksum = "01d1cf6b131b68d076105628e4d88983e924ac8d7c2601a7d2d490aa13208be6"
+
+	require.True(t, isMigrationChecksumCompatible(name, releasedChecksum, editedChecksum))
+	require.True(t, isMigrationChecksumCompatible(name, editedChecksum, releasedChecksum))
+	require.False(t, isMigrationChecksumCompatible(name, "unknown-db-checksum", releasedChecksum))
+	require.False(t, isMigrationChecksumCompatible(name, releasedChecksum, "unknown-file-checksum"))
 }
 
 func TestEnsureAtlasBaselineAligned(t *testing.T) {
