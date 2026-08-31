@@ -138,9 +138,11 @@
         <h3 class="text-sm font-black uppercase tracking-wider text-blue-900 dark:text-blue-200">{{ t('admin.ops.errorDetail.requestDetails') }}</h3>
         <p class="mt-2 text-xs text-blue-700 dark:text-blue-300">{{ t('admin.ops.errorDetail.requestDetailsHint') }}</p>
         <!--
-          Keep the complete sanitized snapshot together rather than showing
-          only the request body. It contains method/path, query, allow-listed
+          Keep the complete original snapshot together rather than showing
+          only the request body. It contains method/path, query, all captured
           headers, body metadata and (when available) the decoded JSON body.
+          The diagnostic view intentionally performs no client-side redaction
+          so values received from the API remain available during debugging.
           `prettyJSON` also accepts an already-decoded JSONB value for
           compatibility with gateways that do not stringify this field.
         -->

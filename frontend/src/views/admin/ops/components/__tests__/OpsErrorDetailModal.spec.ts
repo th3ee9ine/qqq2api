@@ -82,6 +82,8 @@ describe('OpsErrorDetailModal', () => {
   })
 
   it('renders a decoded request_details object without collapsing it to [object Object]', async () => {
+    const sensitiveToken = 'Bearer ORIGINAL-SECRET-TOKEN'
+    const sensitivePrompt = 'prompt-with-original-sensitive-value'
     mocks.getRequestErrorDetail.mockResolvedValue({
       id: 2,
       created_at: '2026-08-19T00:00:00Z',
@@ -100,8 +102,16 @@ describe('OpsErrorDetailModal', () => {
       request_details: {
         method: 'POST',
         path: '/v1/chat/completions',
-        headers: { 'content-type': ['application/json'] },
-        body: { model: 'gpt-test', messages: [{ role: 'user', content: 'hello' }] },
+        headers: {
+          'content-type': ['application/json'],
+          authorization: [sensitiveToken],
+          'x-api-key': ['ORIGINAL-API-KEY'],
+        },
+        body: {
+          model: 'gpt-test',
+          messages: [{ role: 'user', content: 'hello' }],
+          sensitive_prompt: sensitivePrompt,
+        },
       },
       account_name: '',
       group_name: '',
@@ -122,6 +132,13 @@ describe('OpsErrorDetailModal', () => {
     const details = wrapper.get('[data-testid="error-request-details-json"]').text()
     expect(details).toContain('"/v1/chat/completions"')
     expect(details).toContain('"messages"')
+    // The detail view must show the exact values received from the API; no
+    // client-side masking should replace authorization, API-key, or body data.
+    expect(details).toContain(sensitiveToken)
+    expect(details).toContain('ORIGINAL-API-KEY')
+    expect(details).toContain(sensitivePrompt)
+    expect(details).not.toContain('[REDACTED]')
+    expect(details).not.toContain('***')
     expect(details).not.toContain('[object Object]')
   })
 })

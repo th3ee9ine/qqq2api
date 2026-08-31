@@ -2081,10 +2081,9 @@ export interface UserErrorRequest {
 export interface UserErrorRequestDetail extends UserErrorRequest {
   error_body: string
   /**
-   * Sanitized client request snapshot (method/path/query/headers/body).
-   * The user-facing error-detail endpoint only returns this for records owned
-   * by the current user; it is omitted from the paginated list to keep rows
-   * lightweight.
+   * Original client request snapshot (method/path/query/headers/body),
+   * including sensitive values when present. It is returned by the detail
+   * endpoint and omitted from the paginated list to keep rows lightweight.
    */
   request_details?: string | Record<string, unknown> | unknown[] | null
   upstream_status_code?: number

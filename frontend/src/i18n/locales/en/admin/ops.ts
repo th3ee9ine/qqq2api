@@ -345,7 +345,7 @@ export default {
         message: 'Message',
         rootCause: 'Root Cause',
         requestDetails: 'Client Request Details',
-        requestDetailsHint: 'Sanitized and size-limited diagnostic data; it cannot be replayed directly.',
+        requestDetailsHint: 'Complete original client request data, including headers and body, retained for diagnostics.',
         diagnosticPayloads: 'Diagnostic Payloads',
         payloads: {
           client: 'Client Response',

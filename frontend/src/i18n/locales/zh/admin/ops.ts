@@ -345,7 +345,7 @@ export default {
         message: '消息',
         rootCause: '根因',
         requestDetails: '用户请求明细',
-        requestDetailsHint: '已脱敏并限制大小，仅用于诊断，不可直接重放。',
+        requestDetailsHint: '完整保留原始用户请求明细（包括请求头和请求体），用于错误排查。',
         diagnosticPayloads: '诊断载荷',
         payloads: {
           client: '客户端响应',
