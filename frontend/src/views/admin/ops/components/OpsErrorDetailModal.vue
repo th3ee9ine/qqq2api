@@ -130,10 +130,21 @@
         <div class="mt-3 break-words text-sm font-medium text-amber-900 dark:text-amber-100">{{ rootCauseMessage }}</div>
       </div>
 
-      <div v-if="meaningfulPayload(detail.request_details)" class="rounded-xl bg-blue-50 p-6 dark:bg-blue-900/10">
+      <div
+        v-if="meaningfulPayload(detail.request_details)"
+        data-testid="error-request-details"
+        class="rounded-xl bg-blue-50 p-6 dark:bg-blue-900/10"
+      >
         <h3 class="text-sm font-black uppercase tracking-wider text-blue-900 dark:text-blue-200">{{ t('admin.ops.errorDetail.requestDetails') }}</h3>
         <p class="mt-2 text-xs text-blue-700 dark:text-blue-300">{{ t('admin.ops.errorDetail.requestDetailsHint') }}</p>
-        <pre class="mt-4 max-h-[680px] overflow-auto rounded-xl border border-blue-200 bg-white p-4 text-xs text-gray-800 dark:border-blue-500/30 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(detail.request_details) }}</code></pre>
+        <!--
+          Keep the complete sanitized snapshot together rather than showing
+          only the request body. It contains method/path, query, allow-listed
+          headers, body metadata and (when available) the decoded JSON body.
+          `prettyJSON` also accepts an already-decoded JSONB value for
+          compatibility with gateways that do not stringify this field.
+        -->
+        <pre data-testid="error-request-details-json" class="mt-4 max-h-[680px] overflow-auto rounded-xl border border-blue-200 bg-white p-4 text-xs text-gray-800 dark:border-blue-500/30 dark:bg-dark-800 dark:text-gray-100"><code>{{ prettyJSON(detail.request_details) }}</code></pre>
       </div>
 
       <div class="rounded-xl bg-gray-50 p-6 dark:bg-dark-900">
@@ -291,8 +302,18 @@ const diagnosticPayloadSections = computed(() => {
   })
 })
 
+function serializePayload(candidate: unknown): string {
+  if (candidate == null) return ''
+  if (typeof candidate === 'string') return candidate.trim()
+  try {
+    return JSON.stringify(candidate)
+  } catch {
+    return String(candidate).trim()
+  }
+}
+
 function meaningfulPayload(candidate: unknown): string {
-  const value = String(candidate || '').trim()
+  const value = serializePayload(candidate)
   if (!value || value === '[]' || value === '{}' || value.toLowerCase() === 'null') return ''
   return value
 }
@@ -386,8 +407,15 @@ function goBack() {
   emit('back')
 }
 
-function prettyJSON(raw?: string): string {
-  if (!raw) return 'N/A'
+function prettyJSON(raw?: unknown): string {
+  if (raw == null || raw === '') return 'N/A'
+  if (typeof raw !== 'string') {
+    try {
+      return JSON.stringify(raw, null, 2)
+    } catch {
+      return String(raw)
+    }
+  }
   try {
     return JSON.stringify(JSON.parse(raw), null, 2)
   } catch {

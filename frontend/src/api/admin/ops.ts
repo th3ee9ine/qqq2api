@@ -939,7 +939,12 @@ export interface OpsErrorLog {
 
 export interface OpsErrorDetail extends OpsErrorLog {
   error_body: string
-  request_details?: string
+  /**
+   * Sanitized client request snapshot. The API currently serializes this as a
+   * JSON string, but accepting an already-decoded value keeps the UI tolerant
+   * of JSONB-aware proxies and older compatible gateways.
+   */
+  request_details?: string | Record<string, unknown> | unknown[] | null
 
   // Upstream context (optional; enriched by gateway services)
   upstream_status_code?: number | null

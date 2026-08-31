@@ -80,4 +80,48 @@ describe('OpsErrorDetailModal', () => {
     expect(wrapper.findAll('pre')).toHaveLength(3)
     expect(wrapper.text()).not.toContain('admin.ops.errorDetail.payloads.upstream_detail')
   })
+
+  it('renders a decoded request_details object without collapsing it to [object Object]', async () => {
+    mocks.getRequestErrorDetail.mockResolvedValue({
+      id: 2,
+      created_at: '2026-08-19T00:00:00Z',
+      phase: 'request',
+      type: 'invalid_request_error',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      request_id: 'rid-2',
+      message: 'invalid request',
+      error_body: '',
+      request_details: {
+        method: 'POST',
+        path: '/v1/chat/completions',
+        headers: { 'content-type': ['application/json'] },
+        body: { model: 'gpt-test', messages: [{ role: 'user', content: 'hello' }] },
+      },
+      account_name: '',
+      group_name: '',
+      is_business_limited: false,
+    })
+
+    const wrapper = shallowMount(OpsErrorDetailModal, {
+      props: { show: true, errorId: 2, errorType: 'request' },
+      global: {
+        stubs: {
+          BaseDialog: { template: '<div><slot /></div>' },
+          Icon: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    const details = wrapper.get('[data-testid="error-request-details-json"]').text()
+    expect(details).toContain('"/v1/chat/completions"')
+    expect(details).toContain('"messages"')
+    expect(details).not.toContain('[object Object]')
+  })
 })
