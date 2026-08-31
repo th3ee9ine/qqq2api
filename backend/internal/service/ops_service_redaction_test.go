@@ -121,13 +121,13 @@ func TestIsSensitiveOpsFieldNameNormalizesCommonSeparators(t *testing.T) {
 	}
 }
 
-func TestSanitizeOpsRequestDetailsForQueueRedactsNestedSecrets(t *testing.T) {
+func TestSanitizeOpsRequestDetailsForQueuePreservesNestedSecrets(t *testing.T) {
 	t.Parallel()
 
 	raw := `{"method":"POST","path":"/v1/responses","body":{"model":"gpt-test","prompt":"keep me","apiKey":"body-secret","nested":{"privateKey":"pem-secret"},"max_output_tokens":256},"query":{"trace":"fixture"}}`
 	out, changed := SanitizeOpsRequestDetailsForQueue(raw)
-	if !changed {
-		t.Fatal("expected sanitization to report a change")
+	if changed {
+		t.Fatal("a bounded request snapshot should be returned unchanged")
 	}
 	if len(out) > OpsErrorLogRequestDetailsQueueMaxBytes {
 		t.Fatalf("sanitized details exceed queue bound: %d", len(out))
@@ -140,12 +140,12 @@ func TestSanitizeOpsRequestDetailsForQueueRedactsNestedSecrets(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected body object, got %#v", decoded["body"])
 	}
-	if body["apiKey"] != "[REDACTED]" {
-		t.Fatalf("apiKey was not redacted: %#v", body["apiKey"])
+	if body["apiKey"] != "body-secret" {
+		t.Fatalf("apiKey was not preserved: %#v", body["apiKey"])
 	}
 	nested, ok := body["nested"].(map[string]any)
-	if !ok || nested["privateKey"] != "[REDACTED]" {
-		t.Fatalf("privateKey was not redacted: %#v", body["nested"])
+	if !ok || nested["privateKey"] != "pem-secret" {
+		t.Fatalf("privateKey was not preserved: %#v", body["nested"])
 	}
 	if body["prompt"] != "keep me" {
 		t.Fatalf("non-sensitive prompt was not preserved: %#v", body["prompt"])

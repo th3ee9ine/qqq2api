@@ -125,12 +125,12 @@ func ToUserErrorRequest(e *OpsErrorLog) *UserErrorRequest {
 	}
 }
 
-// UserErrorRequestDetail 是错误请求详情的脱敏视图(点击单行查看)。
+// UserErrorRequestDetail 是错误请求详情视图(点击单行查看)。
 // 在 UserErrorRequest 基础上额外暴露 error_body(上游错误响应正文)、
 // request_details(客户端请求快照)与 upstream_status_code。request_details
-// 在写入 ops_error_logs 前已经过字段脱敏和大小限制；这里仅在归属校验通过
-// 的详情接口返回，不把它加入分页列表，避免每页携带大请求体。
-// 仍严禁任何内部/敏感字段。
+// 在写入 ops_error_logs 前仅执行 JSON 合法性检查和技术大小限制，不做字段
+// 脱敏；这里仅在归属校验通过的详情接口返回，不把它加入分页列表，避免每页
+// 携带大请求体。
 type UserErrorRequestDetail struct {
 	UserErrorRequest
 	ErrorBody          string `json:"error_body"`
@@ -138,17 +138,17 @@ type UserErrorRequestDetail struct {
 	UpstreamStatusCode *int   `json:"upstream_status_code,omitempty"`
 }
 
-// ToUserErrorRequestDetail 把内部 OpsErrorLogDetail 裁剪为用户安全详情视图。
+// ToUserErrorRequestDetail 把内部 OpsErrorLogDetail 裁剪为用户详情视图。
 func ToUserErrorRequestDetail(e *OpsErrorLogDetail) *UserErrorRequestDetail {
 	if e == nil {
 		return nil
 	}
 	base := ToUserErrorRequest(&e.OpsErrorLog)
-	// Request details are normally sanitized at ingestion. Re-apply the same
-	// bounded sanitizer at the user-facing boundary so legacy rows or repository
-	// implementations that return an unsanitized value cannot expose credentials
-	// (or an unbounded payload) through this endpoint.
-	requestDetails := sanitizeUserRequestDetails(e.RequestDetails)
+	// Request details are intentionally returned verbatim for troubleshooting.
+	// Apply only the existing JSON/size guard for legacy rows or repository
+	// implementations that may have bypassed ingestion; never redact keys or
+	// values at this boundary.
+	requestDetails := boundUserRequestDetails(e.RequestDetails)
 	return &UserErrorRequestDetail{
 		UserErrorRequest:   *base,
 		ErrorBody:          e.ErrorBody,
@@ -157,41 +157,18 @@ func ToUserErrorRequestDetail(e *OpsErrorLogDetail) *UserErrorRequestDetail {
 	}
 }
 
-// sanitizeUserRequestDetails applies the storage sanitizer at the user API
-// boundary while retaining the original JSON representation when it is already
-// a small, credential-free payload. Retaining that representation avoids
-// needlessly reordering keys/whitespace for clients that display the snapshot
-// verbatim; any malformed, oversized, or credential-bearing value is rebuilt
-// through the canonical sanitizer.
-func sanitizeUserRequestDetails(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+// boundUserRequestDetails validates and bounds a legacy request snapshot at
+// the user API boundary. Small valid values are returned verbatim; larger
+// values are compacted only to satisfy the technical storage bound. No keys or
+// values are redacted.
+func boundUserRequestDetails(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
 		return ""
 	}
-	if len(raw) <= opsMaxStoredRequestDetailsBytes {
-		var decoded any
-		if json.Unmarshal([]byte(raw), &decoded) == nil && !requestDetailsContainsSensitiveKey(decoded) {
-			return raw
-		}
+	if len(trimmed) <= opsMaxStoredRequestDetailsBytes && json.Valid([]byte(trimmed)) {
+		return raw
 	}
-	sanitized, _ := sanitizeOpsRequestDetailsForStorage(raw)
-	return sanitized
-}
-
-func requestDetailsContainsSensitiveKey(value any) bool {
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, child := range typed {
-			if isSensitiveKey(key) || requestDetailsContainsSensitiveKey(child) {
-				return true
-			}
-		}
-	case []any:
-		for _, child := range typed {
-			if requestDetailsContainsSensitiveKey(child) {
-				return true
-			}
-		}
-	}
-	return false
+	bounded, _ := sanitizeOpsRequestDetailsForStorage(trimmed)
+	return bounded
 }

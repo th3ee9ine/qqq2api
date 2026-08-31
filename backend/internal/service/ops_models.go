@@ -83,9 +83,10 @@ type OpsErrorLogDetail struct {
 	OpsErrorLog
 
 	ErrorBody string `json:"error_body"`
-	// RequestDetails is a bounded, sanitized snapshot of the client request
-	// (method/path/query/safe headers and a JSON body when available).  It is
-	// diagnostic data only and is never replayable.
+	// RequestDetails is a bounded snapshot of the original client request
+	// (method/path/query/all headers and a JSON body when available). Values are
+	// retained without field redaction for troubleshooting. It is diagnostic
+	// data only and is never replayable.
 	RequestDetails string `json:"request_details,omitempty"`
 
 	// Upstream context (optional)

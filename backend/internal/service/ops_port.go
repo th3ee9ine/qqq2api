@@ -123,9 +123,10 @@ type OpsInsertErrorLogInput struct {
 	// 落库快照而非读时 JOIN:key 之后被删(key 列被 tombstone 覆盖)仍保留当时前缀。
 	APIKeyPrefix string
 
-	// RequestDetailsJSON is a sanitized, bounded diagnostic snapshot of the
-	// original client request.  It is stored as JSONB but is deliberately not
-	// exposed as a replay input.
+	// RequestDetailsJSON is a bounded diagnostic snapshot of the original
+	// client request. Values are retained without redaction for troubleshooting;
+	// the technical queue/storage bounds still apply. It is stored as JSONB but
+	// is deliberately not exposed as a replay input.
 	RequestDetailsJSON *string
 }
 

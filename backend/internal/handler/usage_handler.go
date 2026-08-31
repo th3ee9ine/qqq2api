@@ -329,7 +329,8 @@ func (h *UsageHandler) ListErrors(c *gin.Context) {
 	response.Paginated(c, result.Items, int64(result.Total), result.Page, result.PageSize)
 }
 
-// GetErrorDetail handles fetching one of the current user's failed-request details (redacted).
+// GetErrorDetail handles fetching one of the current user's failed-request
+// details, including the bounded raw request snapshot.
 // GET /api/v1/usage/errors/:id
 func (h *UsageHandler) GetErrorDetail(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)

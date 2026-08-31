@@ -186,7 +186,7 @@ func TestToUserErrorRequestDetail_Nil(t *testing.T) {
 	}
 }
 
-func TestToUserErrorRequestDetail_DefensivelySanitizesRequestDetails(t *testing.T) {
+func TestToUserErrorRequestDetail_PreservesRawRequestDetails(t *testing.T) {
 	uid := int64(7)
 	src := &OpsErrorLogDetail{
 		OpsErrorLog:    OpsErrorLog{UserID: &uid},
@@ -196,8 +196,8 @@ func TestToUserErrorRequestDetail_DefensivelySanitizesRequestDetails(t *testing.
 	if out == nil || out.RequestDetails == "" {
 		t.Fatal("expected request details")
 	}
-	if strings.Contains(out.RequestDetails, "secret") {
-		t.Fatalf("request details leaked sensitive value: %s", out.RequestDetails)
+	if !strings.Contains(out.RequestDetails, "Bearer secret") || !strings.Contains(out.RequestDetails, "api_key") {
+		t.Fatalf("request details did not preserve raw values: %s", out.RequestDetails)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal([]byte(out.RequestDetails), &decoded); err != nil {
@@ -207,9 +207,7 @@ func TestToUserErrorRequestDetail_DefensivelySanitizesRequestDetails(t *testing.
 	if !ok {
 		t.Fatalf("expected headers object, got %#v", decoded["headers"])
 	}
-	// The recursive redactor replaces a sensitive value with a scalar marker,
-	// even when the captured header representation is an array.
-	if got := headers["authorization"]; got != "[REDACTED]" {
-		t.Fatalf("authorization was not redacted: %#v", got)
+	if got := headers["authorization"]; got == nil {
+		t.Fatalf("authorization was not preserved: %#v", got)
 	}
 }

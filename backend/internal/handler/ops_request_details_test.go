@@ -28,7 +28,7 @@ func (b *trackingRequestBody) Close() error {
 	return b.closeErr
 }
 
-func TestBoundedOpsRequestQueryRedactsSensitiveLongKeyBeforeTruncation(t *testing.T) {
+func TestBoundedOpsRequestQueryPreservesSensitiveLongKeyBeforeTruncation(t *testing.T) {
 	longKey := strings.Repeat("safe", 600) + "access_token"
 	values := url.Values{}
 	values.Add(longKey, "query-secret")
@@ -36,11 +36,11 @@ func TestBoundedOpsRequestQueryRedactsSensitiveLongKeyBeforeTruncation(t *testin
 
 	out, truncated := boundedOpsRequestQuery(values)
 	require.False(t, truncated)
-	require.Equal(t, []string{"[REDACTED]"}, out[truncateString(longKey, opsRequestDetailsMaxValueBytes)])
+	require.Equal(t, []string{"query-secret"}, out[truncateString(longKey, opsRequestDetailsMaxValueBytes)])
 	require.Equal(t, []string{"fixture"}, out["trace"])
 }
 
-func TestBoundedOpsRequestHeadersIncludesOnlySafeOrRedactedValues(t *testing.T) {
+func TestBoundedOpsRequestHeadersPreservesAllValues(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer header-secret")
 	headers.Set("Cookie", "session=header-secret")
@@ -49,11 +49,10 @@ func TestBoundedOpsRequestHeadersIncludesOnlySafeOrRedactedValues(t *testing.T) 
 
 	out, truncated := boundedOpsRequestHeaders(headers)
 	require.False(t, truncated)
-	require.Equal(t, []string{"[REDACTED]"}, out["authorization"])
-	require.Equal(t, []string{"[REDACTED]"}, out["cookie"])
+	require.Equal(t, []string{"Bearer header-secret"}, out["authorization"])
+	require.Equal(t, []string{"session=header-secret"}, out["cookie"])
 	require.Equal(t, []string{"fixture-client/1.0"}, out["user-agent"])
-	require.NotContains(t, out, "x-unlisted-header")
-	require.NotContains(t, out, "header-secret")
+	require.Equal(t, []string{"must-not-be-stored"}, out["x-unlisted-header"])
 }
 
 func TestFinishOpsRequestBodyCaptureRestoresBodyAndDelegatesClose(t *testing.T) {
@@ -82,7 +81,7 @@ func TestFinishOpsRequestBodyCaptureRestoresBodyAndDelegatesClose(t *testing.T) 
 	require.Equal(t, 1, original.closeCalls)
 }
 
-func TestBuildOpsRequestDetailsJSONPreservesSafeQueryAndRedactsSensitiveMetadata(t *testing.T) {
+func TestBuildOpsRequestDetailsJSONPreservesRawQueryAndMetadata(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -100,8 +99,8 @@ func TestBuildOpsRequestDetailsJSONPreservesSafeQueryAndRedactsSensitiveMetadata
 
 	raw := buildOpsRequestDetailsJSON(c, capture)
 	require.NotEmpty(t, raw)
-	require.NotContains(t, raw, "query-secret")
-	require.NotContains(t, raw, "header-secret")
+	require.Contains(t, raw, "query-secret")
+	require.Contains(t, raw, "header-secret")
 	require.Contains(t, raw, "fixture")
 	require.Contains(t, raw, "fixture-client/1.0")
 }

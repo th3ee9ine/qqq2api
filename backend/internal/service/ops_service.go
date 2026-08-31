@@ -23,9 +23,10 @@ const (
 	// OpsErrorLogQueueBodyMaxBytes bounds attacker-controlled response data while
 	// it waits in the asynchronous error-log queue.
 	OpsErrorLogQueueBodyMaxBytes = 8 * 1024
-	// opsMaxStoredRequestDetailsBytes bounds the sanitized client-request
-	// snapshot persisted in ops_error_logs. The snapshot is diagnostic data,
-	// not a replayable request.
+	// opsMaxStoredRequestDetailsBytes bounds the client-request snapshot
+	// persisted in ops_error_logs. The snapshot is diagnostic data, not a
+	// replayable request; values are retained verbatim within this technical
+	// bound.
 	opsMaxStoredRequestDetailsBytes = 256 * 1024
 	// OpsErrorLogRequestDetailsQueueMaxBytes keeps request metadata from
 	// monopolizing the asynchronous error-log queue.
@@ -399,17 +400,26 @@ func SanitizeOpsErrorBodyForQueue(raw string) (string, bool) {
 	return sanitizeErrorBodyForStorage(raw, OpsErrorLogQueueBodyMaxBytes)
 }
 
-// SanitizeOpsRequestDetailsForQueue removes credential-shaped fields and
-// guarantees that a non-empty request snapshot is valid JSON before it enters
-// the asynchronous queue. Invalid JSON is represented by a small marker so
-// the JSONB insert cannot fail because of a captured client payload.
-func SanitizeOpsRequestDetailsForQueue(raw string) (string, bool) {
+// BoundOpsRequestDetailsForQueue validates and bounds a request snapshot before
+// it enters the asynchronous queue. Request details are troubleshooting data
+// and are intentionally NOT redacted: all client-provided keys and values that
+// fit the queue bound are retained. The function only validates JSON and
+// compacts oversized documents so the queue remains bounded.
+func BoundOpsRequestDetailsForQueue(raw string) (string, bool) {
 	return sanitizeOpsRequestDetails(raw, OpsErrorLogRequestDetailsQueueMaxBytes)
 }
 
-// IsSensitiveOpsFieldName exposes the same credential-field classifier used
-// by request-body sanitization to the HTTP metadata collector. Keeping the
-// classifier in one place prevents query parameters from becoming a bypass.
+// SanitizeOpsRequestDetailsForQueue is retained for source compatibility with
+// integrations compiled against the previous API name. Despite the historical
+// name, request details are no longer sanitized or redacted.
+func SanitizeOpsRequestDetailsForQueue(raw string) (string, bool) {
+	return BoundOpsRequestDetailsForQueue(raw)
+}
+
+// IsSensitiveOpsFieldName exposes the credential-field classifier used by
+// unrelated error/response sanitizers. Request-detail capture deliberately
+// does not call this classifier because troubleshooting snapshots retain raw
+// request values.
 func IsSensitiveOpsFieldName(key string) bool {
 	return isSensitiveKey(key)
 }
@@ -419,27 +429,37 @@ func sanitizeOpsRequestDetailsForStorage(raw string) (string, bool) {
 }
 
 func sanitizeOpsRequestDetails(raw string, maxBytes int) (string, bool) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
 		return "", false
 	}
 	if maxBytes <= 0 {
 		return requestDetailsOmissionMarker("size_limit", maxBytes), true
 	}
-	if len(raw) > opsMaxRequestDetailsInputBytes {
+	if len(trimmed) > opsMaxRequestDetailsInputBytes {
 		return requestDetailsOmissionMarker("input_too_large", maxBytes), true
 	}
 
-	// Unlike error_body, request_details is stored as JSONB. Decode the
-	// complete wrapper first so an oversized body can be compacted without
-	// discarding method/path/query metadata.
-	var decoded any
-	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+	// Unlike error_body, request_details is stored as JSONB. Validate the
+	// complete wrapper first. For snapshots that fit the queue/storage bound,
+	// return the original JSON text unchanged so key order, escaping and every
+	// client-provided value remain available during troubleshooting.
+	if !json.Valid([]byte(trimmed)) {
 		return requestDetailsOmissionMarker("invalid_json", maxBytes), true
 	}
-	decoded = redactSensitiveJSON(decoded)
+	if len(trimmed) <= maxBytes {
+		return raw, false
+	}
+
+	// Decode the complete wrapper so an oversized body can be compacted without
+	// discarding route metadata. Compaction is a technical size safeguard only;
+	// it never replaces credential-shaped fields with redaction markers.
+	var decoded any
+	if err := json.Unmarshal([]byte(trimmed), &decoded); err != nil {
+		return requestDetailsOmissionMarker("invalid_json", maxBytes), true
+	}
 	if encoded, err := json.Marshal(decoded); err == nil && len(encoded) <= maxBytes {
-		return string(encoded), string(encoded) != raw
+		return string(encoded), true
 	}
 	if root, ok := decoded.(map[string]any); ok {
 		if out, ok := compactOpsRequestDetails(root, maxBytes); ok {
@@ -459,23 +479,12 @@ func compactOpsRequestDetails(root map[string]any, maxBytes int) (string, bool) 
 		return "", false
 	}
 
-	// Drop unknown top-level fields supplied by external callers. Captured
-	// requests use only this allowlist, and keeping it bounded avoids persisting
-	// arbitrary diagnostic data under a trusted wrapper.
-	allowed := map[string]struct{}{
-		"method": {}, "path": {}, "content_type": {}, "content_encoding": {},
-		"content_length": {}, "query": {}, "query_truncated": {}, "headers": {},
-		"headers_truncated": {}, "body_read": {}, "body_bytes_read": {},
-		"body_truncated": {}, "body_decoded": {}, "body_bytes_decoded": {},
-		"body_normalized": {}, "body_bytes_normalized": {},
-		"body_omitted": {}, "body_omitted_reason": {},
-		"body_parse_error": {}, "body": {},
-	}
+	// Preserve every top-level field supplied by the capture. Earlier versions
+	// used an allowlist here; that dropped legitimate client diagnostics and
+	// contradicted the requirement to retain the original request details.
 	compact := make(map[string]any, len(root))
 	for key, value := range root {
-		if _, ok := allowed[key]; ok {
-			compact[key] = value
-		}
+		compact[key] = value
 	}
 
 	// First compact the body itself, retaining the most recent conversation
@@ -486,7 +495,7 @@ func compactOpsRequestDetails(root map[string]any, maxBytes int) (string, bool) 
 			if bodyBudget <= 0 {
 				bodyBudget = maxBytes
 			}
-			if bodyOut, truncated, _ := sanitizeAndTrimJSONPayload(bodyRaw, bodyBudget); bodyOut != "" && json.Valid([]byte(bodyOut)) {
+			if bodyOut, truncated, _ := boundAndTrimJSONPayload(bodyRaw, bodyBudget); bodyOut != "" && json.Valid([]byte(bodyOut)) {
 				var compactBody any
 				if json.Unmarshal([]byte(bodyOut), &compactBody) == nil {
 					compact["body"] = compactBody
@@ -807,7 +816,7 @@ func (s *OpsService) GetErrorLogs(ctx context.Context, filter *OpsErrorLogFilter
 	return result, nil
 }
 
-// ListUserErrorRequests 返回某个用户自己的错误请求（精简脱敏）。
+// ListUserErrorRequests 返回某个用户自己的错误请求（精简列表视图）。
 // 强制：仅当前用户、View=all（含业务限流/余额类）、排除 count_tokens 噪声。
 func (s *OpsService) ListUserErrorRequests(ctx context.Context, userID int64, filter *OpsErrorLogFilter) (*UserErrorRequestList, error) {
 	if filter == nil {
@@ -867,8 +876,8 @@ func (s *OpsService) GetErrorLogByID(ctx context.Context, id int64) (*OpsErrorLo
 	return detail, nil
 }
 
-// GetUserErrorRequestDetail 返回某用户自己某条错误请求的脱敏详情(含
-// error_body 与已脱敏的 request_details 客户端请求快照)。
+// GetUserErrorRequestDetail 返回某用户自己某条错误请求的详情(含
+// error_body 与保留原值的 request_details 客户端请求快照)。
 // 安全:强制按用户归属校验;非本人记录一律返回 NotFound(不泄露存在性)。
 func (s *OpsService) GetUserErrorRequestDetail(ctx context.Context, userID, id int64) (*UserErrorRequestDetail, error) {
 	if s.opsRepo == nil {
@@ -912,7 +921,23 @@ func (s *OpsService) UpdateErrorResolution(ctx context.Context, errorID int64, r
 	return s.opsRepo.UpdateErrorResolution(ctx, errorID, resolved, resolvedByUserID, nil)
 }
 
+// sanitizeAndTrimJSONPayload keeps the historical response/error-body
+// behaviour, including credential redaction. Request-detail snapshots use
+// boundAndTrimJSONPayload below so their values remain raw.
 func sanitizeAndTrimJSONPayload(raw []byte, maxBytes int) (jsonString string, truncated bool, bytesLen int) {
+	return trimJSONPayload(raw, maxBytes, true)
+}
+
+// boundAndTrimJSONPayload compacts a request payload to a technical byte
+// bound without redacting any key or value. It is intentionally separate from
+// sanitizeAndTrimJSONPayload because request details are retained for
+// troubleshooting while upstream error bodies still follow the redaction
+// policy used elsewhere.
+func boundAndTrimJSONPayload(raw []byte, maxBytes int) (jsonString string, truncated bool, bytesLen int) {
+	return trimJSONPayload(raw, maxBytes, false)
+}
+
+func trimJSONPayload(raw []byte, maxBytes int, redact bool) (jsonString string, truncated bool, bytesLen int) {
 	bytesLen = len(raw)
 	if len(raw) == 0 {
 		return "", false, 0
@@ -924,7 +949,9 @@ func sanitizeAndTrimJSONPayload(raw []byte, maxBytes int) (jsonString string, tr
 		return "", false, bytesLen
 	}
 
-	decoded = redactSensitiveJSON(decoded)
+	if redact {
+		decoded = redactSensitiveJSON(decoded)
+	}
 
 	encoded, err := json.Marshal(decoded)
 	if err != nil {

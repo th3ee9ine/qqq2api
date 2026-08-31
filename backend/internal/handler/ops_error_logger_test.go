@@ -320,7 +320,7 @@ func TestOpsErrorLoggerMiddleware_DedicatedCyberSessionBlockRecordsExactlyOnce(t
 	require.Equal(t, http.StatusForbidden, job.entry.StatusCode)
 }
 
-func TestOpsErrorLoggerMiddleware_CapturesCompleteSanitizedClientRequest(t *testing.T) {
+func TestOpsErrorLoggerMiddleware_CapturesCompleteRawClientRequest(t *testing.T) {
 	setupOpsErrorLogTestQueue(t, 2)
 	gin.SetMode(gin.TestMode)
 	ops := service.NewOpsService(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -352,10 +352,10 @@ func TestOpsErrorLoggerMiddleware_CapturesCompleteSanitizedClientRequest(t *test
 	require.Equal(t, "/v1/responses", details["path"])
 	require.Equal(t, true, details["body_read"])
 	require.Equal(t, "keep this prompt", details["body"].(map[string]any)["prompt"])
-	require.Equal(t, "[REDACTED]", details["body"].(map[string]any)["api_key"])
-	require.Equal(t, "[REDACTED]", details["body"].(map[string]any)["key"])
-	require.NotContains(t, *job.entry.RequestDetailsJSON, "header-secret")
-	require.NotContains(t, *job.entry.RequestDetailsJSON, "query-secret")
+	require.Equal(t, "do-not-store", details["body"].(map[string]any)["api_key"])
+	require.Equal(t, "also-secret", details["body"].(map[string]any)["key"])
+	require.Contains(t, *job.entry.RequestDetailsJSON, "Bearer header-secret")
+	require.Contains(t, *job.entry.RequestDetailsJSON, "query-secret")
 	require.Contains(t, *job.entry.RequestDetailsJSON, "fixture-client/1.0")
 	require.LessOrEqual(t, len(*job.entry.RequestDetailsJSON), service.OpsErrorLogRequestDetailsQueueMaxBytes)
 }

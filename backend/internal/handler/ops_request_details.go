@@ -29,25 +29,6 @@ const (
 	opsRequestDetailsMaxMediaTypeBytes = 256
 )
 
-var opsRequestDetailHeaderAllowlist = map[string]struct{}{
-	"accept":              {},
-	"anthropic-beta":      {},
-	"anthropic-version":   {},
-	"authorization":       {},
-	"content-type":        {},
-	"content-encoding":    {},
-	"openai-beta":         {},
-	"openai-organization": {},
-	"proxy-authorization": {},
-	"cookie":              {},
-	"user-agent":          {},
-	"x-api-key":           {},
-	"x-auth-token":        {},
-	"x-client-request-id": {},
-	"x-goog-api-client":   {},
-	"x-request-id":        {},
-}
-
 // opsRequestBodyCapture tees the original request body without changing what
 // downstream handlers read. It keeps only a bounded prefix and never stores
 // the raw body outside that bound.
@@ -475,10 +456,6 @@ func boundedOpsRequestQuery(values map[string][]string) (map[string][]string, bo
 			break
 		}
 		rawKey := strings.TrimSpace(key)
-		// Classify the complete key before truncating it.  Otherwise a very long
-		// key whose credential marker appears after the retained prefix could
-		// evade redaction while its value is copied into the diagnostic record.
-		keyIsSensitive := service.IsSensitiveOpsFieldName(rawKey)
 		cleanKey := truncateString(rawKey, opsRequestDetailsMaxValueBytes)
 		if cleanKey == "" {
 			continue
@@ -490,11 +467,10 @@ func boundedOpsRequestQuery(values map[string][]string) (map[string][]string, bo
 		}
 		cleanItems := make([]string, 0, len(items))
 		for _, item := range items {
-			if keyIsSensitive {
-				cleanItems = append(cleanItems, "[REDACTED]")
-			} else {
-				cleanItems = append(cleanItems, truncateString(strings.ToValidUTF8(item, ""), opsRequestDetailsMaxValueBytes))
-			}
+			// Preserve the complete client-provided value (subject only to the
+			// diagnostic size bound).  Request details are explicitly intended for
+			// troubleshooting and therefore must not redact credential-shaped keys.
+			cleanItems = append(cleanItems, truncateString(strings.ToValidUTF8(item, ""), opsRequestDetailsMaxValueBytes))
 		}
 		out[cleanKey] = cleanItems
 	}
@@ -508,9 +484,13 @@ func boundedOpsRequestHeaders(headers http.Header) (map[string][]string, bool) {
 	valuesByKey := make(map[string][]string, len(headers))
 	for key := range headers {
 		lower := strings.ToLower(strings.TrimSpace(key))
-		if _, ok := opsRequestDetailHeaderAllowlist[lower]; ok {
-			valuesByKey[lower] = append(valuesByKey[lower], headers[key]...)
+		if lower == "" {
+			continue
 		}
+		// Keep every client header rather than an allowlist. Values are still
+		// bounded below so arbitrary headers cannot monopolize the diagnostic
+		// record, but no header is hidden or replaced.
+		valuesByKey[lower] = append(valuesByKey[lower], headers[key]...)
 	}
 	keys := make([]string, 0, len(valuesByKey))
 	for key := range valuesByKey {
@@ -529,13 +509,10 @@ func boundedOpsRequestHeaders(headers http.Header) (map[string][]string, bool) {
 			truncated = true
 			source = source[:opsRequestDetailsMaxHeaderValues]
 		}
-		sensitive := service.IsSensitiveOpsFieldName(key)
 		clean := make([]string, 0, len(source))
 		for _, value := range source {
-			if sensitive {
-				clean = append(clean, "[REDACTED]")
-				continue
-			}
+			// Preserve raw header values for error diagnosis; only UTF-8 repair and
+			// the fixed per-value byte bound are applied.
 			clean = append(clean, truncateString(strings.ToValidUTF8(value, ""), opsRequestDetailsMaxValueBytes))
 		}
 		out[key] = clean
@@ -755,8 +732,10 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 	if err != nil {
 		return ""
 	}
-	cleaned, _ := service.SanitizeOpsRequestDetailsForQueue(string(encoded))
-	return cleaned
+	// The snapshot is deliberately not redacted.  Queue/storage layers may
+	// compact an oversized JSON document, but they must preserve all values that
+	// fit within their technical bounds.
+	return string(encoded)
 }
 
 // attachOpsRequestDetails snapshots request metadata synchronously. The

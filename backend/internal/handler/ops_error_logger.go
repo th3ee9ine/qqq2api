@@ -223,7 +223,7 @@ func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLo
 	}
 	if entry.RequestDetailsJSON != nil && strings.TrimSpace(*entry.RequestDetailsJSON) != "" {
 		originalDetails := *entry.RequestDetailsJSON
-		details, changed := service.SanitizeOpsRequestDetailsForQueue(originalDetails)
+		details, changed := service.BoundOpsRequestDetailsForQueue(originalDetails)
 		if strings.TrimSpace(details) == "" {
 			entry.RequestDetailsJSON = nil
 		} else {
