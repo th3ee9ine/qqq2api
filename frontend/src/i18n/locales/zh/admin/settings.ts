@@ -1186,7 +1186,7 @@ export default {
       },
       user_error_view: {
         label: '允许用户查看自己的错误请求',
-        description: '开启后，用户可在用量页查看自己失败请求的精简信息（不含内部/上游错误细节）。需运维监控开启才有数据。',
+        description: '开启后，用户可在用量页查看自己失败请求的原始请求明细。需运维监控开启才有数据。',
       },
       imageStorage: {
         title: '异步生图对象存储',
