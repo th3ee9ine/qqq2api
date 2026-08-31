@@ -51,6 +51,14 @@ coverage/
 config.yaml
 config.local.yaml
 
+# Local runtime data and generated bundles (never send to the Docker daemon)
+/data/
+/browser-page-preload.js
+/core-*.js
+/main-*.js
+/service-*.js
+/src-*.js
+
 # Logs
 *.log
 logs/
