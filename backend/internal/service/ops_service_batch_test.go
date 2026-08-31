@@ -25,6 +25,7 @@ func TestOpsServiceRecordErrorBatch_SanitizesAndBatches(t *testing.T) {
 	detail := `{"authorization":"Bearer secret-token"}`
 	entries := []*OpsInsertErrorLogInput{
 		{
+			RequestDetailsJSON:   strPtr(`{"method":"POST","headers":{"authorization":["Bearer request-secret"]},"body":{"api_key":"request-secret"}}`),
 			ErrorBody:            `{"error":"bad","access_token":"secret"}`,
 			UpstreamStatusCode:   intPtr(-10),
 			UpstreamErrorMessage: strPtr(msg),
@@ -62,6 +63,9 @@ func TestOpsServiceRecordErrorBatch_SanitizesAndBatches(t *testing.T) {
 	require.NotNil(t, first.UpstreamErrorsJSON)
 	require.NotContains(t, *first.UpstreamErrorsJSON, "secret")
 	require.Contains(t, *first.UpstreamErrorsJSON, "[REDACTED]")
+	require.NotNil(t, first.RequestDetailsJSON)
+	require.Contains(t, *first.RequestDetailsJSON, "request-secret")
+	require.Contains(t, *first.RequestDetailsJSON, "authorization")
 
 	second := captured[1]
 	require.Equal(t, "upstream", second.ErrorPhase)
