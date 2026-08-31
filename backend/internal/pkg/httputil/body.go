@@ -29,6 +29,10 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 	if req == nil || req.Body == nil {
 		return nil, nil
 	}
+	// Keep an optional observer before consuming req.Body. The Ops request
+	// capture uses this hook to retain the decoded representation for
+	// diagnostics; callers that do not implement it are unaffected.
+	observer := req.Body
 
 	capHint := requestBodyReadInitCap
 	if req.ContentLength > 0 {
@@ -55,8 +59,10 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 
 	decoded, err := decompressRequestBody(enc, raw)
 	if err != nil {
+		markRequestBodyDecodeError(observer)
 		return nil, fmt.Errorf("decode Content-Encoding %q: %w", enc, err)
 	}
+	recordDecodedRequestBody(observer, decoded)
 
 	req.Header.Del("Content-Encoding")
 	req.Header.Del("Content-Length")
@@ -65,14 +71,47 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 	return decoded, nil
 }
 
+// recordDecodedRequestBody notifies an optional request-body observer without
+// coupling this utility package to any particular middleware implementation.
+// The structural interface keeps the hook source-compatible with existing
+// callers and silently does nothing for ordinary io.ReadClosers.
+func recordDecodedRequestBody(body io.ReadCloser, decoded []byte) {
+	if observer, ok := body.(interface{ SetDecodedRequestBody([]byte) }); ok {
+		observer.SetDecodedRequestBody(decoded)
+	}
+}
+
+func markRequestBodyDecodeError(body io.ReadCloser) {
+	if observer, ok := body.(interface{ MarkRequestBodyDecodeError() }); ok {
+		observer.MarkRequestBodyDecodeError()
+	}
+}
+
 // ReadLenientJSONRequestBodyWithPrealloc reads a request body and normalizes
 // JSON string control bytes before strict validation.
 func ReadLenientJSONRequestBodyWithPrealloc(req *http.Request, maxNormalizedBytes int64) ([]byte, error) {
+	// Keep the wire encoding before ReadRequestBodyWithPrealloc clears it.  An
+	// Ops request capture already observes the raw bytes, but compressed
+	// requests need the post-normalization representation for diagnostics.
+	var observer io.ReadCloser
+	compressed := false
+	if req != nil {
+		observer = req.Body
+		enc := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
+		compressed = enc != "" && enc != "identity"
+	}
 	body, err := ReadRequestBodyWithPrealloc(req)
 	if err != nil {
 		return nil, err
 	}
-	return NormalizeLenientJSONRequestBody(body, maxNormalizedBytes)
+	normalized, err := NormalizeLenientJSONRequestBody(body, maxNormalizedBytes)
+	if err != nil {
+		return nil, err
+	}
+	if compressed {
+		recordDecodedRequestBody(observer, normalized)
+	}
+	return normalized, nil
 }
 
 func decompressRequestBody(encoding string, raw []byte) ([]byte, error) {

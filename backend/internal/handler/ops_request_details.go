@@ -53,7 +53,12 @@ var opsRequestDetailHeaderAllowlist = map[string]struct{}{
 type opsRequestBodyCapture struct {
 	original      io.ReadCloser
 	contentLength int64
-	limit         int
+	// contentEncoding/contentLength are snapshotted when the capture is
+	// installed.  Gateway body readers may transparently decode compressed
+	// requests and mutate Request.Header/ContentLength afterwards; retaining
+	// the wire metadata here keeps the diagnostic record truthful.
+	contentEncoding string
+	limit           int
 
 	mu          sync.Mutex
 	buf         []byte
@@ -63,17 +68,33 @@ type opsRequestBodyCapture struct {
 	truncated   bool
 	readErr     bool
 	drained     bool
+
+	// decoded stores a bounded copy of the body produced by the gateway's
+	// Content-Encoding decoder (gzip/zstd/deflate).  The raw capture above is
+	// the wire representation, so parsing it as JSON would incorrectly fail
+	// after the gateway has already decoded it for normal processing.
+	decoded          []byte
+	decodedTotal     int64
+	decodedSet       bool
+	decodedTruncated bool
+	decodeErr        bool
 }
 
 type opsRequestBodySnapshot struct {
-	data          []byte
-	contentLength int64
-	total         int64
-	readStarted   bool
-	readEOF       bool
-	truncated     bool
-	readErr       bool
-	drained       bool
+	data             []byte
+	contentLength    int64
+	contentEncoding  string
+	total            int64
+	readStarted      bool
+	readEOF          bool
+	truncated        bool
+	readErr          bool
+	drained          bool
+	decoded          []byte
+	decodedTotal     int64
+	decodedSet       bool
+	decodedTruncated bool
+	decodeErr        bool
 }
 
 func installOpsRequestBodyCapture(c *gin.Context) *opsRequestBodyCapture {
@@ -85,9 +106,10 @@ func installOpsRequestBodyCapture(c *gin.Context) *opsRequestBodyCapture {
 		original = http.NoBody
 	}
 	capture := &opsRequestBodyCapture{
-		original:      original,
-		contentLength: c.Request.ContentLength,
-		limit:         opsRequestBodyCaptureLimit,
+		original:        original,
+		contentLength:   c.Request.ContentLength,
+		contentEncoding: truncateString(strings.TrimSpace(c.Request.Header.Get("Content-Encoding")), opsRequestDetailsMaxMediaTypeBytes),
+		limit:           opsRequestBodyCaptureLimit,
 	}
 	if capture.contentLength == 0 {
 		capture.readEOF = true
@@ -98,6 +120,44 @@ func installOpsRequestBodyCapture(c *gin.Context) *opsRequestBodyCapture {
 	c.Request.Body = capture
 	c.Set(opsRequestBodyCaptureKey, capture)
 	return capture
+}
+
+// SetDecodedRequestBody is an optional observer hook used by
+// httputil.ReadRequestBodyWithPrealloc.  That helper transparently decodes
+// gzip/zstd/deflate and then removes Content-Encoding from the request; keep a
+// bounded copy of the decoded bytes so diagnostics show the same JSON that the
+// gateway actually processed rather than trying to parse compressed wire data.
+func (c *opsRequestBodyCapture) SetDecodedRequestBody(body []byte) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.decodedSet = true
+	c.decodeErr = false
+	c.decodedTotal = int64(len(body))
+	c.decodedTruncated = len(body) > c.limit
+	c.decoded = c.decoded[:0]
+	if c.limit > 0 && len(body) > c.limit {
+		body = body[:c.limit]
+	}
+	c.decoded = append(c.decoded, body...)
+}
+
+// MarkRequestBodyDecodeError records a failed Content-Encoding decode.  The
+// raw bytes are intentionally not parsed as JSON; buildOpsRequestDetailsJSON
+// will retain the original encoding and an explicit omission reason instead.
+func (c *opsRequestBodyCapture) MarkRequestBodyDecodeError() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.decodeErr = true
+	c.decodedSet = false
+	c.decoded = nil
+	c.decodedTotal = 0
+	c.decodedTruncated = false
+	c.mu.Unlock()
 }
 
 func (c *opsRequestBodyCapture) Read(p []byte) (int, error) {
@@ -149,14 +209,20 @@ func (c *opsRequestBodyCapture) snapshot() opsRequestBodySnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return opsRequestBodySnapshot{
-		data:          append([]byte(nil), c.buf...),
-		contentLength: c.contentLength,
-		total:         c.total,
-		readStarted:   c.readStarted,
-		readEOF:       c.readEOF,
-		truncated:     c.truncated,
-		readErr:       c.readErr,
-		drained:       c.drained,
+		data:             append([]byte(nil), c.buf...),
+		contentLength:    c.contentLength,
+		contentEncoding:  c.contentEncoding,
+		total:            c.total,
+		readStarted:      c.readStarted,
+		readEOF:          c.readEOF,
+		truncated:        c.truncated,
+		readErr:          c.readErr,
+		drained:          c.drained,
+		decoded:          append([]byte(nil), c.decoded...),
+		decodedTotal:     c.decodedTotal,
+		decodedSet:       c.decodedSet,
+		decodedTruncated: c.decodedTruncated,
+		decodeErr:        c.decodeErr,
 	}
 }
 
@@ -247,6 +313,7 @@ func snapshotOpsRequestMetadata(c *gin.Context, capture *opsRequestBodyCapture) 
 	}
 	if capture != nil {
 		metadata.contentLength = capture.contentLength
+		metadata.contentEncoding = capture.contentEncoding
 	} else {
 		metadata.contentLength = req.ContentLength
 	}
@@ -343,6 +410,18 @@ func requestBodyCaptureComplete(snapshot opsRequestBodySnapshot) bool {
 	if snapshot.readErr || snapshot.truncated {
 		return false
 	}
+	return rawBodyReadComplete(snapshot)
+}
+
+// rawBodyReadComplete reports whether the wire reader reached the end of the
+// request independently of the bounded-prefix flag.  A compressed wire body
+// may legitimately exceed opsRequestBodyCaptureLimit while the gateway still
+// reads and decodes it in full; in that case the decoded diagnostic snapshot
+// can be complete even though the raw prefix is marked truncated.
+func rawBodyReadComplete(snapshot opsRequestBodySnapshot) bool {
+	if snapshot.readErr {
+		return false
+	}
 	if snapshot.contentLength == 0 {
 		return true
 	}
@@ -396,36 +475,64 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 	}
 
 	snapshot := capture.snapshot()
+	// Prefer the decoded body supplied by the gateway's request reader when it
+	// exists.  The raw capture remains useful for byte accounting and for
+	// preserving the original wire metadata, but compressed bytes are not JSON.
+	bodyData := snapshot.data
+	bodyTotal := snapshot.total
+	bodyTruncated := snapshot.truncated
+	bodyComplete := requestBodyCaptureComplete(snapshot)
+	decodedBody := false
+	if snapshot.decodedSet {
+		bodyData = snapshot.decoded
+		bodyTotal = snapshot.decodedTotal
+		bodyTruncated = snapshot.decodedTruncated
+		// A successful decoder callback is emitted only after the complete raw
+		// body has been read.  Keep the raw completeness check as an additional
+		// guard for malformed/truncated wire streams.
+		bodyComplete = rawBodyReadComplete(snapshot) && !snapshot.decodedTruncated
+		decodedBody = true
+	}
 	details["body_read"] = snapshot.readStarted
 	details["body_bytes_read"] = snapshot.total
-	details["body_truncated"] = snapshot.truncated
+	details["body_truncated"] = bodyTruncated
+	if decodedBody {
+		details["body_decoded"] = true
+		details["body_bytes_decoded"] = bodyTotal
+	}
 
-	complete := requestBodyCaptureComplete(snapshot)
+	complete := bodyComplete
 	switch {
-	case snapshot.truncated:
+	case (!decodedBody && snapshot.truncated) || (decodedBody && snapshot.decodedTruncated):
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "truncated"
 	case snapshot.readErr:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "read_error"
+	case snapshot.decodeErr:
+		details["body_omitted"] = true
+		details["body_omitted_reason"] = "decompression_failed"
 	case !snapshot.readStarted && snapshot.contentLength > 0:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "not_read"
+	case decodedBody && !rawBodyReadComplete(snapshot):
+		details["body_omitted"] = true
+		details["body_omitted_reason"] = "incomplete"
 	case !complete:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "incomplete"
-	case len(bytes.TrimSpace(snapshot.data)) == 0:
+	case len(bytes.TrimSpace(bodyData)) == 0:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "empty"
-	case metadata.contentEncoding != "" && !strings.EqualFold(metadata.contentEncoding, "identity"):
+	case !decodedBody && metadata.contentEncoding != "" && !strings.EqualFold(metadata.contentEncoding, "identity"):
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "compressed"
-	case !requestBodyCanParseJSON(metadata.contentType, snapshot.data):
+	case !requestBodyCanParseJSON(metadata.contentType, bodyData):
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "non_json"
 	default:
 		var body any
-		if err := json.Unmarshal(snapshot.data, &body); err != nil {
+		if err := json.Unmarshal(bodyData, &body); err != nil {
 			details["body_omitted"] = true
 			details["body_parse_error"] = true
 			details["body_omitted_reason"] = "invalid_json"
