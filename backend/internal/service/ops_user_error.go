@@ -172,3 +172,10 @@ func boundUserRequestDetails(raw string) string {
 	bounded, _ := sanitizeOpsRequestDetailsForStorage(trimmed)
 	return bounded
 }
+
+// sanitizeUserRequestDetails is retained as an internal compatibility alias
+// for older tests/callers. Request-detail values are no longer sanitized; the
+// alias performs only the same JSON/size bounding as boundUserRequestDetails.
+func sanitizeUserRequestDetails(raw string) string {
+	return boundUserRequestDetails(raw)
+}
