@@ -35,7 +35,7 @@ func TestBoundedOpsRequestQueryPreservesSensitiveLongKeyBeforeTruncation(t *test
 	values.Add("trace", "fixture")
 
 	out, truncated := boundedOpsRequestQuery(values)
-	require.False(t, truncated)
+	require.True(t, truncated, "the long key is bounded and must be marked truncated")
 	require.Equal(t, []string{"query-secret"}, out[truncateString(longKey, opsRequestDetailsMaxValueBytes)])
 	require.Equal(t, []string{"fixture"}, out["trace"])
 }

@@ -460,6 +460,9 @@ func boundedOpsRequestQuery(values map[string][]string) (map[string][]string, bo
 		if cleanKey == "" {
 			continue
 		}
+		if cleanKey != rawKey {
+			truncated = true
+		}
 		items := values[key]
 		if len(items) > opsRequestDetailsMaxQueryValues {
 			truncated = true
@@ -470,9 +473,29 @@ func boundedOpsRequestQuery(values map[string][]string) (map[string][]string, bo
 			// Preserve the complete client-provided value (subject only to the
 			// diagnostic size bound).  Request details are explicitly intended for
 			// troubleshooting and therefore must not redact credential-shaped keys.
-			cleanItems = append(cleanItems, truncateString(strings.ToValidUTF8(item, ""), opsRequestDetailsMaxValueBytes))
+			validItem := strings.ToValidUTF8(item, "")
+			cleanItem := truncateString(validItem, opsRequestDetailsMaxValueBytes)
+			if cleanItem != validItem {
+				truncated = true
+			}
+			cleanItems = append(cleanItems, cleanItem)
 		}
-		out[cleanKey] = cleanItems
+		if existing, ok := out[cleanKey]; ok {
+			// Distinct long keys can share the same bounded prefix. Keep both value
+			// sets instead of silently overwriting one of the original parameters.
+			room := opsRequestDetailsMaxQueryValues - len(existing)
+			if room <= 0 {
+				truncated = true
+				continue
+			}
+			if len(cleanItems) > room {
+				cleanItems = cleanItems[:room]
+				truncated = true
+			}
+			out[cleanKey] = append(existing, cleanItems...)
+		} else {
+			out[cleanKey] = cleanItems
+		}
 	}
 	return out, truncated
 }
@@ -504,6 +527,14 @@ func boundedOpsRequestHeaders(headers http.Header) (map[string][]string, bool) {
 			truncated = true
 			break
 		}
+		rawKey := key
+		cleanKey := truncateString(rawKey, opsRequestDetailsMaxValueBytes)
+		if cleanKey == "" {
+			continue
+		}
+		if cleanKey != rawKey {
+			truncated = true
+		}
 		source := valuesByKey[key]
 		if len(source) > opsRequestDetailsMaxHeaderValues {
 			truncated = true
@@ -513,9 +544,27 @@ func boundedOpsRequestHeaders(headers http.Header) (map[string][]string, bool) {
 		for _, value := range source {
 			// Preserve raw header values for error diagnosis; only UTF-8 repair and
 			// the fixed per-value byte bound are applied.
-			clean = append(clean, truncateString(strings.ToValidUTF8(value, ""), opsRequestDetailsMaxValueBytes))
+			validValue := strings.ToValidUTF8(value, "")
+			cleanValue := truncateString(validValue, opsRequestDetailsMaxValueBytes)
+			if cleanValue != validValue {
+				truncated = true
+			}
+			clean = append(clean, cleanValue)
 		}
-		out[key] = clean
+		if existing, ok := out[cleanKey]; ok {
+			room := opsRequestDetailsMaxHeaderValues - len(existing)
+			if room <= 0 {
+				truncated = true
+				continue
+			}
+			if len(clean) > room {
+				clean = clean[:room]
+				truncated = true
+			}
+			out[cleanKey] = append(existing, clean...)
+		} else {
+			out[cleanKey] = clean
+		}
 	}
 	return out, truncated
 }
