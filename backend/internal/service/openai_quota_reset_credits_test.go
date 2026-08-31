@@ -9,6 +9,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestBuildCodexCommonHeadersUsesCanonicalAuthIdentity(t *testing.T) {
+	// Resolve a deterministic, non-Desktop identity to prove quota requests
+	// consume the same runtime resolver as auth/inference requests rather than
+	// the historical hard-coded `Codex Desktop` value.
+	SetCodexCanonicalUserAgentResolver(func() string {
+		return "codex_vscode/0.200.1 (Linux 6.8; x86_64) vscode (VS Code; 26.5825.51511)"
+	})
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+
+	ua, originator := CodexCanonicalAuthIdentity()
+	headers := buildCodexCommonHeaders("token", "account", false)
+
+	require.Equal(t, ua, headers["user-agent"])
+	require.Equal(t, originator, headers["originator"])
+	// /wham is a credential/control-plane surface and does not use the
+	// Responses/WS Version gate.
+	_, hasVersion := headers["version"]
+	require.False(t, hasVersion)
+}
+
 func TestParseOpenAIRateLimitResetCreditDetails_PreservesAvailableCreditOrder(t *testing.T) {
 	body := []byte(`{
 		"availableCount":"2",

@@ -27,6 +27,66 @@ type countTokensRuntimeStateRepo struct {
 	setErrorCalls    int
 }
 
+func TestBuildInputTokensUpstreamRequestOAuthUsesCanonicalAuthIdentity(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string {
+		return "codex-tui/0.200.1 (Mac OS 26.2.0; arm64) unknown (codex-tui; 0.200.1)"
+	})
+	t.Cleanup(func() { SetCodexCanonicalUserAgentResolver(nil) })
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/input_tokens", nil)
+	c.Request.Header.Set("User-Agent", "stale-client/1.0")
+
+	account := &Account{
+		ID:       501,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "oauth-token",
+		},
+	}
+	svc := &OpenAIGatewayService{}
+	req, err := svc.buildInputTokensUpstreamRequest(
+		context.Background(), c, account,
+		[]byte(`{"model":"gpt-5.4","input":"hello"}`),
+		"oauth-token",
+	)
+	require.NoError(t, err)
+	ua, originator := CodexCanonicalAuthIdentity()
+	require.Equal(t, ua, req.Header.Get("User-Agent"))
+	require.Equal(t, originator, req.Header.Get("Originator"))
+	require.Empty(t, req.Header.Get("Version"), "input_tokens uses the auth identity pair, not Responses Version")
+}
+
+func TestBuildInputTokensUpstreamRequestAPIKeyKeepsProviderIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/input_tokens", nil)
+	c.Request.Header.Set("User-Agent", "provider-client/1.0")
+
+	account := &Account{
+		ID:       502,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://api.openai.com/v1",
+		},
+	}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+	req, err := svc.buildInputTokensUpstreamRequest(
+		context.Background(), c, account,
+		[]byte(`{"model":"gpt-5.4","input":"hello"}`),
+		"sk-test",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "provider-client/1.0", req.Header.Get("User-Agent"))
+	require.Empty(t, req.Header.Get("Originator"), "API-key platform calls do not receive Codex OAuth identity")
+}
+
 func (r *countTokensRuntimeStateRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, _ string) error {
 	r.tempUnschedCalls++
 	return nil

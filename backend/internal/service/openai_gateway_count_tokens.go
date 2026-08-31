@@ -476,6 +476,15 @@ func (s *OpenAIGatewayService) buildInputTokensUpstreamRequest(
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
 
+	// Native input_tokens requests made with the ChatGPT/Codex credential
+	// contract must carry the same paired identity as the other OAuth control
+	// and inference calls.  Apply this after inbound/header overrides so a
+	// stale or mismatched client UA cannot leave an inconsistent Originator.
+	// API-key relays intentionally retain their provider-specific headers.
+	if account.IsOpenAIOAuthLike() {
+		ApplyCodexCanonicalAuthIdentity(req.Header)
+	}
+
 	return req, nil
 }
 

@@ -130,11 +130,12 @@ func CodexCanonicalUserAgent() string {
 	return userAgent
 }
 
-// CodexCanonicalAuthIdentity 返回凭据面（auth.openai.com：换 Token / 刷新 / whoami）
-// 出站请求的身份对：规范 User-Agent 与配套 originator，与推理解析链同源。
-// 凭据面不发 version 头——真实 Codex 客户端在该面只携带 originator 与 User-Agent
-// （codex-rs login/default_client.rs 的 default_headers()），version 门槛
-// （issue #3901）只存在于 /backend-api/codex 推理面。
+// CodexCanonicalAuthIdentity 返回凭据/控制面（auth.openai.com 换 Token、
+// /backend-api/wham 配额、input_tokens 预检等）出站请求的身份对：规范
+// User-Agent 与配套 originator，与推理解析链同源。
+// 这些面不发 version 头——真实 Codex 客户端在凭据面只携带 originator
+// 与 User-Agent（codex-rs login/default_client.rs 的 default_headers()），
+// version 门槛（issue #3901）只存在于 /backend-api/codex 推理面。
 func CodexCanonicalAuthIdentity() (userAgent, originator string) {
 	return resolveCodexOutboundUserAgentIdentity("")
 }

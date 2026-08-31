@@ -24,11 +24,14 @@ var ErrSparkShadowResetNotSupported = infraerrors.New(http.StatusConflict, "SPAR
 
 // Endpoints used by the OpenAI/ChatGPT/Codex quota query and reset feature.
 const (
-	chatGPTUsageURL             = "https://chatgpt.com/backend-api/wham/usage"
-	chatGPTRateLimitCreditsURL  = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
-	chatGPTRateLimitResetURL    = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
-	openaiQuotaUpstreamTimeout  = 20 * time.Second
-	openaiQuotaCodexBeta        = "codex-1"
+	chatGPTUsageURL            = "https://chatgpt.com/backend-api/wham/usage"
+	chatGPTRateLimitCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+	chatGPTRateLimitResetURL   = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+	openaiQuotaUpstreamTimeout = 20 * time.Second
+	openaiQuotaCodexBeta       = "codex-1"
+	// Legacy package-local alias retained for callers that still refer to the
+	// historical default. Runtime requests use the canonical identity resolver
+	// below; this value is only an emergency fallback if it ever returns empty.
 	openaiQuotaCodexOriginator  = "Codex Desktop"
 	openaiQuotaCodexLanguageTag = "zh-CN"
 	openaiQuotaSecFetchSite     = "none"
@@ -560,7 +563,6 @@ func buildCodexCommonHeaders(accessToken, chatGPTAccountID string, fedRAMP bool)
 		"chatgpt-account-id": chatGPTAccountID,
 		"openai-beta":        openaiQuotaCodexBeta,
 		"oai-language":       openaiQuotaCodexLanguageTag,
-		"originator":         openaiQuotaCodexOriginator,
 		"accept":             "application/json",
 		"sec-fetch-site":     openaiQuotaSecFetchSite,
 		"sec-fetch-mode":     openaiQuotaSecFetchMode,
@@ -569,6 +571,21 @@ func buildCodexCommonHeaders(accessToken, chatGPTAccountID string, fedRAMP bool)
 	}
 	if fedRAMP {
 		headers["x-openai-fedramp"] = "true"
+	}
+	// Quota/control-plane calls use the same credential-face identity as the
+	// auth endpoints.  Keep Originator and User-Agent paired and sourced from
+	// the single canonical resolver (including runtime version synchronization).
+	identityHeaders := make(http.Header, 2)
+	ApplyCodexCanonicalAuthIdentity(identityHeaders)
+	if userAgent := identityHeaders.Get("user-agent"); userAgent != "" {
+		headers["user-agent"] = userAgent
+	} else {
+		headers["user-agent"] = codexCLIUserAgent
+	}
+	if originator := identityHeaders.Get("originator"); originator != "" {
+		headers["originator"] = originator
+	} else {
+		headers["originator"] = openaiQuotaCodexOriginator
 	}
 	return headers
 }
