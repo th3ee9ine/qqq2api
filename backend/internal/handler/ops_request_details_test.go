@@ -132,6 +132,9 @@ func TestBuildOpsRequestDetailsJSONUsesDecodedCompressedBodyAndPreservesWireMeta
 	require.NoError(t, json.Unmarshal([]byte(raw), &details))
 	require.Equal(t, "gzip", details["content_encoding"])
 	require.Equal(t, float64(compressed.Len()), details["content_length"])
+	headers, ok := details["headers"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, []any{"gzip"}, headers["content-encoding"])
 	require.Equal(t, true, details["body_decoded"])
 	require.Equal(t, float64(len(payload)), details["body_bytes_decoded"])
 	// `body_omitted` is emitted only when the body is unavailable; a complete
@@ -140,6 +143,45 @@ func TestBuildOpsRequestDetailsJSONUsesDecodedCompressedBodyAndPreservesWireMeta
 	body, ok := details["body"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "compressed fixture", body["prompt"])
+}
+
+func TestBuildOpsRequestDetailsJSONKeepsCompleteDecodedBodyWhenWirePrefixIsLarge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	payload := []byte(`{"model":"gpt-test","prompt":"many gzip members"}`)
+	var compressed bytes.Buffer
+	// A gzip stream may contain multiple members.  Add enough empty members to
+	// make the wire representation exceed the diagnostic prefix while keeping
+	// the decoded request small and complete.
+	for i := 0; i < 5000; i++ {
+		writer := gzip.NewWriter(&compressed)
+		require.NoError(t, writer.Close())
+	}
+	writer := gzip.NewWriter(&compressed)
+	_, err := writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.Greater(t, compressed.Len(), opsRequestBodyCaptureLimit)
+
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressed.Bytes()))
+	c.Request.ContentLength = int64(compressed.Len())
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Content-Encoding", "gzip")
+	capture := installOpsRequestBodyCapture(c)
+	decoded, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+	require.NoError(t, err)
+	require.Equal(t, payload, decoded)
+
+	raw := buildOpsRequestDetailsJSON(c, capture)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	require.Equal(t, false, details["body_truncated"], "decoded body should not be marked truncated")
+	require.Equal(t, float64(compressed.Len()), details["body_bytes_read"])
+	require.NotContains(t, details, "body_omitted", "complete decoded payload should remain visible")
+	body, ok := details["body"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "many gzip members", body["prompt"])
 }
 
 func TestBuildOpsRequestDetailsJSONUsesLenientNormalizedIdentityBody(t *testing.T) {
@@ -155,8 +197,9 @@ func TestBuildOpsRequestDetailsJSONUsesLenientNormalizedIdentityBody(t *testing.
 	c.Request.ContentLength = int64(len(payload))
 	c.Request.Header.Set("Content-Type", "application/json")
 	capture := installOpsRequestBodyCapture(c)
-	_, err := io.ReadAll(c.Request.Body)
+	normalized, err := pkghttputil.ReadLenientJSONRequestBodyWithPrealloc(c.Request, int64(opsRequestBodyCaptureLimit))
 	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-test","prompt":"hello\u0000world"}`, string(normalized))
 
 	raw := buildOpsRequestDetailsJSON(c, capture)
 	var details map[string]any
@@ -165,6 +208,88 @@ func TestBuildOpsRequestDetailsJSONUsesLenientNormalizedIdentityBody(t *testing.
 	body, ok := details["body"].(map[string]any)
 	require.True(t, ok)
 	require.Equal(t, "hello\x00world", body["prompt"])
+}
+
+func TestBuildOpsRequestDetailsJSONDoesNotNormalizeStrictRequestBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	// Binary/image-style handlers use the strict reader.  Even if a payload
+	// happens to look like JSON, diagnostics must not silently apply the
+	// compatibility reader's BOM/control-byte repairs on their behalf.
+	payload := []byte("\xef\xbb\xbf{\"model\":\"gpt-test\",\"prompt\":\"hello\x00world\"}")
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images", bytes.NewReader(payload))
+	c.Request.ContentLength = int64(len(payload))
+	c.Request.Header.Set("Content-Type", "application/json")
+	capture := installOpsRequestBodyCapture(c)
+	_, err := pkghttputil.ReadRequestBodyWithPrealloc(c.Request)
+	require.NoError(t, err)
+
+	raw := buildOpsRequestDetailsJSON(c, capture)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	require.Equal(t, true, details["body_omitted"])
+	require.Equal(t, "invalid_json", details["body_omitted_reason"])
+	require.NotContains(t, details, "body")
+}
+
+func TestBuildOpsRequestDetailsJSONPreservesDecodedAndNormalizedSizes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	decodedPayload := []byte("\xef\xbb\xbf{\"model\":\"gpt-test\",\"prompt\":\"hello\x00world\"}")
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, err := writer.Write(decodedPayload)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(compressed.Bytes()))
+	c.Request.ContentLength = int64(compressed.Len())
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Content-Encoding", "gzip")
+	capture := installOpsRequestBodyCapture(c)
+	normalized, err := pkghttputil.ReadLenientJSONRequestBodyWithPrealloc(c.Request, int64(opsRequestBodyCaptureLimit))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-test","prompt":"hello\u0000world"}`, string(normalized))
+
+	raw := buildOpsRequestDetailsJSON(c, capture)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	require.Equal(t, true, details["body_decoded"])
+	require.Equal(t, float64(len(decodedPayload)), details["body_bytes_decoded"])
+	require.Equal(t, true, details["body_normalized"])
+	require.Equal(t, float64(len(normalized)), details["body_bytes_normalized"])
+	require.NotContains(t, details, "body_omitted")
+	body, ok := details["body"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "hello\x00world", body["prompt"])
+}
+
+func TestBuildOpsRequestDetailsJSONMarksNormalizedLimitAsTruncated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	// The compatibility reader expands raw control bytes to six-byte unicode
+	// escapes. A small normalization limit can therefore reject an otherwise
+	// completely read request; diagnostics should report the size boundary,
+	// not attempt to parse the unnormalized bytes as invalid JSON.
+	payload := []byte(`{"model":"gpt-test","prompt":"` + strings.Repeat("\x00", 8) + `"}`)
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+	c.Request.ContentLength = int64(len(payload))
+	c.Request.Header.Set("Content-Type", "application/json")
+	capture := installOpsRequestBodyCapture(c)
+	_, err := pkghttputil.ReadLenientJSONRequestBodyWithPrealloc(c.Request, int64(len(payload)+1))
+	require.Error(t, err)
+	var maxErr *http.MaxBytesError
+	require.ErrorAs(t, err, &maxErr)
+
+	raw := buildOpsRequestDetailsJSON(c, capture)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	require.Equal(t, true, details["body_truncated"])
+	require.Equal(t, "truncated", details["body_omitted_reason"])
+	require.NotContains(t, details, "body")
 }
 
 func TestBuildOpsRequestDetailsJSONMarksCompressedDecodeFailure(t *testing.T) {
@@ -204,6 +329,28 @@ func TestRequestBodyCaptureMarksReadErrorsAsOmitted(t *testing.T) {
 	require.NotEmpty(t, raw)
 	require.Contains(t, raw, `"body_omitted":true`)
 	require.Contains(t, raw, `"body_omitted_reason":"read_error"`)
+}
+
+func TestRequestBodyCaptureMarksMaxBytesErrorsAsTruncated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	payload := []byte(`{"model":"gpt-test","prompt":"oversized"}`)
+	c, _ := gin.CreateTestContext(recorder)
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(payload))
+	request.ContentLength = int64(len(payload))
+	request.Body = http.MaxBytesReader(recorder, request.Body, int64(len(payload)-2))
+	c.Request = request
+	capture := installOpsRequestBodyCapture(c)
+	_, err := io.ReadAll(c.Request.Body)
+	require.Error(t, err)
+	var maxErr *http.MaxBytesError
+	require.ErrorAs(t, err, &maxErr)
+
+	raw := buildOpsRequestDetailsJSON(c, capture)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	require.Equal(t, true, details["body_omitted"])
+	require.Equal(t, "truncated", details["body_omitted_reason"])
 }
 
 type errorRequestBody struct {

@@ -280,6 +280,7 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 			return
 		}
 
+		originalBody := body
 		model := compositeRequestModelFromBody(c.GetHeader("Content-Type"), body)
 		if model != "" {
 			decision, err := resolver.Resolve(c.Request.Context(), apiKey.Group.ID, model, compositeRouteEndpointForPath(c.Request.URL.Path))
@@ -299,7 +300,7 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 				}
 			}
 		}
-		resetRequestBody(c, body)
+		resetRequestBodyWithOriginal(c, body, originalBody)
 		c.Next()
 	}
 }
@@ -362,9 +363,92 @@ func compositeMultipartModelFromBody(contentType string, body []byte) string {
 }
 
 func resetRequestBody(c *gin.Context, body []byte) {
-	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	resetRequestBodyWithOriginal(c, body, body)
+}
+
+func resetRequestBodyWithOriginal(c *gin.Context, body, originalBody []byte) {
+	// Keep optional request-body diagnostics hooks attached when a middleware
+	// has already consumed the capture and needs to replay the body.  A plain
+	// io.NopCloser would hide the observer from the downstream lenient JSON
+	// reader, causing BOM/control-byte normalization to be absent from the
+	// error snapshot on composite routes.  The replay wrapper deliberately
+	// forwards the lenient marker (and decoder hooks).  Normalized bytes are
+	// forwarded only when routing replayed the original body unchanged;
+	// composite model rewrites must not replace the user-facing snapshot with
+	// the internal upstream model.
+	var observer io.ReadCloser
+	if c != nil && c.Request != nil {
+		observer = c.Request.Body
+	}
+	c.Request.Body = &replayedRequestBody{
+		Reader:            bytes.NewReader(body),
+		observer:          observer,
+		forwardNormalized: bytes.Equal(body, originalBody),
+	}
 	c.Request.ContentLength = int64(len(body))
 	c.Request.Header.Set("Content-Length", strconv.Itoa(len(body)))
+}
+
+// replayedRequestBody exposes a body that was buffered by an earlier
+// middleware while retaining the optional hooks consumed by httputil.  The
+// observer is kept as an interface so this routing package does not depend on
+// the concrete Ops capture type.
+type replayedRequestBody struct {
+	*bytes.Reader
+	observer          io.ReadCloser
+	forwardNormalized bool
+}
+
+func (b *replayedRequestBody) Close() error {
+	if b == nil || b.observer == nil {
+		return nil
+	}
+	return b.observer.Close()
+}
+
+func (b *replayedRequestBody) SetDecodedRequestBody(body []byte) {
+	if b == nil || b.observer == nil {
+		return
+	}
+	if observer, ok := b.observer.(interface{ SetDecodedRequestBody([]byte) }); ok {
+		observer.SetDecodedRequestBody(body)
+	}
+}
+
+func (b *replayedRequestBody) MarkRequestBodyDecodeError() {
+	if b == nil || b.observer == nil {
+		return
+	}
+	if observer, ok := b.observer.(interface{ MarkRequestBodyDecodeError() }); ok {
+		observer.MarkRequestBodyDecodeError()
+	}
+}
+
+func (b *replayedRequestBody) MarkLenientJSONRequestBody() {
+	if b == nil || b.observer == nil {
+		return
+	}
+	if observer, ok := b.observer.(interface{ MarkLenientJSONRequestBody() }); ok {
+		observer.MarkLenientJSONRequestBody()
+	}
+}
+
+func (b *replayedRequestBody) MarkNormalizedRequestBodyLimit() {
+	if b == nil || b.observer == nil {
+		return
+	}
+	if observer, ok := b.observer.(interface{ MarkNormalizedRequestBodyLimit() }); ok {
+		observer.MarkNormalizedRequestBodyLimit()
+	}
+}
+
+func (b *replayedRequestBody) SetNormalizedRequestBody(body []byte) {
+	if b == nil || !b.forwardNormalized || b.observer == nil {
+		return
+	}
+	if observer, ok := b.observer.(interface{ SetNormalizedRequestBody([]byte) }); ok {
+		observer.SetNormalizedRequestBody(body)
+	}
 }
 
 func compositeRouteEndpointForPath(path string) string {

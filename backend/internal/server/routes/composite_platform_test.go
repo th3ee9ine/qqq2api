@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	pkghttputil "github.com/th3ee9ine/qqq2api/internal/pkg/httputil"
 	servermiddleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
@@ -80,6 +81,58 @@ func TestCompositeTargetPlatformMiddlewareResolvesModelAndRestoresBody(t *testin
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusNoContent, w.Code)
+}
+
+func TestCompositeTargetPlatformMiddlewarePreservesLenientBodyObserver(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		groupID := int64(1)
+		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+			GroupID: &groupID,
+			Group:   &service.Group{Platform: service.PlatformComposite},
+		})
+		c.Next()
+	})
+	router.Use(compositeTargetPlatformMiddleware(nil))
+	router.POST("/v1/chat/completions", func(c *gin.Context) {
+		body, err := pkghttputil.ReadLenientJSONRequestBodyWithPrealloc(c.Request, 1024)
+		require.NoError(t, err)
+		require.Contains(t, string(body), "hello\\u0000world")
+		c.Status(http.StatusNoContent)
+	})
+
+	payload := []byte("{\"model\":\"gpt-test\",\"prompt\":\"hello\x00world\"}")
+	observer := &compositeObserverBody{Reader: bytes.NewReader(payload)}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Body = observer
+	req.ContentLength = int64(len(payload))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = req
+
+	router.HandleContext(c)
+
+	require.Equal(t, http.StatusNoContent, recorder.Code)
+	require.True(t, observer.lenientMarked, "replayed composite body must forward lenient parser marker")
+	require.JSONEq(t, `{"model":"gpt-test","prompt":"hello\u0000world"}`, string(observer.normalizedPayload))
+}
+
+type compositeObserverBody struct {
+	*bytes.Reader
+	lenientMarked     bool
+	normalizedPayload []byte
+}
+
+func (b *compositeObserverBody) Close() error { return nil }
+
+func (b *compositeObserverBody) MarkLenientJSONRequestBody() {
+	b.lenientMarked = true
+}
+
+func (b *compositeObserverBody) SetNormalizedRequestBody(body []byte) {
+	b.normalizedPayload = append([]byte(nil), body...)
 }
 
 func TestCompositeTargetPlatformMiddlewareUsesExplicitRouteAndRewritesBody(t *testing.T) {

@@ -81,6 +81,38 @@ func recordDecodedRequestBody(body io.ReadCloser, decoded []byte) {
 	}
 }
 
+// recordNormalizedRequestBody notifies an optional observer about the exact
+// representation returned by the lenient JSON reader.  This is kept separate
+// from the decoded hook: compressed requests have two useful sizes (the
+// decompressed wire payload and the post-normalization JSON payload), and
+// conflating them makes diagnostics inaccurate.
+func recordNormalizedRequestBody(body io.ReadCloser, normalized []byte) {
+	if observer, ok := body.(interface{ SetNormalizedRequestBody([]byte) }); ok {
+		observer.SetNormalizedRequestBody(normalized)
+	}
+}
+
+// markLenientJSONRequestBody identifies observers attached to requests that
+// are parsed through the compatibility reader.  Diagnostics use this marker
+// to reproduce BOM/control-byte normalization only for routes that actually
+// apply the lenient parser; strict binary/JSON readers keep the original wire
+// bytes intact.
+func markLenientJSONRequestBody(body io.ReadCloser) {
+	if observer, ok := body.(interface{ MarkLenientJSONRequestBody() }); ok {
+		observer.MarkLenientJSONRequestBody()
+	}
+}
+
+// markNormalizedRequestBodyLimit reports that the lenient parser rejected a
+// payload because its normalized representation exceeded the configured
+// limit. Observers can then preserve a truthful "truncated" diagnostic
+// instead of attempting to parse the unnormalized prefix.
+func markNormalizedRequestBodyLimit(body io.ReadCloser) {
+	if observer, ok := body.(interface{ MarkNormalizedRequestBodyLimit() }); ok {
+		observer.MarkNormalizedRequestBodyLimit()
+	}
+}
+
 func markRequestBodyDecodeError(body io.ReadCloser) {
 	if observer, ok := body.(interface{ MarkRequestBodyDecodeError() }); ok {
 		observer.MarkRequestBodyDecodeError()
@@ -97,6 +129,7 @@ func ReadLenientJSONRequestBodyWithPrealloc(req *http.Request, maxNormalizedByte
 	compressed := false
 	if req != nil {
 		observer = req.Body
+		markLenientJSONRequestBody(observer)
 		enc := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
 		compressed = enc != "" && enc != "identity"
 	}
@@ -106,10 +139,18 @@ func ReadLenientJSONRequestBodyWithPrealloc(req *http.Request, maxNormalizedByte
 	}
 	normalized, err := NormalizeLenientJSONRequestBody(body, maxNormalizedBytes)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			markNormalizedRequestBodyLimit(observer)
+		}
 		return nil, err
 	}
-	if compressed {
-		recordDecodedRequestBody(observer, normalized)
+	// For compressed requests, always retain the normalized representation even
+	// when it is byte-for-byte identical to the decoded payload.  For identity
+	// requests, only retain it when normalization changed the wire bytes; the
+	// raw capture is already the exact representation otherwise.
+	if compressed || !bytes.Equal(normalized, body) {
+		recordNormalizedRequestBody(observer, normalized)
 	}
 	return normalized, nil
 }

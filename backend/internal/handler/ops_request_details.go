@@ -60,6 +60,12 @@ type opsRequestBodyCapture struct {
 	// the wire metadata here keeps the diagnostic record truthful.
 	contentEncoding string
 	limit           int
+	// headers/headerTruncated are snapshotted at installation time.  Gateway
+	// readers may remove Content-Encoding/Content-Length or otherwise mutate
+	// Request.Header while processing the body; diagnostics should describe
+	// the headers the client actually sent.
+	headers         map[string][]string
+	headerTruncated bool
 
 	mu          sync.Mutex
 	buf         []byte
@@ -68,7 +74,11 @@ type opsRequestBodyCapture struct {
 	readEOF     bool
 	truncated   bool
 	readErr     bool
-	drained     bool
+	// readLimitExceeded distinguishes an HTTP body-size rejection from an
+	// arbitrary I/O failure.  MaxBytesReader reports both a prefix and an
+	// error, but diagnostics should identify the actionable truncation reason.
+	readLimitExceeded bool
+	drained           bool
 
 	// decoded stores a bounded copy of the body produced by the gateway's
 	// Content-Encoding decoder (gzip/zstd/deflate).  The raw capture above is
@@ -79,23 +89,41 @@ type opsRequestBodyCapture struct {
 	decodedSet       bool
 	decodedTruncated bool
 	decodeErr        bool
+	// normalized is the representation produced by the lenient JSON reader
+	// after BOM/control-byte normalization. Keep it separate from decoded so
+	// byte counters continue to describe the wire-decoded payload.
+	normalized              []byte
+	normalizedTotal         int64
+	normalizedSet           bool
+	normalizedTruncated     bool
+	normalizedLimitExceeded bool
+	lenientJSON             bool
 }
 
 type opsRequestBodySnapshot struct {
-	data             []byte
-	contentLength    int64
-	contentEncoding  string
-	total            int64
-	readStarted      bool
-	readEOF          bool
-	truncated        bool
-	readErr          bool
-	drained          bool
-	decoded          []byte
-	decodedTotal     int64
-	decodedSet       bool
-	decodedTruncated bool
-	decodeErr        bool
+	data                    []byte
+	contentLength           int64
+	contentEncoding         string
+	total                   int64
+	readStarted             bool
+	readEOF                 bool
+	truncated               bool
+	readErr                 bool
+	readLimitExceeded       bool
+	drained                 bool
+	headers                 map[string][]string
+	headerTruncated         bool
+	decoded                 []byte
+	decodedTotal            int64
+	decodedSet              bool
+	decodedTruncated        bool
+	decodeErr               bool
+	normalized              []byte
+	normalizedTotal         int64
+	normalizedSet           bool
+	normalizedTruncated     bool
+	normalizedLimitExceeded bool
+	lenientJSON             bool
 }
 
 func installOpsRequestBodyCapture(c *gin.Context) *opsRequestBodyCapture {
@@ -112,6 +140,7 @@ func installOpsRequestBodyCapture(c *gin.Context) *opsRequestBodyCapture {
 		contentEncoding: truncateString(strings.TrimSpace(c.Request.Header.Get("Content-Encoding")), opsRequestDetailsMaxMediaTypeBytes),
 		limit:           opsRequestBodyCaptureLimit,
 	}
+	capture.headers, capture.headerTruncated = boundedOpsRequestHeaders(c.Request.Header)
 	if capture.contentLength == 0 {
 		capture.readEOF = true
 	}
@@ -145,6 +174,56 @@ func (c *opsRequestBodyCapture) SetDecodedRequestBody(body []byte) {
 	c.decoded = append(c.decoded, body...)
 }
 
+// SetNormalizedRequestBody records the representation returned by the
+// lenient JSON reader. It is intentionally separate from SetDecodedRequestBody
+// so diagnostics can report both decompressed and post-normalization sizes.
+func (c *opsRequestBodyCapture) SetNormalizedRequestBody(body []byte) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.normalizedLimitExceeded = false
+	c.normalizedSet = true
+	c.normalizedTotal = int64(len(body))
+	c.normalizedTruncated = len(body) > c.limit
+	c.normalized = c.normalized[:0]
+	if c.limit > 0 && len(body) > c.limit {
+		body = body[:c.limit]
+	}
+	c.normalized = append(c.normalized, body...)
+}
+
+// MarkNormalizedRequestBodyLimit records a failed compatibility parse whose
+// normalized representation would exceed the diagnostic bound. The parser
+// returns no usable bytes in this case, so retain an explicit truncation
+// marker rather than letting the raw control-byte payload be mislabeled as
+// invalid JSON.
+func (c *opsRequestBodyCapture) MarkNormalizedRequestBodyLimit() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.normalizedLimitExceeded = true
+	c.normalizedSet = false
+	c.normalized = nil
+	c.normalizedTotal = 0
+	c.normalizedTruncated = true
+	c.mu.Unlock()
+}
+
+// MarkLenientJSONRequestBody identifies requests whose gateway parser applies
+// BOM/control-byte normalization. Strict readers must keep the original wire
+// representation in diagnostics rather than silently repairing it.
+func (c *opsRequestBodyCapture) MarkLenientJSONRequestBody() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.lenientJSON = true
+	c.mu.Unlock()
+}
+
 // MarkRequestBodyDecodeError records a failed Content-Encoding decode.  The
 // raw bytes are intentionally not parsed as JSON; buildOpsRequestDetailsJSON
 // will retain the original encoding and an explicit omission reason instead.
@@ -158,6 +237,11 @@ func (c *opsRequestBodyCapture) MarkRequestBodyDecodeError() {
 	c.decoded = nil
 	c.decodedTotal = 0
 	c.decodedTruncated = false
+	c.normalizedSet = false
+	c.normalized = nil
+	c.normalizedTotal = 0
+	c.normalizedTruncated = false
+	c.normalizedLimitExceeded = false
 	c.mu.Unlock()
 }
 
@@ -185,6 +269,10 @@ func (c *opsRequestBodyCapture) Read(p []byte) (int, error) {
 		c.readEOF = true
 	} else if err != nil {
 		c.readErr = true
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			c.readLimitExceeded = true
+		}
 		// A MaxBytesReader reports an error immediately after the permitted
 		// prefix; treat that as a truncated body even when Content-Length was
 		// not supplied.
@@ -210,20 +298,29 @@ func (c *opsRequestBodyCapture) snapshot() opsRequestBodySnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return opsRequestBodySnapshot{
-		data:             append([]byte(nil), c.buf...),
-		contentLength:    c.contentLength,
-		contentEncoding:  c.contentEncoding,
-		total:            c.total,
-		readStarted:      c.readStarted,
-		readEOF:          c.readEOF,
-		truncated:        c.truncated,
-		readErr:          c.readErr,
-		drained:          c.drained,
-		decoded:          append([]byte(nil), c.decoded...),
-		decodedTotal:     c.decodedTotal,
-		decodedSet:       c.decodedSet,
-		decodedTruncated: c.decodedTruncated,
-		decodeErr:        c.decodeErr,
+		data:                    append([]byte(nil), c.buf...),
+		contentLength:           c.contentLength,
+		contentEncoding:         c.contentEncoding,
+		total:                   c.total,
+		readStarted:             c.readStarted,
+		readEOF:                 c.readEOF,
+		truncated:               c.truncated,
+		readErr:                 c.readErr,
+		readLimitExceeded:       c.readLimitExceeded,
+		drained:                 c.drained,
+		headers:                 cloneOpsRequestHeaderValues(c.headers),
+		headerTruncated:         c.headerTruncated,
+		decoded:                 append([]byte(nil), c.decoded...),
+		decodedTotal:            c.decodedTotal,
+		decodedSet:              c.decodedSet,
+		decodedTruncated:        c.decodedTruncated,
+		decodeErr:               c.decodeErr,
+		normalized:              append([]byte(nil), c.normalized...),
+		normalizedTotal:         c.normalizedTotal,
+		normalizedSet:           c.normalizedSet,
+		normalizedTruncated:     c.normalizedTruncated,
+		normalizedLimitExceeded: c.normalizedLimitExceeded,
+		lenientJSON:             c.lenientJSON,
 	}
 }
 
@@ -287,6 +384,43 @@ func (b *restoredOpsRequestBody) Close() error {
 	return b.capture.Close()
 }
 
+// Keep the optional request-body observer hooks available if an outer
+// middleware rereads a body restored after an early rejection.
+func (b *restoredOpsRequestBody) SetDecodedRequestBody(body []byte) {
+	if b == nil || b.capture == nil {
+		return
+	}
+	b.capture.SetDecodedRequestBody(body)
+}
+
+func (b *restoredOpsRequestBody) MarkRequestBodyDecodeError() {
+	if b == nil || b.capture == nil {
+		return
+	}
+	b.capture.MarkRequestBodyDecodeError()
+}
+
+func (b *restoredOpsRequestBody) MarkLenientJSONRequestBody() {
+	if b == nil || b.capture == nil {
+		return
+	}
+	b.capture.MarkLenientJSONRequestBody()
+}
+
+func (b *restoredOpsRequestBody) MarkNormalizedRequestBodyLimit() {
+	if b == nil || b.capture == nil {
+		return
+	}
+	b.capture.MarkNormalizedRequestBodyLimit()
+}
+
+func (b *restoredOpsRequestBody) SetNormalizedRequestBody(body []byte) {
+	if b == nil || b.capture == nil {
+		return
+	}
+	b.capture.SetNormalizedRequestBody(body)
+}
+
 type opsRequestMetadata struct {
 	method          string
 	path            string
@@ -315,10 +449,12 @@ func snapshotOpsRequestMetadata(c *gin.Context, capture *opsRequestBodyCapture) 
 	if capture != nil {
 		metadata.contentLength = capture.contentLength
 		metadata.contentEncoding = capture.contentEncoding
+		metadata.headers = cloneOpsRequestHeaderValues(capture.headers)
+		metadata.headerTruncated = capture.headerTruncated
 	} else {
 		metadata.contentLength = req.ContentLength
+		metadata.headers, metadata.headerTruncated = boundedOpsRequestHeaders(req.Header)
 	}
-	metadata.headers, metadata.headerTruncated = boundedOpsRequestHeaders(req.Header)
 	return metadata
 }
 
@@ -405,6 +541,17 @@ func boundedOpsRequestHeaders(headers http.Header) (map[string][]string, bool) {
 		out[key] = clean
 	}
 	return out, truncated
+}
+
+func cloneOpsRequestHeaderValues(headers map[string][]string) map[string][]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(headers))
+	for key, values := range headers {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
 }
 
 func requestBodyCaptureComplete(snapshot opsRequestBodySnapshot) bool {
@@ -498,20 +645,51 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 		bodyComplete = rawBodyReadComplete(snapshot) && !snapshot.decodedTruncated
 		decodedBody = true
 	}
-	// The lenient gateway reader can normalize an otherwise valid-looking
-	// client payload (for example by removing a UTF-8 BOM or escaping raw
-	// control bytes inside JSON strings).  The capture intentionally retains
-	// wire bytes, so replay the same bounded normalization here when no
-	// decoder observer supplied a processed body.  This keeps the diagnostic
-	// snapshot aligned with the payload the handler actually parsed instead of
-	// reporting `invalid_json` for requests that the gateway accepted.
+	if snapshot.normalizedLimitExceeded {
+		// No normalized bytes were returned, but the route did consume the
+		// complete request and rejected its compatibility representation at the
+		// configured size boundary. Mark the diagnostic as truncated so the raw
+		// prefix is never mistaken for the payload the handler parsed.
+		bodyTruncated = true
+		bodyComplete = false
+	}
+	if snapshot.readLimitExceeded {
+		// MaxBytesReader can return a prefix together with its limit error
+		// before the capture's own 96 KiB bound is reached.
+		bodyTruncated = true
+		bodyComplete = false
+	}
+	// Prefer the post-normalization representation recorded by the lenient
+	// gateway reader.  It is separate from the decompressed snapshot so both
+	// byte counts remain meaningful for compressed requests.
 	normalizedBody := false
-	if !decodedBody && !snapshot.truncated && requestBodyCanParseJSON(metadata.contentType, bodyData) {
-		if normalized, err := pkghttputil.NormalizeLenientJSONRequestBody(bodyData, int64(opsRequestBodyCaptureLimit)); err == nil && !bytes.Equal(normalized, bodyData) {
-			bodyData = normalized
-			bodyTotal = int64(len(normalized))
-			bodyTruncated = len(normalized) > opsRequestBodyCaptureLimit
-			normalizedBody = true
+	if snapshot.normalizedSet {
+		bodyData = snapshot.normalized
+		bodyTotal = snapshot.normalizedTotal
+		bodyTruncated = snapshot.normalizedTruncated
+		bodyComplete = rawBodyReadComplete(snapshot) && !snapshot.normalizedTruncated
+		normalizedBody = true
+	} else if snapshot.lenientJSON && !bodyTruncated && requestBodyCanParseJSON(metadata.contentType, bodyData) {
+		// Older/compatible readers may mark the route as lenient without
+		// providing the optional normalized observer.  Reproduce the parser's
+		// normalization only in that explicitly marked path; strict readers must
+		// retain the original bytes and report invalid JSON as-is.
+		if normalized, err := pkghttputil.NormalizeLenientJSONRequestBody(bodyData, int64(opsRequestBodyCaptureLimit)); err == nil {
+			if !bytes.Equal(normalized, bodyData) {
+				bodyData = normalized
+				bodyTotal = int64(len(normalized))
+				bodyTruncated = len(normalized) > opsRequestBodyCaptureLimit
+				normalizedBody = true
+			}
+		} else {
+			// Normalization can expand a bounded prefix (for example, many raw
+			// control bytes become six-byte escapes). Preserve the actionable
+			// size reason when the compatibility parser rejects that expansion.
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				bodyTruncated = true
+				bodyComplete = false
+			}
 		}
 	}
 	details["body_read"] = snapshot.readStarted
@@ -519,7 +697,7 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 	details["body_truncated"] = bodyTruncated
 	if decodedBody {
 		details["body_decoded"] = true
-		details["body_bytes_decoded"] = bodyTotal
+		details["body_bytes_decoded"] = snapshot.decodedTotal
 	}
 	if normalizedBody {
 		details["body_normalized"] = true
@@ -527,20 +705,27 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 	}
 
 	complete := bodyComplete
+	processedBody := decodedBody || normalizedBody
 	switch {
-	case (!decodedBody && snapshot.truncated) || (decodedBody && snapshot.decodedTruncated):
+	case snapshot.decodeErr:
+		details["body_omitted"] = true
+		details["body_omitted_reason"] = "decompression_failed"
+	case snapshot.normalizedLimitExceeded:
+		details["body_omitted"] = true
+		details["body_omitted_reason"] = "truncated"
+	case snapshot.readLimitExceeded:
+		details["body_omitted"] = true
+		details["body_omitted_reason"] = "truncated"
+	case bodyTruncated && !snapshot.readErr:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "truncated"
 	case snapshot.readErr:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "read_error"
-	case snapshot.decodeErr:
-		details["body_omitted"] = true
-		details["body_omitted_reason"] = "decompression_failed"
 	case !snapshot.readStarted && snapshot.contentLength > 0:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "not_read"
-	case decodedBody && !rawBodyReadComplete(snapshot):
+	case processedBody && !rawBodyReadComplete(snapshot):
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "incomplete"
 	case !complete:
@@ -549,7 +734,7 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 	case len(bytes.TrimSpace(bodyData)) == 0:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "empty"
-	case !decodedBody && metadata.contentEncoding != "" && !strings.EqualFold(metadata.contentEncoding, "identity"):
+	case !processedBody && metadata.contentEncoding != "" && !strings.EqualFold(metadata.contentEncoding, "identity"):
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "compressed"
 	case !requestBodyCanParseJSON(metadata.contentType, bodyData):
