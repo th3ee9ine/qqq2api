@@ -505,7 +505,12 @@ func boundedOpsRequestHeaders(headers http.Header) (map[string][]string, bool) {
 		return nil, false
 	}
 	valuesByKey := make(map[string][]string, len(headers))
+	headerKeys := make([]string, 0, len(headers))
 	for key := range headers {
+		headerKeys = append(headerKeys, key)
+	}
+	sort.Strings(headerKeys)
+	for _, key := range headerKeys {
 		lower := strings.ToLower(strings.TrimSpace(key))
 		if lower == "" {
 			continue
