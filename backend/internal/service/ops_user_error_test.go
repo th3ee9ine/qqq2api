@@ -127,6 +127,7 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 			Stream:           true,
 		},
 		ErrorBody:          `{"error":{"message":"upstream failed","type":"server_error"}}`,
+		RequestDetails:     `{"method":"POST","path":"/v1/chat/completions","body":{"model":"gpt-4-turbo","messages":[{"role":"user","content":"hello"}]}}`,
 		UpstreamStatusCode: &upstreamStatus,
 	}
 
@@ -144,6 +145,9 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 	}
 	if out.ErrorBody != src.ErrorBody {
 		t.Errorf("ErrorBody mismatch")
+	}
+	if out.RequestDetails != src.RequestDetails {
+		t.Errorf("RequestDetails formatting/value mismatch: want %q, got %q", src.RequestDetails, out.RequestDetails)
 	}
 	if out.UpstreamStatusCode == nil || *out.UpstreamStatusCode != 503 {
 		t.Errorf("UpstreamStatusCode mismatch")
@@ -179,5 +183,33 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 func TestToUserErrorRequestDetail_Nil(t *testing.T) {
 	if out := ToUserErrorRequestDetail(nil); out != nil {
 		t.Errorf("expected nil for nil input, got %+v", out)
+	}
+}
+
+func TestToUserErrorRequestDetail_DefensivelySanitizesRequestDetails(t *testing.T) {
+	uid := int64(7)
+	src := &OpsErrorLogDetail{
+		OpsErrorLog:    OpsErrorLog{UserID: &uid},
+		RequestDetails: `{"method":"POST","path":"/v1/responses","headers":{"authorization":["Bearer secret"]},"body":{"prompt":"hello","api_key":"secret"}}`,
+	}
+	out := ToUserErrorRequestDetail(src)
+	if out == nil || out.RequestDetails == "" {
+		t.Fatal("expected request details")
+	}
+	if strings.Contains(out.RequestDetails, "secret") {
+		t.Fatalf("request details leaked sensitive value: %s", out.RequestDetails)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out.RequestDetails), &decoded); err != nil {
+		t.Fatalf("request details are not valid JSON: %v", err)
+	}
+	headers, ok := decoded["headers"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected headers object, got %#v", decoded["headers"])
+	}
+	// The recursive redactor replaces a sensitive value with a scalar marker,
+	// even when the captured header representation is an array.
+	if got := headers["authorization"]; got != "[REDACTED]" {
+		t.Fatalf("authorization was not redacted: %#v", got)
 	}
 }

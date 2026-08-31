@@ -1,6 +1,10 @@
 package service
 
-import "time"
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
 
 // UserErrorRequest 是面向终端用户的"错误请求"精简脱敏视图（白名单）。
 // 严禁包含 account / api_key_prefix / upstream_endpoint / user_email 等
@@ -122,11 +126,15 @@ func ToUserErrorRequest(e *OpsErrorLog) *UserErrorRequest {
 }
 
 // UserErrorRequestDetail 是错误请求详情的脱敏视图(点击单行查看)。
-// 在 UserErrorRequest 基础上额外暴露 error_body(上游错误响应正文)与 upstream_status_code;
+// 在 UserErrorRequest 基础上额外暴露 error_body(上游错误响应正文)、
+// request_details(客户端请求快照)与 upstream_status_code。request_details
+// 在写入 ops_error_logs 前已经过字段脱敏和大小限制；这里仅在归属校验通过
+// 的详情接口返回，不把它加入分页列表，避免每页携带大请求体。
 // 仍严禁任何内部/敏感字段。
 type UserErrorRequestDetail struct {
 	UserErrorRequest
 	ErrorBody          string `json:"error_body"`
+	RequestDetails     string `json:"request_details,omitempty"`
 	UpstreamStatusCode *int   `json:"upstream_status_code,omitempty"`
 }
 
@@ -136,9 +144,54 @@ func ToUserErrorRequestDetail(e *OpsErrorLogDetail) *UserErrorRequestDetail {
 		return nil
 	}
 	base := ToUserErrorRequest(&e.OpsErrorLog)
+	// Request details are normally sanitized at ingestion. Re-apply the same
+	// bounded sanitizer at the user-facing boundary so legacy rows or repository
+	// implementations that return an unsanitized value cannot expose credentials
+	// (or an unbounded payload) through this endpoint.
+	requestDetails := sanitizeUserRequestDetails(e.RequestDetails)
 	return &UserErrorRequestDetail{
 		UserErrorRequest:   *base,
 		ErrorBody:          e.ErrorBody,
+		RequestDetails:     requestDetails,
 		UpstreamStatusCode: e.UpstreamStatusCode,
 	}
+}
+
+// sanitizeUserRequestDetails applies the storage sanitizer at the user API
+// boundary while retaining the original JSON representation when it is already
+// a small, credential-free payload. Retaining that representation avoids
+// needlessly reordering keys/whitespace for clients that display the snapshot
+// verbatim; any malformed, oversized, or credential-bearing value is rebuilt
+// through the canonical sanitizer.
+func sanitizeUserRequestDetails(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if len(raw) <= opsMaxStoredRequestDetailsBytes {
+		var decoded any
+		if json.Unmarshal([]byte(raw), &decoded) == nil && !requestDetailsContainsSensitiveKey(decoded) {
+			return raw
+		}
+	}
+	sanitized, _ := sanitizeOpsRequestDetailsForStorage(raw)
+	return sanitized
+}
+
+func requestDetailsContainsSensitiveKey(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if isSensitiveKey(key) || requestDetailsContainsSensitiveKey(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if requestDetailsContainsSensitiveKey(child) {
+				return true
+			}
+		}
+	}
+	return false
 }

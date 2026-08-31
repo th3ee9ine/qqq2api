@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"reflect"
 	"testing"
 
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
@@ -95,6 +97,7 @@ func TestGetUserErrorRequestDetail_OwnershipEnforced(t *testing.T) {
 			UserID:          &ownerUID,
 		},
 		ErrorBody:          `{"error":"upstream"}`,
+		RequestDetails:     `{"method":"POST","path":"/v1/responses","body":{"model":"gpt-test"}}`,
 		UpstreamStatusCode: &upstreamStatus,
 	}
 
@@ -127,6 +130,16 @@ func TestGetUserErrorRequestDetail_OwnershipEnforced(t *testing.T) {
 	}
 	if got2.ErrorBody != `{"error":"upstream"}` {
 		t.Errorf("want ErrorBody=%q, got %q", `{"error":"upstream"}`, got2.ErrorBody)
+	}
+	var gotDetails, wantDetails any
+	if err := json.Unmarshal([]byte(got2.RequestDetails), &gotDetails); err != nil {
+		t.Fatalf("returned RequestDetails is not valid JSON: %v", err)
+	}
+	if err := json.Unmarshal([]byte(`{"method":"POST","path":"/v1/responses","body":{"model":"gpt-test"}}`), &wantDetails); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotDetails, wantDetails) {
+		t.Errorf("want RequestDetails propagated, got %q", got2.RequestDetails)
 	}
 	if got2.UpstreamStatusCode == nil || *got2.UpstreamStatusCode != 503 {
 		t.Errorf("want UpstreamStatusCode=503, got %v", got2.UpstreamStatusCode)
