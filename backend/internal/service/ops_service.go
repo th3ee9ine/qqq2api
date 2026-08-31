@@ -466,7 +466,8 @@ func compactOpsRequestDetails(root map[string]any, maxBytes int) (string, bool) 
 		"method": {}, "path": {}, "content_type": {}, "content_encoding": {},
 		"content_length": {}, "query": {}, "query_truncated": {}, "headers": {},
 		"headers_truncated": {}, "body_read": {}, "body_bytes_read": {},
-		"body_truncated": {}, "body_omitted": {}, "body_omitted_reason": {},
+		"body_truncated": {}, "body_decoded": {}, "body_bytes_decoded": {},
+		"body_omitted": {}, "body_omitted_reason": {},
 		"body_parse_error": {}, "body": {},
 	}
 	compact := make(map[string]any, len(root))
