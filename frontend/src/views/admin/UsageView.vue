@@ -292,18 +292,23 @@ const onDateRangeChange = (range: { startDate: string; endDate: string; preset: 
 const buildUsageListParams = (
   page: number,
   pageSize: number,
-  exactTotal: boolean
+  exactTotal: boolean,
+  filterSource: AdminUsageQueryParams = filters.value,
+  sortBy: string = sortState.sort_by,
+  sortOrder: 'asc' | 'desc' = sortState.sort_order,
+  skipCount = false,
 ): AdminUsageQueryParams => {
-  const requestType = filters.value.request_type
-  const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filters.value.stream
+  const requestType = filterSource.request_type
+  const legacyStream = requestType ? requestTypeToLegacyStream(requestType) : filterSource.stream
   return {
+    ...filterSource,
     page,
     page_size: pageSize,
     exact_total: exactTotal,
-    ...filters.value,
     stream: legacyStream === null ? undefined : legacyStream,
-    sort_by: sortState.sort_by,
-    sort_order: sortState.sort_order
+    sort_by: sortBy,
+    sort_order: sortOrder,
+    ...(skipCount ? { skip_count: true } : {}),
   }
 }
 
@@ -488,6 +493,396 @@ const getRequestTypeLabel = (log: AdminUsageLog): string => {
   return t('usage.unknown')
 }
 
+// Usage exports are fetched in bounded pages.  SheetJS keeps the complete
+// worksheet (and then a second ZIP-sized copy) in the JavaScript heap, so a
+// large export is written as CSV instead of constructing an unbounded AST.
+const USAGE_EXPORT_PAGE_SIZE = 1000
+const USAGE_EXPORT_XLSX_MAX_ROWS = 5000
+const USAGE_EXPORT_XLSX_MAX_ESTIMATED_BYTES = 16 * 1024 * 1024
+const USAGE_EXPORT_FIRST_PAGE_BYTES = 4 * 1024 * 1024
+const USAGE_EXPORT_MIN_ESTIMATED_ROW_BYTES = 512
+const USAGE_EXPORT_REQUEST_TIMEOUT_MS = 120_000
+const USAGE_EXPORT_MAX_PAGES = 100_000
+
+type UsageExportCell = string | number | boolean
+
+function usageExportHeaders(): string[] {
+  return [
+    t('usage.time'), t('usage.apiKeyFilter'),
+    t('admin.usage.account'), t('usage.requestedModel'), t('usage.sentUpstreamModel'), t('usage.upstreamResponseModel'), t('usage.upstreamModelMismatch'), t('usage.reasoningEffort'), t('admin.usage.group'),
+    t('usage.inboundEndpoint'), t('usage.upstreamEndpoint'),
+    t('usage.type'),
+    t('admin.usage.inputTokens'), t('admin.usage.outputTokens'),
+    t('admin.usage.cacheReadTokens'), t('admin.usage.cacheCreationTokens'),
+    t('admin.usage.inputCost'), t('admin.usage.outputCost'),
+    t('admin.usage.cacheReadCost'), t('admin.usage.cacheCreationCost'),
+    t('usage.rate'), t('usage.accountMultiplier'), t('usage.original'), t('usage.actualCost'), t('usage.accountBilled'),
+    t('usage.firstToken'), t('usage.duration'),
+    t('admin.usage.requestId'), t('usage.userAgent'), t('usage.ipAddress'),
+  ]
+}
+
+function usageExportRow(log: AdminUsageLog): UsageExportCell[] {
+  return [
+    log.created_at, log.api_key?.name || '', log.account?.name || '', log.model,
+    log.upstream_model || log.model, log.upstream_response_model || '',
+    log.upstream_model_mismatch == null ? '' : t(log.upstream_model_mismatch ? 'common.yes' : 'common.no'),
+    formatReasoningEffort(log.reasoning_effort), log.group?.name || '',
+    log.inbound_endpoint || '', log.upstream_endpoint || '', getRequestTypeLabel(log),
+    log.input_tokens, log.output_tokens, log.cache_read_tokens, log.cache_creation_tokens,
+    log.input_cost?.toFixed(6) || '0.000000', log.output_cost?.toFixed(6) || '0.000000',
+    log.cache_read_cost?.toFixed(6) || '0.000000', log.cache_creation_cost?.toFixed(6) || '0.000000',
+    log.rate_multiplier?.toPrecision(4) || '1.00', (log.account_rate_multiplier ?? 1).toPrecision(4),
+    log.total_cost?.toFixed(6) || '0.000000', log.actual_cost?.toFixed(6) || '0.000000',
+    ((log.account_stats_cost ?? log.total_cost) * (log.account_rate_multiplier ?? 1)).toFixed(6),
+    log.first_token_ms ?? '', log.duration_ms ?? '',
+    log.request_id || '', log.user_agent || '', log.ip_address || '',
+  ]
+}
+
+function stringifyUsageExportValue(value: unknown): string {
+  if (value == null) return ''
+  if (typeof value === 'string') return value
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value)
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function escapeUsageExportCsvCell(value: unknown): string {
+  const text = stringifyUsageExportValue(value)
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+function rowsToUsageExportCsv(rows: UsageExportCell[][]): string {
+  return rows.map((row) => row.map(escapeUsageExportCsvCell).join(',')).join('\r\n')
+}
+
+/**
+ * Estimate a JSON response without creating a second full string copy.  The
+ * estimate intentionally errs high; it is only used to choose CSV before
+ * SheetJS allocates its much larger worksheet/ZIP representation.
+ */
+function estimateUsageExportValueBytes(value: unknown): number {
+  const values: unknown[] = [value]
+  const seen = new WeakSet<object>()
+  let bytes = 2
+  const limit = USAGE_EXPORT_XLSX_MAX_ESTIMATED_BYTES + USAGE_EXPORT_FIRST_PAGE_BYTES
+  while (values.length > 0 && bytes < limit) {
+    const current = values.pop()
+    if (current == null) {
+      bytes += 4
+      continue
+    }
+    switch (typeof current) {
+      case 'string':
+        bytes += current.length * 2 + 2
+        continue
+      case 'number':
+        bytes += 24
+        continue
+      case 'boolean':
+        bytes += current ? 5 : 6
+        continue
+      case 'bigint':
+        bytes += String(current).length + 2
+        continue
+      case 'function':
+      case 'symbol':
+      case 'undefined':
+        bytes += 4
+        continue
+      default:
+        break
+    }
+    if (typeof current !== 'object' || current === null) continue
+    if (seen.has(current)) {
+      bytes += 2
+      continue
+    }
+    seen.add(current)
+    if (Array.isArray(current)) {
+      bytes += 2 + Math.max(0, current.length - 1)
+      for (const item of current) values.push(item)
+      continue
+    }
+    const entries = Object.entries(current as Record<string, unknown>)
+    bytes += 2 + Math.max(0, entries.length - 1)
+    for (const [key, item] of entries) {
+      bytes += key.length * 2 + 3
+      values.push(item)
+    }
+  }
+  return Math.min(bytes, Number.MAX_SAFE_INTEGER)
+}
+
+function estimateUsageExportPayloadBytes(response: { items?: unknown[] }): number {
+  return estimateUsageExportValueBytes(response.items || [])
+}
+
+function usageExportPageSize(response: { page_size?: number }, requested: number): number {
+  const value = Number(response.page_size)
+  return Number.isFinite(value) && value > 0 ? value : requested
+}
+
+/**
+ * Fast pagination deliberately returns an approximate total (`offset + limit
+ * + 1`) for large tables.  A full page therefore cannot use `total/pages` as
+ * an end marker.  We only trust a total when it is not that sentinel; unknown
+ * totals are continued until an empty page is observed.
+ */
+function usageExportTotalIsReliable(
+  response: { total?: number | null },
+  rowCount: number,
+  effectivePageSize: number,
+  page = 1,
+): boolean {
+  const total = Number(response.total)
+  if (response.total === undefined || response.total === null || !Number.isFinite(total) || total < 0) return false
+  // A non-empty page paired with total=0 is stale/legacy metadata.  Treat it
+  // as an unknown total and keep paging instead of dropping the remainder.
+  if (rowCount > 0 && total === 0) return false
+  // A reported total smaller than the page itself cannot describe this
+  // response.  This also protects exports when a count is sampled/stale.
+  if (rowCount > 0 && total < rowCount) return false
+  // Fast pagination reports offset+limit+1 while another page exists.  The
+  // offset is page-dependent, so page two (for example) reports 2*limit+1,
+  // not merely limit+1.  Treat every such full-page sentinel as unknown;
+  // otherwise a later page could be mistaken for an exact count and truncate
+  // the export when exportedCount happens to reach the sentinel value.
+  const normalizedPage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1
+  const sentinelTotal = normalizedPage * effectivePageSize + 1
+  if (
+    rowCount >= effectivePageSize
+    && Number.isFinite(sentinelTotal)
+    && total === sentinelTotal
+  ) return false
+  return true
+}
+
+function shouldUseLargeUsageExportCsv(
+  response: { items?: AdminUsageLog[]; total?: number | null; pages?: number; page_size?: number },
+  requestedPageSize: number,
+): boolean {
+  const rows = response.items || []
+  if (rows.length === 0) return false
+  const effectivePageSize = usageExportPageSize(response, requestedPageSize)
+  const firstPageBytes = estimateUsageExportPayloadBytes(response)
+  const total = Number(response.total)
+  const totalKnown = usageExportTotalIsReliable(response, rows.length, effectivePageSize, 1)
+  const pages = Number(response.pages)
+  const pagesKnown = Number.isFinite(pages) && pages > 0
+  const averageRowBytes = Math.max(firstPageBytes / rows.length, USAGE_EXPORT_MIN_ESTIMATED_ROW_BYTES)
+  const estimatedRows = totalKnown && total > 0
+    ? total
+      : pagesKnown
+        ? pages * Math.max(rows.length, effectivePageSize)
+        : rows.length
+  const estimatedBytes = Math.max(firstPageBytes, estimatedRows * averageRowBytes)
+  return (totalKnown && total >= USAGE_EXPORT_XLSX_MAX_ROWS)
+    || (pagesKnown && pages * Math.max(rows.length, effectivePageSize) >= USAGE_EXPORT_XLSX_MAX_ROWS)
+    || firstPageBytes >= USAGE_EXPORT_FIRST_PAGE_BYTES
+    || estimatedBytes >= USAGE_EXPORT_XLSX_MAX_ESTIMATED_BYTES
+    // Without a trustworthy count, a full page may be only the first chunk of
+    // an unbounded result set (the fast-pagination endpoint intentionally
+    // returns a sentinel total).  Start with CSV before creating a worksheet.
+    || (!totalKnown && rows.length >= effectivePageSize)
+}
+
+function usageExportReachedEnd(
+  response: { items?: unknown[]; total?: number | null; pages?: number; page_size?: number },
+  exportedCount: number,
+  requestedPageSize: number,
+  page = 1,
+): boolean {
+  const rows = response.items || []
+  if (rows.length === 0) return true
+  const effectivePageSize = usageExportPageSize(response, requestedPageSize)
+  // A reliable total is authoritative for a non-empty page, but it must also
+  // be large enough to describe every row already emitted. A stale gateway
+  // can repeat an earlier page's total/sentinel; treating that value as exact
+  // would stop immediately and truncate later pages. Fast-pagination
+  // sentinels are rejected by usageExportTotalIsReliable and likewise fall
+  // through to the probe rules.
+  const total = Number(response.total)
+  if (
+    Number.isFinite(total)
+    && total >= exportedCount
+    && usageExportTotalIsReliable(response, rows.length, effectivePageSize, page)
+  ) {
+    return total >= 0 && exportedCount >= total
+  }
+
+  // Some compatible gateways omit `total` but do provide a page count or an
+  // effective page size.  Honor those signals only when the total property is
+  // genuinely absent.  If it is present-but-invalid (null/zero/negative or a
+  // fast-pagination sentinel), ignore pages and keep probing until an empty
+  // page so malformed metadata cannot truncate an export.
+  // `undefined` is effectively omitted by JSON, but tolerant adapters and
+  // unit-test gateways can still materialize the property. Treat it as
+  // omitted so their page metadata follows the same compatibility path.
+  const hasTotal = Object.prototype.hasOwnProperty.call(response, 'total')
+    && response.total !== undefined
+  if (hasTotal) return false
+
+  const reportedPages = Number(response.pages)
+  const pagesKnown = Number.isFinite(reportedPages) && reportedPages > 0
+  const reportedPageSize = Number(response.page_size)
+  const hasReportedPageSize = Number.isFinite(reportedPageSize) && reportedPageSize > 0
+  if (pagesKnown && page >= reportedPages) {
+    // A lone page with no total and a full page may still be the first chunk of
+    // an unbounded legacy stream.  A reported multi-page result is explicit;
+    // for pages=1 require an explicitly reported, short effective page.
+    if (reportedPages > 1 || (hasReportedPageSize && rows.length < reportedPageSize)) return true
+  }
+
+  if (
+    !pagesKnown
+    && hasReportedPageSize
+    && rows.length < reportedPageSize
+  ) return true
+  return false
+}
+
+async function exportUsageToCsv(
+  firstResponse: Awaited<ReturnType<typeof adminUsageAPI.list>>,
+  headers: string[],
+  controller: AbortController,
+  pageSize: number,
+  filterSnapshot: AdminUsageQueryParams,
+  sortBySnapshot: string,
+  sortOrderSnapshot: 'asc' | 'desc',
+  fileStart: string,
+  fileEnd: string,
+): Promise<void> {
+  const filename = `usage_${fileStart}_to_${fileEnd}.csv`
+  let writable: ErrorExportWritable | null = null
+  let writableClosed = false
+  let writableAborted = false
+  const abortWritable = async (reason?: unknown): Promise<void> => {
+    if (!writable || writableClosed || writableAborted) return
+    writableAborted = true
+    try {
+      await writable.abort?.(reason)
+    } catch {
+      // Preserve the original cancellation/error; cleanup is secondary.
+    }
+  }
+
+  if (controller.signal.aborted) return
+  const picker = getErrorExportSavePicker()
+  if (picker) {
+    try {
+      if (controller.signal.aborted) return
+      const fileHandle = await picker({
+        suggestedName: filename,
+        types: [{ description: 'CSV files', accept: { 'text/csv': ['.csv'] } }],
+      })
+      if (controller.signal.aborted) return
+      writable = await fileHandle.createWritable()
+      if (controller.signal.aborted) {
+        await abortWritable()
+        return
+      }
+    } catch (error) {
+      if (isErrorExportAbortError(error)) {
+        controller.abort()
+        await abortWritable(error)
+        return
+      }
+      if (controller.signal.aborted) {
+        await abortWritable(error)
+        return
+      }
+      // Browsers that expose a partial/denied picker still get a regular Blob
+      // download, so a permission issue does not make the export fail.
+      console.warn('[UsageView] File picker unavailable; falling back to Blob CSV', error)
+    }
+  }
+
+  const header = `\ufeff${headers.map(escapeUsageExportCsvCell).join(',')}\r\n`
+  const csvParts: Array<Blob | string> = writable ? [] : [new Blob([header])]
+  let page = 1
+  let total = 0
+  let totalKnown = false
+  let exportedCount = 0
+  let pendingResponse: Awaited<ReturnType<typeof adminUsageAPI.list>> | null = firstResponse
+
+  try {
+    if (writable) await writable.write(header)
+    while (true) {
+      if (controller.signal.aborted) break
+      const response = pendingResponse ?? await adminUsageAPI.list(
+        buildUsageListParams(page, pageSize, false, filterSnapshot, sortBySnapshot, sortOrderSnapshot, page > 1),
+        { signal: controller.signal, timeout: USAGE_EXPORT_REQUEST_TIMEOUT_MS },
+      )
+      pendingResponse = null
+      if (controller.signal.aborted) break
+
+      const rows = response.items || []
+      const effectivePageSize = usageExportPageSize(response, pageSize)
+      if (page === 1) {
+        totalKnown = usageExportTotalIsReliable(response, rows.length, effectivePageSize, page)
+        total = totalKnown ? Math.max(0, Number(response.total)) : 0
+        exportProgress.total = total
+      }
+      if (rows.length === 0) break
+
+      const csvRows = rows.map(usageExportRow)
+      if (csvRows.length > 0) {
+        const pageCsv = `${rowsToUsageExportCsv(csvRows)}\r\n`
+        if (writable) await writable.write(pageCsv)
+        else csvParts.push(new Blob([pageCsv]))
+      }
+      exportedCount += rows.length
+      exportProgress.current = exportedCount
+      exportProgress.progress = total > 0
+        ? Math.min(100, Math.round((exportedCount / total) * 100))
+        : 0
+
+      if (usageExportReachedEnd(response, exportedCount, pageSize, page)) break
+      page += 1
+      if (page > USAGE_EXPORT_MAX_PAGES) throw new Error(`usage export exceeded ${USAGE_EXPORT_MAX_PAGES} pages`)
+    }
+  } catch (error) {
+    await abortWritable(error)
+    if (controller.signal.aborted || isErrorExportAbortError(error)) {
+      controller.abort()
+      return
+    }
+    throw error
+  }
+
+  if (controller.signal.aborted) {
+    await abortWritable()
+    return
+  }
+  if (writable) {
+    try {
+      if (controller.signal.aborted) {
+        await abortWritable()
+        return
+      }
+      await writable.close()
+      writableClosed = true
+      if (controller.signal.aborted) return
+    } catch (error) {
+      await abortWritable(error)
+      if (isErrorExportAbortError(error)) {
+        controller.abort()
+        return
+      }
+      throw error
+    }
+  } else {
+    saveAs(new Blob(csvParts, { type: 'text/csv;charset=utf-8' }), filename)
+  }
+  appStore.showInfo(t('usage.exportCsvFallback'))
+  appStore.showSuccess(t('usage.exportSuccess'))
+}
+
 const exportToExcel = async () => {
   // The same toolbar is used by the usage and error tabs.  Error rows come
   // from the ops log endpoint and require a detail lookup so the exported
@@ -497,59 +892,191 @@ const exportToExcel = async () => {
     return
   }
 
-  if (exporting.value) return; exporting.value = true; exportProgress.show = true
-  const c = new AbortController(); exportAbortController = c
+  if (exporting.value) return
+  exporting.value = true
+  exportProgress.show = true
+  exportProgress.current = 0
+  exportProgress.progress = 0
+  exportProgress.total = 0
+
+  const controller = new AbortController()
+  exportAbortController = controller
+  // Freeze the query for the duration of the operation.  Otherwise changing a
+  // filter while pages are in flight can produce a mixed or duplicated file.
+  const filterSnapshot = { ...filters.value }
+  const sortBySnapshot = sortState.sort_by
+  const sortOrderSnapshot = sortState.sort_order
+  const pageSize = USAGE_EXPORT_PAGE_SIZE
+  const fileStart = filterSnapshot.start_date || 'start'
+  const fileEnd = filterSnapshot.end_date || 'end'
+
   try {
-    let p = 1; let total = pagination.total; let exportedCount = 0
-    const XLSX = await import('xlsx')
-    const headers = [
-      t('usage.time'), t('usage.apiKeyFilter'),
-      t('admin.usage.account'), t('usage.requestedModel'), t('usage.sentUpstreamModel'), t('usage.upstreamResponseModel'), t('usage.upstreamModelMismatch'), t('usage.reasoningEffort'), t('admin.usage.group'),
-      t('usage.inboundEndpoint'), t('usage.upstreamEndpoint'),
-      t('usage.type'),
-      t('admin.usage.inputTokens'), t('admin.usage.outputTokens'),
-      t('admin.usage.cacheReadTokens'), t('admin.usage.cacheCreationTokens'),
-      t('admin.usage.inputCost'), t('admin.usage.outputCost'),
-      t('admin.usage.cacheReadCost'), t('admin.usage.cacheCreationCost'),
-      t('usage.rate'), t('usage.accountMultiplier'), t('usage.original'), t('usage.actualCost'), t('usage.accountBilled'),
-      t('usage.firstToken'), t('usage.duration'),
-      t('admin.usage.requestId'), t('usage.userAgent'), t('admin.usage.ipAddress')
-    ]
-    const ws = XLSX.utils.aoa_to_sheet([headers])
-    while (true) {
-      const res = await adminUsageAPI.list(
-        buildUsageListParams(p, 100, true),
-        { signal: c.signal }
+    // Probe one bounded page before loading SheetJS.  This lets large exports
+    // take the streaming CSV path without ever allocating a worksheet AST.
+    // If the table already exposed a large/sentinel total, avoid issuing a
+    // second COUNT(*) just to rediscover that fact.  The fast page still
+    // carries LIMIT+1 metadata, and the CSV path will continue until the
+    // actual end of the result set.
+    const tableTotal = Number(pagination.total)
+    const tablePageSize = Number(pagination.page_size)
+    const tablePage = Number(pagination.page)
+    const tableSentinelTotal = Number.isFinite(tablePage)
+      && tablePage > 0
+      && Number.isFinite(tablePageSize)
+      && tablePageSize > 0
+      ? tablePage * tablePageSize + 1
+      : 0
+    const tableAlreadyLooksLarge = Number.isFinite(tableTotal)
+      && tableTotal > 0
+      && (
+        tableTotal >= USAGE_EXPORT_XLSX_MAX_ROWS
+        || tableTotal === tableSentinelTotal
       )
-      if (c.signal.aborted) break; if (p === 1) { total = res.total; exportProgress.total = total }
-      const rows = (res.items || []).map((log: AdminUsageLog) => [
-        log.created_at, log.api_key?.name || '', log.account?.name || '', log.model,
-        log.upstream_model || log.model, log.upstream_response_model || '', log.upstream_model_mismatch == null ? '' : t(log.upstream_model_mismatch ? 'common.yes' : 'common.no'), formatReasoningEffort(log.reasoning_effort), log.group?.name || '',
-        log.inbound_endpoint || '', log.upstream_endpoint || '', getRequestTypeLabel(log),
-        log.input_tokens, log.output_tokens, log.cache_read_tokens, log.cache_creation_tokens,
-        log.input_cost?.toFixed(6) || '0.000000', log.output_cost?.toFixed(6) || '0.000000',
-        log.cache_read_cost?.toFixed(6) || '0.000000', log.cache_creation_cost?.toFixed(6) || '0.000000',
-        log.rate_multiplier?.toPrecision(4) || '1.00', (log.account_rate_multiplier ?? 1).toPrecision(4),
-        log.total_cost?.toFixed(6) || '0.000000', log.actual_cost?.toFixed(6) || '0.000000',
-        ((log.account_stats_cost ?? log.total_cost) * (log.account_rate_multiplier ?? 1)).toFixed(6), log.first_token_ms ?? '', log.duration_ms,
-        log.request_id || '', log.user_agent || '', log.ip_address || ''
-      ])
-      if (rows.length) {
+    const firstPageParams = buildUsageListParams(
+      1,
+      pageSize,
+      !tableAlreadyLooksLarge,
+      filterSnapshot,
+      sortBySnapshot,
+      sortOrderSnapshot,
+      tableAlreadyLooksLarge,
+    )
+    let firstResponse: Awaited<ReturnType<typeof adminUsageAPI.list>>
+    try {
+      firstResponse = await adminUsageAPI.list(
+        firstPageParams,
+        { signal: controller.signal, timeout: USAGE_EXPORT_REQUEST_TIMEOUT_MS },
+      )
+    } catch (error) {
+      // COUNT(*) can time out on a very large/poorly indexed history.  Retry
+      // the bounded page through the fast path so the export can still switch
+      // to CSV and continue without an exact count.  A fast-path probe is
+      // already count-free, so do not repeat it after a transport failure.
+      if (controller.signal.aborted || tableAlreadyLooksLarge) throw error
+      console.warn('[UsageView] Exact usage export count failed; retrying without COUNT(*)', error)
+      firstResponse = await adminUsageAPI.list(
+        buildUsageListParams(
+          1,
+          pageSize,
+          false,
+          filterSnapshot,
+          sortBySnapshot,
+          sortOrderSnapshot,
+          true,
+        ),
+        { signal: controller.signal, timeout: USAGE_EXPORT_REQUEST_TIMEOUT_MS },
+      )
+    }
+    if (controller.signal.aborted) return
+    const headers = usageExportHeaders()
+    if (shouldUseLargeUsageExportCsv(firstResponse, pageSize)) {
+      await exportUsageToCsv(
+        firstResponse,
+        headers,
+        controller,
+        pageSize,
+        filterSnapshot,
+        sortBySnapshot,
+        sortOrderSnapshot,
+        fileStart,
+        fileEnd,
+      )
+      return
+    }
+
+    const XLSX = await import('xlsx')
+    // Keep the worksheet nullable so a late CSV fallback can release the
+    // SheetJS worksheet graph before fetching/replaying all pages again.
+    let ws: ReturnType<typeof XLSX.utils.aoa_to_sheet> | null = XLSX.utils.aoa_to_sheet([headers])
+    let page = 1
+    let total = 0
+    let exportedCount = 0
+    let estimatedPayloadBytes = 0
+    let pendingResponse: Awaited<ReturnType<typeof adminUsageAPI.list>> | null = firstResponse
+
+    while (true) {
+      if (controller.signal.aborted) break
+      const response = pendingResponse ?? await adminUsageAPI.list(
+        buildUsageListParams(page, pageSize, page === 1, filterSnapshot, sortBySnapshot, sortOrderSnapshot, page > 1),
+        { signal: controller.signal, timeout: USAGE_EXPORT_REQUEST_TIMEOUT_MS },
+      )
+      pendingResponse = null
+      if (controller.signal.aborted) break
+
+      const sourceRows = response.items || []
+      if (page === 1) {
+        const effectivePageSize = usageExportPageSize(response, pageSize)
+        const reliableTotal = usageExportTotalIsReliable(response, sourceRows.length, effectivePageSize, page)
+        total = reliableTotal ? Math.max(0, Number(response.total)) : 0
+        exportProgress.total = total
+      }
+      if (sourceRows.length === 0) break
+
+      // A later page can contain much larger strings than the probe page.  If
+      // the accumulated estimate or row count crosses the XLSX safety budget,
+      // restart through CSV before appending that page to the worksheet.
+      estimatedPayloadBytes += estimateUsageExportPayloadBytes(response)
+      if (
+        exportedCount + sourceRows.length >= USAGE_EXPORT_XLSX_MAX_ROWS
+        || estimatedPayloadBytes >= USAGE_EXPORT_XLSX_MAX_ESTIMATED_BYTES
+      ) {
+        ws = null
+        await exportUsageToCsv(
+          firstResponse,
+          headers,
+          controller,
+          pageSize,
+          filterSnapshot,
+          sortBySnapshot,
+          sortOrderSnapshot,
+          fileStart,
+          fileEnd,
+        )
+        return
+      }
+
+      const rows = sourceRows.map(usageExportRow)
+      if (rows.length > 0) {
+        if (!ws) throw new Error('usage export worksheet was released before append')
         XLSX.utils.sheet_add_aoa(ws, rows, { origin: -1 })
       }
       exportedCount += rows.length
       exportProgress.current = exportedCount
-      exportProgress.progress = total > 0 ? Math.min(100, Math.round(exportedCount / total * 100)) : 0
-      if (exportedCount >= total || res.items.length < 100) break; p++
+      exportProgress.progress = total > 0
+        ? Math.min(100, Math.round((exportedCount / total) * 100))
+        : 0
+
+      if (usageExportReachedEnd(response, exportedCount, pageSize, page)) break
+      page += 1
+      if (page > USAGE_EXPORT_MAX_PAGES) {
+        throw new Error(`usage export exceeded ${USAGE_EXPORT_MAX_PAGES} pages`)
+      }
     }
-    if(!c.signal.aborted) {
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, 'Usage')
-      saveAs(new Blob([XLSX.write(wb, { bookType: 'xlsx', type: 'array' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), `usage_${filters.value.start_date}_to_${filters.value.end_date}.xlsx`)
+
+    if (!controller.signal.aborted && ws) {
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, ws, 'Usage')
+      saveAs(
+        new Blob([XLSX.write(workbook, { bookType: 'xlsx', type: 'array', compression: true })], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        }),
+        `usage_${fileStart}_to_${fileEnd}.xlsx`,
+      )
       appStore.showSuccess(t('usage.exportSuccess'))
     }
-  } catch (error) { console.error('Failed to export:', error); appStore.showError('Export Failed') }
-  finally { if(exportAbortController === c) { exportAbortController = null; exporting.value = false; exportProgress.show = false } }
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      controller.abort()
+      console.error('Failed to export usage:', error)
+      appStore.showError(t('usage.exportFailed'))
+    }
+  } finally {
+    if (exportAbortController === controller) {
+      exportAbortController = null
+      exporting.value = false
+      exportProgress.show = false
+    }
+  }
 }
 
 // Column visibility
