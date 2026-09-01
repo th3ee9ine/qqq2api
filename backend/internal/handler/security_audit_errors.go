@@ -146,6 +146,37 @@ func writeSecurityAuditWSError(ctx context.Context, conn *coderws.Conn, decision
 	_ = conn.Write(writeCtx, coderws.MessageText, payload)
 }
 
+// markSecurityAuditWSError records the rejected response.create frame for the
+// Ops stream-error path.  A WebSocket upgrade has no HTTP request body, so the
+// ordinary request capture cannot expose the payload that caused the guard
+// decision.  The frame is bounded and kept out of routine request logs; it is
+// materialized only in the detailed Ops request snapshot.
+func markSecurityAuditWSError(c *gin.Context, body []byte, turn int, decision *securityaudit.Decision) {
+	if c == nil || decision == nil || decision.AllowNextStage {
+		return
+	}
+	// The first frame is checked before the normal turn hook initializes the
+	// stream context. Set the marker directly so MarkOpsStreamFailure tags the
+	// exact frame turn; BeginOpsStreamTurn also clears prior-turn upstream
+	// diagnostics, which is undesirable on a reused WS context. The regular
+	// hook has already reset state for subsequent turns. Always overwrite a
+	// stale marker: a rejection must be associated with the frame that produced
+	// it, even if an earlier error path left another turn number in the shared
+	// Gin context. Keep the helper deterministic for defensive callers that
+	// supply a non-positive turn; setOpsRequestFrameBody applies the same
+	// normalization.
+	if turn < 0 {
+		turn = 0
+	}
+	c.Set(service.OpsStreamTurnKey, turn)
+	setOpsRequestFrameBody(c, turn, body)
+	errType := "api_error"
+	if decision.Kind == securityaudit.DecisionBlock || (decision.Legacy != nil && decision.Legacy.Blocked) {
+		errType = "permission_error"
+	}
+	service.MarkOpsStreamFailure(c, errType, securityAuditErrorCode(decision), securityAuditMessage(decision), securityAuditStatus(decision))
+}
+
 type legacyContentModerationDecision struct{ value *securityaudit.LegacyDecision }
 
 func (d legacyContentModerationDecision) toService() *service.ContentModerationDecision {

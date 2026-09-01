@@ -1438,6 +1438,10 @@ func logOpsStreamError(c *gin.Context, ops *service.OpsService, wireStatus int) 
 }
 
 func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus int, streamErr service.OpsStreamError) {
+	// Release the bounded frame snapshot even when monitoring filters or
+	// passthrough rules skip persistence before request details are attached.
+	defer clearOpsRequestFrameBody(c, streamErr.Turn)
+
 	// 命中 skip_monitoring=true 透传规则的请求跳过落库，与其它分支一致。
 	if streamErr.SkipMonitoring || (streamErr.Turn == 0 && shouldSkipFinalOpsFailure(c)) {
 		return
@@ -1572,7 +1576,10 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		entry.ClientIP = &clientIP
 	}
 
-	attachOpsRequestDetails(c, entry)
+	// WebSocket security-audit failures carry the rejected frame separately from
+	// the empty HTTP upgrade body. Select the snapshot by turn so a long-lived
+	// connection cannot attach a later frame to an earlier Ops row.
+	attachOpsRequestDetailsForTurn(c, entry, streamErr.Turn)
 	enqueueOpsErrorLog(ops, entry)
 }
 

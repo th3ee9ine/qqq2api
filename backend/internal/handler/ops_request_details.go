@@ -18,6 +18,13 @@ import (
 
 const (
 	opsRequestBodyCaptureKey = "ops_request_body_capture"
+	// opsRequestFrameBodiesKey stores bounded client payloads received after a
+	// WebSocket upgrade.  The HTTP request body is empty for a WS handshake, so
+	// the regular body capture cannot describe a frame that was rejected by a
+	// gateway guard.  Keep this in the handler context and consume it only when
+	// an Ops stream-error row is materialized.
+	opsRequestFrameBodiesKey = "ops_request_frame_bodies"
+	opsRequestFrameBodiesMax = 8
 	// Leave room in the queue budget for request metadata (headers, query and
 	// capture flags) in addition to the decoded body.
 	opsRequestBodyCaptureLimit         = 96 * 1024
@@ -28,6 +35,105 @@ const (
 	opsRequestDetailsMaxValueBytes     = 2048
 	opsRequestDetailsMaxMediaTypeBytes = 256
 )
+
+// opsRequestFrameBody is a bounded snapshot of one client WebSocket frame.
+// total is retained separately from data so a clipped frame is reported as
+// omitted instead of being mistaken for a complete JSON document.
+type opsRequestFrameBody struct {
+	data      []byte
+	total     int64
+	truncated bool
+	turn      int
+}
+
+// setOpsRequestFrameBody records a rejected WebSocket frame for the Ops error
+// logger.  Frames can be considerably larger than the request-details bound;
+// retain only the same bounded prefix used for HTTP diagnostics and preserve a
+// truncation marker for the detail builder.
+func setOpsRequestFrameBody(c *gin.Context, turn int, body []byte) {
+	if c == nil {
+		return
+	}
+	if turn < 0 {
+		turn = 0
+	}
+	total := int64(len(body))
+	truncated := len(body) > opsRequestBodyCaptureLimit
+	if truncated {
+		body = body[:opsRequestBodyCaptureLimit]
+	}
+	frame := opsRequestFrameBody{data: append([]byte(nil), body...), total: total, truncated: truncated, turn: turn}
+	frames, _ := c.Get(opsRequestFrameBodiesKey)
+	byTurn, _ := frames.(map[int]opsRequestFrameBody)
+	if byTurn == nil {
+		byTurn = make(map[int]opsRequestFrameBody)
+	}
+	// Stream errors use first-wins semantics for a given turn. Preserve the
+	// original frame as well, so a later fallback/error path cannot attach a
+	// different payload to the already-recorded failure.
+	if _, exists := byTurn[turn]; exists {
+		return
+	}
+	if len(byTurn) >= opsRequestFrameBodiesMax {
+		// Guard failures normally close the connection after one frame, but keep
+		// this context bounded if a caller records several stream diagnostics.
+		oldestTurn := 0
+		haveOldest := false
+		for existingTurn := range byTurn {
+			if !haveOldest || existingTurn < oldestTurn {
+				oldestTurn = existingTurn
+				haveOldest = true
+			}
+		}
+		if haveOldest {
+			delete(byTurn, oldestTurn)
+		}
+	}
+	byTurn[turn] = frame
+	c.Set(opsRequestFrameBodiesKey, byTurn)
+}
+
+func getOpsRequestFrameBody(c *gin.Context, turn int) (opsRequestFrameBody, bool) {
+	if c == nil {
+		return opsRequestFrameBody{}, false
+	}
+	if turn < 0 {
+		turn = 0
+	}
+	value, ok := c.Get(opsRequestFrameBodiesKey)
+	if !ok {
+		return opsRequestFrameBody{}, false
+	}
+	frames, ok := value.(map[int]opsRequestFrameBody)
+	if !ok || len(frames) == 0 {
+		return opsRequestFrameBody{}, false
+	}
+	if frame, exists := frames[turn]; exists {
+		return frame, true
+	}
+	return opsRequestFrameBody{}, false
+}
+
+func clearOpsRequestFrameBody(c *gin.Context, turn int) {
+	if c == nil {
+		return
+	}
+	if turn < 0 {
+		turn = 0
+	}
+	value, ok := c.Get(opsRequestFrameBodiesKey)
+	if !ok {
+		return
+	}
+	frames, ok := value.(map[int]opsRequestFrameBody)
+	if !ok {
+		return
+	}
+	delete(frames, turn)
+	if len(frames) == 0 {
+		c.Set(opsRequestFrameBodiesKey, nil)
+	}
+}
 
 // opsRequestBodyCapture tees the original request body without changing what
 // downstream handlers read. It keeps only a bounded prefix and never stores
@@ -634,6 +740,14 @@ func requestBodyCanParseJSON(contentType string, body []byte) bool {
 }
 
 func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) string {
+	return buildOpsRequestDetailsJSONWithFrame(c, capture, nil)
+}
+
+// buildOpsRequestDetailsJSONWithFrame is the common request-detail builder for
+// HTTP bodies and post-upgrade WebSocket frames.  A WS handshake has an empty
+// HTTP body, so frame is an explicit override used only for a stream error
+// associated with that frame.
+func buildOpsRequestDetailsJSONWithFrame(c *gin.Context, capture *opsRequestBodyCapture, frame *opsRequestFrameBody) string {
 	metadata := snapshotOpsRequestMetadata(c, capture)
 	details := map[string]any{
 		"method":         metadata.method,
@@ -666,7 +780,16 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 	bodyTruncated := snapshot.truncated
 	bodyComplete := requestBodyCaptureComplete(snapshot)
 	decodedBody := false
-	if snapshot.decodedSet {
+	frameBody := frame != nil
+	if frameBody {
+		// The frame payload is already the representation consumed by the WS
+		// protocol parser.  Keep it separate from the handshake capture so its
+		// byte count and truncation state remain truthful.
+		bodyData = frame.data
+		bodyTotal = frame.total
+		bodyTruncated = frame.truncated
+		bodyComplete = !frame.truncated
+	} else if snapshot.decodedSet {
 		bodyData = snapshot.decoded
 		bodyTotal = snapshot.decodedTotal
 		bodyTruncated = snapshot.decodedTruncated
@@ -676,7 +799,7 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 		bodyComplete = rawBodyReadComplete(snapshot) && !snapshot.decodedTruncated
 		decodedBody = true
 	}
-	if snapshot.normalizedLimitExceeded {
+	if !frameBody && snapshot.normalizedLimitExceeded {
 		// No normalized bytes were returned, but the route did consume the
 		// complete request and rejected its compatibility representation at the
 		// configured size boundary. Mark the diagnostic as truncated so the raw
@@ -684,7 +807,7 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 		bodyTruncated = true
 		bodyComplete = false
 	}
-	if snapshot.readLimitExceeded {
+	if !frameBody && snapshot.readLimitExceeded {
 		// MaxBytesReader can return a prefix together with its limit error
 		// before the capture's own 96 KiB bound is reached.
 		bodyTruncated = true
@@ -694,13 +817,13 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 	// gateway reader.  It is separate from the decompressed snapshot so both
 	// byte counts remain meaningful for compressed requests.
 	normalizedBody := false
-	if snapshot.normalizedSet {
+	if !frameBody && snapshot.normalizedSet {
 		bodyData = snapshot.normalized
 		bodyTotal = snapshot.normalizedTotal
 		bodyTruncated = snapshot.normalizedTruncated
 		bodyComplete = rawBodyReadComplete(snapshot) && !snapshot.normalizedTruncated
 		normalizedBody = true
-	} else if snapshot.lenientJSON && !bodyTruncated && requestBodyCanParseJSON(metadata.contentType, bodyData) {
+	} else if !frameBody && snapshot.lenientJSON && !bodyTruncated && requestBodyCanParseJSON(metadata.contentType, bodyData) {
 		// Older/compatible readers may mark the route as lenient without
 		// providing the optional normalized observer.  Reproduce the parser's
 		// normalization only in that explicitly marked path; strict readers must
@@ -723,8 +846,14 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 			}
 		}
 	}
-	details["body_read"] = snapshot.readStarted
+	details["body_read"] = snapshot.readStarted || frameBody
 	details["body_bytes_read"] = snapshot.total
+	if frameBody {
+		details["body_source"] = "websocket_frame"
+		details["body_frame_turn"] = frame.turn
+		details["body_bytes_read"] = bodyTotal
+		details["body_bytes_frame"] = bodyTotal
+	}
 	details["body_truncated"] = bodyTruncated
 	if decodedBody {
 		details["body_decoded"] = true
@@ -737,26 +866,34 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 
 	complete := bodyComplete
 	processedBody := decodedBody || normalizedBody
+	if frameBody {
+		// A frame is already decoded by the WebSocket implementation; do not
+		// apply HTTP compressed/normalized-body checks to it.
+		processedBody = true
+	}
 	switch {
-	case snapshot.decodeErr:
+	case frameBody && bodyTruncated:
+		details["body_omitted"] = true
+		details["body_omitted_reason"] = "truncated"
+	case !frameBody && snapshot.decodeErr:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "decompression_failed"
-	case snapshot.normalizedLimitExceeded:
+	case !frameBody && snapshot.normalizedLimitExceeded:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "truncated"
-	case snapshot.readLimitExceeded:
+	case !frameBody && snapshot.readLimitExceeded:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "truncated"
-	case bodyTruncated && !snapshot.readErr:
+	case !frameBody && bodyTruncated && !snapshot.readErr:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "truncated"
-	case snapshot.readErr:
+	case !frameBody && snapshot.readErr:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "read_error"
-	case !snapshot.readStarted && snapshot.contentLength > 0:
+	case !frameBody && !snapshot.readStarted && snapshot.contentLength > 0:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "not_read"
-	case processedBody && !rawBodyReadComplete(snapshot):
+	case !frameBody && processedBody && !rawBodyReadComplete(snapshot):
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "incomplete"
 	case !complete:
@@ -765,10 +902,10 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 	case len(bytes.TrimSpace(bodyData)) == 0:
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "empty"
-	case !processedBody && metadata.contentEncoding != "" && !strings.EqualFold(metadata.contentEncoding, "identity"):
+	case !frameBody && !processedBody && metadata.contentEncoding != "" && !strings.EqualFold(metadata.contentEncoding, "identity"):
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "compressed"
-	case !requestBodyCanParseJSON(metadata.contentType, bodyData):
+	case !frameBody && !requestBodyCanParseJSON(metadata.contentType, bodyData):
 		details["body_omitted"] = true
 		details["body_omitted_reason"] = "non_json"
 	default:
@@ -796,6 +933,21 @@ func buildOpsRequestDetailsJSON(c *gin.Context, capture *opsRequestBodyCapture) 
 // resulting string is copied into the error-log entry before any asynchronous
 // worker is started, so no gin context escapes the request goroutine.
 func attachOpsRequestDetails(c *gin.Context, entry *service.OpsInsertErrorLogInput) {
+	turn := 0
+	// Most HTTP errors have no stream marker. If a stream failure is being
+	// materialized through the ordinary status>=400 path (for example, a
+	// WebSocket upgrade that committed an error status), use its explicit turn
+	// rather than guessing from whichever frame happens to remain in context.
+	if streamErr, ok := service.GetOpsStreamError(c); ok {
+		turn = streamErr.Turn
+	}
+	attachOpsRequestDetailsForTurn(c, entry, turn)
+}
+
+// attachOpsRequestDetailsForTurn includes a bounded post-upgrade WebSocket
+// frame when the stream error identifies one.  HTTP callers continue to use
+// the ordinary request-body capture path.
+func attachOpsRequestDetailsForTurn(c *gin.Context, entry *service.OpsInsertErrorLogInput, turn int) {
 	if c == nil || entry == nil {
 		return
 	}
@@ -803,7 +955,11 @@ func attachOpsRequestDetails(c *gin.Context, entry *service.OpsInsertErrorLogInp
 	if value, ok := c.Get(opsRequestBodyCaptureKey); ok {
 		capture, _ = value.(*opsRequestBodyCapture)
 	}
-	details := buildOpsRequestDetailsJSON(c, capture)
+	var frame *opsRequestFrameBody
+	if snapshot, ok := getOpsRequestFrameBody(c, turn); ok {
+		frame = &snapshot
+	}
+	details := buildOpsRequestDetailsJSONWithFrame(c, capture, frame)
 	if details == "" {
 		return
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -103,6 +104,91 @@ func TestBuildOpsRequestDetailsJSONPreservesRawQueryAndMetadata(t *testing.T) {
 	require.Contains(t, raw, "header-secret")
 	require.Contains(t, raw, "fixture")
 	require.Contains(t, raw, "fixture-client/1.0")
+}
+
+func TestBuildOpsRequestDetailsJSONIncludesRejectedWebSocketFrame(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("Upgrade", "websocket")
+	c.Request.Header.Set("Content-Type", "application/json")
+	setOpsRequestFrameBody(c, 2, []byte(`{"type":"response.create","model":"gpt-test","response":{"input":"blocked frame prompt"}}`))
+
+	frame, ok := getOpsRequestFrameBody(c, 2)
+	require.True(t, ok)
+	raw := buildOpsRequestDetailsJSONWithFrame(c, nil, &frame)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	require.Equal(t, "websocket_frame", details["body_source"])
+	require.Equal(t, float64(2), details["body_frame_turn"])
+	require.Equal(t, true, details["body_read"])
+	require.Equal(t, false, details["body_truncated"])
+	body, ok := details["body"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "blocked frame prompt", body["response"].(map[string]any)["input"])
+}
+
+func TestOpsRequestFrameBodyLookupIsExactAndFirstWins(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	first := []byte(`{"type":"response.create","response":{"input":"first"}}`)
+	second := []byte(`{"type":"response.create","response":{"input":"second"}}`)
+	setOpsRequestFrameBody(c, 1, first)
+	setOpsRequestFrameBody(c, 1, second)
+
+	stored, ok := getOpsRequestFrameBody(c, 1)
+	require.True(t, ok)
+	require.Equal(t, first, stored.data)
+	_, ok = getOpsRequestFrameBody(c, 0)
+	require.False(t, ok, "frame lookup must not infer a different turn")
+
+	// Clearing a turn must not remove an unrelated frame that may still be
+	// needed by another stream-error row.
+	clearOpsRequestFrameBody(c, 0)
+	_, ok = getOpsRequestFrameBody(c, 1)
+	require.True(t, ok)
+	clearOpsRequestFrameBody(c, 1)
+	_, ok = getOpsRequestFrameBody(c, 1)
+	require.False(t, ok)
+}
+
+func TestOpsRequestFrameBodyMapEvictsOldestTurnAtBound(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+
+	for turn := 1; turn <= opsRequestFrameBodiesMax+1; turn++ {
+		setOpsRequestFrameBody(c, turn, []byte(`{"turn":`+strconv.Itoa(turn)+`}`))
+	}
+
+	_, ok := getOpsRequestFrameBody(c, 1)
+	require.False(t, ok, "oldest frame should be evicted once the bounded map is full")
+	for turn := 2; turn <= opsRequestFrameBodiesMax+1; turn++ {
+		frame, ok := getOpsRequestFrameBody(c, turn)
+		require.Truef(t, ok, "turn %d should remain in the bounded frame map", turn)
+		require.Equal(t, turn, frame.turn)
+	}
+}
+
+func TestBuildOpsRequestDetailsJSONMarksOversizedWebSocketFrame(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	frameBody := []byte(`{"type":"response.create","response":{"input":"` + strings.Repeat("x", opsRequestBodyCaptureLimit) + `"}}`)
+	setOpsRequestFrameBody(c, 1, frameBody)
+	frame, ok := getOpsRequestFrameBody(c, 1)
+	require.True(t, ok)
+	raw := buildOpsRequestDetailsJSONWithFrame(c, nil, &frame)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	require.Equal(t, "websocket_frame", details["body_source"])
+	require.Equal(t, true, details["body_truncated"])
+	require.Equal(t, true, details["body_omitted"])
+	require.Equal(t, "truncated", details["body_omitted_reason"])
+	require.Equal(t, float64(len(frameBody)), details["body_bytes_frame"])
 }
 
 func TestBuildOpsRequestDetailsJSONUsesDecodedCompressedBodyAndPreservesWireMetadata(t *testing.T) {

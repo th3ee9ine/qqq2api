@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/securityaudit"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 func promptGuardDecision(kind securityaudit.DecisionKind) *securityaudit.Decision {
@@ -141,6 +142,25 @@ func TestPromptGuardWebSocketCloseMappingGolden(t *testing.T) {
 	require.Equal(t, securityaudit.ErrorCodeUnavailable, securityAuditWSCloseReason(promptGuardDecision(securityaudit.DecisionUnavailable)))
 	require.Equal(t, int64(1013), int64(securityAuditWSCloseStatus(promptGuardDecision(securityaudit.DecisionInvalid))))
 	require.Equal(t, securityaudit.ErrorCodeInvalidResponse, securityAuditWSCloseReason(promptGuardDecision(securityaudit.DecisionInvalid)))
+}
+
+func TestMarkSecurityAuditWSErrorCapturesFrameAndOpsReason(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	service.SetOpenAIClientTransport(c, service.OpenAIClientTransportWS)
+	decision := promptGuardDecision(securityaudit.DecisionBlock)
+	frame := []byte(`{"type":"response.create","model":"gpt-test","response":{"input":"blocked"}}`)
+	markSecurityAuditWSError(c, frame, 1, decision)
+
+	streamErr, ok := service.GetOpsStreamError(c)
+	require.True(t, ok)
+	require.Equal(t, "permission_error", streamErr.ErrType)
+	require.Equal(t, securityaudit.ErrorCodeBlocked, streamErr.Code)
+	require.Equal(t, http.StatusForbidden, streamErr.IntendedStatus)
+	require.Equal(t, 1, streamErr.Turn, "first rejected frame must retain its explicit turn")
+	stored, ok := getOpsRequestFrameBody(c, 1)
+	require.True(t, ok)
+	require.Equal(t, frame, stored.data)
 }
 
 func TestLegacyModerationErrorKeepsExistingClientPriority(t *testing.T) {
