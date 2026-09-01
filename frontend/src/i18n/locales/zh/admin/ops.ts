@@ -329,6 +329,7 @@ export default {
         detailSheetChunkCount: '分段总数',
         detailSheetContent: '明细内容',
         success: '错误日志导出成功',
+        csvFallback: '数据量较大，已切换为 CSV 导出以降低内存占用',
         failed: '错误日志导出失败'
       },
       // Error Details Modal

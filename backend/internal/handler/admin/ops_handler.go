@@ -142,6 +142,15 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 	// Export requests opt into the heavy diagnostic projection explicitly;
 	// normal table loads keep the lightweight list query and response shape.
 	filter.IncludeDetails = opsQueryFlag(c, "include_details")
+	// Detail rows contain bounded request snapshots and can be substantially
+	// larger than the summary projection. Keep each response below a predictable
+	// size even if an older client asks for a larger page.
+	if filter.IncludeDetails && filter.PageSize > service.OpsErrorLogMaxDetailPageSize {
+		filter.PageSize = service.OpsErrorLogMaxDetailPageSize
+	}
+	// Bulk exporters obtain the total once on page one. Subsequent pages can
+	// skip the expensive COUNT(*) scan; their total is intentionally unknown.
+	filter.SkipCount = opsQueryFlag(c, "skip_count")
 	filter.Phase = strings.TrimSpace(c.Query("phase"))
 	filter.Owner = strings.TrimSpace(c.Query("error_owner"))
 	filter.Source = strings.TrimSpace(c.Query("error_source"))

@@ -50,3 +50,22 @@ func TestGetErrorLogs_IncludeDetailsIsExplicitOptIn(t *testing.T) {
 		})
 	}
 }
+
+func TestGetErrorLogs_LimitsDiagnosticPageSize(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := &opsErrorListCaptureRepo{}
+	svc := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewOpsHandler(svc)
+	r := gin.New()
+	r.GET("/errors", h.GetErrorLogs)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet,
+		"/errors?page=2&page_size=500&include_details=true&skip_count=true", nil))
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotNil(t, repo.filter)
+	require.True(t, repo.filter.IncludeDetails)
+	require.True(t, repo.filter.SkipCount)
+	require.Equal(t, service.OpsErrorLogMaxDetailPageSize, repo.filter.PageSize)
+}

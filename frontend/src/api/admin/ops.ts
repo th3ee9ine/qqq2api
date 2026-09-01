@@ -11,6 +11,8 @@ export type OpsQueryMode = 'auto' | 'raw' | 'preagg'
 
 export interface OpsRequestOptions {
   signal?: AbortSignal
+  /** Optional per-request timeout override (milliseconds). */
+  timeout?: number
 }
 
 export type OpsUpstreamErrorEvent = {
@@ -1145,6 +1147,10 @@ export type OpsErrorListQueryParams = {
   // Heavy diagnostic projection used by the error-log exporter.  It is
   // opt-in so ordinary table requests never carry request snapshots.
   include_details?: boolean
+
+  // Skip the COUNT(*) query for subsequent export pages. The first page still
+  // carries the authoritative total; later pages only need row data.
+  skip_count?: boolean
 }
 
 // Legacy unified endpoints
@@ -1154,14 +1160,16 @@ export async function listErrorLogs(
 ): Promise<OpsErrorLogsResponse> {
   const { data } = await apiClient.get<OpsErrorLogsResponse>('/admin/ops/errors', {
     params,
-    signal: options.signal
+    signal: options.signal,
+    ...(options.timeout != null ? { timeout: options.timeout } : {}),
   })
   return data
 }
 
 export async function getErrorLogDetail(id: number, options: OpsRequestOptions = {}): Promise<OpsErrorDetail> {
   const { data } = await apiClient.get<OpsErrorDetail>(`/admin/ops/errors/${id}`, {
-    signal: options.signal
+    signal: options.signal,
+    ...(options.timeout != null ? { timeout: options.timeout } : {}),
   })
   return data
 }

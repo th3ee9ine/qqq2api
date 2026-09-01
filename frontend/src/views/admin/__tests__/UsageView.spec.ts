@@ -514,7 +514,7 @@ describe('admin UsageView error-log export', () => {
 
     expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining({
       page: 1,
-      page_size: 200,
+      page_size: 50,
       include_details: true,
       view: 'all',
       model: 'gpt-test',
@@ -574,7 +574,7 @@ describe('admin UsageView error-log export', () => {
     await flushPromises()
 
     expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({
-      page_size: 200,
+      page_size: 50,
       include_details: true,
     }))
     expect(getErrorLogDetail).not.toHaveBeenCalled()
@@ -672,8 +672,8 @@ describe('admin UsageView error-log export', () => {
     await flushPromises()
 
     expect(listErrorLogs).toHaveBeenCalledTimes(2)
-    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 200 }))
-    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 200 }))
+    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 50 }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 50 }))
     expect(listErrorLogs.mock.calls[0][1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }))
     // Embedded snapshots are used directly, so no N detail requests are needed.
     expect(getErrorLogDetail).not.toHaveBeenCalled()
@@ -718,8 +718,8 @@ describe('admin UsageView error-log export', () => {
     await flushPromises()
 
     expect(listErrorLogs).toHaveBeenCalledTimes(2)
-    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 200 }))
-    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 200 }))
+    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 50 }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 50 }))
     expect(saveAs).toHaveBeenCalledTimes(1)
   })
 
@@ -757,7 +757,7 @@ describe('admin UsageView error-log export', () => {
     await flushPromises()
 
     expect(listErrorLogs).toHaveBeenCalledTimes(2)
-    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 200 }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 50 }))
     expect(saveAs).toHaveBeenCalledTimes(1)
   })
 
@@ -798,6 +798,100 @@ describe('admin UsageView error-log export', () => {
 
     expect(listErrorLogs).toHaveBeenCalledTimes(3)
     expect(listErrorLogs.mock.calls.map((call) => call[0].page)).toEqual([1, 2, 3])
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to CSV for large exports and keeps the full request snapshot', async () => {
+    const largeSummary = {
+      id: 9001,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: 'client-9001',
+      request_id: 'request-9001',
+      message: 'invalid request',
+      details_included: true,
+      request_details: {
+        method: 'POST',
+        path: '/v1/chat/completions',
+        body: { model: 'gpt-test', messages: [{ role: 'user', content: 'hello, world' }] },
+      },
+      error_body: '',
+      is_business_limited: false,
+    }
+    // Keep the fixture small while making the reported result set large
+    // enough to trigger the CSV safety threshold.
+    listErrorLogs
+      .mockResolvedValueOnce({ items: [largeSummary], total: 6000, pages: 120, page_size: 50 })
+      .mockResolvedValueOnce({ items: [], total: 0, pages: 0, page_size: 50 })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledTimes(2)
+    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({
+      page: 1,
+      page_size: 50,
+      include_details: true,
+    }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({
+      page: 2,
+      page_size: 50,
+      include_details: true,
+      skip_count: true,
+    }))
+    expect(xlsxWrite).not.toHaveBeenCalled()
+    expect(saveAs).toHaveBeenCalledWith(expect.any(Blob), expect.stringMatching(/^error_logs_.*\.csv$/))
+    const csvBlob = saveAs.mock.calls[0][0] as Blob
+    expect(csvBlob.size).toBeGreaterThan(0)
+    expect(csvBlob.type).toBe('text/csv;charset=utf-8')
+    expect(getErrorLogDetail).not.toHaveBeenCalled()
+  })
+
+  it('does not truncate a legacy page when total is zero but rows are present', async () => {
+    const row = {
+      id: 9101,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: 'client-9101',
+      request_id: 'request-9101',
+      message: 'invalid request',
+      request_details: { body: { model: 'gpt-test' } },
+    }
+    listErrorLogs
+      .mockResolvedValueOnce({ items: [row], total: 0, pages: 1, page_size: 50 })
+      .mockResolvedValueOnce({ items: [], total: 0, pages: 0, page_size: 50 })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledTimes(2)
+    expect(listErrorLogs.mock.calls.map((call) => call[0].page)).toEqual([1, 2])
     expect(saveAs).toHaveBeenCalledTimes(1)
   })
 })

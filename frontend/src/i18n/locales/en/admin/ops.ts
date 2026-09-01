@@ -328,6 +328,7 @@ export default {
         detailSheetChunkCount: 'Chunk Count',
         detailSheetContent: 'Detail Content',
         success: 'Error logs exported successfully',
+        csvFallback: 'Large export switched to CSV to reduce memory usage',
         failed: 'Failed to export error logs'
       },
       // Error Details Modal

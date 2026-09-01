@@ -843,6 +843,10 @@ func (s *OpsService) ListUserErrorRequests(ctx context.Context, userID int64, fi
 	// Request snapshots are an admin-only diagnostic surface.  Do not allow a
 	// caller to smuggle IncludeDetails into the user-facing list service.
 	filter.IncludeDetails = false
+	// Likewise, keep the user-facing pagination contract authoritative. The
+	// count-skip optimization is reserved for admin bulk exports and would
+	// otherwise make the user's total/pages metadata disappear on later pages.
+	filter.SkipCount = false
 
 	list, err := s.opsRepo.ListErrorLogs(ctx, filter)
 	if err != nil {

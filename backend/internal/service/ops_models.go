@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+// OpsErrorLogMaxDetailPageSize bounds a single list response when the
+// diagnostic projection is requested. Request snapshots can be large (up to
+// the storage capture limit per row), so allowing an unbounded page would let
+// one export request exceed proxy or browser response limits.
+const OpsErrorLogMaxDetailPageSize = 50
+
 type OpsSystemLog struct {
 	ID              int64     `json:"id"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -187,6 +193,12 @@ type OpsErrorLogFilter struct {
 	// alongside each summary row.  It is intentionally opt-in because request
 	// snapshots can be large; user-facing list services clear this flag.
 	IncludeDetails bool
+
+	// SkipCount skips the COUNT(*) query for pages after the first page. Bulk
+	// exports already fetched the total on page one; avoiding a repeated full
+	// count keeps later detail pages responsive on large log tables. Callers
+	// must treat Total as unknown (zero) when this flag is set for page > 1.
+	SkipCount bool
 
 	Page     int
 	PageSize int

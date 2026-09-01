@@ -222,13 +222,25 @@ func (r *opsRepository) ListErrorLogs(ctx context.Context, filter *service.OpsEr
 	if pageSize > 500 {
 		pageSize = 500
 	}
+	// Diagnostic fields include request snapshots and upstream bodies. Apply a
+	// repository-level cap as a second line of defence for non-HTTP callers
+	// (scheduled jobs/tests) that bypass the admin handler's normalization.
+	if filter.IncludeDetails && pageSize > service.OpsErrorLogMaxDetailPageSize {
+		pageSize = service.OpsErrorLogMaxDetailPageSize
+	}
 
 	where, args := buildOpsErrorLogsWhere(filter)
-	countSQL := "SELECT COUNT(*) FROM ops_error_logs e " + where
 
 	var total int
-	if err := r.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
-		return nil, err
+	// A bulk export fetches the total on its first page for progress reporting.
+	// Repeating COUNT(*) for every subsequent detail page can scan millions of
+	// rows and is the main server-side bottleneck for large exports. Keep the
+	// historical count behavior unless the caller explicitly opts out.
+	if !filter.SkipCount || page <= 1 {
+		countSQL := "SELECT COUNT(*) FROM ops_error_logs e " + where
+		if err := r.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+			return nil, err
+		}
 	}
 
 	offset := (page - 1) * pageSize

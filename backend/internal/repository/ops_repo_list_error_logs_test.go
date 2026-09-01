@@ -93,3 +93,44 @@ func TestListErrorLogs_DefaultProjectionStaysLightweight(t *testing.T) {
 	require.Empty(t, result.Errors[0].RequestDetails)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestListErrorLogs_SkipCountOnLaterDetailPageAndCapPageSize(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &opsRepository{db: db}
+
+	// Page two of a bulk export explicitly opts out of COUNT(*). The detail
+	// projection is still bounded to the repository safety cap even when an
+	// older caller asks for page_size=500.
+	mock.ExpectQuery(`(?s)SELECT.*request_details::text.*FROM ops_error_logs.*LIMIT \$1 OFFSET \$2`).
+		WithArgs(service.OpsErrorLogMaxDetailPageSize, service.OpsErrorLogMaxDetailPageSize).
+		WillReturnRows(sqlmock.NewRows(make([]string, 47)).AddRow(opsErrorListRowValues(true)...))
+
+	result, err := repo.ListErrorLogs(context.Background(), &service.OpsErrorLogFilter{
+		Page: 2, PageSize: 500, IncludeDetails: true, SkipCount: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, result.Total, "total is intentionally unknown when COUNT is skipped")
+	require.Equal(t, 2, result.Page)
+	require.Equal(t, service.OpsErrorLogMaxDetailPageSize, result.PageSize)
+	require.Len(t, result.Errors, 1)
+	require.True(t, result.Errors[0].DetailsIncluded)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListErrorLogs_SkipCountStillCountsFirstPage(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &opsRepository{db: db}
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM ops_error_logs`).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
+	mock.ExpectQuery(`(?s)SELECT.*FROM ops_error_logs.*LIMIT \$1 OFFSET \$2`).
+		WithArgs(20, 0).
+		WillReturnRows(sqlmock.NewRows(make([]string, 34)).AddRow(opsErrorListRowValues(false)...))
+
+	result, err := repo.ListErrorLogs(context.Background(), &service.OpsErrorLogFilter{
+		Page: 1, PageSize: 20, SkipCount: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 3, result.Total)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
