@@ -233,6 +233,27 @@ func (r *opsRepository) ListErrorLogs(ctx context.Context, filter *service.OpsEr
 
 	offset := (page - 1) * pageSize
 	argsWithLimit := append(args, pageSize, offset)
+	detailProjection := ""
+	if filter.IncludeDetails {
+		// Request snapshots and upstream bodies are deliberately opt-in.  The
+		// normal table query must remain narrow because these JSON/text columns
+		// can be hundreds of kilobytes per row; export callers use this single
+		// projection to avoid an N+1 detail lookup for every row.
+		detailProjection = `,
+  COALESCE(e.error_body, ''),
+  COALESCE(e.request_details::text, ''),
+  e.upstream_status_code,
+  COALESCE(e.upstream_error_message, ''),
+  COALESCE(e.upstream_error_detail, ''),
+  COALESCE(e.upstream_errors::text, ''),
+  e.is_business_limited,
+  e.auth_latency_ms,
+  e.routing_latency_ms,
+  e.upstream_latency_ms,
+  e.response_latency_ms,
+  e.time_to_first_token_ms,
+  COALESCE(e.api_key_prefix, '')`
+	}
 	selectSQL := `
 SELECT
   e.id,
@@ -268,7 +289,7 @@ SELECT
   COALESCE(e.user_agent, ''),
   e.request_type,
   COALESCE(ak.name, ''),
-  ak.deleted_at
+  ak.deleted_at` + detailProjection + `
 FROM ops_error_logs e
 LEFT JOIN accounts a ON e.account_id = a.id
 LEFT JOIN groups g ON e.group_id = g.id
@@ -301,7 +322,21 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 		var requestType sql.NullInt64
 		var apiKeyName string
 		var apiKeyDeletedAt sql.NullTime
-		if err := rows.Scan(
+		var errorBody string
+		var requestDetails string
+		var upstreamStatusCode sql.NullInt64
+		var upstreamErrorMessage string
+		var upstreamErrorDetail string
+		var upstreamErrors string
+		var isBusinessLimited sql.NullBool
+		var authLatency sql.NullInt64
+		var routingLatency sql.NullInt64
+		var upstreamLatency sql.NullInt64
+		var responseLatency sql.NullInt64
+		var timeToFirstToken sql.NullInt64
+		var apiKeyPrefix string
+
+		scanArgs := []any{
 			&item.ID,
 			&item.CreatedAt,
 			&item.Phase,
@@ -336,6 +371,26 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			&requestType,
 			&apiKeyName,
 			&apiKeyDeletedAt,
+		}
+		if filter.IncludeDetails {
+			scanArgs = append(scanArgs,
+				&errorBody,
+				&requestDetails,
+				&upstreamStatusCode,
+				&upstreamErrorMessage,
+				&upstreamErrorDetail,
+				&upstreamErrors,
+				&isBusinessLimited,
+				&authLatency,
+				&routingLatency,
+				&upstreamLatency,
+				&responseLatency,
+				&timeToFirstToken,
+				&apiKeyPrefix,
+			)
+		}
+		if err := rows.Scan(
+			scanArgs...,
 		); err != nil {
 			return nil, err
 		}
@@ -377,6 +432,48 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 		}
 		item.APIKeyName = apiKeyName
 		item.APIKeyDeleted = apiKeyDeletedAt.Valid
+		if filter.IncludeDetails {
+			item.DetailsIncluded = true
+			item.ErrorBody = errorBody
+			item.RequestDetails = strings.TrimSpace(requestDetails)
+			if item.RequestDetails == "null" {
+				item.RequestDetails = ""
+			}
+			item.UpstreamErrorMessage = upstreamErrorMessage
+			item.UpstreamErrorDetail = upstreamErrorDetail
+			item.UpstreamErrors = strings.TrimSpace(upstreamErrors)
+			if item.UpstreamErrors == "null" {
+				item.UpstreamErrors = ""
+			}
+			if upstreamStatusCode.Valid {
+				v := int(upstreamStatusCode.Int64)
+				item.UpstreamStatusCode = &v
+			}
+			if isBusinessLimited.Valid {
+				item.IsBusinessLimited = isBusinessLimited.Bool
+			}
+			if authLatency.Valid {
+				v := authLatency.Int64
+				item.AuthLatencyMs = &v
+			}
+			if routingLatency.Valid {
+				v := routingLatency.Int64
+				item.RoutingLatencyMs = &v
+			}
+			if upstreamLatency.Valid {
+				v := upstreamLatency.Int64
+				item.UpstreamLatencyMs = &v
+			}
+			if responseLatency.Valid {
+				v := responseLatency.Int64
+				item.ResponseLatencyMs = &v
+			}
+			if timeToFirstToken.Valid {
+				v := timeToFirstToken.Int64
+				item.TimeToFirstTokenMs = &v
+			}
+			item.APIKeyPrefix = apiKeyPrefix
+		}
 		out = append(out, &item)
 	}
 	if err := rows.Err(); err != nil {

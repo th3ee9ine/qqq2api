@@ -94,6 +94,16 @@ func applyOpsErrorSortParams(c *gin.Context, filter *service.OpsErrorLogFilter) 
 	filter.SetSort(c.Query("sort_by"), c.Query("sort_order"))
 }
 
+// opsQueryFlag accepts the boolean spellings used by the admin UI while
+// keeping unknown values backward-compatible (they simply mean false).
+func opsQueryFlag(c *gin.Context, name string) bool {
+	if c == nil {
+		return false
+	}
+	v := strings.TrimSpace(c.Query(name))
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
+
 // GET /api/v1/admin/ops/errors
 func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 	if h.opsService == nil {
@@ -129,6 +139,9 @@ func (h *OpsHandler) GetErrorLogs(c *gin.Context) {
 		filter.EndTime = &endTime
 	}
 	filter.View = parseOpsViewParam(c)
+	// Export requests opt into the heavy diagnostic projection explicitly;
+	// normal table loads keep the lightweight list query and response shape.
+	filter.IncludeDetails = opsQueryFlag(c, "include_details")
 	filter.Phase = strings.TrimSpace(c.Query("phase"))
 	filter.Owner = strings.TrimSpace(c.Query("error_owner"))
 	filter.Source = strings.TrimSpace(c.Query("error_source"))

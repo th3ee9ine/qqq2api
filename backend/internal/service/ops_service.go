@@ -840,6 +840,9 @@ func (s *OpsService) ListUserErrorRequests(ctx context.Context, userID int64, fi
 	//（error_phase='upstream' 但 status<400,最终成功返回）记录对用户不可见——符合预期。
 	filter.Phase = ""
 	filter.IncludeRecoveredUpstream = false
+	// Request snapshots are an admin-only diagnostic surface.  Do not allow a
+	// caller to smuggle IncludeDetails into the user-facing list service.
+	filter.IncludeDetails = false
 
 	list, err := s.opsRepo.ListErrorLogs(ctx, filter)
 	if err != nil {

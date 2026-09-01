@@ -514,7 +514,8 @@ describe('admin UsageView error-log export', () => {
 
     expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining({
       page: 1,
-      page_size: 100,
+      page_size: 200,
+      include_details: true,
       view: 'all',
       model: 'gpt-test',
       account_id: 8,
@@ -535,7 +536,105 @@ describe('admin UsageView error-log export', () => {
     expect(saveAs).toHaveBeenCalledWith(expect.any(Blob), expect.stringMatching(/^error_logs_.*\.xlsx$/))
   })
 
-  it('walks all filtered pages when exporting more than one hundred errors', async () => {
+  it('uses the inline diagnostic projection without issuing per-row detail requests', async () => {
+    const summaryWithInlineDetails = {
+      id: 7,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'upstream',
+      type: 'upstream_error',
+      error_owner: 'provider',
+      error_source: 'upstream_http',
+      severity: 'P1',
+      status_code: 503,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: 'client-7',
+      request_id: 'request-7',
+      message: 'upstream failed',
+      details_included: true,
+      // An empty snapshot is valid; the marker means all detail columns were
+      // already projected and a fallback GET would only add latency.
+      request_details: '',
+      error_body: '',
+      upstream_status_code: 503,
+      upstream_error_message: 'upstream failed',
+      upstream_error_detail: '',
+      upstream_errors: '[]',
+      is_business_limited: false,
+    }
+    listErrorLogs.mockResolvedValueOnce({ items: [summaryWithInlineDetails], total: 1, pages: 1 })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({
+      page_size: 200,
+      include_details: true,
+    }))
+    expect(getErrorLogDetail).not.toHaveBeenCalled()
+    const headers = aoaToSheet.mock.calls[0][0][0] as string[]
+    const row = sheetAddAoa.mock.calls[0][1][0] as unknown[]
+    expect(row[headers.indexOf('admin.ops.errorExport.errorBody')]).toBe('')
+    expect(row[headers.indexOf('admin.ops.errorExport.upstreamStatus')]).toBe(503)
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps detail lookups bounded while refilling workers as requests finish', async () => {
+    const summaries = Array.from({ length: 40 }, (_, index) => ({
+      id: index + 1,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: `client-${index + 1}`,
+      request_id: `request-${index + 1}`,
+      message: 'invalid request',
+    }))
+    let inFlight = 0
+    let maxInFlight = 0
+    listErrorLogs.mockResolvedValueOnce({ items: summaries, total: summaries.length, pages: 1 })
+    getErrorLogDetail.mockImplementation(async (id: number) => {
+      inFlight += 1
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      // Yield once so every worker gets a chance to start before the first
+      // completed lookup refills the queue.
+      await Promise.resolve()
+      inFlight -= 1
+      return {
+        ...summaries[id - 1],
+        error_body: '',
+        request_details: { body: { id } },
+        is_business_limited: false,
+      }
+    })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(getErrorLogDetail).toHaveBeenCalledTimes(summaries.length)
+    expect(maxInFlight).toBeGreaterThan(8)
+    expect(maxInFlight).toBeLessThanOrEqual(32)
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('walks all filtered pages when exporting more than one page of errors', async () => {
     const firstPage = Array.from({ length: 100 }, (_, index) => ({
       id: index + 1,
       created_at: '2026-08-20T01:02:03Z',
@@ -573,8 +672,8 @@ describe('admin UsageView error-log export', () => {
     await flushPromises()
 
     expect(listErrorLogs).toHaveBeenCalledTimes(2)
-    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 100 }))
-    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 100 }))
+    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 200 }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 200 }))
     expect(listErrorLogs.mock.calls[0][1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }))
     // Embedded snapshots are used directly, so no N detail requests are needed.
     expect(getErrorLogDetail).not.toHaveBeenCalled()
@@ -599,13 +698,13 @@ describe('admin UsageView error-log export', () => {
       client_request_id: `client-${offset + index + 1}`,
       request_id: `request-${offset + index + 1}`,
       message: 'invalid request',
-      // Embedded snapshots avoid 100 detail lookups while exercising only
+      // Embedded snapshots avoid per-row detail lookups while exercising only
       // the pagination termination behavior under test.
       request_details: { body: { index: offset + index + 1 } },
     }))
 
     // The gateway enforces a 50-row maximum despite the requested page_size
-    // of 100.  It omits total but reports the effective page count.
+    // of 200.  It omits total but reports the effective page count.
     listErrorLogs
       .mockResolvedValueOnce({ items: makePage(0), pages: 2 })
       .mockResolvedValueOnce({ items: makePage(50), pages: 2 })
@@ -619,8 +718,8 @@ describe('admin UsageView error-log export', () => {
     await flushPromises()
 
     expect(listErrorLogs).toHaveBeenCalledTimes(2)
-    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 100 }))
-    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 100 }))
+    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 200 }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 200 }))
     expect(saveAs).toHaveBeenCalledTimes(1)
   })
 
@@ -658,7 +757,47 @@ describe('admin UsageView error-log export', () => {
     await flushPromises()
 
     expect(listErrorLogs).toHaveBeenCalledTimes(2)
-    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 100 }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 200 }))
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('probes past short pages when a legacy gateway omits pagination metadata', async () => {
+    const makeRows = (offset: number, count: number) => Array.from({ length: count }, (_, index) => ({
+      id: offset + index + 1,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: `client-${offset + index + 1}`,
+      request_id: `request-${offset + index + 1}`,
+      message: 'invalid request',
+      request_details: { body: { index: offset + index + 1 } },
+    }))
+
+    // The gateway silently caps each page at 50 and omits total/pages/page_size.
+    // The exporter must request the next page even though the first page is
+    // shorter than its requested 200 rows, then stop on the empty probe page.
+    listErrorLogs
+      .mockResolvedValueOnce({ items: makeRows(0, 50) })
+      .mockResolvedValueOnce({ items: makeRows(50, 1) })
+      .mockResolvedValueOnce({ items: [] })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledTimes(3)
+    expect(listErrorLogs.mock.calls.map((call) => call[0].page)).toEqual([1, 2, 3])
     expect(saveAs).toHaveBeenCalledTimes(1)
   })
 })

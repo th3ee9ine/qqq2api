@@ -77,6 +77,26 @@ type OpsErrorLog struct {
 	// 关联 api_key 名称（LEFT JOIN api_keys 取得；软删只覆盖 key 列，name 保留，故已删 key 仍有原名）。
 	APIKeyName    string `json:"api_key_name,omitempty"`
 	APIKeyDeleted bool   `json:"api_key_deleted,omitempty"`
+
+	// Optional diagnostic fields.  The regular paginated list deliberately
+	// leaves these zero-valued so it stays lightweight; the admin export can
+	// request them inline with IncludeDetails and avoid one detail query per
+	// row.  OpsErrorLogDetail keeps its historical explicit fields for the
+	// single-row endpoint, which take precedence over these promoted fields.
+	ErrorBody            string `json:"error_body,omitempty"`
+	RequestDetails       string `json:"request_details,omitempty"`
+	UpstreamStatusCode   *int   `json:"upstream_status_code,omitempty"`
+	UpstreamErrorMessage string `json:"upstream_error_message,omitempty"`
+	UpstreamErrorDetail  string `json:"upstream_error_detail,omitempty"`
+	UpstreamErrors       string `json:"upstream_errors,omitempty"`
+	AuthLatencyMs        *int64 `json:"auth_latency_ms,omitempty"`
+	RoutingLatencyMs     *int64 `json:"routing_latency_ms,omitempty"`
+	UpstreamLatencyMs    *int64 `json:"upstream_latency_ms,omitempty"`
+	ResponseLatencyMs    *int64 `json:"response_latency_ms,omitempty"`
+	TimeToFirstTokenMs   *int64 `json:"time_to_first_token_ms,omitempty"`
+	IsBusinessLimited    bool   `json:"is_business_limited,omitempty"`
+	APIKeyPrefix         string `json:"api_key_prefix,omitempty"`
+	DetailsIncluded      bool   `json:"details_included,omitempty"`
 }
 
 type OpsErrorLogDetail struct {
@@ -162,6 +182,11 @@ type OpsErrorLogFilter struct {
 	// - excluded: only show excluded errors
 	// - all: show everything
 	View string
+
+	// IncludeDetails asks the admin list query to project the diagnostic fields
+	// alongside each summary row.  It is intentionally opt-in because request
+	// snapshots can be large; user-facing list services clear this flag.
+	IncludeDetails bool
 
 	Page     int
 	PageSize int

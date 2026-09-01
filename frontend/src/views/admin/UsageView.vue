@@ -766,6 +766,7 @@ const buildErrorExportParams = (
   filterSource: AdminUsageQueryParams = filters.value,
   sortBy: string = errSortBy.value,
   sortOrder: 'asc' | 'desc' = errSortOrder.value,
+  includeDetails = false,
 ): OpsErrorListQueryParams => ({
   page,
   page_size: pageSize,
@@ -781,6 +782,7 @@ const buildErrorExportParams = (
   status_codes: filterSource.status_code != null ? String(filterSource.status_code) : undefined,
   sort_by: sortBy,
   sort_order: sortOrder,
+  ...(includeDetails ? { include_details: true } : {}),
 })
 
 function stringifyErrorExportValue(value: unknown): string | number | boolean {
@@ -795,6 +797,16 @@ function stringifyErrorExportValue(value: unknown): string | number | boolean {
     return String(value)
   }
 }
+
+// Diagnostic rows can contain a sizeable request snapshot.  Keep each
+// response bounded while still doubling the old 100-row page size; the
+// include_details projection removes the much more expensive N+1 lookups.
+const ERROR_EXPORT_PAGE_SIZE = 200
+
+// Detail requests are independent primary-key lookups. Keep a bounded worker
+// fan-out so a large export does not wait for eight serial waves while still
+// avoiding an unbounded burst against the browser/DB connection pools.
+const ERROR_EXPORT_DETAIL_CONCURRENCY = 32
 
 // XLSX worksheet cells are limited to 32,767 UTF-16 code units.  Request
 // snapshots are intentionally retained by the backend up to a much larger
@@ -916,30 +928,58 @@ function formatBooleanForErrorExport(value: boolean | null | undefined): string 
 }
 
 /**
- * Detail rows intentionally omit request_details on the paginated endpoint.
- * Resolve details in small concurrent batches; one failed detail must not
- * discard the rest of an otherwise valid export.  The abort signal is passed
- * through to axios so cancelling the progress dialog stops in-flight calls.
+ * Older gateways may omit diagnostic fields on paginated rows. Resolve those
+ * legacy rows with a bounded worker pool; one failed detail must not discard
+ * the rest of an otherwise valid export. The abort signal is passed through
+ * to axios so cancelling the progress dialog stops in-flight calls.
  */
 async function loadErrorExportDetails(
   rows: OpsErrorLog[],
   controller: AbortController
 ): Promise<Map<number, OpsErrorDetail>> {
   const details = new Map<number, OpsErrorDetail>()
-  const batchSize = 8
+  if (rows.length === 0 || controller.signal.aborted) return details
 
-  for (let offset = 0; offset < rows.length; offset += batchSize) {
-    if (controller.signal.aborted) break
-    const batch = rows.slice(offset, offset + batchSize)
-    await Promise.all(batch.map(async (row) => {
-      if (!row || !Number.isFinite(Number(row.id)) || Number(row.id) <= 0) return
+  // Keep a fixed number of workers busy instead of waiting for a whole batch
+  // to finish before starting the next one.  A single slow detail lookup then
+  // no longer stalls the other rows, while the bounded worker count still
+  // protects the browser and database connection pools.
+  let nextIndex = 0
+  const workerCount = Math.min(ERROR_EXPORT_DETAIL_CONCURRENCY, rows.length)
+  const loadNext = async (): Promise<void> => {
+    while (!controller.signal.aborted) {
+      const index = nextIndex
+      nextIndex += 1
+      if (index >= rows.length) return
+
+      const row = rows[index]
+      if (!row || !Number.isFinite(Number(row.id)) || Number(row.id) <= 0) continue
 
       // Future gateways may opt to include details in an export/list response;
       // use those values directly and avoid an unnecessary round trip.
       const embedded = row.request_details
-      if (embedded !== undefined && embedded !== null && embedded !== '') {
+      // New gateways return a marker when the list query projected the full
+      // diagnostic columns.  In that mode an empty request snapshot is still
+      // a complete result and must not trigger a fallback GET. For older
+      // compatible gateways without the marker, accept a non-empty
+      // diagnostic value as evidence that the projection is already inline.
+      const hasText = (value: unknown): boolean => typeof value === 'string' && value.length > 0
+      const hasInlineDetails = row.details_included === true
+        || (embedded !== undefined && embedded !== null && embedded !== '')
+        || hasText(row.error_body)
+        || row.upstream_status_code != null
+        || hasText(row.upstream_error_message)
+        || hasText(row.upstream_error_detail)
+        || hasText(row.upstream_errors)
+        || row.auth_latency_ms != null
+        || row.routing_latency_ms != null
+        || row.upstream_latency_ms != null
+        || row.response_latency_ms != null
+        || row.time_to_first_token_ms != null
+        || hasText(row.api_key_prefix)
+      if (hasInlineDetails) {
         details.set(row.id, row as OpsErrorDetail)
-        return
+        continue
       }
 
       try {
@@ -951,8 +991,10 @@ async function loadErrorExportDetails(
         // endpoint fails (for example, a concurrently cleaned-up log).
         console.warn(`[UsageView] Failed to load error detail ${row.id}`, error)
       }
-    }))
+    }
   }
+
+  await Promise.all(Array.from({ length: workerCount }, () => loadNext()))
 
   return details
 }
@@ -969,9 +1011,10 @@ async function exportErrorsToExcel() {
   exportProgress.progress = 0
   exportProgress.total = errTotal.value
 
-  // Keep page size below the server's shared admin limit and leave enough
-  // room for detail requests without making the browser hold a giant page.
-  const pageSize = 100
+  // Use the server's shared admin limit.  The export asks for the bounded
+  // diagnostic projection in the same query, so there is no per-row detail
+  // round trip; the server's ingestion bound keeps each snapshot finite.
+  const pageSize = ERROR_EXPORT_PAGE_SIZE
   // Freeze filters/sort for the whole operation.  Changing a control while
   // requests are in flight must not produce a workbook containing mixed
   // result sets or a filename that no longer describes its contents.
@@ -982,7 +1025,17 @@ async function exportErrorsToExcel() {
   const fileEnd = filterSnapshot.end_date || 'end'
 
   try {
-    const XLSX = await import('xlsx')
+    // Start the first list request while the code-split XLSX module is being
+    // downloaded. These operations are independent and this removes the
+    // module-download latency from the critical path on a cold browser cache.
+    const firstPageRequest = listErrorLogs(
+      buildErrorExportParams(1, pageSize, filterSnapshot, sortBySnapshot, sortOrderSnapshot, true),
+      { signal: controller.signal }
+    )
+    const [XLSX, firstResponse] = await Promise.all([
+      import('xlsx'),
+      firstPageRequest,
+    ])
     const headers = [
       t('admin.ops.errorExport.id'),
       t('admin.ops.errorExport.time'),
@@ -1039,15 +1092,15 @@ async function exportErrorsToExcel() {
     let reportedPages: number | null = null
     let effectivePageSize = pageSize
     let exportedCount = 0
+    let pendingResponse: Awaited<typeof firstPageRequest> | null = firstResponse
 
     while (true) {
       if (controller.signal.aborted) break
-      const response = await listErrorLogs(
-        buildErrorExportParams(page, pageSize, filterSnapshot, sortBySnapshot, sortOrderSnapshot),
-        {
-          signal: controller.signal
-        }
+      const response = pendingResponse ?? await listErrorLogs(
+        buildErrorExportParams(page, pageSize, filterSnapshot, sortBySnapshot, sortOrderSnapshot, true),
+        { signal: controller.signal }
       )
+      pendingResponse = null
       if (controller.signal.aborted) break
 
       const summaryRows = response.items || []
@@ -1086,6 +1139,12 @@ async function exportErrorsToExcel() {
         const requestDetails = detailRequestDetails !== undefined && detailRequestDetails !== null && detailRequestDetails !== ''
           ? detailRequestDetails
           : embeddedRequestDetails
+        // is_business_limited is tagged with omitempty on the lightweight
+        // list DTO, so a projected false value may be absent from JSON.  The
+        // details marker makes that absence unambiguous for the export.
+        const businessLimited = row.is_business_limited == null && summary.details_included === true
+          ? false
+          : row.is_business_limited
 
         return [
           row.id,
@@ -1125,7 +1184,7 @@ async function exportErrorsToExcel() {
           row.user_agent || '',
           row.client_ip || '',
           formatBooleanForErrorExport(row.resolved),
-          formatBooleanForErrorExport(row.is_business_limited),
+          formatBooleanForErrorExport(businessLimited),
           requestDetailsForExcel(requestDetails, row.id, row.request_id || row.client_request_id || '', requestDetailChunks),
         ]
       })
@@ -1137,12 +1196,19 @@ async function exportErrorsToExcel() {
         ? Math.min(100, Math.round((exportedCount / total) * 100))
         : 0
 
-      // A known total is authoritative.  Without one, use an explicit page
+      // A known total is authoritative. Without one, use an explicit page
       // count first, then the effective page size reported by the gateway;
       // this avoids truncating results when a server caps our requested size.
+      // If a legacy gateway omits all pagination metadata, keep probing until
+      // an empty page instead of treating a short page as the end: some
+      // gateways silently cap page_size and would otherwise lose rows.
       const reachedKnownTotal = totalKnown && exportedCount >= total
       const reachedReportedPages = !totalKnown && reportedPages !== null && page >= reportedPages
-      const reachedShortPage = !totalKnown && reportedPages === null && summaryRows.length < effectivePageSize
+      const reachedShortPage = !totalKnown
+        && reportedPages === null
+        && Number.isFinite(parsedPageSize)
+        && parsedPageSize > 0
+        && summaryRows.length < effectivePageSize
       if (reachedKnownTotal || reachedReportedPages || reachedShortPage) break
       page += 1
     }
@@ -1185,6 +1251,9 @@ async function exportErrorsToExcel() {
     }
   } catch (error) {
     if (!controller.signal.aborted) {
+      // If module loading or a list request fails while the other operation is
+      // still in flight, stop it before tearing down the progress state.
+      controller.abort()
       console.error('Failed to export error logs:', error)
       appStore.showError(t('admin.ops.errorExport.failed'))
     }

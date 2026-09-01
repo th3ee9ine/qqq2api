@@ -43,7 +43,7 @@ func TestListUserErrorRequests_ForcesScopeAndRedacts(t *testing.T) {
 	svc := &OpsService{opsRepo: stub}
 	uid := int64(42)
 	kid := int64(7)
-	in := &OpsErrorLogFilter{UserID: nil, View: "errors", Phase: "upstream", APIKeyID: &kid}
+	in := &OpsErrorLogFilter{UserID: nil, View: "errors", Phase: "upstream", APIKeyID: &kid, IncludeDetails: true}
 	out, err := svc.ListUserErrorRequests(context.Background(), uid, in)
 	if err != nil {
 		t.Fatal(err)
@@ -55,6 +55,9 @@ func TestListUserErrorRequests_ForcesScopeAndRedacts(t *testing.T) {
 	// 强制 View=all（含业务限流/余额）
 	if stub.gotFilter.View != "all" {
 		t.Fatalf("View not forced to all: %q", stub.gotFilter.View)
+	}
+	if stub.gotFilter.IncludeDetails {
+		t.Fatal("user-facing error list must not request diagnostic details")
 	}
 	// 强制排除 count_tokens
 	if !stub.gotFilter.ExcludeCountTokens {

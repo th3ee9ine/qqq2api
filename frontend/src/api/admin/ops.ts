@@ -940,6 +940,25 @@ export interface OpsErrorLog {
   // Keep it optional so callers can consume either response shape safely.
   request_details?: string | Record<string, unknown> | unknown[] | null
 
+  // True when the list query intentionally projected all diagnostic fields;
+  // this distinguishes an inline empty snapshot from an omitted snapshot and
+  // lets the exporter avoid a redundant per-row detail request.
+  details_included?: boolean
+
+  // Optional diagnostic fields returned when include_details is enabled.
+  error_body?: string
+  upstream_status_code?: number | null
+  upstream_error_message?: string
+  upstream_error_detail?: string
+  upstream_errors?: string
+  auth_latency_ms?: number | null
+  routing_latency_ms?: number | null
+  upstream_latency_ms?: number | null
+  response_latency_ms?: number | null
+  time_to_first_token_ms?: number | null
+  is_business_limited?: boolean
+  api_key_prefix?: string | null
+
 }
 
 export interface OpsErrorDetail extends OpsErrorLog {
@@ -1122,6 +1141,10 @@ export type OpsErrorListQueryParams = {
   // 服务端排序,列白名单见后端 opsErrorLogsOrderBy(created_at/model/status_code)
   sort_by?: string
   sort_order?: 'asc' | 'desc'
+
+  // Heavy diagnostic projection used by the error-log exporter.  It is
+  // opt-in so ordinary table requests never carry request snapshots.
+  include_details?: boolean
 }
 
 // Legacy unified endpoints
