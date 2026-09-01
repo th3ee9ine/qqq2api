@@ -894,6 +894,123 @@ describe('admin UsageView error-log export', () => {
     expect(listErrorLogs.mock.calls.map((call) => call[0].page)).toEqual([1, 2])
     expect(saveAs).toHaveBeenCalledTimes(1)
   })
+
+  it('probes until an empty page when total metadata is null', async () => {
+    const makeRow = (id: number) => ({
+      id,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: `client-${id}`,
+      request_id: `request-${id}`,
+      message: 'invalid request',
+      request_details: { body: { id } },
+    })
+
+    listErrorLogs
+      .mockResolvedValueOnce({ items: [makeRow(9201)], total: null, pages: 1, page_size: 50 })
+      .mockResolvedValueOnce({ items: [makeRow(9202)], total: 0, pages: 1, page_size: 50 })
+      .mockResolvedValueOnce({ items: [], total: 0, pages: 0, page_size: 50 })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledTimes(3)
+    expect(listErrorLogs.mock.calls.map((call) => call[0].page)).toEqual([1, 2, 3])
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a reported page count when total metadata is invalid', async () => {
+    const makeRow = (id: number) => ({
+      id,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: `client-${id}`,
+      request_id: `request-${id}`,
+      message: 'invalid request',
+      request_details: { body: { id } },
+    })
+
+    listErrorLogs
+      .mockResolvedValueOnce({ items: [makeRow(9301)], total: -1, pages: 2, page_size: 50 })
+      .mockResolvedValueOnce({ items: [makeRow(9302)], total: 0, pages: 1, page_size: 50 })
+      .mockResolvedValueOnce({ items: [], total: 0, pages: 0, page_size: 50 })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledTimes(3)
+    expect(listErrorLogs.mock.calls.map((call) => call[0].page)).toEqual([1, 2, 3])
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats a cancelled native file picker as a silent export cancellation', async () => {
+    const row = {
+      id: 9401,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: 'client-9401',
+      request_id: 'request-9401',
+      message: 'invalid request',
+      request_details: { body: { id: 9401 } },
+    }
+    listErrorLogs.mockResolvedValueOnce({ items: [row], total: 6000, pages: 120, page_size: 50 })
+
+    const windowWithPicker = window as Window & { showSaveFilePicker?: unknown }
+    const previousPicker = windowWithPicker.showSaveFilePicker
+    windowWithPicker.showSaveFilePicker = vi.fn().mockRejectedValue(new DOMException('cancelled', 'AbortError'))
+
+    try {
+      const wrapper = mountRouteFilteredUsageView()
+      vi.advanceTimersByTime(120)
+      await flushPromises()
+      ;(wrapper.vm as any).activeTab = 'errors'
+
+      await (wrapper.vm as any).exportToExcel()
+      await flushPromises()
+
+      expect(listErrorLogs).toHaveBeenCalledTimes(1)
+      expect(saveAs).not.toHaveBeenCalled()
+      expect(xlsxWrite).not.toHaveBeenCalled()
+      expect((wrapper.vm as any).exporting).toBe(false)
+    } finally {
+      if (previousPicker === undefined) delete windowWithPicker.showSaveFilePicker
+      else windowWithPicker.showSaveFilePicker = previousPicker
+    }
+  })
 })
 
 describe('admin UsageView removed user surface', () => {

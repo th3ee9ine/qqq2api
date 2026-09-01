@@ -1098,6 +1098,11 @@ function getErrorExportSavePicker(): ErrorExportSavePicker | null {
     : null
 }
 
+function isErrorExportAbortError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('name' in error)) return false
+  return (error as { name?: unknown }).name === 'AbortError'
+}
+
 function estimateErrorExportValueBytes(value: unknown): number {
   // Do not stringify the complete page just to decide whether it is too
   // large. JSON.stringify briefly creates another copy of every request
@@ -1163,6 +1168,27 @@ function estimateErrorExportValueBytes(value: unknown): number {
 
 function estimateErrorExportPayloadBytes(response: OpsErrorLogsResponse): number {
   return estimateErrorExportValueBytes(response.items || [])
+}
+
+/**
+ * A present-but-invalid total (including null/zero with rows) is stale
+ * pagination metadata, not an empty result. Keep probing until an empty page
+ * instead of trusting a coincidental page count or short page.
+ *
+ * An omitted total is treated separately: compatible gateways may omit only
+ * the count while still returning a reliable page_size, and the caller keeps
+ * the existing short-page termination behaviour for that shape.
+ */
+function shouldProbeErrorExportUntilEmpty(
+  response: OpsErrorLogsResponse,
+  rowCount: number,
+  parsedTotal: number,
+): boolean {
+  if (rowCount <= 0 || !Object.prototype.hasOwnProperty.call(response, 'total')) return false
+  return response.total == null
+    || !Number.isFinite(parsedTotal)
+    || parsedTotal < 0
+    || parsedTotal === 0
 }
 
 /** Decide the format before creating a potentially enormous XLSX worksheet. */
@@ -1291,19 +1317,48 @@ async function exportErrorsToCsv(
 ): Promise<void> {
   const filename = `error_logs_${fileStart}_to_${fileEnd}.csv`
   let writable: ErrorExportWritable | null = null
+  let writableClosed = false
+  let writableAborted = false
+  const abortWritable = async (reason?: unknown): Promise<void> => {
+    if (!writable || writableClosed || writableAborted) return
+    writableAborted = true
+    try {
+      await writable.abort?.(reason)
+    } catch {
+      // Preserve the original cancellation/error; a failed cleanup is
+      // secondary.
+    }
+  }
+
+  // A cancellation can race with the first-page response. Do not open a file
+  // picker (or allocate a fallback Blob) after the user has already stopped
+  // the export.
+  if (controller.signal.aborted) return
   const picker = getErrorExportSavePicker()
   if (picker) {
     try {
+      if (controller.signal.aborted) return
       const fileHandle = await picker({
         suggestedName: filename,
         types: [{ description: 'CSV files', accept: { 'text/csv': ['.csv'] } }],
       })
+      if (controller.signal.aborted) return
       writable = await fileHandle.createWritable()
+      if (controller.signal.aborted) {
+        await abortWritable()
+        return
+      }
     } catch (error) {
       // A user cancellation should follow the normal export cancellation
       // path. Other picker failures can fall back to a Blob download.
-      if (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError') {
-        throw error
+      if (isErrorExportAbortError(error)) {
+        controller.abort()
+        await abortWritable(error)
+        return
+      }
+      if (controller.signal.aborted) {
+        await abortWritable(error)
+        return
       }
       console.warn('[UsageView] File picker unavailable; falling back to Blob CSV', error)
     }
@@ -1351,11 +1406,7 @@ async function exportErrorsToCsv(
       if (page === 1) {
         const parsedTotal = Number(response.total)
         const parsedPages = Number(response.pages)
-        forceProbeUntilEmpty = response.total !== undefined
-          && response.total !== null
-          && (!Number.isFinite(parsedTotal)
-            || parsedTotal < 0
-            || (parsedTotal === 0 && summaryRows.length > 0))
+        forceProbeUntilEmpty = shouldProbeErrorExportUntilEmpty(response, summaryRows.length, parsedTotal)
         const validTotalMetadata = response.total !== undefined
           && response.total !== null
           && Number.isFinite(parsedTotal)
@@ -1394,7 +1445,10 @@ async function exportErrorsToCsv(
         : 0
 
       const reachedKnownTotal = totalKnown && exportedCount >= total
-      const reachedReportedPages = !totalKnown && reportedPages !== null && page >= reportedPages
+      const reachedReportedPages = !totalKnown
+        && !forceProbeUntilEmpty
+        && reportedPages !== null
+        && page >= reportedPages
       const reachedShortPage = !totalKnown
         && reportedPages === null
         && !forceProbeUntilEmpty
@@ -1408,30 +1462,40 @@ async function exportErrorsToCsv(
       }
     }
   } catch (error) {
-    if (writable?.abort) {
-      try {
-        await writable.abort(error)
-      } catch {
-        // Preserve the original export error; a failed cleanup is secondary.
-      }
+    await abortWritable(error)
+    if (controller.signal.aborted || isErrorExportAbortError(error)) {
+      controller.abort()
+      return
     }
     throw error
   }
 
   if (controller.signal.aborted) {
-    if (writable?.abort) {
-      try {
-        await writable.abort()
-      } catch {
-        // Ignore cleanup errors after an explicit cancellation.
-      }
-    }
+    await abortWritable()
     return
   }
 
   if (!controller.signal.aborted) {
     if (writable) {
-      await writable.close()
+      try {
+        if (controller.signal.aborted) {
+          await abortWritable()
+          return
+        }
+        await writable.close()
+        writableClosed = true
+        // Cancellation may arrive while the sink is flushing its final
+        // bytes. A successful close after that race must not report a
+        // completed export to the user.
+        if (controller.signal.aborted) return
+      } catch (error) {
+        await abortWritable(error)
+        if (isErrorExportAbortError(error)) {
+          controller.abort()
+          return
+        }
+        throw error
+      }
     } else {
       saveAs(new Blob(csvParts, { type: 'text/csv;charset=utf-8' }), filename)
     }
@@ -1532,11 +1596,7 @@ async function exportErrorsToExcel() {
       if (page === 1) {
         const parsedTotal = Number(response.total)
         const parsedPages = Number(response.pages)
-        forceProbeUntilEmpty = response.total !== undefined
-          && response.total !== null
-          && (!Number.isFinite(parsedTotal)
-            || parsedTotal < 0
-            || (parsedTotal === 0 && summaryRows.length > 0))
+        forceProbeUntilEmpty = shouldProbeErrorExportUntilEmpty(response, summaryRows.length, parsedTotal)
         // Treat a zero total with a non-empty first page as malformed/legacy
         // pagination metadata rather than stopping after that page. A valid
         // `pages` value remains useful as a second termination signal.
@@ -1627,7 +1687,10 @@ async function exportErrorsToExcel() {
       // an empty page instead of treating a short page as the end: some
       // gateways silently cap page_size and would otherwise lose rows.
       const reachedKnownTotal = totalKnown && exportedCount >= total
-      const reachedReportedPages = !totalKnown && reportedPages !== null && page >= reportedPages
+      const reachedReportedPages = !totalKnown
+        && !forceProbeUntilEmpty
+        && reportedPages !== null
+        && page >= reportedPages
       const reachedShortPage = !totalKnown
         && reportedPages === null
         && !forceProbeUntilEmpty
