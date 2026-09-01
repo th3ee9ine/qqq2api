@@ -330,6 +330,7 @@ export default {
     failedToLoad: '加载使用记录失败',
     noDataToExport: '没有可导出的数据',
     exportSuccess: '使用数据导出成功',
+    exportCsvFallback: '数据量较大，已切换为 CSV 导出以降低内存占用',
     exportFailed: '使用数据导出失败',
     exportExcelSuccess: '使用数据导出成功（Excel格式）',
     exportExcelFailed: '使用数据导出失败',

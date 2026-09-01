@@ -77,6 +77,15 @@ func (h *UsageHandler) List(c *gin.Context) {
 		}
 		exactTotal = parsed
 	}
+	skipCount := false
+	if skipCountRaw := strings.TrimSpace(c.Query("skip_count")); skipCountRaw != "" {
+		parsed, err := strconv.ParseBool(skipCountRaw)
+		if err != nil {
+			response.BadRequest(c, "Invalid skip_count value, use true or false")
+			return
+		}
+		skipCount = parsed
+	}
 
 	// Parse filters
 	var apiKeyID, accountID, groupID int64
@@ -197,6 +206,7 @@ func (h *UsageHandler) List(c *gin.Context) {
 		StartTime:             startTime,
 		EndTime:               endTime,
 		ExactTotal:            exactTotal,
+		SkipCount:             skipCount,
 	}
 
 	records, result, err := h.usageService.ListWithFilters(c.Request.Context(), params, filters)

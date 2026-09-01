@@ -65,3 +65,23 @@ func TestBuildUsageLogBatchInsertQuery_UsesConflictDoNothing(t *testing.T) {
 	require.Contains(t, query, "ON CONFLICT (request_id, api_key_id) DO NOTHING")
 	require.NotContains(t, strings.ToUpper(query), "DO UPDATE")
 }
+
+func TestShouldUseFastUsageLogTotalSkipCount(t *testing.T) {
+	// A selective filter normally keeps the exact-count path because it is
+	// cheap for the table view. Export callers explicitly opt out so each page
+	// does not repeat a COUNT(*) over a large history.
+	require.True(t, shouldUseFastUsageLogTotal(UsageLogFilters{
+		APIKeyID:  42,
+		SkipCount: true,
+	}))
+	require.False(t, shouldUseFastUsageLogTotal(UsageLogFilters{
+		APIKeyID: 42,
+	}))
+	// An explicit exact_total request remains authoritative if both flags are
+	// accidentally supplied by a client.
+	require.False(t, shouldUseFastUsageLogTotal(UsageLogFilters{
+		APIKeyID:   42,
+		SkipCount:  true,
+		ExactTotal: true,
+	}))
+}

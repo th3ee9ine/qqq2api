@@ -328,6 +328,7 @@ export default {
     failedToLoad: 'Failed to load usage logs',
     noDataToExport: 'No data to export',
     exportSuccess: 'Usage data exported successfully',
+    exportCsvFallback: 'Large export switched to CSV to reduce memory usage',
     exportFailed: 'Failed to export usage data',
     exportExcelSuccess: 'Usage data exported successfully (Excel format)',
     exportExcelFailed: 'Failed to export usage data',

@@ -82,6 +82,8 @@ export interface CreateUsageCleanupTaskRequest {
 
 export interface AdminUsageQueryParams extends UsageQueryParams {
   exact_total?: boolean
+  /** Skip COUNT(*) on export pages after the initial metadata request. */
+  skip_count?: boolean
   billing_mode?: string
   upstream_model_mismatch?: boolean
   sort_by?: string
@@ -90,6 +92,19 @@ export interface AdminUsageQueryParams extends UsageQueryParams {
   error_phase?: string | null
   error_category?: string | null
   status_code?: number | null
+}
+
+/**
+ * Options for usage-list requests.
+ *
+ * The regular table requests keep the shared axios timeout, while long-running
+ * export pages can opt into a larger timeout without changing the global
+ * client (or affecting unrelated admin requests).  Keeping the option here
+ * also makes cancellation explicit for callers that stream a large export.
+ */
+export interface AdminUsageRequestOptions {
+  signal?: AbortSignal
+  timeout?: number
 }
 
 // ==================== API Functions ====================
@@ -101,11 +116,12 @@ export interface AdminUsageQueryParams extends UsageQueryParams {
  */
 export async function list(
   params: AdminUsageQueryParams,
-  options?: { signal?: AbortSignal }
+  options: AdminUsageRequestOptions = {}
 ): Promise<PaginatedResponse<AdminUsageLog>> {
   const { data } = await apiClient.get<PaginatedResponse<AdminUsageLog>>('/admin/usage', {
     params,
-    signal: options?.signal
+    signal: options.signal,
+    ...(options.timeout != null ? { timeout: options.timeout } : {}),
   })
   return data
 }

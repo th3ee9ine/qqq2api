@@ -171,6 +171,12 @@ func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
 	if filters.ExactTotal {
 		return false
 	}
+	// Export callers can explicitly opt out of COUNT(*) even when a strong
+	// account/API-key filter would normally retain the exact-count path. The
+	// caller is responsible for terminating on a short/empty page in this mode.
+	if filters.SkipCount {
+		return true
+	}
 	// 强选择过滤下记录集通常较小，保留精确总数。
 	return filters.UserID == 0 && filters.APIKeyID == 0 && filters.AccountID == 0
 }

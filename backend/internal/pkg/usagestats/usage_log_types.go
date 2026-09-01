@@ -285,6 +285,11 @@ type UsageLogFilters struct {
 	EndTime               *time.Time
 	// ExactTotal requests exact COUNT(*) for pagination. Default false for fast large-table paging.
 	ExactTotal bool
+	// SkipCount skips the COUNT(*) query for a page and uses the fast
+	// LIMIT+1 pagination path even when a selective filter is present. This is
+	// intended for long-running exports, whose caller can detect the end from
+	// a short/empty page and does not need an exact total on every request.
+	SkipCount bool
 }
 
 // UsageStats represents usage statistics
