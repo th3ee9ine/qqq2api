@@ -176,11 +176,12 @@ import UsageTable from '@/components/admin/usage/UsageTable.vue'; import UsageEx
 import UsageCleanupDialog from '@/components/admin/usage/UsageCleanupDialog.vue'
 import OpsErrorLogTable from '@/views/admin/ops/components/OpsErrorLogTable.vue'
 import OpsErrorDetailModal from '@/views/admin/ops/components/OpsErrorDetailModal.vue'
-import { listErrorLogs } from '@/api/admin/ops'
-import type { OpsErrorLog } from '@/api/admin/ops'
+import { getErrorLogDetail, listErrorLogs } from '@/api/admin/ops'
+import type { OpsErrorDetail, OpsErrorLog, OpsErrorListQueryParams } from '@/api/admin/ops'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'; import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'; import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
 import EndpointDistributionChart from '@/components/charts/EndpointDistributionChart.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { mapErrorCategory } from '@/utils/errorCategory'
 import type { AdminUsageLog, TrendDataPoint, ModelStat, GroupStat, EndpointStat } from '@/types'; import type { AdminUsageStatsResponse, AdminUsageQueryParams } from '@/api/admin/usage'
 
 const { t } = useI18n()
@@ -488,6 +489,14 @@ const getRequestTypeLabel = (log: AdminUsageLog): string => {
 }
 
 const exportToExcel = async () => {
+  // The same toolbar is used by the usage and error tabs.  Error rows come
+  // from the ops log endpoint and require a detail lookup so the exported
+  // workbook can include the complete user request snapshot.
+  if (activeTab.value === 'errors') {
+    await exportErrorsToExcel()
+    return
+  }
+
   if (exporting.value) return; exporting.value = true; exportProgress.show = true
   const c = new AbortController(); exportAbortController = c
   try {
@@ -742,6 +751,449 @@ const loadAdminErrors = async () => {
     appStore.showError(t('usage.errors.failedToLoad'))
   } finally {
     errLoading.value = false
+  }
+}
+
+/**
+ * Build the exact query used by the error tab for an export page.  Keep this
+ * in one place so a downloaded workbook cannot silently differ from the rows
+ * currently visible in the table (especially date, category, and sort
+ * filters).
+ */
+const buildErrorExportParams = (
+  page: number,
+  pageSize: number,
+  filterSource: AdminUsageQueryParams = filters.value,
+  sortBy: string = errSortBy.value,
+  sortOrder: 'asc' | 'desc' = errSortOrder.value,
+): OpsErrorListQueryParams => ({
+  page,
+  page_size: pageSize,
+  view: 'all',
+  start_time: toRFC3339(filterSource.start_date),
+  end_time: toRFC3339(filterSource.end_date, true),
+  api_key_id: filterSource.api_key_id ?? undefined,
+  account_id: filterSource.account_id ?? undefined,
+  group_id: filterSource.group_id ?? undefined,
+  model: filterSource.model || undefined,
+  phase: filterSource.error_phase || undefined,
+  category: filterSource.error_category || undefined,
+  status_codes: filterSource.status_code != null ? String(filterSource.status_code) : undefined,
+  sort_by: sortBy,
+  sort_order: sortOrder,
+})
+
+function stringifyErrorExportValue(value: unknown): string | number | boolean {
+  if (value == null) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value
+  try {
+    // JSON.stringify returns undefined for values such as functions and
+    // symbols.  Keep the worksheet cell type stable even for malformed or
+    // legacy payloads received from a gateway.
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+// XLSX worksheet cells are limited to 32,767 UTF-16 code units.  Request
+// snapshots are intentionally retained by the backend up to a much larger
+// bound, so keep oversized values lossless by placing chunks on a companion
+// sheet while leaving a short, discoverable marker in the main table.
+const ERROR_EXPORT_CELL_MAX_CHARS = 32767
+
+type ErrorRequestDetailChunk = [number, string, number, number, string]
+
+// Other diagnostic text fields (notably upstream_errors) can also exceed the
+// XLSX per-cell limit. Keep them on a separate companion sheet so the request
+// details sheet and its existing five-column contract remain unchanged.
+type ErrorLargeTextChunk = [number, string, string, number, number, string]
+
+/**
+ * Split text on the XLSX UTF-16 code-unit boundary without separating a
+ * surrogate pair.  JavaScript's `String#slice` counts code units, so a plain
+ * fixed-width slice can otherwise leave an emoji split across two cells.
+ */
+function splitErrorExportText(value: string): string[] {
+  if (value.length <= ERROR_EXPORT_CELL_MAX_CHARS) return [value]
+
+  const chunks: string[] = []
+  let offset = 0
+  while (offset < value.length) {
+    let end = Math.min(offset + ERROR_EXPORT_CELL_MAX_CHARS, value.length)
+    if (
+      end < value.length
+      && end > offset
+      && value.charCodeAt(end - 1) >= 0xd800
+      && value.charCodeAt(end - 1) <= 0xdbff
+      && value.charCodeAt(end) >= 0xdc00
+      && value.charCodeAt(end) <= 0xdfff
+    ) {
+      end -= 1
+    }
+    // A surrogate pair is at most two code units, so this guard is only a
+    // defensive fallback for malformed strings or future limit changes.
+    if (end <= offset) end = Math.min(offset + ERROR_EXPORT_CELL_MAX_CHARS, value.length)
+    chunks.push(value.slice(offset, end))
+    offset = end
+  }
+  return chunks
+}
+
+function requestDetailsForExcel(
+  value: unknown,
+  errorId: number,
+  requestId: string,
+  chunks: ErrorRequestDetailChunk[]
+): string | number | boolean {
+  const serialized = stringifyErrorExportValue(value)
+  if (typeof serialized !== 'string' || serialized.length <= ERROR_EXPORT_CELL_MAX_CHARS) {
+    return serialized
+  }
+
+  const textChunks = splitErrorExportText(serialized)
+  const chunkCount = textChunks.length
+  for (let index = 0; index < chunkCount; index += 1) {
+    chunks.push([
+      errorId,
+      requestId,
+      index + 1,
+      chunkCount,
+      textChunks[index],
+    ])
+  }
+
+  const marker = t('admin.ops.errorExport.requestDetailsChunked', { count: chunkCount })
+  // Keep the marker visible even if a translated marker is unusually long.
+  const safeMarker = marker.slice(0, ERROR_EXPORT_CELL_MAX_CHARS)
+  const prefixLength = Math.max(0, ERROR_EXPORT_CELL_MAX_CHARS - safeMarker.length)
+  return serialized.slice(0, prefixLength) + safeMarker
+}
+
+function largeTextForExcel(
+  value: unknown,
+  errorId: number,
+  requestId: string,
+  fieldLabel: string,
+  chunks: ErrorLargeTextChunk[]
+): string | number | boolean {
+  const serialized = stringifyErrorExportValue(value)
+  if (typeof serialized !== 'string' || serialized.length <= ERROR_EXPORT_CELL_MAX_CHARS) {
+    return serialized
+  }
+
+  const textChunks = splitErrorExportText(serialized)
+  const chunkCount = textChunks.length
+  for (let index = 0; index < chunkCount; index += 1) {
+    chunks.push([
+      errorId,
+      requestId,
+      fieldLabel,
+      index + 1,
+      chunkCount,
+      textChunks[index],
+    ])
+  }
+
+  const marker = t('admin.ops.errorExport.fieldChunked', { field: fieldLabel, count: chunkCount })
+  const safeMarker = marker.slice(0, ERROR_EXPORT_CELL_MAX_CHARS)
+  const prefixLength = Math.max(0, ERROR_EXPORT_CELL_MAX_CHARS - safeMarker.length)
+  return serialized.slice(0, prefixLength) + safeMarker
+}
+
+function formatErrorRequestType(type: number | null | undefined): string {
+  switch (type) {
+    case 1: return t('admin.ops.errorLog.requestTypeSync')
+    case 2: return t('admin.ops.errorLog.requestTypeStream')
+    case 3: return t('admin.ops.errorLog.requestTypeWs')
+    default: return type == null ? '' : String(type)
+  }
+}
+
+function formatBooleanForErrorExport(value: boolean | null | undefined): string {
+  if (value == null) return ''
+  return t(value ? 'common.yes' : 'common.no')
+}
+
+/**
+ * Detail rows intentionally omit request_details on the paginated endpoint.
+ * Resolve details in small concurrent batches; one failed detail must not
+ * discard the rest of an otherwise valid export.  The abort signal is passed
+ * through to axios so cancelling the progress dialog stops in-flight calls.
+ */
+async function loadErrorExportDetails(
+  rows: OpsErrorLog[],
+  controller: AbortController
+): Promise<Map<number, OpsErrorDetail>> {
+  const details = new Map<number, OpsErrorDetail>()
+  const batchSize = 8
+
+  for (let offset = 0; offset < rows.length; offset += batchSize) {
+    if (controller.signal.aborted) break
+    const batch = rows.slice(offset, offset + batchSize)
+    await Promise.all(batch.map(async (row) => {
+      if (!row || !Number.isFinite(Number(row.id)) || Number(row.id) <= 0) return
+
+      // Future gateways may opt to include details in an export/list response;
+      // use those values directly and avoid an unnecessary round trip.
+      const embedded = row.request_details
+      if (embedded !== undefined && embedded !== null && embedded !== '') {
+        details.set(row.id, row as OpsErrorDetail)
+        return
+      }
+
+      try {
+        const detail = await getErrorLogDetail(row.id, { signal: controller.signal })
+        if (detail) details.set(row.id, detail)
+      } catch (error) {
+        if (controller.signal.aborted) throw error
+        // Keep the summary row in the workbook even if an individual detail
+        // endpoint fails (for example, a concurrently cleaned-up log).
+        console.warn(`[UsageView] Failed to load error detail ${row.id}`, error)
+      }
+    }))
+  }
+
+  return details
+}
+
+/** Export the currently filtered error log list, including full request snapshots. */
+async function exportErrorsToExcel() {
+  if (exporting.value) return
+  exporting.value = true
+  exportProgress.show = true
+  const controller = new AbortController()
+  exportAbortController = controller
+
+  exportProgress.current = 0
+  exportProgress.progress = 0
+  exportProgress.total = errTotal.value
+
+  // Keep page size below the server's shared admin limit and leave enough
+  // room for detail requests without making the browser hold a giant page.
+  const pageSize = 100
+  // Freeze filters/sort for the whole operation.  Changing a control while
+  // requests are in flight must not produce a workbook containing mixed
+  // result sets or a filename that no longer describes its contents.
+  const filterSnapshot = { ...filters.value }
+  const sortBySnapshot = errSortBy.value
+  const sortOrderSnapshot = errSortOrder.value
+  const fileStart = filterSnapshot.start_date || 'start'
+  const fileEnd = filterSnapshot.end_date || 'end'
+
+  try {
+    const XLSX = await import('xlsx')
+    const headers = [
+      t('admin.ops.errorExport.id'),
+      t('admin.ops.errorExport.time'),
+      t('admin.ops.errorExport.phase'),
+      t('admin.ops.errorExport.type'),
+      t('admin.ops.errorExport.category'),
+      t('admin.ops.errorExport.owner'),
+      t('admin.ops.errorExport.source'),
+      t('admin.ops.errorExport.severity'),
+      t('admin.ops.errorExport.status'),
+      t('admin.ops.errorExport.platform'),
+      t('admin.ops.errorExport.model'),
+      t('admin.ops.errorExport.requestedModel'),
+      t('admin.ops.errorExport.upstreamModel'),
+      t('admin.ops.errorExport.inboundEndpoint'),
+      t('admin.ops.errorExport.upstreamEndpoint'),
+      t('admin.ops.errorExport.apiKey'),
+      t('admin.ops.errorExport.account'),
+      t('admin.ops.errorExport.group'),
+      // User identity is intentionally not exported: the admin Ops contract
+      // keeps user_id/user_email out of responses; request attribution remains
+      // available through the request IDs and captured request snapshot.
+      t('admin.ops.errorExport.clientRequestId'),
+      t('admin.ops.errorExport.requestId'),
+      t('admin.ops.errorExport.requestPath'),
+      t('admin.ops.errorExport.requestType'),
+      t('admin.ops.errorExport.stream'),
+      t('admin.ops.errorExport.message'),
+      t('admin.ops.errorExport.errorBody'),
+      t('admin.ops.errorExport.upstreamStatus'),
+      t('admin.ops.errorExport.upstreamMessage'),
+      t('admin.ops.errorExport.upstreamDetail'),
+      t('admin.ops.errorExport.upstreamEvents'),
+      t('admin.ops.errorExport.authLatency'),
+      t('admin.ops.errorExport.routingLatency'),
+      t('admin.ops.errorExport.upstreamLatency'),
+      t('admin.ops.errorExport.responseLatency'),
+      t('admin.ops.errorExport.timeToFirstToken'),
+      t('admin.ops.errorExport.userAgent'),
+      t('admin.ops.errorExport.clientIp'),
+      t('admin.ops.errorExport.resolved'),
+      t('admin.ops.errorExport.businessLimited'),
+      // Keep the complete JSON snapshot as a dedicated field.  This is the
+      // canonical export value; the summary columns above aid filtering.
+      t('admin.ops.errorExport.requestDetails'),
+    ]
+    const ws = XLSX.utils.aoa_to_sheet([headers])
+    const requestDetailChunks: ErrorRequestDetailChunk[] = []
+    const largeTextChunks: ErrorLargeTextChunk[] = []
+
+    let page = 1
+    let total = errTotal.value
+    let totalKnown = false
+    let reportedPages: number | null = null
+    let effectivePageSize = pageSize
+    let exportedCount = 0
+
+    while (true) {
+      if (controller.signal.aborted) break
+      const response = await listErrorLogs(
+        buildErrorExportParams(page, pageSize, filterSnapshot, sortBySnapshot, sortOrderSnapshot),
+        {
+          signal: controller.signal
+        }
+      )
+      if (controller.signal.aborted) break
+
+      const summaryRows = response.items || []
+      const parsedPageSize = Number(response.page_size)
+      if (Number.isFinite(parsedPageSize) && parsedPageSize > 0) {
+        // A compatible gateway may cap page_size below what we requested.
+        // Remember the effective value so a full capped page is not mistaken
+        // for the end of an otherwise paginated result set.
+        effectivePageSize = parsedPageSize
+      }
+      if (page === 1) {
+        const parsedTotal = Number(response.total)
+        const parsedPages = Number(response.pages)
+        // Treat a zero total with a non-empty first page as malformed/legacy
+        // pagination metadata rather than stopping after that page. A valid
+        // `pages` value remains useful as a second termination signal.
+        totalKnown = response.total !== undefined && response.total !== null && Number.isFinite(parsedTotal) && (parsedTotal > 0 || summaryRows.length === 0)
+        reportedPages = Number.isFinite(parsedPages) && parsedPages > 0 ? parsedPages : null
+        total = totalKnown ? parsedTotal : 0
+        exportProgress.total = total
+      }
+      if (summaryRows.length === 0) break
+
+      const detailById = await loadErrorExportDetails(summaryRows, controller)
+      if (controller.signal.aborted) break
+
+      const rows = summaryRows.map((summary) => {
+        const detail = detailById.get(summary.id)
+        // The list DTO is intentionally lightweight while the detail DTO
+        // carries diagnostic fields; normalize both shapes for the exporter.
+        const row = { ...summary, ...(detail || {}) } as OpsErrorDetail & Partial<OpsErrorLog>
+        const embeddedRequestDetails = summary.request_details
+        const detailRequestDetails = detail?.request_details
+        // Prefer a non-empty detail value, but retain an embedded snapshot if
+        // a compatible gateway returns an empty detail field.
+        const requestDetails = detailRequestDetails !== undefined && detailRequestDetails !== null && detailRequestDetails !== ''
+          ? detailRequestDetails
+          : embeddedRequestDetails
+
+        return [
+          row.id,
+          row.created_at,
+          row.phase || '',
+          row.type || '',
+          t(`usage.errors.categories.${mapErrorCategory(row.phase, row.type)}`),
+          row.error_owner || '',
+          row.error_source || '',
+          row.severity || '',
+          row.status_code ?? '',
+          row.platform || '',
+          row.model || '',
+          row.requested_model || '',
+          row.upstream_model || '',
+          row.inbound_endpoint || '',
+          row.upstream_endpoint || '',
+          row.api_key_name || (row.api_key_id != null ? `#${row.api_key_id}` : ''),
+          row.account_name || (row.account_id != null ? `#${row.account_id}` : ''),
+          row.group_name || (row.group_id != null ? `#${row.group_id}` : ''),
+          row.client_request_id || '',
+          row.request_id || '',
+          row.request_path || '',
+          formatErrorRequestType(row.request_type),
+          formatBooleanForErrorExport(row.stream),
+          row.message || '',
+          largeTextForExcel(row.error_body, row.id, row.request_id || row.client_request_id || '', t('admin.ops.errorExport.errorBody'), largeTextChunks),
+          row.upstream_status_code ?? '',
+          largeTextForExcel(row.upstream_error_message, row.id, row.request_id || row.client_request_id || '', t('admin.ops.errorExport.upstreamMessage'), largeTextChunks),
+          largeTextForExcel(row.upstream_error_detail, row.id, row.request_id || row.client_request_id || '', t('admin.ops.errorExport.upstreamDetail'), largeTextChunks),
+          largeTextForExcel(row.upstream_errors, row.id, row.request_id || row.client_request_id || '', t('admin.ops.errorExport.upstreamEvents'), largeTextChunks),
+          row.auth_latency_ms ?? '',
+          row.routing_latency_ms ?? '',
+          row.upstream_latency_ms ?? '',
+          row.response_latency_ms ?? '',
+          row.time_to_first_token_ms ?? '',
+          row.user_agent || '',
+          row.client_ip || '',
+          formatBooleanForErrorExport(row.resolved),
+          formatBooleanForErrorExport(row.is_business_limited),
+          requestDetailsForExcel(requestDetails, row.id, row.request_id || row.client_request_id || '', requestDetailChunks),
+        ]
+      })
+
+      if (rows.length) XLSX.utils.sheet_add_aoa(ws, rows, { origin: -1 })
+      exportedCount += rows.length
+      exportProgress.current = exportedCount
+      exportProgress.progress = total > 0
+        ? Math.min(100, Math.round((exportedCount / total) * 100))
+        : 0
+
+      // A known total is authoritative.  Without one, use an explicit page
+      // count first, then the effective page size reported by the gateway;
+      // this avoids truncating results when a server caps our requested size.
+      const reachedKnownTotal = totalKnown && exportedCount >= total
+      const reachedReportedPages = !totalKnown && reportedPages !== null && page >= reportedPages
+      const reachedShortPage = !totalKnown && reportedPages === null && summaryRows.length < effectivePageSize
+      if (reachedKnownTotal || reachedReportedPages || reachedShortPage) break
+      page += 1
+    }
+
+    if (!controller.signal.aborted) {
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, ws, 'Error Logs')
+      if (requestDetailChunks.length > 0) {
+        const detailSheetHeaders = [
+          t('admin.ops.errorExport.detailSheetErrorId'),
+          t('admin.ops.errorExport.detailSheetRequestId'),
+          t('admin.ops.errorExport.detailSheetChunk'),
+          t('admin.ops.errorExport.detailSheetChunkCount'),
+          t('admin.ops.errorExport.detailSheetContent'),
+        ]
+        const detailWs = XLSX.utils.aoa_to_sheet([detailSheetHeaders])
+        XLSX.utils.sheet_add_aoa(detailWs, requestDetailChunks, { origin: -1 })
+        XLSX.utils.book_append_sheet(workbook, detailWs, 'Request Details')
+      }
+      if (largeTextChunks.length > 0) {
+        const largeTextSheetHeaders = [
+          t('admin.ops.errorExport.detailSheetErrorId'),
+          t('admin.ops.errorExport.detailSheetRequestId'),
+          t('admin.ops.errorExport.detailSheetField'),
+          t('admin.ops.errorExport.detailSheetChunk'),
+          t('admin.ops.errorExport.detailSheetChunkCount'),
+          t('admin.ops.errorExport.detailSheetContent'),
+        ]
+        const largeTextWs = XLSX.utils.aoa_to_sheet([largeTextSheetHeaders])
+        XLSX.utils.sheet_add_aoa(largeTextWs, largeTextChunks, { origin: -1 })
+        XLSX.utils.book_append_sheet(workbook, largeTextWs, 'Oversized Fields')
+      }
+      saveAs(
+        new Blob([XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        }),
+        `error_logs_${fileStart}_to_${fileEnd}.xlsx`
+      )
+      appStore.showSuccess(t('admin.ops.errorExport.success'))
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      console.error('Failed to export error logs:', error)
+      appStore.showError(t('admin.ops.errorExport.failed'))
+    }
+  } finally {
+    if (exportAbortController === controller) {
+      exportAbortController = null
+      exporting.value = false
+      exportProgress.show = false
+    }
   }
 }
 

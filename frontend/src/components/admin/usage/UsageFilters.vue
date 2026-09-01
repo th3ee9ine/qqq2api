@@ -136,11 +136,18 @@
           {{ t('common.reset') }}
         </button>
         <slot name="after-reset" />
-        <template v-if="mode !== 'errors'">
+        <!-- Export is available for both usage and error tabs.  The parent
+             chooses the corresponding exporter based on the active tab.  The
+             `all` mode is reserved for the cleanup dialog and has no export
+             action of its own. -->
+        <template v-if="mode !== 'all'">
           <button type="button" @click="$emit('export')" :disabled="exporting" class="btn btn-primary">
-            {{ t('usage.exportExcel') }}
+            {{ mode === 'errors' ? t('admin.ops.errorLog.exportExcel') : t('usage.exportExcel') }}
           </button>
         </template>
+        <!-- Keep the existing cleanup affordance on both tabs.  The parent
+             already selects the matching record type (usage/errors) when the
+             dialog is opened. -->
         <button type="button" @click="$emit('cleanup')" class="btn btn-danger">
           {{ t('admin.usage.cleanup.button') }}
         </button>
@@ -167,7 +174,7 @@ interface Props {
   showActions?: boolean
   modelOptions?: string[]
   /**
-   * errors 模式:隐藏用量专属字段/按钮,显示错误类型+状态码(错误请求 tab 用)
+   * errors 模式:隐藏用量专属字段，显示错误类型+状态码(错误请求 tab 用)
    * all 模式:清理对话框中同时展示两类筛选字段
    */
   mode?: 'usage' | 'errors' | 'all'

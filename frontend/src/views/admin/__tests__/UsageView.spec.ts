@@ -4,7 +4,7 @@ import { defineComponent } from 'vue'
 
 import UsageView from '../UsageView.vue'
 
-const { list, exportList, getStats, getSnapshotV2, getModelStats, listErrorLogs, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
+const { list, exportList, getStats, getSnapshotV2, getModelStats, listErrorLogs, getErrorLogDetail, routeQuery, aoaToSheet, sheetAddAoa, saveAs, xlsxWrite } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
@@ -18,6 +18,7 @@ const { list, exportList, getStats, getSnapshotV2, getModelStats, listErrorLogs,
     getSnapshotV2: vi.fn(),
     getModelStats: vi.fn(),
     listErrorLogs: vi.fn(),
+    getErrorLogDetail: vi.fn(),
     routeQuery: {} as Record<string, string>,
 		aoaToSheet: vi.fn(() => ({})),
 		sheetAddAoa: vi.fn(),
@@ -81,6 +82,7 @@ vi.mock('xlsx', () => ({
 
 vi.mock('@/api/admin/ops', () => ({
   listErrorLogs,
+  getErrorLogDetail,
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -430,6 +432,234 @@ describe('admin UsageView errors tab filter forwarding', () => {
       account_id: 7,
       group_id: 3,
     }))
+  })
+})
+
+describe('admin UsageView error-log export', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    list.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getStats.mockReset().mockResolvedValue({
+      total_requests: 0, total_input_tokens: 0, total_output_tokens: 0,
+      total_cache_tokens: 0, total_tokens: 0, total_cost: 0, total_actual_cost: 0, average_duration_ms: 0,
+    })
+    getSnapshotV2.mockReset().mockResolvedValue({ trend: [], models: [], groups: [] })
+    getModelStats.mockReset().mockResolvedValue({ models: [] })
+    listErrorLogs.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
+    getErrorLogDetail.mockReset()
+    aoaToSheet.mockClear()
+    sheetAddAoa.mockClear()
+    saveAs.mockClear()
+    xlsxWrite.mockClear()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('exports filtered error rows with detail snapshots and downloads an xlsx workbook', async () => {
+    const summary = {
+      id: 42,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: 'client-42',
+      request_id: 'request-42',
+      message: 'invalid request',
+      api_key_id: 7,
+      api_key_name: 'fixture-key',
+      account_id: 8,
+      account_name: 'fixture-account',
+      group_id: 9,
+      group_name: 'fixture-group',
+      request_type: 1,
+      stream: false,
+    }
+    const detail = {
+      ...summary,
+      error_body: '{"error":"bad request"}',
+      request_details: {
+        method: 'POST',
+        path: '/v1/chat/completions',
+        headers: { 'content-type': ['application/json'] },
+        body: { model: 'gpt-test', messages: [{ role: 'user', content: 'hello' }] },
+      },
+      is_business_limited: false,
+    }
+    listErrorLogs.mockResolvedValueOnce({ items: [summary], total: 1, pages: 1 })
+    getErrorLogDetail.mockResolvedValueOnce(detail)
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    const vm = wrapper.vm as any
+    vm.activeTab = 'errors'
+    vm.filters.model = 'gpt-test'
+    vm.filters.account_id = 8
+    vm.filters.group_id = 9
+    vm.filters.error_phase = 'request'
+    vm.filters.error_category = 'invalid_request'
+    vm.filters.status_code = 400
+
+    await vm.exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledWith(expect.objectContaining({
+      page: 1,
+      page_size: 100,
+      view: 'all',
+      model: 'gpt-test',
+      account_id: 8,
+      group_id: 9,
+      phase: 'request',
+      category: 'invalid_request',
+      status_codes: '400',
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(getErrorLogDetail).toHaveBeenCalledWith(42, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+
+    const headers = aoaToSheet.mock.calls[0][0][0] as string[]
+    const requestDetailsIndex = headers.indexOf('admin.ops.errorExport.requestDetails')
+    expect(requestDetailsIndex).toBeGreaterThan(-1)
+    expect(headers).toContain('admin.ops.errorExport.errorBody')
+    const row = sheetAddAoa.mock.calls[0][1][0] as unknown[]
+    expect(row[requestDetailsIndex]).toBe(JSON.stringify(detail.request_details))
+    expect(row[headers.indexOf('admin.ops.errorExport.errorBody')]).toBe(detail.error_body)
+    expect(saveAs).toHaveBeenCalledWith(expect.any(Blob), expect.stringMatching(/^error_logs_.*\.xlsx$/))
+  })
+
+  it('walks all filtered pages when exporting more than one hundred errors', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: `client-${index + 1}`,
+      request_id: `request-${index + 1}`,
+      message: 'invalid request',
+      request_details: { body: { index: index + 1 } },
+    }))
+    const secondPage = [{
+      ...firstPage[0],
+      id: 101,
+      client_request_id: 'client-101',
+      request_id: 'request-101',
+      request_details: { body: { index: 101 } },
+    }]
+    listErrorLogs
+      .mockResolvedValueOnce({ items: firstPage, total: 101, pages: 2 })
+      .mockResolvedValueOnce({ items: secondPage, total: 101, pages: 2 })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledTimes(2)
+    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 100 }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 100 }))
+    expect(listErrorLogs.mock.calls[0][1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    // Embedded snapshots are used directly, so no N detail requests are needed.
+    expect(getErrorLogDetail).not.toHaveBeenCalled()
+    expect(sheetAddAoa).toHaveBeenCalledTimes(2)
+    expect((sheetAddAoa.mock.calls[1][1] as unknown[]).length).toBe(1)
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('honors reported pages when the server caps page size and omits total', async () => {
+    const makePage = (offset: number) => Array.from({ length: 50 }, (_, index) => ({
+      id: offset + index + 1,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: `client-${offset + index + 1}`,
+      request_id: `request-${offset + index + 1}`,
+      message: 'invalid request',
+      // Embedded snapshots avoid 100 detail lookups while exercising only
+      // the pagination termination behavior under test.
+      request_details: { body: { index: offset + index + 1 } },
+    }))
+
+    // The gateway enforces a 50-row maximum despite the requested page_size
+    // of 100.  It omits total but reports the effective page count.
+    listErrorLogs
+      .mockResolvedValueOnce({ items: makePage(0), pages: 2 })
+      .mockResolvedValueOnce({ items: makePage(50), pages: 2 })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledTimes(2)
+    expect(listErrorLogs.mock.calls[0][0]).toEqual(expect.objectContaining({ page: 1, page_size: 100 }))
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 100 }))
+    expect(saveAs).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses response page_size when pagination metadata is absent', async () => {
+    const makeRows = (offset: number, count: number) => Array.from({ length: count }, (_, index) => ({
+      id: offset + index + 1,
+      created_at: '2026-08-20T01:02:03Z',
+      phase: 'request',
+      type: 'invalid_request',
+      error_owner: 'client',
+      error_source: 'client_request',
+      severity: 'P2',
+      status_code: 400,
+      platform: 'openai',
+      model: 'gpt-test',
+      resolved: false,
+      client_request_id: `client-${offset + index + 1}`,
+      request_id: `request-${offset + index + 1}`,
+      message: 'invalid request',
+      request_details: { body: { index: offset + index + 1 } },
+    }))
+
+    // No total/pages are returned. The effective server page size is 50,
+    // so the first 50-row page must be followed by a second request.
+    listErrorLogs
+      .mockResolvedValueOnce({ items: makeRows(0, 50), page_size: 50 })
+      .mockResolvedValueOnce({ items: makeRows(50, 1), page_size: 50 })
+
+    const wrapper = mountRouteFilteredUsageView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+    ;(wrapper.vm as any).activeTab = 'errors'
+
+    await (wrapper.vm as any).exportToExcel()
+    await flushPromises()
+
+    expect(listErrorLogs).toHaveBeenCalledTimes(2)
+    expect(listErrorLogs.mock.calls[1][0]).toEqual(expect.objectContaining({ page: 2, page_size: 100 }))
+    expect(saveAs).toHaveBeenCalledTimes(1)
   })
 })
 
