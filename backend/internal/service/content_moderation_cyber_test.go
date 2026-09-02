@@ -260,8 +260,14 @@ func TestRecordCyberPolicyEvent_RuntimeSnapshotRefreshFailureKeepsStaleScope(t *
 		SettingKeyRiskControlEnabled:      "true",
 		SettingKeyContentModerationConfig: `{"all_groups":true,"model_filter":{"type":"include","models":["gpt-5"]}}`,
 	}}
-	svc := NewContentModerationService(settingRepo, repo, nil, nil, nil, nil, nil, nil)
-	svc.runtimeCacheTTL = time.Minute
+	// Construct the service without background workers so the test can control
+	// the runtime snapshot lifecycle deterministically. The refresh goroutine
+	// is still exercised by loadRuntimeSnapshot when the stale snapshot is read.
+	svc := &ContentModerationService{
+		settingRepo:     settingRepo,
+		repo:            repo,
+		runtimeCacheTTL: time.Minute,
+	}
 
 	_, err := svc.loadRuntimeSnapshot(context.Background())
 	require.NoError(t, err)
