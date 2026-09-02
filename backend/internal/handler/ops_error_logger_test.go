@@ -352,9 +352,11 @@ func TestOpsErrorLoggerMiddleware_CapturesCompleteRawClientRequest(t *testing.T)
 	require.Equal(t, "POST", details["method"])
 	require.Equal(t, "/v1/responses", details["path"])
 	require.Equal(t, true, details["body_read"])
-	require.Equal(t, "keep this prompt", details["body"].(map[string]any)["prompt"])
-	require.Equal(t, "do-not-store", details["body"].(map[string]any)["api_key"])
-	require.Equal(t, "also-secret", details["body"].(map[string]any)["key"])
+	bodyDetails, ok := details["body"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "keep this prompt", bodyDetails["prompt"])
+	require.Equal(t, "do-not-store", bodyDetails["api_key"])
+	require.Equal(t, "also-secret", bodyDetails["key"])
 	require.Contains(t, *job.entry.RequestDetailsJSON, "Bearer header-secret")
 	require.Contains(t, *job.entry.RequestDetailsJSON, "query-secret")
 	require.Contains(t, *job.entry.RequestDetailsJSON, "fixture-client/1.0")
@@ -395,7 +397,12 @@ func TestOpsErrorLoggerMiddleware_CapturesLocalPromptGuardBody(t *testing.T) {
 	require.Equal(t, true, details["body_read"])
 	parsedBody, ok := details["body"].(map[string]any)
 	require.True(t, ok)
-	require.Contains(t, parsedBody["messages"].([]any)[0].(map[string]any)["content"], "ignore all previous instructions")
+	messages, ok := parsedBody["messages"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, messages)
+	message, ok := messages[0].(map[string]any)
+	require.True(t, ok)
+	require.Contains(t, message["content"], "ignore all previous instructions")
 }
 
 func TestOpsErrorLoggerMiddleware_CapturesBodyForEarlyCyberPolicyRejection(t *testing.T) {
@@ -425,7 +432,14 @@ func TestOpsErrorLoggerMiddleware_CapturesBodyForEarlyCyberPolicyRejection(t *te
 	var details map[string]any
 	require.NoError(t, json.Unmarshal([]byte(*job.entry.RequestDetailsJSON), &details))
 	require.Equal(t, true, details["body_read"], "the bounded known-length body should be drained for early policy failures")
-	require.Equal(t, "blocked prompt", details["body"].(map[string]any)["input"].([]any)[0].(map[string]any)["text"])
+	bodyDetails, ok := details["body"].(map[string]any)
+	require.True(t, ok)
+	input, ok := bodyDetails["input"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, input)
+	inputItem, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "blocked prompt", inputItem["text"])
 }
 
 func TestOpsErrorLoggerMiddlewareOmitsOversizedRequestBody(t *testing.T) {
@@ -919,7 +933,9 @@ func TestLogOpsStreamErrorIncludesRejectedWebSocketFrame(t *testing.T) {
 	require.Equal(t, float64(2), details["body_frame_turn"])
 	body, ok := details["body"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "guarded websocket prompt", body["response"].(map[string]any)["input"])
+	response, ok := body["response"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "guarded websocket prompt", response["input"])
 	_, frameRetained := getOpsRequestFrameBody(c, 2)
 	require.False(t, frameRetained, "frame snapshot should be consumed after the Ops row is materialized")
 }
@@ -945,7 +961,9 @@ func TestLogOpsStreamErrorIncludesFirstRejectedWebSocketFrame(t *testing.T) {
 	require.Equal(t, float64(1), details["body_frame_turn"])
 	body, ok := details["body"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "first-turn prompt", body["response"].(map[string]any)["input"])
+	response, ok := body["response"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "first-turn prompt", response["input"])
 	_, frameRetained := getOpsRequestFrameBody(c, 1)
 	require.False(t, frameRetained, "first-turn frame snapshot should be consumed after logging")
 }

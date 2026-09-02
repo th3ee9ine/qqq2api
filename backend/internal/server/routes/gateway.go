@@ -370,10 +370,6 @@ func compositeMultipartModelFromBody(contentType string, body []byte) string {
 	}
 }
 
-func resetRequestBody(c *gin.Context, body []byte) {
-	resetRequestBodyWithOriginal(c, body, body)
-}
-
 func resetRequestBodyWithOriginal(c *gin.Context, body, originalBody []byte) {
 	// Keep optional request-body diagnostics hooks attached when a middleware
 	// has already consumed the capture and needs to replay the body.  A plain

@@ -229,6 +229,13 @@ func (m *mockAccountRepoForPlatform) ResetQuotaUsed(ctx context.Context, id int6
 	return nil
 }
 
+// ResetQuotaUsedAndClearRateLimitCooldown mirrors the production repository's
+// atomic quota reset contract.  These gateway tests only exercise scheduling,
+// so the mock intentionally keeps the operation side-effect free.
+func (m *mockAccountRepoForPlatform) ResetQuotaUsedAndClearRateLimitCooldown(ctx context.Context, id int64) error {
+	return nil
+}
+
 func (m *mockAccountRepoForPlatform) RevertProxyFallback(ctx context.Context, accountID int64) error {
 	return nil
 }

@@ -126,7 +126,9 @@ func TestBuildOpsRequestDetailsJSONIncludesRejectedWebSocketFrame(t *testing.T) 
 	require.Equal(t, false, details["body_truncated"])
 	body, ok := details["body"].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "blocked frame prompt", body["response"].(map[string]any)["input"])
+	response, ok := body["response"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "blocked frame prompt", response["input"])
 }
 
 func TestOpsRequestFrameBodyLookupIsExactAndFirstWins(t *testing.T) {

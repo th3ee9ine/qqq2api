@@ -182,9 +182,9 @@ func normalizePromptInjectionText(value string) string {
 			// Remove format/zero-width characters so bidi and joiner tricks cannot
 			// split or visually reorder an indicator.
 		case unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t':
-			builder.WriteRune(' ')
+			_, _ = builder.WriteRune(' ')
 		default:
-			builder.WriteRune(unicode.ToLower(r))
+			_, _ = builder.WriteRune(unicode.ToLower(r))
 		}
 	}
 	return strings.Join(strings.Fields(builder.String()), " ")
@@ -196,7 +196,7 @@ func compactPromptInjectionText(value string) string {
 	for _, r := range value {
 		r = foldPromptInjectionRune(r)
 		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			builder.WriteRune(r)
+			_, _ = builder.WriteRune(r)
 		}
 	}
 	return builder.String()

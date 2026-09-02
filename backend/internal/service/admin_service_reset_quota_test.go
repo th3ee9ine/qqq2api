@@ -39,7 +39,7 @@ func (r *resetAccountQuotaRepoStub) ClearRateLimit(context.Context, int64) error
 }
 
 func TestResetAccountQuota_ClearsSchedulerRateLimitWithoutClearingOverload(t *testing.T) {
-	repo := &resetAccountQuotaRepoStub{account: &Account{ID: 42}, overloaded: true}
+	repo := &resetAccountQuotaRepoStub{account: &Account{ID: 42, Platform: PlatformOpenAI}, overloaded: true}
 	svc := &adminServiceImpl{accountRepo: repo}
 
 	err := svc.ResetAccountQuota(context.Background(), 42)
@@ -67,7 +67,7 @@ func TestResetAccountQuota_PreservesLookupAndSparkShadowShortCircuits(t *testing
 	t.Run("spark shadow", func(t *testing.T) {
 		parentID := int64(7)
 		repo := &resetAccountQuotaRepoStub{
-			account: &Account{ID: 42, ParentAccountID: &parentID},
+			account: &Account{ID: 42, Platform: PlatformOpenAI, ParentAccountID: &parentID},
 		}
 		svc := &adminServiceImpl{accountRepo: repo}
 
@@ -82,7 +82,7 @@ func TestResetAccountQuota_PreservesLookupAndSparkShadowShortCircuits(t *testing
 func TestResetAccountQuota_PropagatesAtomicRepositoryFailure(t *testing.T) {
 	resetErr := errors.New("atomic reset failed")
 	repo := &resetAccountQuotaRepoStub{
-		account:  &Account{ID: 42},
+		account:  &Account{ID: 42, Platform: PlatformOpenAI},
 		resetErr: resetErr,
 	}
 	svc := &adminServiceImpl{accountRepo: repo}

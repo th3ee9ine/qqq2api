@@ -29,7 +29,9 @@ func newTokenCostTestEnv(t *testing.T, groupPlatform string, pricing []ChannelMo
 }
 
 func TestCalculateTokenCostForRequest_BuiltInPricingUsesUnifiedPath(t *testing.T) {
-	bs, resolver := newTokenCostTestEnv(t, PlatformOpenAI, nil, nil)
+	// Long-context ladders are sourced from the parsed LiteLLM catalog after
+	// the billing refactor; static fallback prices intentionally have no ladder.
+	bs, resolver := newTokenCostTestEnv(t, PlatformOpenAI, nil, newStubPricingServiceFromJSON(t, openAILadderCatalogJSON))
 	group := &Group{ID: 100, Platform: PlatformOpenAI, LongContextPricingEnabled: true}
 	gid := group.ID
 	tokens := UsageTokens{InputTokens: 300000, OutputTokens: 1000}

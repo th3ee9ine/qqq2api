@@ -148,7 +148,7 @@ func (r *accountRepository) CreateWithAutomaticProxy(ctx context.Context, accoun
 
 	contextTx := dbent.TxFromContext(ctx)
 	client := r.client
-	exec := r.sql
+	var exec sqlExecutor
 	var tx *dbent.Tx
 	if contextTx != nil {
 		client = contextTx.Client()
@@ -540,7 +540,7 @@ func (r *accountRepository) UpdateWithAccountBillingSettingsAndAutomaticProxy(
 	baseCtx := ctx
 	contextTx := dbent.TxFromContext(ctx)
 	client := r.client
-	exec := r.sql
+	var exec sqlExecutor
 	var tx *dbent.Tx
 	if contextTx != nil {
 		client = contextTx.Client()

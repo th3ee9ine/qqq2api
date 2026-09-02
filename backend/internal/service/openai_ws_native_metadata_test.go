@@ -67,5 +67,7 @@ func TestStampOpenAIWSStreamRequestStartValueCopiesRequestTemplate(t *testing.T)
 
 	raw, changed := stampOpenAIWSStreamRequestStartValue(json.RawMessage(`{"type":"response.create"}`), now)
 	require.True(t, changed)
-	require.Equal(t, "1700000000789", gjson.GetBytes(raw.(json.RawMessage), "client_metadata.x-codex-ws-stream-request-start-ms").String())
+	rawJSON, ok := raw.(json.RawMessage)
+	require.True(t, ok)
+	require.Equal(t, "1700000000789", gjson.GetBytes(rawJSON, "client_metadata.x-codex-ws-stream-request-start-ms").String())
 }
