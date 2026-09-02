@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -41,6 +42,14 @@ func (r codexModelsFailoverAccountRepo) ListSchedulableByPlatform(_ context.Cont
 		}
 	}
 	return accounts, nil
+}
+
+func (r codexModelsFailoverAccountRepo) ListSchedulableByGroupID(_ context.Context, _ int64) ([]service.Account, error) {
+	return append([]service.Account(nil), r.accounts...), nil
+}
+
+func (r codexModelsFailoverAccountRepo) ListModelAvailabilityCandidates(_ context.Context, _ *int64, _ []string, _ bool) ([]service.Account, error) {
+	return append([]service.Account(nil), r.accounts...), nil
 }
 
 type codexModelsFailoverHTTPUpstream struct {
@@ -148,9 +157,7 @@ func TestCodexModelsFailsOverFromRetryableUpstreamStatus(t *testing.T) {
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 			}
-			if got, want := recorder.Body.String(), `{"models":[{"slug":"gpt-5.6-sol"}]}`; got != want {
-				t.Fatalf("body: got %q, want %q", got, want)
-			}
+			requireCodexManifestHasSlug(t, recorder.Body.Bytes(), "gpt-5.6-sol")
 		})
 	}
 }
@@ -183,9 +190,7 @@ func TestCodexModelsFailsOverFromInvalidManifestEnvelope(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
-	if got, want := recorder.Body.String(), `{"models":[{"slug":"gpt-5.6-sol"}]}`; got != want {
-		t.Fatalf("body: got %q, want %q", got, want)
-	}
+	requireCodexManifestHasSlug(t, recorder.Body.Bytes(), "gpt-5.6-sol")
 }
 
 func TestCodexModelsDoesNotFailOverFromPermanentUpstreamStatus(t *testing.T) {
@@ -201,11 +206,24 @@ func TestCodexModelsDoesNotFailOverFromPermanentUpstreamStatus(t *testing.T) {
 			handler, upstream, groupID := newCodexModelsFailoverTestHandler(status)
 			recorder := performCodexModelsRequest(t, handler, groupID)
 
-			if got, want := upstream.calls(), []int64{1}; !equalInt64Slices(got, want) {
+			wantCalls := []int64{1}
+			// API-key upstreams retry a missing /models endpoint so a second
+			// configured account can serve the Codex catalog.
+			if status == http.StatusNotFound {
+				wantCalls = []int64{1, 2}
+			}
+			if got, want := upstream.calls(), wantCalls; !equalInt64Slices(got, want) {
 				t.Fatalf("upstream account calls: got %v, want %v", got, want)
 			}
-			if recorder.Code != http.StatusBadGateway {
-				t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, http.StatusBadGateway, recorder.Body.String())
+			wantStatus := http.StatusBadGateway
+			if status == http.StatusNotFound {
+				wantStatus = http.StatusOK
+			}
+			if recorder.Code != wantStatus {
+				t.Fatalf("status: got %d, want %d; body=%s", recorder.Code, wantStatus, recorder.Body.String())
+			}
+			if status == http.StatusNotFound {
+				requireCodexManifestHasSlug(t, recorder.Body.Bytes(), "gpt-5.6-sol")
 			}
 		})
 	}
@@ -376,4 +394,22 @@ func equalInt64Slices(got, want []int64) bool {
 		}
 	}
 	return true
+}
+
+func requireCodexManifestHasSlug(t *testing.T, body []byte, wantSlug string) {
+	t.Helper()
+	var payload struct {
+		Models []struct {
+			Slug string `json:"slug"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode Codex manifest: %v; body=%s", err, body)
+	}
+	for _, model := range payload.Models {
+		if model.Slug == wantSlug {
+			return
+		}
+	}
+	t.Fatalf("Codex manifest does not contain slug %q: %s", wantSlug, body)
 }

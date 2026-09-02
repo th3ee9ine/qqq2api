@@ -69,6 +69,7 @@ describe('PricingEntryCard default pricing', () => {
         input_price: 3,
         output_price: 15,
         cache_write_price: 3.75,
+        cache_write_1h_price: null,
         cache_read_price: 0.3,
         image_input_price: 1,
         image_output_price: 2

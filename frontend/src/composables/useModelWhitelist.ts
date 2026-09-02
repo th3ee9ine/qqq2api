@@ -16,7 +16,7 @@ export const claudeModels = [
   'claude-opus-4-1-20250805', 'claude-sonnet-4-5-20250929',
   'claude-haiku-4-5-20251001', 'claude-opus-4-5-20251101',
   'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8',
-  'claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5', 'claude-fable-5'
+  'claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-fable-5'
 ]
 
 export const allModels = [...openaiModels, ...claudeModels]
@@ -24,6 +24,7 @@ export const allModels = [...openaiModels, ...claudeModels]
   .map(model => ({ value: model, label: model }))
 
 const anthropicPresetMappings = [
+  { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'claude-fable-5-1', color: 'bg-rose-100 text-rose-700' },
   { label: 'Fable 5', from: 'claude-fable-5', to: 'claude-fable-5', color: 'bg-rose-100 text-rose-700' },
   { label: 'Sonnet 5', from: 'claude-sonnet-5', to: 'claude-sonnet-5', color: 'bg-indigo-100 text-indigo-700' },
   { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4-6', color: 'bg-blue-100 text-blue-700' },
@@ -43,6 +44,7 @@ const openaiPresetMappings = [
 ]
 
 const bedrockPresetMappings = [
+  { label: 'Fable 5.1', from: 'claude-fable-5-1', to: 'anthropic.claude-fable-5-1', color: 'bg-rose-100 text-rose-700' },
   { label: 'Fable 5', from: 'claude-fable-5', to: 'anthropic.claude-fable-5', color: 'bg-rose-100 text-rose-700' },
   { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'us.anthropic.claude-opus-4-6-v1', color: 'bg-pink-100 text-pink-700' },
   { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'us.anthropic.claude-opus-4-8-v1', color: 'bg-pink-100 text-pink-700' },

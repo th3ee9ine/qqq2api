@@ -16,6 +16,16 @@ const messages: Record<string, string> = {
   'usage.ws': 'WS',
   'usage.stream': 'Stream',
   'usage.sync': 'Sync',
+  'usage.compactionFilter': 'Request Kind',
+  'usage.allCompactionTypes': 'All Requests',
+  'usage.compactionOnly': 'Compaction Only',
+  'admin.usage.billingType': 'Billing Type',
+  'admin.usage.allBillingTypes': 'All Billing Types',
+  'admin.usage.billingTypeBalance': 'Balance',
+  'admin.usage.billingTypeSubscription': 'Subscription',
+  'admin.usage.userFilter': 'User',
+  'admin.usage.searchUserPlaceholder': 'Search user...',
+  'admin.usage.userDeletedBadge': 'Deleted',
   'admin.usage.billingMode': 'Billing Mode',
   'admin.usage.allBillingModes': 'All Billing Modes',
   'admin.usage.billingModeToken': 'Token',
@@ -53,6 +63,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     usage: {
       searchApiKeys: (...args: any[]) => mockSearchApiKeys(...args),
+      searchUsers: vi.fn().mockResolvedValue([]),
     },
     groups: { list: (...args: any[]) => mockGroupsList(...args) },
     dashboard: { getModelStats: (...args: any[]) => mockGetModelStats(...args) },
@@ -66,6 +77,7 @@ const defaultFilters = () => ({
   account_id: undefined,
   model: null,
   request_type: null,
+  native_compaction_v2: null,
   billing_type: null,
   billing_mode: null,
 	upstream_model_mismatch: null,
@@ -105,7 +117,7 @@ describe('UsageFilters — global API key search', () => {
 
   it('searches the global key set and selects by api_key_id without a user filter', async () => {
     const wrapper = mountFilters()
-    const input = wrapper.find('input[type="text"]')
+    const input = wrapper.find('input[placeholder="Search API key..."]')
     await input.trigger('focus')
     await input.setValue('system')
     vi.advanceTimersByTime(300)
@@ -153,13 +165,54 @@ describe('UsageFilters — model options come from prop (no dup request)', () =>
   })
 })
 
-describe('UsageFilters — retained system-wide dimensions', () => {
-  it('does not expose retired subscription billing or video modes', () => {
-    const wrapper = mountFilters()
+describe('UsageFilters — native compaction filter', () => {
+  it('offers only All/Compaction and emits the independent boolean filter', async () => {
+    const SelectStub = {
+      name: 'Select',
+      props: ['modelValue', 'options'],
+      emits: ['update:modelValue', 'change'],
+      template: '<div />',
+    }
+    const filters = defaultFilters()
+    const wrapper = mount(UsageFilters, {
+      props: {
+        modelValue: filters,
+        exporting: false,
+        startDate: '2026-05-01',
+        endDate: '2026-05-28',
+        showActions: false,
+        modelOptions: [],
+      },
+      global: { stubs: { Select: SelectStub, Teleport: true } },
+    })
 
-    expect(wrapper.text()).not.toContain('Billing Type')
-    expect(wrapper.text()).not.toContain('Subscription')
+    const compactionSelect = wrapper.findAllComponents(SelectStub).find((select: any) =>
+      (select.props('options') as Array<{ value: unknown }>).some((option) => option.value === true)
+    )
+    expect(compactionSelect).toBeDefined()
+    expect(compactionSelect!.props('options')).toEqual([
+      { value: null, label: 'All Requests' },
+      { value: true, label: 'Compaction Only' },
+    ])
+    expect(compactionSelect!.props('options')).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: false })])
+    )
+
+    compactionSelect!.vm.$emit('update:modelValue', true)
+    compactionSelect!.vm.$emit('change')
+    await wrapper.vm.$nextTick()
+
+    expect(filters.native_compaction_v2).toBe(true)
+    expect(wrapper.emitted('change')).toBeTruthy()
+  })
+})
+
+describe('UsageFilters — retained system-wide dimensions', () => {
+  it('keeps local token/image billing modes while exposing new compaction and billing-type filters', () => {
+    const wrapper = mountFilters()
     expect((wrapper.vm as any).billingModeOptions.map((option: { value: string | null }) => option.value))
       .toEqual([null, 'token', 'per_request', 'image'])
+    expect(wrapper.text()).not.toContain('Billing Type')
+    expect(wrapper.text()).not.toContain('Subscription')
   })
 })

@@ -90,6 +90,12 @@
           <Select v-model="filters.request_type" :options="requestTypeOptions" @change="emitChange" />
         </div>
 
+        <!-- Native compaction is independent of transport request type. -->
+        <div v-if="mode !== 'errors' && !cleanup" class="w-full sm:w-auto sm:min-w-[180px]">
+          <label class="input-label">{{ t('usage.compactionFilter') }}</label>
+          <Select v-model="filters.native_compaction_v2" :options="compactionOptions" @change="emitChange" />
+        </div>
+
         <!-- Billing Mode Filter (usage only) -->
         <div v-if="mode !== 'errors' && !cleanup" class="w-full sm:w-auto sm:min-w-[200px]">
           <label class="input-label">{{ t('admin.usage.billingMode') }}</label>
@@ -232,6 +238,11 @@ const requestTypeOptions = ref<SelectOption[]>([
   { value: 'stream', label: t('usage.stream') },
   { value: 'sync', label: t('usage.sync') },
   { value: 'cyber', label: t('usage.cyber') }
+])
+
+const compactionOptions = ref<SelectOption[]>([
+  { value: null, label: t('usage.allCompactionTypes') },
+  { value: true, label: t('usage.compactionOnly') },
 ])
 
 // 错误类型对应后端 phase 参数(与错误表"类型"徽章同语义)

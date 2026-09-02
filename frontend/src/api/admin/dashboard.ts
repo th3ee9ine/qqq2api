@@ -45,12 +45,14 @@ export interface TrendParams {
   start_date?: string
   end_date?: string
   granularity?: 'day' | 'hour'
+  user_id?: number
   api_key_id?: number
   model?: string
   account_id?: number
   group_id?: number
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   billing_type?: number | null
   upstream_model_mismatch?: boolean
 }
@@ -75,6 +77,7 @@ export async function getUsageTrend(params?: TrendParams): Promise<TrendResponse
 export interface ModelStatsParams {
   start_date?: string
   end_date?: string
+  user_id?: number
   api_key_id?: number
   model?: string
   model_source?: 'requested' | 'upstream' | 'mapping'
@@ -82,6 +85,7 @@ export interface ModelStatsParams {
   group_id?: number
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   billing_type?: number | null
   upstream_model_mismatch?: boolean
 }
@@ -105,11 +109,13 @@ export async function getModelStats(params?: ModelStatsParams): Promise<ModelSta
 export interface GroupStatsParams {
   start_date?: string
   end_date?: string
+  user_id?: number
   api_key_id?: number
   account_id?: number
   group_id?: number
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   billing_type?: number | null
   upstream_model_mismatch?: boolean
 }
