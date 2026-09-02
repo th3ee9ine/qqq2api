@@ -3,7 +3,9 @@ package handler
 import (
 	"crypto/sha256"
 	"net/http"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/th3ee9ine/qqq2api/internal/securityaudit"
@@ -15,6 +17,22 @@ import (
 const securityAuditCompletedContextKey = "sub2api.security_audit.completed"
 const securityAuditWSTurnContextKey = "sub2api.security_audit.ws_turn"
 const securityAuditWSDedupeContextKey = "sub2api.security_audit.ws_dedupe"
+
+// securityAuditDecisionContextKey carries bounded decision metadata into the
+// Ops error-detail snapshot. It contains scanner IDs/evidence and policy
+// versions without duplicating the full prompt body, so an omitted body can
+// still be triaged without copying a multi-megabyte payload into the log row.
+const securityAuditDecisionContextKey = "sub2api.security_audit.decision"
+
+// Ops request details are retained alongside error rows and may be rendered
+// by an admin UI. Keep scanner-controlled metadata bounded even when a remote
+// audit backend returns a very large evidence string or an unexpectedly large
+// map. Normal rule IDs/evidence remain byte-for-byte unchanged below these
+// limits.
+const (
+	maxSecurityAuditMetadataEntries    = 64
+	maxSecurityAuditMetadataValueBytes = 512
+)
 
 type securityAuditWSDedupeEntry struct {
 	stage    string
@@ -69,6 +87,11 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 	if c == nil || c.Request == nil {
 		return nil
 	}
+	// A gin Context can be reused across WebSocket turns and compatibility
+	// middleware may invoke this helper more than once. Clear the previous
+	// explanation before considering the completion cache so a later error row
+	// never inherits metadata from an earlier payload.
+	c.Set(securityAuditDecisionContextKey, nil)
 	cacheCompletion := cachesSecurityAuditCompletion(stage)
 	if cacheCompletion {
 		if completed, exists := c.Get(securityAuditCompletedContextKey); exists && completed == true {
@@ -92,6 +115,7 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 		if decision.AllowNextStage && cacheCompletion {
 			c.Set(securityAuditCompletedContextKey, true)
 		}
+		setSecurityAuditDecisionMetadata(c, &decision)
 		return &decision
 	}
 	request := buildSecurityAuditRequest(c, apiKey, subject, protocol, model, body, stage)
@@ -102,6 +126,7 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 				if entry, ok := cached.(securityAuditWSDedupeEntry); ok &&
 					entry.stage == request.Stage && entry.turn == turnNo && entry.bodyHash == bodyHash {
 					decision := entry.decision
+					setSecurityAuditDecisionMetadata(c, &decision)
 					logSecurityAuditDone(reqLog, request, decision, true)
 					return &decision
 				}
@@ -114,6 +139,7 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 				})
 			}
 			logSecurityAuditDone(reqLog, request, decision, false)
+			setSecurityAuditDecisionMetadata(c, &decision)
 			return &decision
 		}
 	}
@@ -123,7 +149,154 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 		c.Set(securityAuditCompletedContextKey, true)
 	}
 	logSecurityAuditDone(reqLog, request, decision, false)
+	setSecurityAuditDecisionMetadata(c, &decision)
 	return &decision
+}
+
+// setSecurityAuditDecisionMetadata stores a compact, structured explanation of
+// the latest audit decision for the Ops request-detail builder. Keeping this
+// separate from the client response avoids exposing the full audit payload
+// while preserving rule IDs, bounded evidence, roles, scores, and policy
+// versions for false-positive review when the request body is omitted or
+// truncated.
+func setSecurityAuditDecisionMetadata(c *gin.Context, decision *securityaudit.Decision) {
+	if c == nil || decision == nil {
+		return
+	}
+	metadata := map[string]any{
+		"decision":         string(decision.Kind),
+		"error_code":       boundSecurityAuditMetadataString(decision.ErrorCode),
+		"allow_next_stage": decision.AllowNextStage,
+	}
+	if decision.Legacy != nil {
+		metadata["legacy"] = map[string]any{
+			"blocked":     decision.Legacy.Blocked,
+			"flagged":     decision.Legacy.Flagged,
+			"action":      boundSecurityAuditMetadataString(decision.Legacy.Action),
+			"status_code": decision.Legacy.StatusCode,
+			"error_code":  boundSecurityAuditMetadataString(decision.Legacy.ErrorCode),
+			"message":     boundSecurityAuditMetadataString(decision.Legacy.Message),
+		}
+	}
+	if result := decision.Prompt; result != nil {
+		prompt := map[string]any{
+			"decision":         string(result.Kind),
+			"error_code":       boundSecurityAuditMetadataString(result.ErrorCode),
+			"allow_next_stage": result.AllowNextStage,
+		}
+		if normalized := result.Result; normalized != nil {
+			// Keep the PromptDecision kind (`allow`/`block`/`flag`) in
+			// `decision`; the normalized event decision is a separate field so
+			// downstream triage does not confuse the two enums.
+			prompt["event_decision"] = string(normalized.Decision)
+			prompt["risk_level"] = string(normalized.RiskLevel)
+			prompt["action"] = string(normalized.Action)
+			prompt["safety"] = boundSecurityAuditMetadataString(normalized.Safety)
+			prompt["categories"] = cloneBoundedStringSlice(normalized.Categories)
+			prompt["matched_scanners"] = cloneBoundedStringSlice(normalized.MatchedScanners)
+			prompt["scanner_scores"] = cloneBoundedStringFloatMap(normalized.ScannerScores)
+			prompt["scanner_evidence"] = cloneBoundedStringStringMap(normalized.ScannerEvidence)
+			prompt["scanner_backend"] = boundSecurityAuditMetadataString(normalized.ScannerBackend)
+			prompt["scanner_version"] = boundSecurityAuditMetadataString(normalized.ScannerVersion)
+			prompt["guard_endpoint_id"] = boundSecurityAuditMetadataString(normalized.GuardEndpointID)
+			prompt["policy_id"] = boundSecurityAuditMetadataString(normalized.PolicyID)
+			prompt["policy_version"] = normalized.PolicyVersion
+			prompt["chunk_total"] = normalized.ChunkTotal
+			prompt["latency_ms"] = normalized.LatencyMS
+			prompt["unknown_categories"] = cloneBoundedStringSlice(normalized.UnknownCategories)
+		}
+		metadata["prompt"] = prompt
+	}
+	c.Set(securityAuditDecisionContextKey, metadata)
+}
+
+func cloneStringFloatMap(input map[string]float64) map[string]float64 {
+	return cloneBoundedStringFloatMap(input)
+}
+
+func cloneBoundedStringFloatMap(input map[string]float64) map[string]float64 {
+	if len(input) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(input))
+	for key := range input {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > maxSecurityAuditMetadataEntries {
+		keys = keys[:maxSecurityAuditMetadataEntries]
+	}
+	output := make(map[string]float64, minSecurityAuditMetadataEntries(len(keys)))
+	for _, key := range keys {
+		output[boundSecurityAuditMetadataString(key)] = input[key]
+	}
+	return output
+}
+
+func cloneStringStringMap(input map[string]string) map[string]string {
+	return cloneBoundedStringStringMap(input)
+}
+
+func cloneBoundedStringStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(input))
+	for key := range input {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > maxSecurityAuditMetadataEntries {
+		keys = keys[:maxSecurityAuditMetadataEntries]
+	}
+	output := make(map[string]string, minSecurityAuditMetadataEntries(len(keys)))
+	for _, key := range keys {
+		output[boundSecurityAuditMetadataString(key)] = boundSecurityAuditMetadataString(input[key])
+	}
+	return output
+}
+
+func cloneBoundedStringSlice(input []string) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	limit := len(input)
+	if limit > maxSecurityAuditMetadataEntries {
+		limit = maxSecurityAuditMetadataEntries
+	}
+	output := make([]string, 0, limit)
+	for _, value := range input {
+		if len(output) >= limit {
+			break
+		}
+		output = append(output, boundSecurityAuditMetadataString(value))
+	}
+	return output
+}
+
+func minSecurityAuditMetadataEntries(length int) int {
+	if length < 1 {
+		return 1
+	}
+	if length > maxSecurityAuditMetadataEntries {
+		return maxSecurityAuditMetadataEntries
+	}
+	return length
+}
+
+func boundSecurityAuditMetadataString(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= maxSecurityAuditMetadataValueBytes {
+		return value
+	}
+	limit := maxSecurityAuditMetadataValueBytes - len("…")
+	if limit < 1 {
+		return "…"
+	}
+	for limit > 0 && limit < len(value) && !utf8.RuneStart(value[limit]) {
+		limit--
+	}
+	return value[:limit] + "…"
 }
 
 func logSecurityAuditStart(reqLog *zap.Logger, request securityaudit.Request, bodyBytes int, cached bool) {

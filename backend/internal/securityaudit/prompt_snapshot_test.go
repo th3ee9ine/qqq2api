@@ -293,6 +293,49 @@ func TestPromptSnapshotIncludesClientControlledInstructions(t *testing.T) {
 	}
 }
 
+func TestPromptSnapshotIncludesToolSchemaText(t *testing.T) {
+	body := []byte(`{"messages":[{"role":"user","content":"lookup the record"}],"tools":[{"type":"function","function":{"name":"lookup_record","description":"Look up a record by identifier.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"The record identifier."},"mode":{"type":"string","enum":["safe","raw"]}}}}}]}`)
+	snapshot, err := ExtractPromptSnapshot(Request{Protocol: "openai_chat_completions", Body: body})
+	require.NoError(t, err)
+	require.Contains(t, snapshot.ScanText, "lookup the record")
+	require.Contains(t, snapshot.ScanText, "Look up a record by identifier.")
+	require.Contains(t, snapshot.ScanText, "The record identifier.")
+	// Enum/data values are not prompt text and must not be pulled into the audit
+	// snapshot merely because they occur inside a tool schema.
+	require.NotContains(t, snapshot.ScanText, "safe")
+	require.NotContains(t, snapshot.ScanText, "raw")
+	require.Equal(t, 4, snapshot.MessageCount)
+}
+
+func TestPromptSnapshotToolSchemaTraversalIsDeterministicAcrossProtocols(t *testing.T) {
+	toolJSON := `"tools":[{"function":{"description":"shared description","parameters":{"properties":{"z":{"description":"z parameter"},"a":{"description":"a parameter"}}}}}]`
+	for _, protocol := range []string{"openai_responses", "anthropic_messages", "gemini"} {
+		var body string
+		switch protocol {
+		case "openai_responses":
+			body = `{"input":"user text",` + toolJSON + `}`
+		case "anthropic_messages":
+			body = `{"messages":[{"role":"user","content":"user text"}],` + toolJSON + `}`
+		case "gemini":
+			body = `{"contents":[{"role":"user","parts":[{"text":"user text"}]}],` + toolJSON + `}`
+		}
+		snapshot, err := ExtractPromptSnapshot(Request{Protocol: protocol, Body: []byte(body)})
+		require.NoError(t, err, protocol)
+		require.Contains(t, snapshot.ScanText, "shared description", protocol)
+		require.Contains(t, snapshot.ScanText, "a parameter", protocol)
+		require.Contains(t, snapshot.ScanText, "z parameter", protocol)
+	}
+}
+
+func TestPromptSnapshotIncludesLegacyAndNestedResponseToolSchemas(t *testing.T) {
+	body := []byte(`{"type":"response.create","response":{"input":"user text","tools":[{"type":"function","function":{"description":"nested response tool"}}]},"functions":[{"name":"legacy_fn","description":"legacy function description"}]}`)
+	snapshot, err := ExtractPromptSnapshot(Request{Protocol: "openai_responses", Body: body})
+	require.NoError(t, err)
+	for _, expected := range []string{"user text", "nested response tool", "legacy function description"} {
+		require.Contains(t, snapshot.ScanText, expected)
+	}
+}
+
 func TestBlockingPromptSnapshotLimitsInputToLatestUserAndPreviousOutput(t *testing.T) {
 	tests := []struct {
 		name, protocol, body, want string

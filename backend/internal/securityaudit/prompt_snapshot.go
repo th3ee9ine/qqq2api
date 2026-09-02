@@ -23,6 +23,15 @@ var (
 
 const promptAuditPrioritySeparator = "\x00SUB2API_PROMPT_AUDIT_PRIORITY_END\x00"
 
+// Tool schemas are client-controlled JSON. Keep recursive traversal bounded
+// so a deeply nested or extremely wide schema cannot turn prompt extraction
+// into an unbounded stack/CPU operation before the local guard runs.
+const (
+	maxPromptToolSchemaDepth    = 32
+	maxPromptToolSchemaChildren = 256
+	maxPromptToolSchemaSegments = 128
+)
+
 type promptSegment struct {
 	text string
 	user bool
@@ -87,23 +96,33 @@ func extractProtocolSegments(protocol string, document any) []promptSegment {
 	case "openai_chat_completions", "openai_chat", "chat_completions":
 		return extractChatLikeSegments(root)
 	case "anthropic_messages", "claude_messages", "messages":
-		return append(extractAnthropicSystem(root["system"]), extractMessages(root["messages"], clientInstructionRoles...)...)
+		segments := append(extractAnthropicSystem(root["system"]), extractMessages(root["messages"], clientInstructionRoles...)...)
+		segments = append(segments, extractToolDefinitionSegments(root["tools"])...)
+		return append(segments, extractToolDefinitionSegments(root["functions"])...)
 	case "gemini", "gemini_generate_content":
 		return extractGeminiRoot(root)
 	case "openai_responses", "responses", "responses_websocket":
+		toolSegments := extractToolDefinitionSegments(root["tools"])
+		toolSegments = append(toolSegments, extractToolDefinitionSegments(root["functions"])...)
 		if frameType := stringValue(root["type"]); frameType != "" || protocol == "responses_websocket" {
 			if frameType != "response.create" {
 				return nil
 			}
 			if input, exists := root["input"]; exists && input != nil {
-				return append(extractInstructions(root["instructions"]), extractResponses(input)...)
+				segments := append(extractInstructions(root["instructions"]), extractResponses(input)...)
+				return append(segments, toolSegments...)
 			}
 			if response, ok := root["response"].(map[string]any); ok {
-				return append(extractInstructions(response["instructions"]), extractResponses(response["input"])...)
+				responseTools := extractToolDefinitionSegments(response["tools"])
+				responseTools = append(responseTools, extractToolDefinitionSegments(response["functions"])...)
+				segments := append(extractInstructions(response["instructions"]), extractResponses(response["input"])...)
+				segments = append(segments, responseTools...)
+				return append(segments, toolSegments...)
 			}
-			return extractInstructions(root["instructions"])
+			return append(extractInstructions(root["instructions"]), toolSegments...)
 		}
-		return append(extractInstructions(root["instructions"]), extractResponses(root["input"])...)
+		segments := append(extractInstructions(root["instructions"]), extractResponses(root["input"])...)
+		return append(segments, toolSegments...)
 	case "openai_images", "grok_media", "media", "images":
 		return userPromptSegments(extractMediaPrompts(root))
 	default:
@@ -129,7 +148,71 @@ func extractChatLikeSegments(root map[string]any) []promptSegment {
 	if root == nil {
 		return nil
 	}
-	return extractMessages(root["messages"], clientInstructionRoles...)
+	segments := extractMessages(root["messages"], clientInstructionRoles...)
+	segments = append(segments, extractToolDefinitionSegments(root["tools"])...)
+	return append(segments, extractToolDefinitionSegments(root["functions"])...)
+}
+
+// extractToolDefinitionSegments includes text that a provider sends as a tool
+// or function schema. Tool descriptions and parameter descriptions are part of
+// the model-visible context and can carry prompt-injection text just like a
+// message. Only textual schema fields are collected; arbitrary enum/data
+// values are deliberately ignored to avoid turning binary/tool payloads into
+// audit prompts. Exact duplicate fields are collapsed deterministically.
+func extractToolDefinitionSegments(value any) []promptSegment {
+	if value == nil {
+		return nil
+	}
+	textKeys := map[string]struct{}{
+		"name": {}, "title": {}, "description": {}, "summary": {}, "instructions": {}, "instruction": {},
+	}
+	seen := make(map[string]struct{})
+	result := make([]promptSegment, 0, 4)
+	var walk func(any, string, int)
+	walk = func(current any, key string, depth int) {
+		if depth > maxPromptToolSchemaDepth || len(result) >= maxPromptToolSchemaSegments {
+			return
+		}
+		switch typed := current.(type) {
+		case map[string]any:
+			keys := make([]string, 0, len(typed))
+			for childKey := range typed {
+				keys = append(keys, childKey)
+			}
+			sort.Strings(keys)
+			if len(keys) > maxPromptToolSchemaChildren {
+				keys = keys[:maxPromptToolSchemaChildren]
+			}
+			for _, childKey := range keys {
+				walk(typed[childKey], childKey, depth+1)
+			}
+		case []any:
+			limit := len(typed)
+			if limit > maxPromptToolSchemaChildren {
+				limit = maxPromptToolSchemaChildren
+			}
+			for _, item := range typed[:limit] {
+				walk(item, key, depth+1)
+			}
+		case string:
+			normalizedKey := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(strings.TrimSpace(key), "_", ""), "-", ""))
+			if _, ok := textKeys[normalizedKey]; !ok {
+				return
+			}
+			text := strings.TrimSpace(typed)
+			if text == "" {
+				return
+			}
+			identity := normalizedKey + "\x00" + text
+			if _, duplicate := seen[identity]; duplicate {
+				return
+			}
+			seen[identity] = struct{}{}
+			result = append(result, promptSegment{text: text, role: "tool", user: false})
+		}
+	}
+	walk(value, "", 0)
+	return result
 }
 
 func extractMessages(value any, wantedRoles ...string) []promptSegment {
@@ -273,6 +356,7 @@ func extractGeminiRoot(root map[string]any) []promptSegment {
 	result = append(result, extractGemini(root["contents"])...)
 	result = append(result, extractGemini(root["content"])...)
 	result = append(result, extractGeminiInstances(root["instances"])...)
+	result = append(result, extractToolDefinitionSegments(root["tools"])...)
 	if requests, ok := root["requests"].([]any); ok {
 		for _, item := range requests {
 			request, ok := item.(map[string]any)
@@ -284,6 +368,7 @@ func extractGeminiRoot(root map[string]any) []promptSegment {
 			result = append(result, extractGemini(request["contents"])...)
 			result = append(result, extractGemini(request["content"])...)
 			result = append(result, extractGeminiInstances(request["instances"])...)
+			result = append(result, extractToolDefinitionSegments(request["tools"])...)
 		}
 	}
 	return result

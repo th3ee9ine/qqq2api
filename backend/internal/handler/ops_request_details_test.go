@@ -106,6 +106,40 @@ func TestBuildOpsRequestDetailsJSONPreservesRawQueryAndMetadata(t *testing.T) {
 	require.Contains(t, raw, "fixture-client/1.0")
 }
 
+func TestBuildOpsRequestDetailsJSONIncludesSecurityAuditMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-test"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set(securityAuditDecisionContextKey, map[string]any{
+		"decision":         "block",
+		"error_code":       "prompt_guard_blocked",
+		"allow_next_stage": false,
+		"prompt": map[string]any{
+			"decision":         "block",
+			"matched_scanners": []string{"jailbreak"},
+			"scanner_evidence": map[string]string{"jailbreak": "instruction_override@user"},
+			"scanner_version":  "2",
+		},
+	})
+	capture := installOpsRequestBodyCapture(c)
+	_, err := io.ReadAll(c.Request.Body)
+	require.NoError(t, err)
+
+	raw := buildOpsRequestDetailsJSON(c, capture)
+	var details map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &details))
+	audit, ok := details["security_audit"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "block", audit["decision"])
+	require.Equal(t, "prompt_guard_blocked", audit["error_code"])
+	prompt, ok := audit["prompt"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "block", prompt["decision"])
+	require.Equal(t, []any{"jailbreak"}, prompt["matched_scanners"])
+	require.NotContains(t, audit, "prompt_text", "structured audit metadata must not duplicate the request body")
+}
+
 func TestBuildOpsRequestDetailsJSONIncludesRejectedWebSocketFrame(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

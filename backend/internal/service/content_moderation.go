@@ -1670,9 +1670,9 @@ func (s *contentModerationRuntimeSnapshot) matchBlockedKeyword(text string) (str
 		return "", false
 	}
 	if s.keywordMatcher != nil {
-		return s.keywordMatcher.Match(text)
+		return s.keywordMatcher.MatchContextAware(text)
 	}
-	return matchBlockedKeyword(text, s.config.BlockedKeywords)
+	return matchBlockedKeywordContextAware(text, s.config.BlockedKeywords)
 }
 
 func (s *ContentModerationService) isRiskControlEnabled(ctx context.Context) bool {

@@ -770,6 +770,13 @@ func buildOpsRequestDetailsJSONWithFrame(c *gin.Context, capture *opsRequestBody
 	if metadata.headerTruncated {
 		details["headers_truncated"] = true
 	}
+	// Attach the latest bounded security-audit explanation, when the gateway
+	// ran an audit for this request/frame. The value contains rule IDs,
+	// scores/evidence and policy metadata without duplicating the full prompt;
+	// the request body remains under the ordinary capture policy below.
+	if audit, ok := c.Get(securityAuditDecisionContextKey); ok && audit != nil {
+		details["security_audit"] = audit
+	}
 
 	snapshot := capture.snapshot()
 	// Prefer the decoded body supplied by the gateway's request reader when it

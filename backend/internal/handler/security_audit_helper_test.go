@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -51,6 +52,60 @@ func TestRunSecurityAuditDoesNotSkipSubsequentWebSocketTurns(t *testing.T) {
 		[]byte(`{"type":"response.create","response":{"input":"malicious follow-up"}}`), "subsequent_turn")
 	require.NotNil(t, second)
 	require.Equal(t, int64(2), engine.enqueues.Load(), "subsequent WebSocket turns must be audited again")
+}
+
+func TestRunSecurityAuditClearsCachedDecisionMetadataBeforeCompletionReuse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := &turnCountingEngine{mode: securityaudit.ModeBlocking}
+	coordinator := securityaudit.NewCoordinator(nil, engine)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	first := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", []byte(`{"input":"first"}`), "http")
+	require.NotNil(t, first)
+	if _, ok := c.Get(securityAuditDecisionContextKey); !ok {
+		t.Fatal("first audit should publish decision metadata")
+	}
+	second := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", []byte(`{"input":"cached"}`), "http")
+	require.Nil(t, second)
+	value, exists := c.Get(securityAuditDecisionContextKey)
+	require.True(t, exists)
+	require.Nil(t, value)
+}
+
+func TestSetSecurityAuditDecisionMetadataBoundsRemoteEvidence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	longEvidence := strings.Repeat("证据", maxSecurityAuditMetadataValueBytes)
+	longMessage := strings.Repeat("消息", maxSecurityAuditMetadataValueBytes)
+	decision := &securityaudit.Decision{
+		Kind:           securityaudit.DecisionBlock,
+		ErrorCode:      longMessage,
+		AllowNextStage: false,
+		Legacy: &securityaudit.LegacyDecision{
+			Message: longMessage,
+		},
+		Prompt: &securityaudit.PromptDecision{
+			Kind: securityaudit.DecisionBlock,
+			Result: &securityaudit.NormalizedResult{
+				MatchedScanners: []string{longMessage},
+				ScannerEvidence: map[string]string{"jailbreak": longEvidence},
+			},
+		},
+	}
+	setSecurityAuditDecisionMetadata(c, decision)
+	value, exists := c.Get(securityAuditDecisionContextKey)
+	require.True(t, exists)
+	metadata, ok := value.(map[string]any)
+	require.True(t, ok)
+	require.LessOrEqual(t, len(metadata["error_code"].(string)), maxSecurityAuditMetadataValueBytes)
+	legacy := metadata["legacy"].(map[string]any)
+	require.LessOrEqual(t, len(legacy["message"].(string)), maxSecurityAuditMetadataValueBytes)
+	prompt := metadata["prompt"].(map[string]any)
+	evidence := prompt["scanner_evidence"].(map[string]string)
+	require.LessOrEqual(t, len(evidence["jailbreak"]), maxSecurityAuditMetadataValueBytes)
+	scanners := prompt["matched_scanners"].([]string)
+	require.LessOrEqual(t, len(scanners[0]), maxSecurityAuditMetadataValueBytes)
 }
 
 func TestRunSecurityAuditDeduplicatesRepeatedPayloadWithinWebSocketTurn(t *testing.T) {
