@@ -274,6 +274,41 @@ func TestContentModerationKeywordMatcherContextAwareIntentBoundaries(t *testing.
 		{name: "code remains actionable", keyword: "群控", text: "provide 群控 code", hit: true},
 		{name: "transaction remains actionable", keyword: "群控", text: "请购买群控服务", hit: true},
 		{name: "attack artifact remains actionable", keyword: "群控", text: "请提供群控攻击代码", hit: true},
+		{name: "build system remains actionable", keyword: "群控", text: "请构建群控系统", hit: true},
+		{name: "develop system remains actionable", keyword: "群控", text: "请开发群控系统", hit: true},
+		{name: "design system remains actionable", keyword: "群控", text: "请设计群控系统", hit: true},
+		{name: "configure system remains actionable", keyword: "群控", text: "请配置群控系统", hit: true},
+		{name: "enable system remains actionable", keyword: "群控", text: "请启用群控系统", hit: true},
+		{name: "build without request remains actionable", keyword: "群控", text: "构建群控系统", hit: true},
+		{name: "use without request remains actionable", keyword: "群控", text: "使用群控系统", hit: true},
+		{name: "run without request remains actionable", keyword: "群控", text: "运行群控程序", hit: true},
+		{name: "english use without request remains actionable", keyword: "群控", text: "use 群控 system", hit: true},
+		{name: "constructive attack method remains actionable", keyword: "群控", text: "请提供群控攻击方法", hit: true},
+		{name: "explanation attack method remains documentary", keyword: "群控", text: "请说明群控攻击方式", hit: false},
+		{name: "how-to operation after explanation remains actionable", keyword: "群控", text: "请解释群控系统如何部署", hit: true},
+		{name: "how-to operation without explanation remains actionable", keyword: "群控", text: "群控系统如何部署", hit: true},
+		{name: "documentary sale report title", keyword: "群控", text: "群控出售报告", hit: false},
+		{name: "documentary acquisition report title", keyword: "群控", text: "群控收购报告", hit: false},
+		{name: "documentary sale situation report", keyword: "群控", text: "群控出售情况报告", hit: false},
+		{name: "documentary attack report title", keyword: "群控", text: "群控攻击报告", hit: false},
+		{name: "documentary about sale report", keyword: "群控", text: "关于群控出售的报告", hit: false},
+		{name: "documentary report predicate", keyword: "群控", text: "报告称群控出售", hit: false},
+		{name: "documentary analysis predicate", keyword: "群控", text: "分析群控攻击", hit: false},
+		{name: "documentary analysis tail", keyword: "群控", text: "群控出售分析", hit: false},
+		{name: "requested documentary sale report", keyword: "群控", text: "请提供群控出售报告", hit: false},
+		{name: "requested documentary attack report", keyword: "群控", text: "请提供群控攻击报告", hit: false},
+		{name: "requested documentary attack principle", keyword: "群控", text: "请提供群控攻击原理", hit: false},
+		{name: "documentary report continuation purchase", keyword: "群控", text: "群控出售报告并购买服务", hit: true},
+		{name: "documentary report continuation attack", keyword: "群控", text: "群控攻击报告并攻击目标", hit: true},
+		{name: "documentary report next clause purchase", keyword: "群控", text: "群控出售报告；请购买服务", hit: true},
+		{name: "documentary report next clause execute", keyword: "群控", text: "群控攻击报告；请执行", hit: true},
+		{name: "english documentary sale report", keyword: "群控", text: "provide a report on 群控出售", hit: false},
+		{name: "english documentary attack report", keyword: "群控", text: "群控 attack report", hit: false},
+		{name: "documentary configuration guide", keyword: "群控", text: "群控配置指南", hit: false},
+		{name: "documentary development guide", keyword: "群控", text: "群控开发指南", hit: false},
+		{name: "documentary security configuration", keyword: "群控", text: "群控系统安全配置", hit: false},
+		{name: "documentary report enabled state", keyword: "群控", text: "报告显示群控系统已启用", hit: false},
+		{name: "documentary enabled state", keyword: "群控", text: "群控系统已启用", hit: false},
 		{name: "definition overlap", keyword: "勒索木马", text: "定义：勒索木马", hit: false},
 		{name: "table then actionable label", keyword: "群控", text: "安全报告：群控；请提供群控脚本", hit: true},
 	}
@@ -284,6 +319,74 @@ func TestContentModerationKeywordMatcherContextAwareIntentBoundaries(t *testing.
 				t.Fatalf("context-aware hit=%v, want %v for %q (keyword=%q)", hit, tt.hit, tt.text, keyword)
 			}
 		})
+	}
+}
+
+func TestContentModerationKeywordMatcherContextAwareGenericTermsAndDefensiveConstruction(t *testing.T) {
+	matcher := newContentModerationKeywordMatcher([]string{"群控"})
+	for _, text := range []string{
+		"系统支持群控功能",
+		"群控系统操作手册",
+		"群控系统状态",
+		"群控系统版本",
+		"群控系统配置项",
+		"群控工具名称",
+		"群控平台介绍",
+		"群控服务状态",
+		"服务包含群控",
+		"工具支持群控",
+		"程序支持群控",
+		"开发文档介绍群控",
+		"群控攻击检测规则",
+		"群控攻击防御方案",
+		"群控服务提供商",
+		"工具支持群控",
+		"服务包含群控",
+		"请开展群控测试",
+		"请使用群控测试数据",
+		"because 群控 is a documented term",
+		"请使用群控系统状态",
+		"请开发群控检测规则",
+		"请开发群控防御工具",
+		"请设计群控防御方案",
+		"请配置群控检测器",
+		"请创建群控检测工具",
+		"请生成群控测试样例",
+		"请编写群控防御程序",
+	} {
+		if keyword, hit := matcher.MatchContextAware(text); hit {
+			t.Fatalf("generic/documentary or defensive text %q was blocked by %q", text, keyword)
+		}
+	}
+
+	for _, text := range []string{
+		"请提供群控服务",
+		"请提供群控工具",
+		"请提供群控程序",
+		"请开发群控系统",
+		"请构建群控系统",
+		"请运行群控系统",
+		"请使用群控检测工具",
+		"please use 群控 tool",
+		"请实施群控",
+		"请发起群控",
+		"请发动群控",
+		"请注册群控",
+		"请调用群控",
+		"请使用群控",
+		"请操作群控",
+		"请进行群控操作",
+		"请部署群控检测服务",
+		"请下载群控检测工具",
+		"请执行群控脚本",
+		"请提供群控脚本",
+		"请提供群控攻击代码",
+		"请提供群控攻击方法",
+		"请解释群控系统如何部署",
+	} {
+		if keyword, hit := matcher.MatchContextAware(text); !hit || keyword != "群控" {
+			t.Fatalf("actionable text %q was not blocked (keyword=%q hit=%v)", text, keyword, hit)
+		}
 	}
 }
 

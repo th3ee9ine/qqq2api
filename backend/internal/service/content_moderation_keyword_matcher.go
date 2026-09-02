@@ -80,7 +80,7 @@ var contentModerationRiskContextTerms = []string{
 	"脚本", "命令", "代码", "payload", "shell", "webshell", "攻击", "入侵", "渗透",
 	"窃取", "盗取", "抓取", "转储", "导出", "删除", "擦除", "加密", "勒索", "爆破",
 	"破解", "绕过", "漏洞", "利用", "注入", "提权", "执行", "搭建", "部署", "安装",
-	"运行", "下载", "编写", "生成", "提供", "创建", "制作", "上线", "远程", "连接",
+	"运行", "下载", "编写", "生成", "提供", "创建", "制作", "构建", "开发", "设计", "配置", "开启", "启用", "上线", "远程", "连接",
 	"监听", "控制", "批量", "自动注册", "注册机",
 	"出售", "购买", "收购", "拿到", "拿下", "拖库", "脱库", "发信", "钓鱼", "劫持",
 	"投毒", "转发", "扫描", "密码", "账号", "验证码", "权限", "root", "admin", "administrator", "服务器", "主机", "端口", "c2",
@@ -105,7 +105,7 @@ var contentModerationNegationTerms = []string{
 
 var contentModerationActionTerms = []string{
 	"执行", "使用", "启用", "进行", "开展", "调用", "提供", "实施", "搭建", "部署", "运行",
-	"开启", "安装", "编写", "生成", "下载", "连接", "控制", "操作", "购买", "出售", "创建", "制作",
+	"开启", "安装", "编写", "生成", "下载", "连接", "控制", "操作", "购买", "出售", "创建", "制作", "构建", "开发", "设计", "配置", "上线",
 	"execute", "use", "enable", "invoke", "provide", "build", "deploy", "run", "install", "write", "generate", "download", "connect", "create", "make", "call",
 }
 
@@ -114,8 +114,8 @@ var contentModerationActionTerms = []string{
 // “请编写木马检测脚本” can be treated as defensive, while “下载并运行远控”
 // remains an actionable hit even when the user adds a generic “安全” qualifier.
 var contentModerationOperationalActionTerms = []string{
-	"执行", "下载", "安装", "运行", "连接", "监听", "部署", "搭建", "构建", "开启", "启用",
-	"调用", "购买", "出售", "收购", "上线", "execute", "download", "install", "run",
+	"执行", "下载", "安装", "运行", "连接", "监听", "部署", "搭建", "构建", "开发", "设计", "配置", "开启", "启用",
+	"调用", "使用", "购买", "出售", "收购", "上线", "操作", "进行", "开展", "execute", "download", "install", "run",
 	"connect", "deploy", "build", "enable", "invoke", "purchase", "sell",
 }
 
@@ -724,6 +724,30 @@ func allowContextualKeywordHit(text string, start, end int, _ ...string) bool {
 	if hasKeywordRequestMarkerContext(window, relativeStart, relativeEnd) {
 		return true
 	}
+	// Operational verbs that follow a short keyword are actionable only when
+	// they target a sensitive artifact/service.  This closes the Chinese form
+	// `请使用群控检测工具`, while leaving data-only references such as
+	// `请使用群控测试数据` in the documentary/defensive path.  The check is
+	// deliberately local to the candidate clause and does not treat a generic
+	// verb such as “使用” as a standalone risk signal.
+	if hasKeywordSensitiveOperationalTarget(window, relativeStart, relativeEnd) {
+		return true
+	}
+	// A short imperative can omit a polite request marker (`使用群控系统` or
+	// `use 群控 system`).  Treat an operational verb immediately before the
+	// keyword as actionable when it starts the clause (or follows only a small
+	// set of imperative adverbs).  Subject-led statements such as
+	// `用户使用群控系统` remain eligible for the documentary/state paths.
+	if hasKeywordBareOperationalRequest(window, relativeStart, relativeEnd) {
+		return true
+	}
+	// Strong/explicit operation verbs can be actionable even when the user
+	// omits an artifact noun (`请实施群控`, `请发起群控`). A narrow data/rule
+	// exception is handled by isClearlyBenignKeywordContext above; everything
+	// else with a request marker remains blockable.
+	if hasKeywordDirectOperationalRequest(window, relativeStart, relativeEnd) {
+		return true
+	}
 	// A short keyword can be the object of an instruction in the immediately
 	// following clause even when the user does not repeat the keyword (for
 	// example, “群控；请提供脚本” or “群控, then run it”).  Keep this fallback
@@ -735,6 +759,179 @@ func allowContextualKeywordHit(text string, start, end int, _ ...string) bool {
 	}
 	// Without a nearby action/object signal a short term is informational by
 	// default.  This is the key precision guard for entries such as “群控”.
+	return false
+}
+
+// hasKeywordSensitiveOperationalTarget identifies a concrete object of an
+// operational verb near a context-sensitive keyword.  Generic nouns (数据,
+// 名称, 状态, 版本) are intentionally excluded so ordinary inventory and
+// telemetry text is not promoted to a hard block.
+func hasKeywordSensitiveOperationalTarget(window string, start, end int) bool {
+	if start < 0 || end < start || start > len(window) {
+		return false
+	}
+	if end > len(window) {
+		end = len(window)
+	}
+	clause, relativeStart, relativeEnd := keywordClauseBounds(window, start, end)
+	if clause == "" {
+		return false
+	}
+	lower := strings.ToLower(clause)
+	withoutKeyword := strings.TrimSpace(lower[:relativeStart] + " " + lower[relativeEnd:])
+	if withoutKeyword == "" {
+		return false
+	}
+	// A request/continuation marker is required for an operational verb; this
+	// keeps a report sentence such as “the tool uses 群控 data” descriptive.
+	request := hasKeywordRequestMarkerValue(withoutKeyword) || hasKeywordContinuationMarker(withoutKeyword)
+	if !request {
+		return false
+	}
+	for _, action := range contentModerationOperationalActionTerms {
+		if !containsContentModerationTerm(withoutKeyword, action) {
+			continue
+		}
+		// Sensitive artifacts and control-plane services are concrete targets.
+		// Detection/test data and metadata nouns are intentionally not included.
+		for _, object := range []string{
+			"脚本", "代码", "命令", "payload", "shell", "webshell", "工具", "程序", "系统", "平台", "服务", "木马", "远控", "群控", "僵尸网络",
+			"script", "code", "command", "tool", "program", "payload", "shell", "webshell", "system", "platform", "service", "botnet", "trojan",
+		} {
+			if hasKeywordOperationalArtifactObject(withoutKeyword, object) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasKeywordDirectOperationalRequest(window string, start, end int) bool {
+	if start < 0 || end < start || start > len(window) {
+		return false
+	}
+	if end > len(window) {
+		end = len(window)
+	}
+	clause, relativeStart, relativeEnd := keywordClauseBounds(window, start, end)
+	if clause == "" {
+		return false
+	}
+	lower := strings.ToLower(clause)
+	withoutKeyword := strings.TrimSpace(lower[:relativeStart] + " " + lower[relativeEnd:])
+	if !hasKeywordRequestMarkerValue(withoutKeyword) {
+		return false
+	}
+	for _, action := range []string{
+		"实施", "发动", "发起", "注册", "调用", "操作", "使用", "进行", "开展",
+		"execute", "launch", "register", "invoke", "operate", "use", "conduct", "perform",
+	} {
+		if containsContentModerationTerm(withoutKeyword, action) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKeywordBareOperationalRequest(window string, start, end int) bool {
+	if start < 0 || end < start || start > len(window) {
+		return false
+	}
+	if end > len(window) {
+		end = len(window)
+	}
+	clause, relativeStart, relativeEnd := keywordClauseBounds(window, start, end)
+	if clause == "" {
+		return false
+	}
+	lower := strings.ToLower(clause)
+	before := strings.TrimSpace(lower[:relativeStart])
+	after := strings.TrimSpace(lower[relativeEnd:])
+	if before == "" {
+		return false
+	}
+	for _, action := range contentModerationOperationalActionTerms {
+		action = strings.ToLower(action)
+		if !keywordTermHasSuffix(before, action) {
+			continue
+		}
+		lead := strings.TrimSpace(before[:len(before)-len(action)])
+		if lead != "" && !hasKeywordRequestMarkerValue(lead) && !hasKeywordImperativeAdverb(lead) {
+			continue
+		}
+		// A verb-only lead is an imperative even when no artifact noun follows;
+		// an adjacent metadata tail is still a state/inventory mention.
+		if after == "" || hasKeywordOperationalArtifactObject(after, "系统") ||
+			hasKeywordOperationalArtifactObject(after, "工具") ||
+			hasKeywordOperationalArtifactObject(after, "程序") ||
+			hasKeywordOperationalArtifactObject(after, "服务") ||
+			hasKeywordOperationalArtifactObject(after, "平台") ||
+			hasKeywordOperationalArtifactObject(after, "system") ||
+			hasKeywordOperationalArtifactObject(after, "tool") ||
+			hasKeywordOperationalArtifactObject(after, "program") ||
+			hasKeywordOperationalArtifactObject(after, "service") ||
+			hasKeywordOperationalArtifactObject(after, "platform") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKeywordImperativeAdverb(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	for _, term := range []string{"直接", "立即", "马上", "现在", "继续", "再", "then", "now", "directly", "please"} {
+		if value == term || strings.HasSuffix(value, term) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasKeywordOperationalArtifactObject reports whether object occurs as a
+// concrete operational target.  Status/metadata tails turn otherwise broad
+// nouns (system, service, tool) into inventory text and are therefore kept out
+// of the hard-block path (`群控系统状态`, `群控工具版本`).
+func hasKeywordOperationalArtifactObject(value, object string) bool {
+	value = strings.ToLower(value)
+	object = strings.TrimSpace(strings.ToLower(object))
+	if value == "" || object == "" {
+		return false
+	}
+	for from := 0; from < len(value); {
+		relative := strings.Index(value[from:], object)
+		if relative < 0 {
+			return false
+		}
+		index := from + relative
+		if !keywordTermBoundaryAt(value, index, object) {
+			from = index + len(object)
+			continue
+		}
+		tail := strings.TrimSpace(value[index+len(object):])
+		if !hasKeywordMetadataTail(tail) {
+			return true
+		}
+		from = index + len(object)
+	}
+	return false
+}
+
+func hasKeywordMetadataTail(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	for _, term := range []string{
+		"状态", "版本", "名称", "配置项", "功能", "介绍", "说明", "描述", "文档", "手册", "数据", "记录", "日志", "字段", "选项", "参数",
+		"status", "version", "name", "config", "configuration", "feature", "function", "introduction", "overview", "description", "documentation", "manual", "data", "record", "log", "field", "option", "parameter",
+	} {
+		if containsContentModerationTerm(value, term) {
+			return true
+		}
+	}
 	return false
 }
 
@@ -1013,7 +1210,7 @@ func hasKeywordRequestMarkerContext(window string, start, end int) bool {
 		"provide", "give me", "how to", "i want", "need to",
 	} {
 		marker = strings.ToLower(marker)
-		if strings.Contains(prefix, marker) || strings.HasPrefix(suffix, marker) {
+		if containsContentModerationTerm(prefix, marker) || keywordTermHasPrefix(suffix, marker) {
 			return true
 		}
 	}
@@ -1087,14 +1284,14 @@ func hasKeywordBenignLabelContext(window string, start, end int) bool {
 	}
 	benignMarker := false
 	for _, term := range append(append([]string{}, contentModerationDefensiveTerms...), contentModerationDescriptionTerms...) {
-		if strings.Contains(label, strings.ToLower(term)) {
+		if containsContentModerationTerm(label, term) {
 			benignMarker = true
 			break
 		}
 	}
 	if !benignMarker {
 		for _, term := range []string{"字段", "选项", "表格", "清单", "参数", "配置", "关键词", "关键字", "术语", "词条", "标签", "引用", "参考", "原文", "报告", "文档", "示例", "样例", "field", "option", "table", "term", "label", "quote", "reference", "report", "document", "example"} {
-			if strings.Contains(label, strings.ToLower(term)) {
+			if containsContentModerationTerm(label, term) {
 				benignMarker = true
 				break
 			}
@@ -1144,6 +1341,16 @@ func isClearlyBenignKeywordContext(text string, start, end int) bool {
 	if hasKeywordBenignLabelContext(window, relativeStart, relativeEnd) {
 		return true
 	}
+	// Transaction/offensive words can also be ordinary nouns in a report title
+	// (for example, “群控出售报告” or “报告称群控攻击”).  Recognise that
+	// documentary relation before the generic operational-action guard, while
+	// keeping explicit continuations such as “并购买服务” actionable.
+	if hasKeywordDocumentaryActionNounContext(window, relativeStart, relativeEnd) {
+		return true
+	}
+	if hasKeywordDocumentaryActionContinuationContext(window, relativeStart, relativeEnd) {
+		return false
+	}
 	// A request for a definition, report, or documentation about a sensitive
 	// term is documentary rather than an instruction to operate that term. The
 	// generic risk vocabulary contains request verbs such as "provide", so it
@@ -1155,13 +1362,29 @@ func isClearlyBenignKeywordContext(text string, start, end int) bool {
 	if hasKeywordConceptualDocumentaryContext(window, relativeStart, relativeEnd) {
 		return true
 	}
+	// Some inventory/telemetry requests have no explicit “检测/防御” marker
+	// (`请使用群控系统状态`). Classify their metadata target before the
+	// defensive-context gate; the narrow helper still rejects artifact nouns.
+	if hasKeywordBenignOperationalDataContext(window, relativeStart, relativeEnd) {
+		return true
+	}
 
 	defensive := hasKeywordDefensiveContext(window, relativeStart, relativeEnd)
 	description := hasKeywordDescriptionContext(window, relativeStart, relativeEnd)
 	if !defensive && !description {
 		return false
 	}
-
+	// Defensive detection/rule construction is a legitimate use of a
+	// sensitive term. Evaluate this narrow scope before the generic operational
+	// guard so verbs such as 开发/设计/配置 do not turn security tooling into a
+	// false positive. Purpose-suffix artifacts ("提供群控脚本用于安全检测") are
+	// intentionally rejected by hasScopedDetectionConstruction and continue to
+	// hit the hard block below.
+	if hasKeywordConstructiveActionContext(window, relativeStart, relativeEnd) &&
+		hasScopedDetectionConstruction(window, relativeStart, relativeEnd) &&
+		!hasExecutionAfterDetectionScope(window, relativeStart, relativeEnd) {
+		return true
+	}
 	// Downloading, installing, running, or otherwise operating a sensitive
 	// artifact is actionable even when the sentence contains a generic
 	// “security”/“testing” qualifier.  These operations are deliberately
@@ -1201,6 +1424,379 @@ func isClearlyBenignKeywordContext(text string, start, end int) bool {
 	}
 	return !hasKeywordActionContext(window, relativeStart, relativeEnd) &&
 		!hasKeywordHarmfulActionContext(window, relativeStart, relativeEnd)
+}
+
+func hasKeywordBenignOperationalDataContext(window string, start, end int) bool {
+	if start < 0 || end < start || start > len(window) {
+		return false
+	}
+	if end > len(window) {
+		end = len(window)
+	}
+	clause, relativeStart, relativeEnd := keywordClauseBounds(window, start, end)
+	if clause == "" {
+		return false
+	}
+	lower := strings.ToLower(clause)
+	withoutKeyword := strings.TrimSpace(lower[:relativeStart] + " " + lower[relativeEnd:])
+	if withoutKeyword == "" {
+		return false
+	}
+	weakAction := false
+	for _, action := range []string{"使用", "进行", "开展", "调用", "操作", "use", "conduct", "perform", "invoke", "operate"} {
+		if containsContentModerationTerm(withoutKeyword, action) {
+			weakAction = true
+			break
+		}
+	}
+	if !weakAction || containsOffensiveObject(withoutKeyword) {
+		return false
+	}
+	// Never treat a tool/program/service/system as test data merely because a
+	// detection qualifier appears nearby.
+	for _, artifact := range []string{
+		"脚本", "代码", "命令", "工具", "程序", "服务", "系统", "平台", "payload", "shell", "webshell",
+		"script", "code", "command", "tool", "program", "service", "system", "platform", "payload", "shell", "webshell",
+	} {
+		if hasKeywordOperationalArtifactObject(withoutKeyword, artifact) {
+			return false
+		}
+	}
+	for _, safe := range []string{
+		"测试", "测试数据", "测试样例", "测试用例", "样例", "样本", "日志", "记录", "指标", "状态", "版本", "配置项", "检测规则", "防御规则", "审计规则",
+		"test", "test data", "test case", "test sample", "sample data", "telemetry", "log", "record", "metric", "status", "version", "configuration", "detection rule", "defense rule", "audit rule",
+	} {
+		if containsContentModerationTerm(withoutKeyword, safe) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasKeywordDocumentaryActionNounContext recognises a sensitive term used as
+// part of a report/document/analysis noun phrase.  A transaction or attack
+// word immediately followed by “报告/分析/report” is descriptive data (for
+// example, “群控出售报告”), whereas a chained operation (“报告并购买服务”)
+// remains actionable and is rejected by the continuation helper below.
+func hasKeywordDocumentaryActionNounContext(window string, start, end int) bool {
+	if start < 0 || end < start || start > len(window) {
+		return false
+	}
+	if end > len(window) {
+		end = len(window)
+	}
+	clause, relativeStart, relativeEnd := keywordClauseBounds(window, start, end)
+	if clause == "" {
+		return false
+	}
+	lower := strings.ToLower(clause)
+	before := strings.TrimSpace(lower[:relativeStart])
+	after := strings.TrimSpace(lower[relativeEnd:])
+	if before == "" && after == "" {
+		return false
+	}
+	withoutKeyword := strings.TrimSpace(lower[:relativeStart] + " " + lower[relativeEnd:])
+	if hasKeywordDocumentaryActionContinuation(withoutKeyword) ||
+		hasKeywordDocumentaryOperationalContinuation(withoutKeyword) ||
+		hasCrossDelimiterKeywordActionContext(window, start, end) {
+		return false
+	}
+
+	// A direct operational/offensive verb before the matched term takes
+	// precedence over a later report noun (`请构建群控系统设计报告`).  The
+	// documentary request verbs provide/explain/analyse are intentionally not
+	// in this list, so `请提供群控攻击报告` remains a report request.
+	if hasKeywordDirectDocumentaryOperation(before) {
+		return false
+	}
+	if hasKeywordDirectOffensiveRequestBefore(before) {
+		return false
+	}
+	if hasKeywordDocumentaryActionObjectRequest(withoutKeyword) {
+		return false
+	}
+	if hasKeywordDocumentaryHowToOperation(after) {
+		return false
+	}
+	if hasKeywordDocumentaryMethodRequest(before, after) {
+		return false
+	}
+
+	if hasKeywordDocumentaryNounTail(after) ||
+		hasKeywordDocumentaryPredicateBefore(before) ||
+		hasKeywordDocumentaryLeadBefore(before) {
+		return true
+	}
+	return false
+}
+
+func hasKeywordDocumentaryActionContinuationContext(window string, start, end int) bool {
+	if start < 0 || end < start || start > len(window) {
+		return false
+	}
+	if end > len(window) {
+		end = len(window)
+	}
+	clause, relativeStart, relativeEnd := keywordClauseBounds(window, start, end)
+	if clause == "" {
+		return false
+	}
+	withoutKeyword := strings.TrimSpace(strings.ToLower(clause[:relativeStart] + " " + clause[relativeEnd:]))
+	if hasKeywordDocumentaryActionContinuation(withoutKeyword) ||
+		hasKeywordDocumentaryOperationalContinuation(withoutKeyword) {
+		return true
+	}
+	return hasCrossDelimiterKeywordActionContext(window, start, end)
+}
+
+func hasKeywordDocumentaryNounTail(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	for _, term := range []string{
+		"报告", "文档", "文献", "分析", "研究", "概述", "摘要", "情况", "统计", "说明", "描述", "解释", "定义", "术语", "原理", "方式", "方法",
+		"手册", "指南", "介绍", "功能", "状态", "版本", "名称", "配置项", "架构", "日志", "运行日志", "字段", "选项", "检测规则", "防御方案", "检测器", "风险", "行为", "支持", "包含", "包括", "具备", "拥有", "能力", "用途", "用法", "配置", "安全配置", "已启用", "已禁用", "已运行", "已部署", "已配置", "提供商", "供应商",
+		"report", "reports", "document", "documentation", "paper", "analysis", "research", "overview", "summary", "findings", "case study", "description", "explanation", "definition", "principle", "method",
+		"manual", "guide", "introduction", "function", "status", "version", "name", "configuration", "security configuration", "architecture", "logs", "runtime logs", "field", "option", "detection rule", "defense plan", "detector", "risk", "behavior", "supports", "contains", "includes", "offers", "capability", "purpose", "usage", "enabled", "disabled", "running", "deployed", "configured", "provider", "vendor",
+	} {
+		if containsContentModerationTerm(value, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKeywordDocumentaryPredicateBefore(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	for _, term := range []string{
+		"报告说", "报告称", "报告指出", "报告记录", "报告描述", "报告说明", "报告讨论", "报告提到",
+		"报告显示", "报告表明", "报告发现", "报告显示已", "记录显示", "日志显示",
+		"安全报告说", "安全报告称", "安全报告指出", "安全报告记录", "安全报告描述", "安全报告说明", "安全报告讨论", "安全报告提到",
+		"安全报告显示", "安全报告表明", "安全报告发现",
+		"文档说", "文档指出", "文档记录", "文档描述", "文档说明", "文档讨论", "文档提到", "文档介绍", "说明书介绍",
+		"支持", "包含", "包括", "具备", "拥有", "supports", "contains", "includes", "offers",
+		"report says", "report states", "report documents", "report describes", "report explains", "report discusses", "report mentions",
+		"report shows", "report indicates", "report found", "the report shows", "the report indicates", "the report found",
+		"the report says", "the report states", "the report documents", "the report describes", "the report explains", "the report discusses", "the report mentions",
+		"security report says", "security report states", "security report documents", "security report describes", "security report explains", "security report discusses", "security report mentions",
+		"documentation says", "documentation states", "documentation describes", "documentation explains", "documentation discusses", "documentation mentions", "documentation introduces",
+	} {
+		if containsContentModerationTerm(value, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKeywordDocumentaryLeadBefore(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	// A report/analysis preposition or a leading explanatory verb makes the
+	// following sensitive term the subject of a document, not an operation.
+	for _, term := range []string{
+		"关于", "针对", "围绕", "有关", "分析", "研究", "讨论", "说明", "解释", "定义", "介绍",
+		"about", "regarding", "concerning", "on", "analysis of", "research on", "discussion of", "explanation of", "definition of",
+		"introduction to", "overview of", "支持", "包含", "包括", "具备", "拥有", "supports", "contains", "includes", "offers",
+	} {
+		if strings.HasSuffix(value, term) || containsContentModerationTerm(value, term+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKeywordDirectDocumentaryOperation(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" || !hasKeywordRequestMarkerNear(value) {
+		return false
+	}
+	for _, term := range []string{
+		"执行", "下载", "安装", "运行", "连接", "监听", "部署", "搭建", "构建", "开发", "设计", "配置", "开启", "启用", "调用", "使用", "上线", "操作", "进行", "开展",
+		"execute", "download", "install", "run", "connect", "listen", "deploy", "build", "develop", "design", "configure", "launch", "enable", "invoke", "use", "operate",
+	} {
+		if containsContentModerationTerm(value, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKeywordDirectOffensiveRequestBefore(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" || !hasKeywordRequestMarkerNear(value) {
+		return false
+	}
+	for _, term := range []string{
+		"攻击", "入侵", "渗透", "窃取", "盗取", "勒索", "爆破", "破解", "提权", "拖库", "脱库", "删库", "劫持", "投毒", "利用", "绕过",
+		"attack", "intrude", "penetrate", "steal", "ransom", "brute force", "crack", "escalate", "exfiltrate", "delete", "hijack", "poison", "exploit", "bypass",
+	} {
+		if containsContentModerationTerm(value, term) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasKeywordDocumentaryActionObjectRequest rejects an ostensibly documentary
+// request when a transaction/attack verb is paired with a concrete object
+// before the report tail (`请提供群控攻击目标报告`, `provide a report on 群控出售服务`).
+// A bare noun compound such as `群控攻击报告` remains descriptive because it
+// has no request marker or object between the action and the documentary noun.
+func hasKeywordDocumentaryActionObjectRequest(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	actions := []string{
+		"购买", "出售", "收购", "purchase", "sell", "buy",
+		"攻击", "入侵", "渗透", "窃取", "盗取", "勒索", "爆破", "破解", "提权", "拖库", "脱库", "删库", "删除", "劫持", "投毒",
+		"attack", "intrude", "penetrate", "steal", "ransom", "brute force", "crack", "escalate", "exfiltrate", "delete", "hijack", "poison",
+	}
+	objects := []string{
+		"目标", "主机", "服务器", "网站", "账号", "账户", "数据", "接口", "服务", "渠道", "权限",
+		"target", "host", "server", "site", "account", "data", "endpoint", "service", "channel", "permission",
+	}
+	for _, action := range actions {
+		for from := 0; from < len(value); {
+			relative := strings.Index(value[from:], action)
+			if relative < 0 {
+				break
+			}
+			index := from + relative
+			if !keywordTermBoundaryAt(value, index, action) {
+				from = index + len(action)
+				continue
+			}
+			prefix := strings.TrimSpace(value[:index])
+			if !hasKeywordRequestMarkerNear(prefix) {
+				from = index + len(action)
+				continue
+			}
+			suffix := value[index+len(action):]
+			// Only inspect text before the first documentary tail.  Objects
+			// after that tail belong to a continuation and are handled by the
+			// separate continuation checks.
+			cut := len(suffix)
+			for _, noun := range []string{"报告", "文档", "分析", "研究", "概述", "摘要", "report", "document", "documentation", "analysis", "research", "overview", "summary"} {
+				if at := strings.Index(suffix, noun); at >= 0 && at < cut {
+					cut = at
+				}
+			}
+			segment := suffix[:cut]
+			for _, object := range objects {
+				if containsContentModerationTerm(segment, object) {
+					return true
+				}
+			}
+			from = index + len(action)
+		}
+	}
+	return false
+}
+
+func hasKeywordDocumentaryHowToOperation(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	markers := []string{"如何", "怎么", "怎么做", "如何做", "how to", "steps to", "step-by-step"}
+	operations := []string{
+		"执行", "下载", "安装", "运行", "连接", "监听", "部署", "搭建", "构建", "开发", "设计", "配置", "开启", "启用", "调用", "使用", "上线", "操作",
+		"execute", "download", "install", "run", "connect", "listen", "deploy", "build", "develop", "design", "configure", "launch", "enable", "invoke", "use", "operate",
+	}
+	for _, marker := range markers {
+		if markerIndex := strings.Index(value, marker); markerIndex >= 0 {
+			tail := value[markerIndex+len(marker):]
+			for _, operation := range operations {
+				if containsContentModerationTerm(tail, operation) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func hasKeywordDocumentaryMethodRequest(before, after string) bool {
+	full := strings.TrimSpace(strings.ToLower(before + " " + after))
+	if full == "" {
+		return false
+	}
+	// `请说明/解释攻击方式` is a descriptive request covered by the
+	// ordinary explanation path.  A constructive request for a method/steps
+	// is treated as operational unless it explicitly asks for a report about
+	// that method (`provide a report on ...`).
+	constructive := false
+	for _, marker := range []string{"提供", "给出", "写出", "编写", "生成", "创建", "制作", "provide", "give", "write", "generate", "create", "make"} {
+		if containsContentModerationTerm(full, marker) {
+			constructive = true
+			break
+		}
+	}
+	if !constructive {
+		return false
+	}
+	if strings.Contains(full, "report on") || strings.Contains(full, "报告") && strings.Contains(full, "关于") {
+		return false
+	}
+	offensive := false
+	for _, term := range []string{
+		"攻击", "入侵", "渗透", "窃取", "盗取", "勒索", "爆破", "破解", "提权", "拖库", "脱库", "删库", "劫持", "投毒", "利用", "绕过",
+		"attack", "intrude", "penetrate", "steal", "ransom", "brute force", "crack", "escalate", "exfiltrate", "delete", "hijack", "poison", "exploit", "bypass",
+	} {
+		if containsContentModerationTerm(full, term) {
+			offensive = true
+			break
+		}
+	}
+	if !offensive {
+		return false
+	}
+	for _, term := range []string{"方法", "方式", "步骤", "教程", "指南", "method", "methods", "steps", "guide", "tutorial"} {
+		if containsContentModerationTerm(full, term) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasKeywordDocumentaryOperationalContinuation catches a second operation
+// joined to a report noun (`报告并提供脚本`).  It deliberately requires a
+// conjunction marker, so a leading documentary request such as `请提供...`
+// is not mistaken for a continuation.
+func hasKeywordDocumentaryOperationalContinuation(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	for _, term := range []string{
+		"执行", "下载", "安装", "运行", "连接", "监听", "部署", "搭建", "构建", "开发", "设计", "配置", "开启", "启用", "调用", "使用", "上线", "操作", "购买", "出售", "收购",
+		"提供", "编写", "生成", "创建", "制作", "写出", "给出",
+		"execute", "download", "install", "run", "connect", "listen", "deploy", "build", "develop", "design", "configure", "launch", "enable", "invoke", "use", "operate", "purchase", "sell", "provide", "write", "generate", "create", "make", "give",
+	} {
+		for from := 0; from < len(value); {
+			relative := strings.Index(value[from:], term)
+			if relative < 0 {
+				break
+			}
+			index := from + relative
+			if !keywordTermBoundaryAt(value, index, term) {
+				from = index + len(term)
+				continue
+			}
+			if hasKeywordContinuationMarker(strings.TrimSpace(value[:index])) {
+				return true
+			}
+			from = index + len(term)
+		}
+	}
+	return false
 }
 
 // hasKeywordConceptualDocumentaryContext recognises grammatical requests for
@@ -1319,11 +1915,20 @@ func hasKeywordDocumentaryActionContinuation(value string) bool {
 				continue
 			}
 			prefix := strings.TrimSpace(value[:index])
+			suffix := strings.TrimSpace(value[index+len(action):])
 			// When this helper is applied to the first clause after a
 			// delimiter, a bare action starts the continuation (`; attack
 			// target`, `；购买服务`). Treat that as actionable even without an
 			// explicit conjunction word.
 			if prefix == "" {
+				// In a noun compound such as `攻击报告`/`出售分析`, the
+				// documentary tail makes the leading word descriptive rather
+				// than an imperative.  A later conjunction/action is handled
+				// by the branches below on its own occurrence.
+				if hasKeywordDocumentaryNounTail(suffix) {
+					from = index + len(action)
+					continue
+				}
 				return true
 			}
 			for _, marker := range continuationMarkers {
@@ -1517,7 +2122,7 @@ func containsKeywordReferenceMarker(value string) bool {
 		"示例", "样例", "说明", "定义", "quote", "quoted", "reference", "term", "label",
 		"report", "document", "example",
 	} {
-		if strings.Contains(value, strings.ToLower(marker)) {
+		if containsContentModerationTerm(value, marker) {
 			return true
 		}
 	}
@@ -1531,7 +2136,7 @@ func hasKeywordReferenceExternalAction(value string) bool {
 		if transactionOnly && isKeywordTransactionTerm(term) {
 			continue
 		}
-		if strings.Contains(value, strings.ToLower(term)) {
+		if containsContentModerationTerm(value, term) {
 			return true
 		}
 	}
@@ -1541,7 +2146,7 @@ func hasKeywordReferenceExternalAction(value string) bool {
 	for _, term := range []string{
 		"提供", "编写", "生成", "创建", "制作", "写出", "给出", "provide", "write", "generate", "create", "make", "give",
 	} {
-		if strings.Contains(value, strings.ToLower(term)) && hasKeywordRequestMarkerValue(value) {
+		if containsContentModerationTerm(value, term) && hasKeywordRequestMarkerValue(value) {
 			return true
 		}
 	}
@@ -1549,7 +2154,7 @@ func hasKeywordReferenceExternalAction(value string) bool {
 	// reports.  Requiring a target keeps “攻击原理/攻击方式” reference-safe.
 	if hasKeywordRequestMarkerValue(value) && containsOffensiveObject(value) {
 		for _, target := range []string{"目标", "主机", "服务器", "网站", "账号", "数据", "接口", "target", "host", "server", "account", "data"} {
-			if strings.Contains(value, target) {
+			if containsContentModerationTerm(value, target) {
 				return true
 			}
 		}
@@ -1574,7 +2179,7 @@ func hasKeywordTransactionOnlyContext(value string) bool {
 	value = strings.ToLower(value)
 	transaction := false
 	for _, term := range []string{"购买", "出售", "收购", "purchase", "sell"} {
-		if strings.Contains(value, term) {
+		if containsContentModerationTerm(value, term) {
 			transaction = true
 			break
 		}
@@ -1586,7 +2191,7 @@ func hasKeywordTransactionOnlyContext(value string) bool {
 		if isKeywordTransactionTerm(term) {
 			continue
 		}
-		if strings.Contains(value, strings.ToLower(term)) {
+		if containsContentModerationTerm(value, term) {
 			return false
 		}
 	}
@@ -1861,7 +2466,7 @@ func keywordTermBoundaryAt(value string, index int, term string) bool {
 
 func containsKeywordRequestMarker(value string) bool {
 	for _, marker := range []string{"请", "帮我", "给我", "我要", "please", "provide", "give me"} {
-		if strings.Contains(value, marker) {
+		if containsContentModerationTerm(value, marker) {
 			return true
 		}
 	}
@@ -2020,7 +2625,7 @@ func hasTableActionInClause(clause string, start, end int) bool {
 		"provide", "execute", "download", "install", "run", "write", "generate", "create",
 		"build", "deploy", "invoke", "connect", "listen", "enable",
 	} {
-		if strings.Contains(withoutKeyword, strings.ToLower(term)) {
+		if containsContentModerationTerm(withoutKeyword, term) {
 			return true
 		}
 	}
@@ -2029,14 +2634,14 @@ func hasTableActionInClause(clause string, start, end int) bool {
 	// table action only when the clause also contains an explicit request or
 	// channel marker; otherwise the field/table marker should suppress the
 	// overlapping short token.  A standalone “请购买/请出售...” remains a hit.
-	if strings.Contains(withoutKeyword, "购买") || strings.Contains(withoutKeyword, "出售") ||
-		strings.Contains(withoutKeyword, "收购") || strings.Contains(withoutKeyword, "purchase") ||
-		strings.Contains(withoutKeyword, "sell") {
+	if containsContentModerationTerm(withoutKeyword, "购买") || containsContentModerationTerm(withoutKeyword, "出售") ||
+		containsContentModerationTerm(withoutKeyword, "收购") || containsContentModerationTerm(withoutKeyword, "purchase") ||
+		containsContentModerationTerm(withoutKeyword, "sell") {
 		for _, marker := range []string{
 			"请", "帮我", "给我", "我要", "我想", "需要", "渠道", "链接", "地址",
 			"please", "provide", "give me", "i want", "need", "channel", "link", "url",
 		} {
-			if strings.Contains(withoutKeyword, marker) {
+			if containsContentModerationTerm(withoutKeyword, marker) {
 				return true
 			}
 		}
@@ -2099,7 +2704,7 @@ func hasKeywordRiskContext(window string, start, end int) bool {
 	// risk-term list and must not self-justify a hit.
 	compact := keywordClauseContext(window, start, end)
 	for _, term := range contentModerationRiskContextTerms {
-		if strings.Contains(compact, strings.ToLower(term)) {
+		if containsContentModerationTerm(compact, term) {
 			return true
 		}
 	}
@@ -2238,12 +2843,12 @@ func hasKeywordActionContext(window string, start, end int) bool {
 	}
 	context := keywordClauseContext(window, start, end)
 	for _, term := range contentModerationActionTerms {
-		if strings.Contains(context, strings.ToLower(term)) {
+		if containsContentModerationTerm(context, term) {
 			return true
 		}
 	}
 	for _, term := range []string{"帮我", "给我", "怎么做", "如何做", "制作", "编写", "生成", "下载", "安装"} {
-		if strings.Contains(context, term) {
+		if containsContentModerationTerm(context, term) {
 			return true
 		}
 	}
@@ -2259,7 +2864,7 @@ func hasKeywordOperationalActionContext(window string, start, end int) bool {
 	}
 	context := keywordClauseContext(window, start, end)
 	for _, term := range contentModerationOperationalActionTerms {
-		if strings.Contains(context, strings.ToLower(term)) {
+		if containsContentModerationTerm(context, term) {
 			return true
 		}
 	}
@@ -2275,9 +2880,9 @@ func hasKeywordConstructiveActionContext(window string, start, end int) bool {
 	}
 	context := keywordClauseContext(window, start, end)
 	for _, term := range []string{
-		"提供", "编写", "生成", "创建", "制作", "写出", "给出", "provide", "write", "generate", "create", "make", "give",
+		"提供", "编写", "生成", "创建", "制作", "写出", "给出", "构建", "开发", "设计", "配置", "provide", "write", "generate", "create", "make", "give", "build", "develop", "design", "configure",
 	} {
-		if strings.Contains(context, strings.ToLower(term)) {
+		if containsContentModerationTerm(context, term) {
 			return true
 		}
 	}
@@ -2317,16 +2922,16 @@ func hasScopedDetectionConstruction(window string, start, end int) bool {
 	}
 	near := lower[left:right]
 	for _, term := range []string{
-		"检测", "侦测", "识别", "审计", "防御", "防护", "修复", "规则", "分析", "评估", "验证",
-		"detect", "detection", "identify", "audit", "defensive", "remediate", "rule", "analy",
+		"检测", "侦测", "识别", "审计", "防御", "防护", "修复", "规则", "分析", "评估", "验证", "测试", "样例", "模拟",
+		"detect", "detection", "identify", "audit", "defensive", "remediate", "rule", "analy", "test", "sample", "simulation",
 	} {
-		if strings.Contains(near, term) {
+		if containsContentModerationTerm(near, term) {
 			// A directly qualified artifact (`提供木马检测脚本` or
 			// `provide SQL-injection detection rules`) is defensive.  A generic
 			// artifact followed by a purpose suffix (`提供群控脚本用于安全检测`)
 			// remains actionable and is handled conservatively.
 			before := lower[:relativeStart]
-			if strings.Contains(before, "提供") || strings.Contains(before, "provide") {
+			if containsContentModerationTerm(before, "提供") || containsContentModerationTerm(before, "provide") {
 				after := lower[relativeEnd:]
 				if !hasDetectionMarkerBeforeArtifact(after) {
 					return false
@@ -2384,7 +2989,7 @@ func hasExecutionAfterDetectionScope(window string, start, end int) bool {
 	lowerSuffix := strings.ToLower(clause[relativeEnd:])
 	for _, term := range contentModerationOperationalActionTerms {
 		term = strings.ToLower(term)
-		if strings.Contains(lowerSuffix, term) {
+		if containsContentModerationTerm(lowerSuffix, term) {
 			return true
 		}
 	}
@@ -2397,7 +3002,7 @@ func containsOffensiveObject(context string) bool {
 		"提权", "拖库", "脱库", "删库", "劫持", "投毒", "后门", "getshell", "webshell",
 		"rce", "c2", "mimikatz", "attack", "intrusion", "exploit", "bypass", "steal",
 	} {
-		if strings.Contains(context, term) {
+		if containsContentModerationTerm(context, term) {
 			return true
 		}
 	}
@@ -2414,7 +3019,7 @@ func hasKeywordRequestMarkerValue(value string) bool {
 		"请", "帮我", "给我", "我要", "我想", "需要", "如何", "怎么", "怎么做", "如何做",
 		"please", "provide", "give me", "how to", "i want", "need to", "can you",
 	} {
-		if strings.Contains(value, strings.ToLower(marker)) {
+		if containsContentModerationTerm(value, marker) {
 			return true
 		}
 	}
@@ -2436,7 +3041,7 @@ func hasExplicitKeywordOffensiveAction(context string) bool {
 		"实施", "发动", "发起", "利用", "绕过", "获取凭据", "窃听",
 		"implement", "launch", "exploit", "bypass", "get credentials", "wiretap",
 	} {
-		if strings.Contains(context, strings.ToLower(term)) {
+		if containsContentModerationTerm(context, term) {
 			return true
 		}
 	}
@@ -2520,7 +3125,7 @@ func hasKeywordDefensiveMarkerBetweenRequestAndVerb(prefix string) bool {
 		"prevent", "protect", "detect", "identify", "audit", "remediate", "mitigate", "harden", "monitor", "training",
 		"verify", "assessment", "explain", "definition", "principle", "report", "document", "risk", "research", "analysis", "review", "test",
 	} {
-		if strings.Contains(between, strings.ToLower(marker)) {
+		if containsContentModerationTerm(between, marker) {
 			return true
 		}
 	}
@@ -2547,7 +3152,7 @@ func hasKeywordExplanatoryActionContext(context string) bool {
 		"principle", "method", "risk", "detection", "detect", "analysis", "audit",
 		"report", "document", "example", "definition", "meaning", "testing", "defense",
 	} {
-		if strings.Contains(context, strings.ToLower(term)) {
+		if containsContentModerationTerm(context, term) {
 			return true
 		}
 	}
@@ -2569,7 +3174,7 @@ func hasKeywordOffensiveActionContext(window string, start, end int) bool {
 	withoutKeyword := lower[:relativeStart] + " " + lower[relativeEnd:]
 	// Operational verbs are unambiguously actionable in a sensitive clause.
 	for _, term := range contentModerationOperationalActionTerms {
-		if strings.Contains(withoutKeyword, strings.ToLower(term)) {
+		if containsContentModerationTerm(withoutKeyword, term) {
 			return true
 		}
 	}
@@ -2611,7 +3216,7 @@ func hasKeywordHarmfulActionContext(window string, start, end int) bool {
 		"提权", "拖库", "脱库", "删库", "劫持", "投毒", "木马", "后门", "拿下", "拿到",
 		"getshell", "webshell", "rce", "c2", "mimikatz",
 	} {
-		if strings.Contains(context, strings.ToLower(term)) {
+		if containsContentModerationTerm(context, term) {
 			return true
 		}
 	}
