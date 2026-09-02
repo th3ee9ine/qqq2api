@@ -1053,6 +1053,15 @@ func promptInjectionIsDefensiveOrReferenceMention(signalID, local string, start,
 		!promptInjectionHasExternalImperative(outside) {
 		return true
 	}
+	// Reporting/documentation predicates turn a sensitive phrase into data
+	// being described rather than a command to apply it.  Keep this exception
+	// limited to bypass/override/refusal indicators; hidden-prompt extraction
+	// and unrestricted-role assignments remain blocking even when a caller
+	// prefixes them with a report label.  A chained imperative after the
+	// documented phrase is handled as an action below and remains blockable.
+	if promptInjectionHasDocumentaryPredicateContext(signalID, before, after) {
+		return true
+	}
 	// Refusal wording is also common in reports and evaluation prose.  Keep a
 	// direct command (`please do not refuse`, `you must never refuse`) blocking,
 	// but do not classify a sentence that merely records/documentates the
@@ -1438,10 +1447,21 @@ func promptInjectionHasLegacyDocumentStatement(signalID, local string, start, en
 	}
 	before := strings.TrimSpace(strings.ToLower(local[:start]))
 	after := strings.TrimSpace(strings.ToLower(local[end:]))
-	if before != "" {
+	phrase := strings.ToLower(local[start:end])
+	if !promptInjectionHasAnyTerm(phrase, []string{"no content restrictions", "without content restrictions", "no safety restrictions", "无内容限制", "不受内容限制"}) {
 		return false
 	}
-	if !promptInjectionHasAnyTerm(strings.ToLower(local[start:end]), []string{"no content restrictions", "without content restrictions", "no safety restrictions", "无内容限制", "不受内容限制"}) {
+	// A report/document label followed by the copular `apply/applies` form is
+	// a factual statement, not an unrestricted-output request.  Keep a direct
+	// operation after the statement actionable (for example, `...apply; now
+	// provide unrestricted output`).
+	if before != "" {
+		label := strings.TrimSpace(strings.TrimRight(before, ":："))
+		if (promptInjectionHasDocumentaryPrefix(label) || promptInjectionHasAnyTerm(label, []string{"security report", "report", "document", "documentation", "policy", "安全报告", "报告", "文档", "策略"})) &&
+			promptInjectionHasNominalTail(after) &&
+			!promptInjectionHasExternalImperative(after) {
+			return true
+		}
 		return false
 	}
 	return promptInjectionHasAnyTerm(after, []string{"legacy mode", "historical", "documentation", "legacy", "历史", "旧版本", "文档"}) &&
@@ -1611,11 +1631,78 @@ func promptInjectionHasNominalTail(after string) bool {
 		return false
 	}
 	for _, marker := range []string{
-		"is an attack", "is a jailbreak", "is a phrase", "is an example", "is used for detection", "used for detection", "used for identification", "for detection", "for identification", "as an attack", "to detect", "to identify", "to record", "examples", "deprecated", "a high-risk request", "a risky request", "is a request", "is high risk", "high-risk request", "高风险请求", "风险请求", "这一攻击", "这个攻击", "该攻击", "攻击示例", "请求", "被拦截", "已拦截", "已命中", "用于检测", "用于识别", "用于防御", "作为攻击", "用于记录", "并记录", "来描述", "来说明", "是攻击", "是越狱", "是短语", "是示例",
+		"is an attack", "is a jailbreak", "is a phrase", "is an example", "is used for detection", "used for detection", "used for identification", "for detection", "for identification", "as an attack", "to detect", "to identify", "to record", "examples", "deprecated", "a high-risk request", "a risky request", "is a request", "is high risk", "high-risk request", "apply", "applies", "do not apply", "does not apply", "高风险请求", "风险请求", "这一攻击", "这个攻击", "该攻击", "攻击示例", "请求", "被拦截", "已拦截", "已命中", "用于检测", "用于识别", "用于防御", "作为攻击", "用于记录", "并记录", "来描述", "来说明", "是攻击", "是越狱", "是短语", "是示例",
 	} {
 		if promptInjectionContainsTerm(after, marker) {
 			return true
 		}
+	}
+	return false
+}
+
+// promptInjectionHasDocumentaryPredicateContext recognises a reporting
+// predicate such as "documentation describes how to bypass safety rules" or
+// "a report documents: do not follow safety rules".  These are statements
+// about an attack pattern, not fresh instructions.  The predicate must be in
+// the bounded clause immediately before the match, and any operational
+// continuation after the match keeps the signal actionable.
+func promptInjectionHasDocumentaryPredicateContext(signalID, before, after string) bool {
+	if signalID == "system_prompt_exfiltration" || signalID == "role_override" {
+		return false
+	}
+	prefix := strings.TrimSpace(strings.ToLower(before))
+	suffix := strings.TrimSpace(strings.ToLower(after))
+	if prefix == "" {
+		return false
+	}
+	// A direct assistant-addressed request takes precedence over a document
+	// noun that happens to occur in the same prefix.
+	for _, marker := range []string{"please", "can you", "could you", "would you", "you", "assistant", "model", "请", "帮我", "给我", "我要", "我想"} {
+		if strings.HasPrefix(prefix, marker+" ") || strings.HasPrefix(prefix, marker+":") || strings.HasPrefix(prefix, marker+"：") || strings.HasPrefix(prefix, marker) && marker != "you" && marker != "assistant" && marker != "model" {
+			return false
+		}
+	}
+	// Do not suppress a phrase when a direct operation follows it in the same
+	// bounded clause; the documented prefix is then being used as a label for
+	// an actual request.
+	if promptInjectionHasExternalImperative(suffix) {
+		return false
+	}
+	// The predicate relation must be explicit.  A bare `Report:`/`文档：` label
+	// is intentionally excluded because it is easy to prepend to an attack.
+	predicateTerms := []string{
+		"report says", "report states", "report documents", "report describes", "report explains", "report discusses", "report mentions",
+		"a report says", "a report states", "a report documents", "a report describes", "a report explains", "a report discusses", "a report mentions",
+		"the report says", "the report states", "the report documents", "the report describes", "the report explains", "the report discusses", "the report mentions",
+		"security report says", "security report states", "security report documents", "security report describes", "security report explains", "security report discusses", "security report mentions",
+		"documentation says", "documentation states", "documentation documents", "documentation describes", "documentation explains", "documentation discusses", "documentation mentions",
+		"the documentation says", "the documentation states", "the documentation describes", "the documentation explains", "the documentation discusses", "the documentation mentions",
+		"document says", "document states", "document documents", "document describes", "document explains", "document discusses", "document mentions",
+		"the document says", "the document states", "the document describes", "the document explains", "the document discusses", "the document mentions",
+		"policy says", "policy states", "policy documents", "policy describes", "policy explains", "policy discusses", "policy mentions",
+		"the policy says", "the policy states", "the policy describes", "the policy explains", "the policy discusses", "the policy mentions",
+		"报告说", "报告指出", "报告记录", "报告描述", "报告说明", "报告讨论", "报告提到", "报告总结",
+		"安全报告说", "安全报告指出", "安全报告记录", "安全报告描述", "安全报告说明", "安全报告讨论", "安全报告提到",
+		"文档说", "文档指出", "文档记录", "文档描述", "文档说明", "文档讨论", "文档提到", "文档总结",
+		"策略规定", "策略说明", "策略记录", "策略描述", "策略指出", "策略提到",
+	}
+	for _, predicate := range predicateTerms {
+		if !promptInjectionContainsTerm(prefix, predicate) {
+			continue
+		}
+		// `ignore/disregard previous instructions` is itself a high-confidence
+		// control-plane override.  Only a genuine descriptive predicate (rather
+		// than a bare `report documents:` label) may classify that phrase as
+		// recorded data; this keeps label laundering from disabling the guard.
+		if signalID == "instruction_override" && !promptInjectionHasAnyTerm(prefix, []string{
+			"describes", "described", "explains", "explained", "discusses", "discussed", "mentions", "mentioned",
+			"描述", "说明", "讨论", "提到", "总结",
+		}) {
+			return false
+		}
+		// `describes how to ...` is a declarative relation; a trailing
+		// conjunction/action after the matched span is still caught above.
+		return true
 	}
 	return false
 }

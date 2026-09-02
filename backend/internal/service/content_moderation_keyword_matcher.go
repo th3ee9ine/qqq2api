@@ -810,6 +810,14 @@ func hasCrossDelimiterKeywordActionClause(clause string) bool {
 	if clause == "" {
 		return false
 	}
+	// A documentary clause may be followed by a transaction or offensive
+	// action in the next punctuation-delimited clause (for example,
+	// "报告；然后购买服务" or "report; then attack target"). Reuse the same
+	// conjunction-aware vocabulary as the in-clause guard before checking the
+	// artifact/request forms below.
+	if hasKeywordDocumentaryActionContinuation(clause) {
+		return true
+	}
 
 	for _, continuation := range []string{
 		"then run it", "then execute it", "then use it", "then launch it",
@@ -894,8 +902,13 @@ func hasCrossDelimiterKeywordActionClause(clause string) bool {
 				return true
 			}
 			// An operational action is only treated as a request when it has an
-			// explicit request marker or an object/artifact in the same clause.
+			// explicit request marker, a continuation marker, or an object/artifact
+			// in the same clause.
 			if hasKeywordRequestMarkerValue(clause[:index]) ||
+				strings.HasSuffix(strings.TrimSpace(clause[:index]), "and") ||
+				strings.HasSuffix(strings.TrimSpace(clause[:index]), "then") ||
+				strings.HasSuffix(strings.TrimSpace(clause[:index]), "并") ||
+				strings.HasSuffix(strings.TrimSpace(clause[:index]), "然后") ||
 				crossDelimiterHasArtifact(clause, index+len(action.term)) ||
 				strings.TrimSpace(clause[:index]) == "" {
 				return true
@@ -1131,6 +1144,17 @@ func isClearlyBenignKeywordContext(text string, start, end int) bool {
 	if hasKeywordBenignLabelContext(window, relativeStart, relativeEnd) {
 		return true
 	}
+	// A request for a definition, report, or documentation about a sensitive
+	// term is documentary rather than an instruction to operate that term. The
+	// generic risk vocabulary contains request verbs such as "provide", so it
+	// must be checked before risk/action scoring; otherwise phrases like
+	// "请提供群控的定义" are treated exactly like "请提供群控脚本". The
+	// helper remains bounded to the candidate's clause and rejects concrete
+	// artifacts/operational continuations, preserving hard blocks for script,
+	// code, and execution requests.
+	if hasKeywordConceptualDocumentaryContext(window, relativeStart, relativeEnd) {
+		return true
+	}
 
 	defensive := hasKeywordDefensiveContext(window, relativeStart, relativeEnd)
 	description := hasKeywordDescriptionContext(window, relativeStart, relativeEnd)
@@ -1177,6 +1201,218 @@ func isClearlyBenignKeywordContext(text string, start, end int) bool {
 	}
 	return !hasKeywordActionContext(window, relativeStart, relativeEnd) &&
 		!hasKeywordHarmfulActionContext(window, relativeStart, relativeEnd)
+}
+
+// hasKeywordConceptualDocumentaryContext recognises grammatical requests for
+// an explanation/report/document about a matched term. It intentionally does
+// not treat a generic request verb as benign by itself: a concrete artifact or
+// execution continuation keeps the candidate actionable. Both sides of the
+// match are inspected so English forms such as "provide a definition of
+// 群控" and Chinese forms such as "请提供群控的定义" are covered.
+func hasKeywordConceptualDocumentaryContext(window string, start, end int) bool {
+	if start < 0 || end < start || start > len(window) {
+		return false
+	}
+	if end > len(window) {
+		end = len(window)
+	}
+	clause, relativeStart, relativeEnd := keywordClauseBounds(window, start, end)
+	if clause == "" {
+		return false
+	}
+	lower := strings.ToLower(clause)
+	before := strings.TrimSpace(lower[:relativeStart])
+	after := strings.TrimSpace(lower[relativeEnd:])
+	if before == "" && after == "" {
+		return false
+	}
+
+	// Keep this vocabulary to noun-like/documentary tails. "report" and
+	// "document" are intentionally accepted on either side of the term, while
+	// "usage/how to use" are excluded below because they commonly introduce an
+	// operational request.
+	conceptualTerms := []string{
+		"定义", "术语", "解释", "含义", "是什么", "原理", "说明", "描述", "分析", "研究", "报告", "文档", "文献", "背景", "概述", "摘要",
+		"definition", "term", "explanation", "meaning", "what is", "principle", "description", "analysis", "research", "report", "document", "documentation", "paper", "background", "overview", "summary",
+	}
+	found := false
+	for _, term := range conceptualTerms {
+		// The helper below retains ASCII token boundaries while preserving
+		// substring semantics for Chinese terms.
+		if containsContentModerationTerm(before, term) || containsContentModerationTerm(after, term) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	withoutKeyword := strings.TrimSpace(lower[:relativeStart] + " " + lower[relativeEnd:])
+	if hasKeywordDocumentaryActionContinuation(withoutKeyword) ||
+		hasKeywordDocumentaryDirectAction(withoutKeyword) {
+		return false
+	}
+	// A directly chained operation in the next clause remains actionable. This
+	// closes forms such as "provide a report on 群控, then run it" without
+	// allowing an unrelated later sentence to lend intent to the term.
+	if hasCrossDelimiterKeywordActionContext(window, start, end) {
+		return false
+	}
+
+	// Concrete artifacts, operational verbs, and usage instructions are not
+	// documentary exceptions. Restrict the check to the same clause so a
+	// later unrelated sentence cannot change the decision.
+	actionableTerms := []string{
+		"脚本", "代码", "命令", "工具", "程序", "payload", "shell", "webshell", "script", "code", "command", "tool", "program",
+		"执行", "运行", "下载", "安装", "连接", "监听", "部署", "搭建", "构建", "开启", "启用", "调用", "使用", "利用", "绕过", "实施", "发动", "发起",
+		"execute", "run", "download", "install", "connect", "listen", "deploy", "build", "launch", "invoke", "use", "exploit", "bypass", "implement", "operate", "usage", "how to use", "操作指南", "使用方法", "用于执行", "for execution", "to execute",
+	}
+	for _, term := range actionableTerms {
+		if containsContentModerationTerm(before, term) || containsContentModerationTerm(after, term) {
+			return false
+		}
+	}
+
+	// Require a request/description relation rather than allowing an arbitrary
+	// sentence that happens to contain "report" or "document". The marker can
+	// be before the term ("provide a report on 群控") or after it
+	// ("请提供群控的定义"). A standalone noun phrase such as "群控报告" is
+	// already handled by the broader description/reference paths, but remains
+	// benign here as well when no operation is present.
+	requestOrDescription := []string{
+		"请", "帮我", "给我", "我要", "我想", "需要", "如何", "怎么", "说明", "解释", "描述", "分析", "定义",
+		"please", "provide", "give", "explain", "describe", "define", "discuss", "analyze", "summarize", "what is", "how to",
+	}
+	for _, term := range requestOrDescription {
+		if containsContentModerationTerm(before, term) || containsContentModerationTerm(after, term) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasKeywordDocumentaryActionContinuation rejects an operational or
+// transactional action that is explicitly chained to a documentary request.
+// A noun such as "群控攻击报告" has no continuation marker and remains a
+// report; forms like "report on 群控 and attack target" or "报告并购买服务"
+// are direct follow-up actions and must stay blockable.
+func hasKeywordDocumentaryActionContinuation(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	continuationMarkers := []string{"并", "并且", "然后", "再", "随后", "以及", "而且", "and", "then", "but", "also"}
+	actions := []string{
+		"购买", "出售", "收购", "purchase", "sell", "buy", "for sale",
+		"攻击", "入侵", "渗透", "窃取", "盗取", "勒索", "爆破", "破解", "提权", "拖库", "脱库", "删库", "删除", "劫持", "投毒",
+		"attack", "intrude", "penetrate", "steal", "ransom", "brute force", "crack", "escalate", "exfiltrate", "delete", "hijack", "poison",
+	}
+	for _, action := range actions {
+		for from := 0; from < len(value); {
+			relative := strings.Index(value[from:], action)
+			if relative < 0 {
+				break
+			}
+			index := from + relative
+			if !keywordTermBoundaryAt(value, index, action) {
+				from = index + len(action)
+				continue
+			}
+			prefix := strings.TrimSpace(value[:index])
+			// When this helper is applied to the first clause after a
+			// delimiter, a bare action starts the continuation (`; attack
+			// target`, `；购买服务`). Treat that as actionable even without an
+			// explicit conjunction word.
+			if prefix == "" {
+				return true
+			}
+			for _, marker := range continuationMarkers {
+				if strings.HasSuffix(prefix, marker) {
+					return true
+				}
+			}
+			from = index + len(action)
+		}
+	}
+	return false
+}
+
+// hasKeywordDocumentaryDirectAction catches an explicit operation embedded in
+// the same clause as a documentary request when the action is followed by a
+// concrete target/object. This keeps noun phrases such as "report on 群控攻击"
+// and "报告：群控出售" documentary, while blocking forms such as
+// "report on 群控 attack target" or "请提供群控的定义出售服务".
+func hasKeywordDocumentaryDirectAction(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	actions := []string{
+		"购买", "出售", "收购", "purchase", "sell", "buy", "for sale",
+		"攻击", "入侵", "渗透", "窃取", "盗取", "勒索", "爆破", "破解", "提权", "拖库", "脱库", "删库", "删除", "劫持", "投毒",
+		"attack", "intrude", "penetrate", "steal", "ransom", "brute force", "crack", "escalate", "exfiltrate", "delete", "hijack", "poison",
+	}
+	objectTerms := []string{
+		"目标", "主机", "服务器", "网站", "账号", "账户", "数据", "接口", "服务", "渠道", "权限", "它", "他们",
+		"target", "host", "server", "site", "account", "data", "endpoint", "service", "channel", "permission", "it", "them",
+	}
+	for _, action := range actions {
+		for from := 0; from < len(value); {
+			relative := strings.Index(value[from:], action)
+			if relative < 0 {
+				break
+			}
+			index := from + relative
+			if !keywordTermBoundaryAt(value, index, action) {
+				from = index + len(action)
+				continue
+			}
+			prefix := strings.TrimSpace(value[:index])
+			if !hasKeywordRequestMarkerNear(prefix) {
+				from = index + len(action)
+				continue
+			}
+			// Conjunctions make the intent operational even if the object is
+			// omitted (`... and attack`, `...并购买`).
+			if hasKeywordContinuationMarker(prefix) {
+				return true
+			}
+			// `for sale` is an explicit transaction phrase. Other actions need
+			// a nearby object so noun compounds such as `攻击报告` remain
+			// documentary.
+			if action == "for sale" || hasKeywordActionObjectSuffix(value[index+len(action):], objectTerms) {
+				return true
+			}
+			from = index + len(action)
+		}
+	}
+	return false
+}
+
+func hasKeywordContinuationMarker(prefix string) bool {
+	prefix = strings.TrimSpace(strings.ToLower(prefix))
+	if prefix == "" {
+		return false
+	}
+	for _, marker := range []string{"并", "并且", "然后", "再", "随后", "以及", "而且", "and", "then", "but", "also"} {
+		if strings.HasSuffix(prefix, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasKeywordActionObjectSuffix(value string, objectTerms []string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	for _, term := range objectTerms {
+		if containsContentModerationTerm(value, term) {
+			return true
+		}
+	}
+	return false
 }
 
 // looksLikeKeywordReferenceContext suppresses quoted/reference mentions such
