@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,7 +60,7 @@ type cleanupRepoStub struct {
 
 type dashboardRepoStub struct {
 	recomputeErr   error
-	recomputeCalls int
+	recomputeCalls atomic.Int64
 }
 
 func (s *dashboardRepoStub) AggregateRange(ctx context.Context, start, end time.Time) error {
@@ -67,7 +68,7 @@ func (s *dashboardRepoStub) AggregateRange(ctx context.Context, start, end time.
 }
 
 func (s *dashboardRepoStub) RecomputeRange(ctx context.Context, start, end time.Time) error {
-	s.recomputeCalls++
+	s.recomputeCalls.Add(1)
 	return s.recomputeErr
 }
 
@@ -526,7 +527,7 @@ func TestUsageCleanupServiceExecuteTaskErrorsOnlySkipsUsageAndDashboard(t *testi
 	require.Len(t, repo.markSucceeded, 1)
 	require.Equal(t, int64(1), repo.markSucceeded[0].deletedRows)
 	repo.mu.Unlock()
-	require.Equal(t, 0, dashboardRepo.recomputeCalls)
+	require.Zero(t, dashboardRepo.recomputeCalls.Load())
 }
 
 func TestUsageCleanupServiceExecuteTaskAllPreservesPartialProgressWhenErrorFamilyFails(t *testing.T) {
@@ -782,7 +783,7 @@ func TestUsageCleanupServiceExecuteTaskDashboardRecomputeError(t *testing.T) {
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
 	require.Len(t, repo.markSucceeded, 1)
-	require.Eventually(t, func() bool { return dashboardRepo.recomputeCalls == 1 }, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dashboardRepo.recomputeCalls.Load() == 1 }, time.Second, 10*time.Millisecond)
 }
 
 func TestUsageCleanupServiceExecuteTaskDashboardRecomputeSuccess(t *testing.T) {
@@ -810,7 +811,7 @@ func TestUsageCleanupServiceExecuteTaskDashboardRecomputeSuccess(t *testing.T) {
 	repo.mu.Lock()
 	defer repo.mu.Unlock()
 	require.Len(t, repo.markSucceeded, 1)
-	require.Eventually(t, func() bool { return dashboardRepo.recomputeCalls == 1 }, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return dashboardRepo.recomputeCalls.Load() == 1 }, time.Second, 10*time.Millisecond)
 }
 
 func TestUsageCleanupServiceExecuteTaskCanceled(t *testing.T) {
