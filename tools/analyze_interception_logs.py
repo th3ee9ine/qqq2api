@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Summarise interception logs and estimate duplicate/false-positive patterns.
 
-The workbook and keyword file are treated as untrusted data.  This script only
-parses values; it never executes text found in either attachment.  Use the
-bundled workspace Python (or any environment with ``openpyxl``) to run it:
+    The CSV/XLSX log and keyword file are treated as untrusted data.  This
+    script only parses values; it never executes text found in either
+    attachment.  Use the bundled workspace Python (or any environment with
+    ``openpyxl``) to run it:
 
-    python tools/analyze_interception_logs.py LOG.xlsx KEYWORDS.txt
+    python tools/analyze_interception_logs.py LOG.csv KEYWORDS.txt
 
 Output is JSON; credential values are omitted from the derived summary while
 the source workbook remains untouched.
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import csv
 import hashlib
 import json
 import re
@@ -46,6 +48,11 @@ def redact(value: Any) -> Any:
 
 
 def load_rows(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
+    if path.suffix.lower() == ".csv":
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            headers = [str(value or "") for value in (reader.fieldnames or [])]
+            return headers, [dict(row) for row in reader]
     workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
     if not workbook.worksheets:
         workbook.close()
@@ -70,9 +77,37 @@ def body_from_details(raw: Any) -> Any:
     if not isinstance(raw, str) or not raw.strip():
         return None
     try:
-        return json.loads(raw).get("body")
+        details = json.loads(raw)
     except (TypeError, ValueError, AttributeError):
         return None
+    return details.get("body") if isinstance(details, dict) else None
+
+
+def details_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row.get("用户请求明细")
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        details = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return details if isinstance(details, dict) else {}
+
+
+def prompt_audit_from_details(details: dict[str, Any]) -> dict[str, Any]:
+    audit = details.get("security_audit")
+    if not isinstance(audit, dict):
+        return {}
+    prompt = audit.get("prompt")
+    return prompt if isinstance(prompt, dict) else {}
+
+
+def body_fingerprint(details: dict[str, Any]) -> str | None:
+    body = details.get("body")
+    if body is None:
+        return None
+    encoded = json.dumps(redact(body), ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def fingerprint(row: dict[str, Any], headers: list[str]) -> str:
@@ -102,6 +137,10 @@ def main() -> None:
     by_error = collections.Counter(r.get("错误消息") for r in rows)
     by_body_status = collections.Counter()
     body_bytes_by_phase_type = collections.Counter()
+    prompt_decisions = collections.Counter()
+    prompt_evidence = collections.Counter()
+    complete_prompt_decisions = collections.Counter()
+    body_fingerprints = collections.Counter()
 
     timestamps = []
     for row in rows:
@@ -118,12 +157,15 @@ def main() -> None:
     keyword_occurrences = collections.Counter()
     complete_body_rows = 0
     for row in rows:
-        raw_details = row.get("用户请求明细")
-        body = body_from_details(raw_details)
-        try:
-            details = json.loads(raw_details) if isinstance(raw_details, str) else {}
-        except (TypeError, ValueError):
-            details = {}
+        details = details_from_row(row)
+        prompt = prompt_audit_from_details(details)
+        if prompt:
+            decision = prompt.get("decision") or "unavailable"
+            prompt_decisions[str(decision)] += 1
+            evidence = (prompt.get("scanner_evidence") or {}).get("jailbreak")
+            if evidence:
+                prompt_evidence[str(evidence)] += 1
+        body = details.get("body")
         incomplete = bool(details.get("body_omitted") or details.get("body_truncated"))
         if incomplete:
             by_body_status["omitted_or_truncated"] += 1
@@ -142,6 +184,11 @@ def main() -> None:
         if body is None or incomplete:
             continue
         complete_body_rows += 1
+        if prompt:
+            complete_prompt_decisions[str(prompt.get("decision") or "unavailable")] += 1
+        fingerprint_value = body_fingerprint(details)
+        if fingerprint_value:
+            body_fingerprints[fingerprint_value] += 1
         text = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
         for keyword in keywords:
             if keyword:
@@ -196,6 +243,16 @@ def main() -> None:
             for (phase, kind), count in body_bytes_by_phase_type.items()
         },
         "complete_body_rows": complete_body_rows,
+        "prompt_audit_decisions": dict(prompt_decisions),
+        "prompt_scanner_evidence": dict(prompt_evidence),
+        "complete_prompt_audit_decisions": dict(complete_prompt_decisions),
+        "unique_body_fingerprints": len(body_fingerprints),
+        "duplicate_complete_body_rows": complete_body_rows - len(body_fingerprints),
+        "duplicate_complete_body_ratio": (
+            (complete_body_rows - len(body_fingerprints)) / complete_body_rows
+            if complete_body_rows
+            else 0.0
+        ),
         "keyword_count": len(keywords),
         "short_keyword_count_le_2": sum(len(k) <= 2 for k in keywords),
         "keyword_hits_in_complete_bodies": dict(keyword_hits),

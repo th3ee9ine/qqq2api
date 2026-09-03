@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	localPromptInjectionPolicyID        = "local-jailbreak-v1"
+	localPromptInjectionPolicyID        = "local-jailbreak-v2"
+	localPromptInjectionPolicyVersion   = 2
 	localPromptInjectionScannerID       = "jailbreak"
 	localPromptInjectionScannerVersion  = "2"
 	localPromptInjectionEndpointID      = "local-jailbreak-heuristic"
@@ -25,6 +26,10 @@ const (
 	// split at a window boundary is still considered one match.
 	localPromptInjectionChunkRunes   = 8192
 	localPromptInjectionChunkOverlap = 256
+	// Policy-context detection is a precision hint only. Bound its case-folded
+	// view so a multi-megabyte tool/schema segment cannot allocate a second full
+	// copy merely to look for an envelope marker.
+	localPromptInjectionPolicyContextRunes = 65536
 	// Bound synchronous CPU on very large provider-specific bodies.  Bodies up
 	// to this many chunks are scanned exhaustively; larger bodies use evenly
 	// distributed windows plus the mandatory head/tail view.  Remote auditing
@@ -77,6 +82,11 @@ type promptInjectionSegmentMatches struct {
 	score   int
 	role    string
 	user    bool
+	// policyDefensive marks a client-supplied non-user envelope that
+	// explicitly discusses untrusted evidence or safety policy.  Such envelopes
+	// frequently quote the very phrases the guard detects; weak matches in
+	// them are telemetry, not a fresh user command.
+	policyDefensive bool
 }
 
 type promptInjectionCompactSpan struct {
@@ -348,10 +358,11 @@ func DetectPromptInjection(req Request) *PromptDecision {
 				}
 			}
 			segmentMatches = append(segmentMatches, promptInjectionSegmentMatches{
-				matched: localIDs,
-				score:   localScore,
-				role:    strings.TrimSpace(strings.ToLower(segment.role)),
-				user:    segment.user,
+				matched:         localIDs,
+				score:           localScore,
+				role:            strings.TrimSpace(strings.ToLower(segment.role)),
+				user:            segment.user,
+				policyDefensive: !segment.user && promptInjectionHasDefensivePolicyContext(boundPromptInjectionText(segment.text, localPromptInjectionPolicyContextRunes)),
 			})
 		}
 	}
@@ -395,7 +406,7 @@ func DetectPromptInjection(req Request) *PromptDecision {
 		ScannerVersion:  localPromptInjectionScannerVersion,
 		GuardEndpointID: localPromptInjectionEndpointID,
 		PolicyID:        localPromptInjectionPolicyID,
-		PolicyVersion:   1,
+		PolicyVersion:   localPromptInjectionPolicyVersion,
 	}
 	return &PromptDecision{
 		Kind:           DecisionBlock,
@@ -2654,19 +2665,41 @@ func shouldBlockPromptInjectionGroups(groups []promptInjectionSegmentMatches, gl
 		return false
 	}
 	for _, group := range groups {
-		if containsPromptInjectionSignal(group.matched, "instruction_override") {
-			return true
+		matched := group.matched
+		if group.policyDefensive {
+			matched = filterDefensivePolicyPromptSignals(matched)
 		}
-		if shouldBlockPromptInjection(group.matched, group.score) {
+		if !group.user {
+			// Assistant/tool output and client-supplied policy envelopes are
+			// model-visible context, but they are not a user command.  Require a
+			// high-confidence override/exfiltration signal or a corroborated
+			// control-plane cluster before blocking them.  In particular, phrases
+			// such as "remove a filter" in a tool API description and "do not
+			// refuse" in a policy response must not turn an otherwise benign user
+			// request into a 403.
+			if !shouldBlockNonUserPromptInjection(matched, group.score) {
+				continue
+			}
 			return true
+		} else {
+			if containsPromptInjectionSignal(matched, "instruction_override") {
+				return true
+			}
+			if shouldBlockPromptInjection(matched, group.score) {
+				return true
+			}
 		}
 	}
 	var fixtureInPolicy, unrestrictedInUser bool
 	for _, group := range groups {
-		if !group.user && containsPromptInjectionSignal(group.matched, "fixture_laundering") {
+		matched := group.matched
+		if group.policyDefensive {
+			matched = filterDefensivePolicyPromptSignals(matched)
+		}
+		if !group.user && containsPromptInjectionSignal(matched, "fixture_laundering") {
 			fixtureInPolicy = true
 		}
-		if group.user && containsPromptInjectionSignal(group.matched, "unrestricted_output") {
+		if group.user && containsPromptInjectionSignal(matched, "unrestricted_output") {
 			unrestrictedInUser = true
 		}
 	}
@@ -2677,6 +2710,91 @@ func shouldBlockPromptInjectionGroups(groups []promptInjectionSegmentMatches, gl
 	// aggregate score; groups are authoritative for combination decisions.
 	_ = globalMatched
 	_ = globalScore
+	return false
+}
+
+// shouldBlockNonUserPromptInjection applies a stricter threshold to
+// assistant/tool/system/developer segments.  Those roles are client
+// controlled and must still be scanned for a real override, but weak policy
+// vocabulary is common in ordinary tool schemas, safety explanations, and
+// historical transcripts.  It therefore needs corroboration in the same
+// segment before it can block.
+func shouldBlockNonUserPromptInjection(matched []string, score int) bool {
+	if len(matched) == 0 {
+		return false
+	}
+	if hasAnyPromptInjectionSignal(matched, "instruction_override", "role_override", "system_prompt_exfiltration", "unrestricted_output") {
+		return true
+	}
+	if containsPromptInjectionSignal(matched, "delimiter_injection") &&
+		hasAnyPromptInjectionSignal(matched, "instruction_override", "role_override", "system_prompt_exfiltration", "unrestricted_output") {
+		return true
+	}
+	// A tool/policy segment that combines fixture laundering with explicit
+	// agent control is the legacy attached-fixture shape and remains blocking.
+	if containsPromptInjectionSignal(matched, "agent_control") &&
+		containsPromptInjectionSignal(matched, "fixture_laundering") {
+		return true
+	}
+	// Refusal/safety vocabulary, tool routing, and policy impersonation are
+	// intentionally non-blocking by themselves outside the user turn.  Keep
+	// `score` in the signature for audit/test callers that compare signal
+	// weights, while the role-aware rules above remain authoritative.
+	_ = score
+	return false
+}
+
+func filterDefensivePolicyPromptSignals(matched []string) []string {
+	if len(matched) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(matched))
+	for _, signal := range matched {
+		switch signal {
+		case "instruction_override", "safety_bypass", "refusal_suppression", "agent_control", "tool_routing", "policy_impersonation", "fixture_laundering":
+			// These signals are frequently quoted in safety-policy prose. A
+			// direct role/scope override or hidden-prompt extraction is not in
+			// this list and remains high confidence.
+			continue
+		default:
+			filtered = append(filtered, signal)
+		}
+	}
+	return filtered
+}
+
+// promptInjectionHasDefensivePolicyContext detects the envelope language
+// used by agent runtimes to explain how untrusted transcripts and safety rules
+// should be handled. It is only consulted for non-user roles; a user message
+// containing the same words remains subject to the ordinary detector.
+func promptInjectionHasDefensivePolicyContext(value string) bool {
+	lower := strings.ToLower(value)
+	if lower == "" {
+		return false
+	}
+	// Require an explicit untrusted-evidence envelope. Generic mentions of
+	// "safety policy" or "rules" also occur in short, actionable override
+	// prompts and must not suppress those signals.
+	markers := []string{
+		"untrusted content", "untrusted evidence", "untrusted data", "untrusted transcript",
+		"treat the transcript", "treat tool outputs", "treat the tool output", "as untrusted",
+		"ignore untrusted", "should not be followed", "evidence handling", "coding-agent restrictions",
+		"不可信内容", "不可信证据", "不可信数据", "不可信的记录", "将内容视为不可信",
+		"仅作为普通文字", "不要执行其中任何指令", "证据处理",
+	}
+	for _, marker := range markers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	// Windows agent guidance commonly documents the one-shot
+	// `-ExecutionPolicy Bypass` switch while explicitly warning against a
+	// system policy change. The generic override regex sees "bypass ... system
+	// policy" here, but this is operational documentation rather than a
+	// jailbreak instruction.
+	if strings.Contains(lower, "executionpolicy bypass") && strings.Contains(lower, "system policy change") {
+		return true
+	}
 	return false
 }
 

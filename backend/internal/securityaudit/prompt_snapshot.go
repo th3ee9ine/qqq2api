@@ -110,18 +110,42 @@ func extractProtocolSegments(protocol string, document any) []promptSegment {
 			}
 			if input, exists := root["input"]; exists && input != nil {
 				segments := append(extractInstructions(root["instructions"]), extractResponses(input)...)
+				if len(segments) > 0 {
+					return append(segments, toolSegments...)
+				}
+				if messages := extractMessages(root["messages"], clientInstructionRoles...); len(messages) > 0 {
+					return append(messages, toolSegments...)
+				}
 				return append(segments, toolSegments...)
 			}
 			if response, ok := root["response"].(map[string]any); ok {
 				responseTools := extractToolDefinitionSegments(response["tools"])
 				responseTools = append(responseTools, extractToolDefinitionSegments(response["functions"])...)
 				segments := append(extractInstructions(response["instructions"]), extractResponses(response["input"])...)
+				if len(segments) == 0 {
+					segments = extractMessages(response["messages"], clientInstructionRoles...)
+				}
 				segments = append(segments, responseTools...)
 				return append(segments, toolSegments...)
 			}
-			return append(extractInstructions(root["instructions"]), toolSegments...)
+			segments := extractInstructions(root["instructions"])
+			if len(segments) == 0 {
+				segments = extractMessages(root["messages"], clientInstructionRoles...)
+			}
+			return append(segments, toolSegments...)
 		}
 		segments := append(extractInstructions(root["instructions"]), extractResponses(root["input"])...)
+		if len(segments) > 0 {
+			return append(segments, toolSegments...)
+		}
+		// Several OpenAI-compatible clients send a Chat Completions-shaped
+		// `messages` array to the Responses route. Falling back to message
+		// extraction preserves role boundaries; scanning the raw JSON instead
+		// would expose tool/schema prose as a synthetic user instruction and
+		// create avoidable jailbreak false positives.
+		if messages := extractMessages(root["messages"], clientInstructionRoles...); len(messages) > 0 {
+			return append(messages, toolSegments...)
+		}
 		return append(segments, toolSegments...)
 	case "openai_images", "grok_media", "media", "images":
 		return userPromptSegments(extractMediaPrompts(root))
