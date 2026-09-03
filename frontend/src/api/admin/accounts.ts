@@ -332,6 +332,15 @@ export async function revokeOpenAISessions(
   return data
 }
 
+/** Mark the current/local ChatGPT device session as trusted. */
+export async function trustOpenAISession(id: number, sessionId?: string): Promise<{ message: string }> {
+  const { data } = await apiClient.post<{ message: string }>(
+    `/admin/openai/accounts/${id}/sessions/trust`,
+    sessionId ? { session_id: sessionId } : undefined
+  )
+  return data
+}
+
 /** Fetch the periodic non-current OpenAI session cleanup policy and status. */
 export async function getOpenAISessionCleanup(id: number): Promise<OpenAISessionCleanupSettings> {
   const { data } = await apiClient.get<OpenAISessionCleanupSettings>(
@@ -1150,6 +1159,7 @@ export const accountsAPI = {
   listOpenAISessions,
   revokeOpenAISession,
   revokeOpenAISessions,
+  trustOpenAISession,
   getOpenAISessionCleanup,
   updateOpenAISessionCleanup,
   runOpenAISessionCleanup,

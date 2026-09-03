@@ -19,7 +19,7 @@
         <button
           type="button"
           class="btn btn-secondary shrink-0"
-          :disabled="loading || revokingId !== null || batchRevoking || cleanupRunning"
+          :disabled="loading || trustingId !== null || revokingId !== null || batchRevoking || cleanupRunning"
           @click="loadSessions"
         >
           <Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />
@@ -159,7 +159,7 @@
             data-testid="select-all-sessions"
             class="h-4 w-4 rounded border-gray-300 text-cyan-600 focus:ring-cyan-500 dark:border-dark-600 dark:bg-dark-800"
             :checked="allRevokableSelected"
-            :disabled="revokableSessions.length === 0 || batchRevoking || revokingId !== null || cleanupRunning"
+            :disabled="revokableSessions.length === 0 || trustingId !== null || batchRevoking || revokingId !== null || cleanupRunning"
             @change="toggleAllSessions"
           />
           <span>{{ t('admin.accounts.sessions.selectAll') }}</span>
@@ -172,7 +172,7 @@
           type="button"
           data-testid="bulk-session-logout"
           class="btn bg-red-600 text-white hover:bg-red-700"
-          :disabled="batchRevoking || revokingId !== null || cleanupRunning"
+          :disabled="trustingId !== null || batchRevoking || revokingId !== null || cleanupRunning"
           @click="batchRevokeConfirm = true"
         >
           <Icon v-if="batchRevoking" name="refresh" size="sm" class="animate-spin" />
@@ -202,7 +202,7 @@
                 type="button"
                 data-testid="confirm-session-logout"
                 class="btn bg-red-600 text-white hover:bg-red-700"
-                :disabled="revokingId !== null || batchRevoking || cleanupRunning"
+                :disabled="trustingId !== null || revokingId !== null || batchRevoking || cleanupRunning"
                 @click="confirmRevoke"
               >
                 {{ t('admin.accounts.sessions.logout') }}
@@ -233,7 +233,7 @@
                 type="button"
                 data-testid="confirm-bulk-session-logout"
                 class="btn bg-red-600 text-white hover:bg-red-700"
-                :disabled="batchRevoking || selectedSessionIds.length === 0 || cleanupRunning"
+                :disabled="trustingId !== null || batchRevoking || selectedSessionIds.length === 0 || cleanupRunning"
                 @click="confirmBatchRevoke"
               >
                 <Icon v-if="batchRevoking" name="refresh" size="sm" class="animate-spin" />
@@ -286,7 +286,7 @@
                   data-testid="session-select"
                   class="h-4 w-4 shrink-0 rounded border-gray-300 text-cyan-600 focus:ring-cyan-500 dark:border-dark-600 dark:bg-dark-800"
                   :checked="selectedSessionIds.includes(session.id)"
-                  :disabled="batchRevoking || revokingId !== null || cleanupRunning"
+                  :disabled="trustingId !== null || batchRevoking || revokingId !== null || cleanupRunning"
                   :aria-label="sessionTitle(session)"
                   @change="toggleSession(session.id)"
                 />
@@ -332,11 +332,23 @@
             </div>
 
             <button
+              v-if="session.current && !session.trusted"
+              type="button"
+              data-testid="session-trust"
+              class="btn shrink-0 border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+              :disabled="trustingId !== null || revokingId !== null || batchRevoking || cleanupRunning"
+              @click="trustCurrentSession(session)"
+            >
+              <Icon v-if="trustingId === (session.id || '__current__')" name="refresh" size="sm" class="animate-spin" />
+              <Icon v-else name="shield" size="sm" />
+              {{ trustingId === (session.id || '__current__') ? t('admin.accounts.sessions.trust.trusting') : t('admin.accounts.sessions.trust.action') }}
+            </button>
+            <button
               v-if="session.can_revoke && !session.current"
               type="button"
               data-testid="session-logout"
               class="btn shrink-0 border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300 dark:hover:bg-red-900/40"
-              :disabled="revokingId !== null || batchRevoking || cleanupRunning"
+              :disabled="trustingId !== null || revokingId !== null || batchRevoking || cleanupRunning"
               @click="revokeTarget = session"
             >
               <Icon v-if="revokingId === session.id" name="refresh" size="sm" class="animate-spin" />
@@ -391,6 +403,7 @@ const loading = ref(false)
 const loadError = ref('')
 const revokeTarget = ref<OpenAIAccountSession | null>(null)
 const revokingId = ref<string | null>(null)
+const trustingId = ref<string | null>(null)
 const selectedSessionIds = ref<string[]>([])
 const batchRevokeConfirm = ref(false)
 const batchRevoking = ref(false)
@@ -607,6 +620,34 @@ const runCleanup = async () => {
   }
 }
 
+const trustCurrentSession = async (target: OpenAIAccountSession) => {
+  const accountId = props.account?.id
+  if (!accountId || !target.current || target.trusted || trustingId.value !== null) return
+  if (typeof adminAPI.accounts.trustOpenAISession !== 'function') {
+    appStore.showError(t('admin.accounts.sessions.trust.failed'))
+    return
+  }
+  const requestKey = target.id || '__current__'
+  trustingId.value = requestKey
+  try {
+    await adminAPI.accounts.trustOpenAISession(accountId, target.id || undefined)
+    if (!props.show || props.account?.id !== accountId) return
+    target.trusted = true
+    appStore.showSuccess(t('admin.accounts.sessions.trust.success'))
+  } catch (error) {
+    appStore.showError(
+      extractI18nErrorMessage(
+        error,
+        t,
+        'admin.accounts.sessions.errors',
+        t('admin.accounts.sessions.trust.failed')
+      )
+    )
+  } finally {
+    trustingId.value = null
+  }
+}
+
 const confirmRevoke = async () => {
   const accountId = props.account?.id
   const target = revokeTarget.value
@@ -720,6 +761,7 @@ watch(
     cleanupSaving.value = false
     cleanupRunning.value = false
     revokeTarget.value = null
+    trustingId.value = null
     batchRevokeConfirm.value = false
     if (visible) {
       void loadSessions()

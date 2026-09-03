@@ -372,6 +372,8 @@ func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		openai.POST("/sessions/cleanup/run", middleware.AdminOnly(), h.Admin.OpenAIOAuth.RunSessionsCleanup)
 		openai.GET("/accounts/:id/sessions", h.Admin.OpenAIOAuth.ListSessions)
 		openai.POST("/accounts/:id/sessions/revoke", h.Admin.OpenAIOAuth.RevokeSessions)
+		openai.POST("/accounts/:id/sessions/trust", h.Admin.OpenAIOAuth.TrustSession)
+		openai.POST("/accounts/:id/sessions/:session_id/trust", h.Admin.OpenAIOAuth.TrustSession)
 		openai.GET("/accounts/:id/sessions/cleanup", h.Admin.OpenAIOAuth.GetSessionCleanup)
 		openai.PUT("/accounts/:id/sessions/cleanup", h.Admin.OpenAIOAuth.UpdateSessionCleanup)
 		openai.POST("/accounts/:id/sessions/cleanup/run", h.Admin.OpenAIOAuth.RunSessionCleanup)

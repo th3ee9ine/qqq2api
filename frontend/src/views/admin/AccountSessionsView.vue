@@ -7,18 +7,18 @@
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.accountSessions.description') }}</p>
         </div>
         <div class="flex flex-wrap gap-2">
-          <button type="button" class="btn btn-secondary" :disabled="loadingAccounts || querying || cleaning || revoking" @click="loadAll">
+          <button type="button" class="btn btn-secondary" :disabled="loadingAccounts || querying || cleaning || revoking || trustingKey !== null" @click="loadAll">
             <Icon name="refresh" size="sm" :class="{ 'animate-spin': loadingAccounts || querying }" />
             {{ t('admin.accountSessions.refresh') }}
           </button>
-          <button type="button" class="btn btn-primary" :disabled="querying || cleaning || revoking || selectedAccountIds.length === 0" @click="querySessions">
+          <button type="button" class="btn btn-primary" :disabled="querying || cleaning || revoking || trustingKey !== null || selectedAccountIds.length === 0" @click="querySessions">
             <Icon name="search" size="sm" />
             {{ querying ? t('admin.accountSessions.querying') : t('admin.accountSessions.query') }}
           </button>
           <button
             type="button"
             class="btn bg-violet-600 text-white hover:bg-violet-700"
-            :disabled="cleaning || querying || revoking || selectedAccountIds.length === 0"
+            :disabled="cleaning || querying || revoking || trustingKey !== null || selectedAccountIds.length === 0"
             @click="cleanupConfirm = true"
           >
             <Icon name="shield" size="sm" :class="{ 'animate-pulse': cleaning }" />
@@ -86,7 +86,7 @@
             <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.accountSessions.sessions') }}</h2>
             <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accountSessions.selectedSessions', { count: selectedSessionKeys.length }) }}</span>
           </div>
-          <button type="button" class="btn btn-danger" :disabled="revoking || querying || cleaning || selectedSessionKeys.length === 0" @click="revokeConfirm = true">
+          <button type="button" class="btn btn-danger" :disabled="revoking || querying || cleaning || trustingKey !== null || selectedSessionKeys.length === 0" @click="revokeConfirm = true">
             <Icon name="login" size="sm" /> {{ t('admin.accountSessions.revokeSelected') }}
           </button>
         </div>
@@ -104,6 +104,18 @@
               </div>
               <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ row.account.name }} · {{ [row.session.app_name, row.session.browser, row.session.os, row.session.location].filter(Boolean).join(' · ') || '-' }}</div>
               <div class="mt-1 text-xs text-gray-400">{{ formatTime(row.session.last_active_at || row.session.signed_in_at) }}</div>
+              <button
+                v-if="row.session.current && !row.session.trusted"
+                type="button"
+                data-testid="session-trust"
+                class="btn mt-3 border border-emerald-200 bg-emerald-50 text-xs text-emerald-700 hover:bg-emerald-100 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+                :disabled="trustingKey !== null || querying || cleaning || revoking"
+                @click.prevent.stop="trustCurrentSession(row)"
+              >
+                <Icon v-if="trustingKey === row.key" name="refresh" size="sm" class="animate-spin" />
+                <Icon v-else name="shield" size="sm" />
+                {{ trustingKey === row.key ? t('admin.accountSessions.trusting') : t('admin.accountSessions.trustCurrent') }}
+              </button>
             </div>
           </label>
         </div>
@@ -146,6 +158,7 @@ const loadingAccounts = ref(false)
 const querying = ref(false)
 const cleaning = ref(false)
 const revoking = ref(false)
+const trustingKey = ref<string | null>(null)
 const queried = ref(false)
 const accountLoadError = ref('')
 const sessionError = ref('')
@@ -306,6 +319,24 @@ const revokeSelected = async () => {
     appStore.showError(extractApiErrorMessage(error, t('admin.accountSessions.revokeFailed')))
   } finally {
     revoking.value = false
+  }
+}
+
+const trustCurrentSession = async (row: SessionRow) => {
+  if (!row.session.current || row.session.trusted || trustingKey.value !== null) return
+  if (typeof adminAPI.accounts.trustOpenAISession !== 'function') {
+    appStore.showError(t('admin.accountSessions.trustFailed'))
+    return
+  }
+  trustingKey.value = row.key
+  try {
+    await adminAPI.accounts.trustOpenAISession(row.account.id, row.session.id || undefined)
+    row.session.trusted = true
+    appStore.showSuccess(t('admin.accountSessions.trustSuccess'))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accountSessions.trustFailed')))
+  } finally {
+    trustingKey.value = null
   }
 }
 

@@ -1,7 +1,7 @@
 export default {
   accountSessions: {
     title: '账号设备会话',
-    description: '查询 OpenAI OAuth 账号的登录设备，并批量清理非当前设备会话。',
+    description: '查询 OpenAI OAuth 账号的登录设备，批量清理非当前设备会话，并将本地设备设为受信任。',
     accounts: '账号',
     selectedAccounts: '已选择 {count} 个账号',
     selectAllAccounts: '全选账号',
@@ -20,6 +20,10 @@ export default {
     account: '账号',
     current: '当前设备',
     trusted: '受信任',
+    trustCurrent: '设为受信任',
+    trusting: '设置中...',
+    trustSuccess: '当前设备会话已设为受信任',
+    trustFailed: '设置受信任设备失败',
     unknown: '未知设备',
     revoke: '退出会话',
     revokeSelected: '退出选中会话',
@@ -47,6 +51,9 @@ export default {
       OPENAI_SESSIONS_AUTH_FAILED: '账号授权信息不可用，请重新授权后重试',
       OPENAI_SESSION_CLEANUP_DISABLED: '请先启用全局定时清理配置',
       OPENAI_CURRENT_SESSION_UNKNOWN: '无法识别当前设备，本次未清理会话',
+      OPENAI_SESSION_TRUST_PROXY_UNAVAILABLE: '账号代理无法连接 ChatGPT，请检测代理后重试',
+      OPENAI_SESSION_TRUST_REQUEST_FAILED: '当前网络无法连接 ChatGPT，请检查网络后重试',
+      OPENAI_SESSION_TRUST_UPSTREAM_ERROR: 'OpenAI 拒绝了设置受信任设备请求，请刷新账号授权后重试',
     },
   },
 }

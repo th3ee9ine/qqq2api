@@ -1,7 +1,7 @@
 export default {
   accountSessions: {
     title: 'Account Device Sessions',
-    description: 'Review signed-in devices for OpenAI OAuth accounts and remove non-current sessions in bulk.',
+    description: 'Review signed-in devices for OpenAI OAuth accounts, remove non-current sessions in bulk, and trust the local device.',
     accounts: 'Accounts',
     selectedAccounts: '{count} accounts selected',
     selectAllAccounts: 'Select all accounts',
@@ -20,6 +20,10 @@ export default {
     account: 'Account',
     current: 'Current device',
     trusted: 'Trusted',
+    trustCurrent: 'Trust current device',
+    trusting: 'Trusting...',
+    trustSuccess: 'Current device session is now trusted',
+    trustFailed: 'Failed to trust current device',
     unknown: 'Unknown device',
     revoke: 'Log out',
     revokeSelected: 'Log out selected sessions',
@@ -47,6 +51,9 @@ export default {
       OPENAI_SESSIONS_AUTH_FAILED: 'The account authorization is unavailable. Re-authorize and retry.',
       OPENAI_SESSION_CLEANUP_DISABLED: 'Enable global scheduled cleanup first.',
       OPENAI_CURRENT_SESSION_UNKNOWN: 'The current device was not identified; no sessions were cleaned.',
+      OPENAI_SESSION_TRUST_PROXY_UNAVAILABLE: 'The account proxy could not connect to ChatGPT. Check the proxy and retry.',
+      OPENAI_SESSION_TRUST_REQUEST_FAILED: 'The current network could not connect to ChatGPT. Check the network and retry.',
+      OPENAI_SESSION_TRUST_UPSTREAM_ERROR: 'OpenAI rejected the trust-device request. Refresh the account authorization and retry.',
     },
   },
 }

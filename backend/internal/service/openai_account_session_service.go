@@ -20,6 +20,7 @@ import (
 var (
 	chatGPTAccountSessionsURL      = "https://chatgpt.com/backend-api/accounts/sessions"
 	chatGPTAccountSessionRevokeURL = "https://chatgpt.com/backend-api/accounts/sessions/revoke"
+	chatGPTAccountSessionTrustURL  = "https://chatgpt.com/backend-api/accounts/sessions/trust"
 )
 
 const maxOpenAIAccountSessionBatchSize = 50
@@ -211,6 +212,55 @@ func (s *OpenAIQuotaService) RevokeSessions(ctx context.Context, accountID int64
 	return result, nil
 }
 
+// TrustSession marks a ChatGPT device session as trusted.  The admin UI only
+// exposes this action for the current/local device; the upstream control-plane
+// endpoint still accepts the concrete session identifier so the operation is
+// idempotent and remains safe when a device contains multiple app sessions.
+func (s *OpenAIQuotaService) TrustSession(ctx context.Context, accountID int64, sessionID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || len(sessionID) > 512 {
+		return infraerrors.New(http.StatusBadRequest, "OPENAI_SESSION_INVALID_ID", "session id is invalid")
+	}
+
+	callCtx, cancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
+	defer cancel()
+	client, headers, proxyURL, err := s.prepareSessionRevoke(callCtx, accountID)
+	if err != nil {
+		return err
+	}
+	return trustOpenAIAccountSession(callCtx, client, headers, proxyURL, accountID, sessionID)
+}
+
+// TrustCurrentSession resolves the authoritative current device first, then
+// delegates to TrustSession.  This variant is useful for integrations that do
+// not want to expose a session identifier in their request body and guarantees
+// that only the local/current device can be marked trusted.
+func (s *OpenAIQuotaService) TrustCurrentSession(ctx context.Context, accountID int64) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessions, err := s.ListSessions(ctx, accountID)
+	if err != nil {
+		return err
+	}
+	if sessions == nil || !sessions.CurrentKnown {
+		return infraerrors.New(http.StatusBadGateway, "OPENAI_CURRENT_SESSION_UNKNOWN", "the current device could not be identified")
+	}
+	for _, session := range sessions.Sessions {
+		if !session.Current || strings.TrimSpace(session.ID) == "" {
+			continue
+		}
+		if session.Trusted {
+			return nil
+		}
+		return s.TrustSession(ctx, accountID, session.ID)
+	}
+	return infraerrors.New(http.StatusBadGateway, "OPENAI_CURRENT_SESSION_UNKNOWN", "the current device could not be identified")
+}
+
 func (s *OpenAIQuotaService) prepareSessionRevoke(ctx context.Context, accountID int64) (*req.Client, map[string]string, string, error) {
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
@@ -256,6 +306,37 @@ func revokeOpenAIAccountSession(
 		return infraerrors.Newf(mapUpstreamStatus(resp.StatusCode), "OPENAI_SESSION_REVOKE_UPSTREAM_ERROR", "upstream returned %d", resp.StatusCode)
 	}
 	slog.Info("openai_session_revoke_success", "account_id", accountID)
+	return nil
+}
+
+func trustOpenAIAccountSession(
+	ctx context.Context,
+	client *req.Client,
+	headers map[string]string,
+	proxyURL string,
+	accountID int64,
+	sessionID string,
+) error {
+	resp, err := client.R().
+		SetContext(ctx).
+		SetHeaders(headers).
+		SetBody(map[string]string{"session_id": sessionID}).
+		Post(chatGPTAccountSessionTrustURL)
+	if err != nil {
+		if strings.TrimSpace(proxyURL) != "" {
+			slog.Warn("openai_session_trust_proxy_unavailable", "account_id", accountID)
+			return infraerrors.New(http.StatusBadGateway, "OPENAI_SESSION_TRUST_PROXY_UNAVAILABLE", "the account proxy could not connect to ChatGPT")
+		}
+		return infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSION_TRUST_REQUEST_FAILED", "upstream request failed: %v", err)
+	}
+	if !resp.IsSuccessState() {
+		slog.Warn("openai_session_trust_failed", "account_id", accountID, "status", resp.StatusCode)
+		if resp.StatusCode == http.StatusNotFound {
+			return infraerrors.New(http.StatusNotFound, "OPENAI_SESSION_NOT_FOUND", "session no longer exists")
+		}
+		return infraerrors.Newf(mapUpstreamStatus(resp.StatusCode), "OPENAI_SESSION_TRUST_UPSTREAM_ERROR", "upstream returned %d", resp.StatusCode)
+	}
+	slog.Info("openai_session_trust_success", "account_id", accountID)
 	return nil
 }
 
@@ -736,7 +817,13 @@ func decodeOpenAIAccountSession(row map[string]any) OpenAIAccountSession {
 	}
 	trusted := sessionBool(row, "trusted", "is_trusted", "isTrusted", "trusted_device", "trustedDevice", "is_trusted_device", "isTrustedDevice")
 	if !trusted {
+		trusted = sessionBool(device, "trusted", "is_trusted", "isTrusted", "trusted_device", "trustedDevice", "is_trusted_device", "isTrustedDevice")
+	}
+	if !trusted {
 		trusted = strings.EqualFold(sessionString(row, "trust_status", "trustStatus", "device_trust_status", "deviceTrustStatus"), "trusted")
+	}
+	if !trusted {
+		trusted = strings.EqualFold(sessionString(device, "trust_status", "trustStatus", "device_trust_status", "deviceTrustStatus"), "trusted")
 	}
 	status := sessionString(row, "status", "session_status", "sessionStatus")
 	statusAvailable := true

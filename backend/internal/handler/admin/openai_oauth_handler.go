@@ -41,6 +41,21 @@ type openAIAccountSessionService interface {
 	RevokeSessions(ctx context.Context, accountID int64, sessionIDs []string) (*service.OpenAIAccountSessionBatchRevokeResult, error)
 }
 
+// openAIAccountSessionTrustService is optional so older integrations and
+// reduced test doubles that only support listing/revoking sessions remain
+// source-compatible.  The production OpenAIQuotaService implements it.
+type openAIAccountSessionTrustService interface {
+	TrustSession(ctx context.Context, accountID int64, sessionID string) error
+}
+
+// openAIAccountCurrentSessionTrustService is an optional extension for
+// implementations that can resolve and trust the current device without a
+// session identifier.  The HTTP endpoint accepts an omitted session_id for
+// those integrations while the UI sends the concrete current-session id.
+type openAIAccountCurrentSessionTrustService interface {
+	TrustCurrentSession(ctx context.Context, accountID int64) error
+}
+
 type openAIAccountStateRecoverer interface {
 	RecoverAccountState(ctx context.Context, accountID int64, options service.AccountRecoveryOptions) (*service.SuccessfulTestRecoveryResult, error)
 }
@@ -431,6 +446,87 @@ func (h *OpenAIOAuthHandler) RevokeSessions(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+type openAITrustSessionRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+// TrustSession marks the local/current ChatGPT device session as trusted.
+// The panel only renders this action for rows identified as the current
+// session.  A concrete session_id is accepted to support accounts whose
+// current device exposes multiple first-party app sessions; implementations
+// that resolve the current session themselves may omit it.
+// POST /api/v1/admin/openai/accounts/:id/sessions/trust
+func (h *OpenAIOAuthHandler) TrustSession(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h == nil || h.sessionService == nil {
+		response.BadRequest(c, "openai account session service is not enabled")
+		return
+	}
+
+	var req openAITrustSessionRequest
+	// Keep an empty body valid for current-session-aware integrations.  A
+	// malformed non-empty body is still rejected rather than silently trusting a
+	// different session.
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			response.BadRequest(c, "Invalid request: "+err.Error())
+			return
+		}
+	}
+	req.SessionID = strings.TrimSpace(req.SessionID)
+	if req.SessionID == "" {
+		// Accept the resource-style spelling as well as the body-based action
+		// route. This keeps integrations that mirror the single-session revoke
+		// endpoint from having to special-case trust operations.
+		req.SessionID = strings.TrimSpace(c.Param("session_id"))
+	}
+	if req.SessionID != "" && len(req.SessionID) > 512 {
+		response.BadRequest(c, "Invalid session ID")
+		return
+	}
+
+	if req.SessionID == "" {
+		if currentTrust, ok := h.sessionService.(openAIAccountCurrentSessionTrustService); ok && !isNilOpenAISessionTrustService(currentTrust) {
+			if err := currentTrust.TrustCurrentSession(c.Request.Context(), accountID); err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+			response.Success(c, gin.H{"message": "Current device session marked as trusted"})
+			return
+		}
+		response.BadRequest(c, "session_id is required")
+		return
+	}
+
+	trustService, ok := h.sessionService.(openAIAccountSessionTrustService)
+	if !ok || isNilOpenAISessionTrustService(trustService) {
+		response.BadRequest(c, "openai account session trust service is not enabled")
+		return
+	}
+	if err := trustService.TrustSession(c.Request.Context(), accountID, req.SessionID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "Device session marked as trusted"})
+}
+
+func isNilOpenAISessionTrustService(value any) bool {
+	if value == nil {
+		return true
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }
 
 // RunSessionsCleanup executes the global non-current-session cleanup for a

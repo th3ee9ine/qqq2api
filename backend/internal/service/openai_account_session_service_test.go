@@ -632,7 +632,7 @@ func TestDecodeOpenAIAccountSessionsDoesNotPromoteGenericNestedIDs(t *testing.T)
 	require.Equal(t, "device-session", result.Sessions[0].ID)
 }
 
-func TestOpenAIAccountSessionServiceListsAndRevokes(t *testing.T) {
+func TestOpenAIAccountSessionServiceListsRevokesAndTrusts(t *testing.T) {
 	account := &Account{
 		ID:       71,
 		Platform: PlatformOpenAI,
@@ -647,7 +647,7 @@ func TestOpenAIAccountSessionServiceListsAndRevokes(t *testing.T) {
 
 	var methods []string
 	var paths []string
-	var revokeBody map[string]string
+	var postBodies []map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		methods = append(methods, r.Method)
 		paths = append(paths, r.URL.Path)
@@ -659,7 +659,9 @@ func TestOpenAIAccountSessionServiceListsAndRevokes(t *testing.T) {
 			_, _ = w.Write([]byte(`{"sessions":[{"id":"sess-a","device_name":"Firefox","can_revoke":true}]}`))
 			return
 		}
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&revokeBody))
+		var body map[string]string
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		postBodies = append(postBodies, body)
 		_, _ = w.Write([]byte(`{"revoked_unified_sessions":1,"revoked_app_sessions":2}`))
 	}))
 	defer srv.Close()
@@ -673,9 +675,11 @@ func TestOpenAIAccountSessionServiceListsAndRevokes(t *testing.T) {
 
 	err = svc.RevokeSession(context.Background(), account.ID, "us_session-test")
 	require.NoError(t, err)
-	require.Equal(t, []string{http.MethodGet, http.MethodPost}, methods)
-	require.Equal(t, []string{"/backend-api/accounts/sessions", "/backend-api/accounts/sessions/revoke"}, paths)
-	require.Equal(t, map[string]string{"session_id": "us_session-test"}, revokeBody)
+	err = svc.TrustSession(context.Background(), account.ID, "us_session-current")
+	require.NoError(t, err)
+	require.Equal(t, []string{http.MethodGet, http.MethodPost, http.MethodPost}, methods)
+	require.Equal(t, []string{"/backend-api/accounts/sessions", "/backend-api/accounts/sessions/revoke", "/backend-api/accounts/sessions/trust"}, paths)
+	require.Equal(t, []map[string]string{{"session_id": "us_session-test"}, {"session_id": "us_session-current"}}, postBodies)
 }
 
 func TestOpenAIAccountSessionServiceBatchRevokeReportsPartialSuccess(t *testing.T) {

@@ -22,10 +22,12 @@ type openAIAccountSessionServiceStub struct {
 	listErr           error
 	revokeErr         error
 	revokeSessionsErr error
+	trustErr          error
 	batchResult       *service.OpenAIAccountSessionBatchRevokeResult
 	accountID         int64
 	sessionID         string
 	sessionIDs        []string
+	trustedSessionID  string
 }
 
 func (s *openAIAccountSessionServiceStub) ListSessions(_ context.Context, accountID int64) (*service.OpenAIAccountSessionList, error) {
@@ -43,6 +45,12 @@ func (s *openAIAccountSessionServiceStub) RevokeSessions(_ context.Context, acco
 	s.accountID = accountID
 	s.sessionIDs = append([]string(nil), sessionIDs...)
 	return s.batchResult, s.revokeSessionsErr
+}
+
+func (s *openAIAccountSessionServiceStub) TrustSession(_ context.Context, accountID int64, sessionID string) error {
+	s.accountID = accountID
+	s.trustedSessionID = sessionID
+	return s.trustErr
 }
 
 func TestOpenAIListSessions(t *testing.T) {
@@ -111,6 +119,32 @@ func TestOpenAIRevokeSessions(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
 	require.Equal(t, 2, envelope.Data.SuccessCount)
+}
+
+func TestOpenAITrustSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := &openAIAccountSessionServiceStub{}
+	handler := &OpenAIOAuthHandler{sessionService: stub}
+	router := gin.New()
+	router.POST("/api/v1/admin/openai/accounts/:id/sessions/trust", handler.TrustSession)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/openai/accounts/42/sessions/trust",
+		strings.NewReader(`{"session_id":"sess-current"}`),
+	)
+	request.Header.Set("content-type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, int64(42), stub.accountID)
+	require.Equal(t, "sess-current", stub.trustedSessionID)
+	var envelope struct {
+		Data map[string]string `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	require.Equal(t, "Device session marked as trusted", envelope.Data["message"])
 }
 
 func TestOpenAIListSessionsPropagatesServiceError(t *testing.T) {

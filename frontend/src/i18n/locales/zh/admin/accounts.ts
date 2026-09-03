@@ -1557,6 +1557,12 @@ export default {
         unknownDevice: '未知设备',
         current: '当前会话',
         trusted: '受信任设备',
+        trust: {
+          action: '设为受信任',
+          trusting: '设置中...',
+          success: '当前设备会话已设为受信任',
+          failed: '设置受信任设备失败',
+        },
         location: '大致位置',
         signedInAt: '登录时间',
         lastActiveAt: '最近活动',
@@ -1576,7 +1582,11 @@ export default {
           OPENAI_SESSIONS_REQUEST_FAILED: '当前网络无法连接 ChatGPT，请检查网络后重试',
           OPENAI_SESSION_REVOKE_PROXY_UNAVAILABLE: '账号代理无法连接 ChatGPT，请检测或更换代理后重试',
           OPENAI_SESSION_REVOKE_UPSTREAM_ERROR: 'OpenAI 拒绝了退出会话请求，请刷新账号授权后重试',
-          OPENAI_SESSION_NOT_FOUND: '该设备会话已不存在，请刷新列表'
+          OPENAI_SESSION_NOT_FOUND: '该设备会话已不存在，请刷新列表',
+          OPENAI_SESSION_TRUST_PROXY_UNAVAILABLE: '账号代理无法连接 ChatGPT，请检测或更换代理后重试',
+          OPENAI_SESSION_TRUST_REQUEST_FAILED: '当前网络无法连接 ChatGPT，请检查网络后重试',
+          OPENAI_SESSION_TRUST_UPSTREAM_ERROR: 'OpenAI 拒绝了设置受信任设备请求，请刷新账号授权后重试',
+          OPENAI_CURRENT_SESSION_UNKNOWN: '无法识别当前设备，请刷新设备会话列表后重试',
         },
         cleanup: {
           title: '定时清理设备会话',

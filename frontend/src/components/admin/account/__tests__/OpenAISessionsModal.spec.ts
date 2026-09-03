@@ -7,6 +7,7 @@ const {
   listSessionsMock,
   revokeSessionMock,
   revokeSessionsMock,
+  trustSessionMock,
   getCleanupMock,
   updateCleanupMock,
   runCleanupMock,
@@ -17,6 +18,7 @@ const {
   listSessionsMock: vi.fn(),
   revokeSessionMock: vi.fn(),
   revokeSessionsMock: vi.fn(),
+  trustSessionMock: vi.fn(),
   getCleanupMock: vi.fn(),
   updateCleanupMock: vi.fn(),
   runCleanupMock: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock('@/api/admin', () => ({
       listOpenAISessions: listSessionsMock,
       revokeOpenAISession: revokeSessionMock,
       revokeOpenAISessions: revokeSessionsMock,
+      trustOpenAISession: trustSessionMock,
       getOpenAISessionCleanup: getCleanupMock,
       updateOpenAISessionCleanup: updateCleanupMock,
       runOpenAISessionCleanup: runCleanupMock,
@@ -130,6 +133,7 @@ describe('OpenAISessionsModal', () => {
       revoked_session_ids: ['sess-1'],
       failures: [],
     })
+    trustSessionMock.mockResolvedValue({ message: 'ok' })
   })
 
   it('打开时查询会话，并在确认后退出选中会话', async () => {
@@ -209,5 +213,33 @@ describe('OpenAISessionsModal', () => {
     await wrapper.get('[data-testid="session-cleanup-save"]').trigger('click')
     expect(updateCleanupMock).not.toHaveBeenCalled()
     expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.sessions.cleanup.invalidInterval')
+  })
+
+  it('支持将当前设备会话设为受信任', async () => {
+    listSessionsMock.mockResolvedValueOnce({
+      sessions: [{
+        id: 'sess-current',
+        device_name: 'Local Mac',
+        current: true,
+        trusted: false,
+        status_available: true,
+        can_revoke: false,
+      }],
+      fetched_at: 1,
+      current_known: true,
+    })
+    const wrapper = mount(OpenAISessionsModal, {
+      props: { show: true, account },
+      global: { stubs: { BaseDialog: BaseDialogStub } },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="session-trust"]').trigger('click')
+    await flushPromises()
+
+    expect(trustSessionMock).toHaveBeenCalledWith(42, 'sess-current')
+    expect(showSuccessMock).toHaveBeenCalledWith('admin.accounts.sessions.trust.success')
+    expect(wrapper.text()).toContain('admin.accounts.sessions.trusted')
+    expect(wrapper.find('[data-testid="session-trust"]').exists()).toBe(false)
   })
 })

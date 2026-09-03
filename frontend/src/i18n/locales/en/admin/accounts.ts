@@ -1500,6 +1500,12 @@ export default {
         unknownDevice: 'Unknown device',
         current: 'Current session',
         trusted: 'Trusted device',
+        trust: {
+          action: 'Trust device',
+          trusting: 'Trusting...',
+          success: 'Current device session is now trusted',
+          failed: 'Failed to trust device session',
+        },
         location: 'Approximate location',
         signedInAt: 'Signed in',
         lastActiveAt: 'Last active',
@@ -1519,7 +1525,11 @@ export default {
           OPENAI_SESSIONS_REQUEST_FAILED: 'The current network could not connect to ChatGPT. Check the network and retry.',
           OPENAI_SESSION_REVOKE_PROXY_UNAVAILABLE: 'The account proxy could not connect to ChatGPT. Test or replace the proxy and retry.',
           OPENAI_SESSION_REVOKE_UPSTREAM_ERROR: 'OpenAI rejected the logout request. Refresh the account authorization and retry.',
-          OPENAI_SESSION_NOT_FOUND: 'This device session no longer exists. Refresh the list.'
+          OPENAI_SESSION_NOT_FOUND: 'This device session no longer exists. Refresh the list.',
+          OPENAI_SESSION_TRUST_PROXY_UNAVAILABLE: 'The account proxy could not connect to ChatGPT. Test or replace the proxy and retry.',
+          OPENAI_SESSION_TRUST_REQUEST_FAILED: 'The current network could not connect to ChatGPT. Check the network and retry.',
+          OPENAI_SESSION_TRUST_UPSTREAM_ERROR: 'OpenAI rejected the trust-device request. Refresh the account authorization and retry.',
+          OPENAI_CURRENT_SESSION_UNKNOWN: 'The current device could not be identified. Refresh the session list and retry.',
         },
         cleanup: {
           title: 'Automatic session cleanup',
