@@ -158,6 +158,7 @@ export default {
     modelPlaza: 'Model Plaza',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',
+    accountSessions: 'Account Device Sessions',
     accountAdmins: 'Account Administrators',
     plugins: 'Plugins',
     proxies: 'Proxies',

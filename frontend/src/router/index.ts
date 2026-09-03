@@ -149,6 +149,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/account-sessions',
+    name: 'AdminAccountSessions',
+    component: () => import('@/views/admin/AccountSessionsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Account Device Sessions',
+      titleKey: 'admin.accountSessions.title',
+      descriptionKey: 'admin.accountSessions.description'
+    }
+  },
+  {
     path: '/admin/proxies',
     name: 'AdminProxies',
     component: () => import('@/views/admin/ProxiesView.vue'),

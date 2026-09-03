@@ -362,6 +362,17 @@ export async function runOpenAISessionCleanup(id: number): Promise<{ message: st
   return data
 }
 
+/** Trigger global non-current-session cleanup for several accounts. */
+export async function runOpenAISessionCleanupBatch(accountIds: number[]): Promise<{
+  requested_count: number
+  success_count: number
+  failed_count: number
+  failures?: number[]
+}> {
+  const { data } = await apiClient.post('/admin/openai/sessions/cleanup/run', { account_ids: accountIds }, { timeout: 130000 })
+  return data
+}
+
 /**
  * Apply OAuth credentials after re-authorization.
  *
@@ -1142,6 +1153,7 @@ export const accountsAPI = {
   getOpenAISessionCleanup,
   updateOpenAISessionCleanup,
   runOpenAISessionCleanup,
+  runOpenAISessionCleanupBatch,
   applyOAuthCredentials,
   getStats,
   clearError,

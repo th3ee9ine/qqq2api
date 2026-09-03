@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -52,6 +53,13 @@ type OpenAISessionCleanupRunner interface {
 }
 
 type openAISessionCleanupRunner = OpenAISessionCleanupRunner
+
+// openAISessionCleanupImmediateRunner is implemented by the production
+// worker. It is optional so reduced deployments and existing test doubles that
+// only implement the scheduled RunAccount method remain source-compatible.
+type openAISessionCleanupImmediateRunner interface {
+	RunAccountNow(ctx context.Context, accountID int64) error
+}
 
 // openAIQuotaResetPostProcessTimeout bounds the work performed AFTER the
 // (non-refundable) reset credit has already been consumed upstream. The whole
@@ -384,6 +392,21 @@ type openAIRevokeSessionsRequest struct {
 	SessionIDs []string `json:"session_ids"`
 }
 
+type openAISessionCleanupBatchRequest struct {
+	AccountIDs []int64 `json:"account_ids"`
+}
+
+const openAISessionCleanupMaxAccountBatchSize = 100
+
+type openAISessionCleanupBatchResult struct {
+	RequestedCount int `json:"requested_count"`
+	SuccessCount   int `json:"success_count"`
+	FailedCount    int `json:"failed_count"`
+	// Failures contains account IDs only. Upstream errors can include URLs,
+	// session IDs, or credential material and must not be returned verbatim.
+	Failures []int64 `json:"failures,omitempty"`
+}
+
 // RevokeSessions logs multiple device/browser sessions out of ChatGPT.
 // POST /api/v1/admin/openai/accounts/:id/sessions/revoke
 func (h *OpenAIOAuthHandler) RevokeSessions(c *gin.Context) {
@@ -408,6 +431,88 @@ func (h *OpenAIOAuthHandler) RevokeSessions(c *gin.Context) {
 		return
 	}
 	response.Success(c, result)
+}
+
+// RunSessionsCleanup executes the global non-current-session cleanup for a
+// selected set of accounts. The global policy controls the scheduler, while
+// this endpoint is the explicit batch action used by the Account Device
+// Sessions menu.
+// POST /api/v1/admin/openai/sessions/cleanup/run
+func (h *OpenAIOAuthHandler) RunSessionsCleanup(c *gin.Context) {
+	if h == nil || isNilOpenAISessionCleanupRunner(h.sessionCleanup) {
+		response.BadRequest(c, "openai session cleanup service is not enabled")
+		return
+	}
+	var req openAISessionCleanupBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if len(req.AccountIDs) == 0 || len(req.AccountIDs) > openAISessionCleanupMaxAccountBatchSize {
+		response.BadRequest(c, "account_ids must contain between 1 and 100 accounts")
+		return
+	}
+	accountIDs := make([]int64, 0, len(req.AccountIDs))
+	seen := make(map[int64]struct{}, len(req.AccountIDs))
+	for _, accountID := range req.AccountIDs {
+		if accountID <= 0 {
+			response.BadRequest(c, "account_ids must contain positive account IDs")
+			return
+		}
+		if _, exists := seen[accountID]; exists {
+			continue
+		}
+		seen[accountID] = struct{}{}
+		accountIDs = append(accountIDs, accountID)
+	}
+	if len(accountIDs) == 0 {
+		response.BadRequest(c, "account_ids must contain between 1 and 100 accounts")
+		return
+	}
+
+	// A cleanup call is bounded upstream, but a large selection should still be
+	// processed in parallel so one slow account does not make the panel request
+	// time out. Four workers keeps refresh/revoke traffic below the normal panel
+	// concurrency used by the account list.
+	type outcome struct {
+		accountID int64
+		err       error
+	}
+	jobs := make(chan int64)
+	outcomes := make(chan outcome, len(accountIDs))
+	workerCount := len(accountIDs)
+	if workerCount > 4 {
+		workerCount = 4
+	}
+	for i := 0; i < workerCount; i++ {
+		go func() {
+			for accountID := range jobs {
+				run := h.sessionCleanup.RunAccount
+				if immediate, ok := h.sessionCleanup.(openAISessionCleanupImmediateRunner); ok && !isNilOpenAISessionCleanupRunner(immediate) {
+					run = immediate.RunAccountNow
+				}
+				outcomes <- outcome{accountID: accountID, err: run(c.Request.Context(), accountID)}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, accountID := range accountIDs {
+			jobs <- accountID
+		}
+	}()
+	batchResult := openAISessionCleanupBatchResult{RequestedCount: len(accountIDs), Failures: make([]int64, 0)}
+	for range accountIDs {
+		outcome := <-outcomes
+		if outcome.err != nil {
+			batchResult.FailedCount++
+			batchResult.Failures = append(batchResult.Failures, outcome.accountID)
+		} else {
+			batchResult.SuccessCount++
+		}
+	}
+	sort.Slice(batchResult.Failures, func(i, j int) bool { return batchResult.Failures[i] < batchResult.Failures[j] })
+	response.Success(c, batchResult)
 }
 
 // OpenAIGenerateAuthURLRequest represents the request for generating OpenAI auth URL

@@ -210,7 +210,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	ollamaCloudUsageService := service.ProvideOllamaCloudUsageService(accountRepository, httpUpstream, settingService, secretEncryptor, configConfig, leaderLockCache, db)
-	openAISessionCleanupService := service.ProvideOpenAISessionCleanupService(accountRepository, openAIQuotaService, leaderLockCache)
+	openAISessionCleanupService := service.ProvideOpenAISessionCleanupService(accountRepository, openAIQuotaService, leaderLockCache, settingService)
 	adminHandlers := handler.ProvideAdminHandlersWithSessionCleanup(dashboardHandler, groupHandler, modelPricingHandler, accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler, openAIOAuthHandler, proxyHandler, settingHandler, opsHandler, systemHandler, adminUsageHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, contentModerationHandler, promptAdminHandler, auditLogHandler, upstreamBillingProbeService, ollamaCloudUsageService, openAISessionCleanupService)
 	usageRecordWorkerPool := service.NewUsageRecordWorkerPool(configConfig)
 	userMsgQueueCache := repository.NewUserMsgQueueCache(redisClient)

@@ -107,14 +107,15 @@ type OpenAISessionCleanupBatchClient interface {
 }
 
 // OpenAISessionCleanupService periodically removes every revokable,
-// non-current ChatGPT device session for opted-in OpenAI OAuth parent
-// accounts.  It deliberately fails closed whenever the upstream response does
-// not include an authoritative current-device marker.
+// non-current ChatGPT device session for active OpenAI OAuth parent accounts
+// while the global policy is enabled. It deliberately fails closed whenever
+// the upstream response does not include an authoritative current-device marker.
 type OpenAISessionCleanupService struct {
-	accountRepo   AccountRepository
-	sessionClient OpenAISessionCleanupClient
-	leaderLock    LeaderLockCache
-	owner         string
+	accountRepo    AccountRepository
+	sessionClient  OpenAISessionCleanupClient
+	leaderLock     LeaderLockCache
+	settingService *SettingService
+	owner          string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -183,6 +184,36 @@ func NewOpenAISessionCleanupService(
 	}
 }
 
+// SetSettingService switches the worker to the installation-wide cleanup
+// policy.  Keeping this setter preserves the historical constructor used by
+// integrations and unit tests; a nil setting service retains legacy
+// account-extra behavior.
+func (s *OpenAISessionCleanupService) SetSettingService(settings *SettingService) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.settingService = settings
+	s.mu.Unlock()
+}
+
+func (s *OpenAISessionCleanupService) globalCleanupConfig(ctx context.Context) (OpenAISessionCleanupGlobalSettings, bool) {
+	if s == nil {
+		return OpenAISessionCleanupGlobalSettings{}, false
+	}
+	s.mu.Lock()
+	settings := s.settingService
+	s.mu.Unlock()
+	if settings == nil {
+		return OpenAISessionCleanupGlobalSettings{}, false
+	}
+	resolved, err := settings.GetOpenAISessionCleanupGlobalSettings(ctx)
+	if err != nil || resolved == nil {
+		return OpenAISessionCleanupGlobalSettings{IntervalMinutes: OpenAISessionCleanupDefaultIntervalMinutes}, true
+	}
+	return *resolved, true
+}
+
 // NewOpenAINonCurrentSessionRevokeService is an alias constructor for callers
 // that use the feature's policy-oriented name.
 func NewOpenAINonCurrentSessionRevokeService(
@@ -221,9 +252,10 @@ func NewOpenAIAutoRevokeNonCurrentSessionsWorker(
 	return NewOpenAISessionCleanupService(accountRepo, sessionClient, leaderLocks...)
 }
 
-// Start launches the minute scanner.  It performs one scan after a short,
-// cancellable startup grace period and then wakes once per minute; each
-// account's configured interval determines whether that account is due.
+// Start launches the minute scanner. It performs one scan after a short,
+// cancellable startup grace period and then wakes once per minute; the global
+// settings policy determines whether cleanup is enabled and when each account
+// is due.
 func (s *OpenAISessionCleanupService) Start() {
 	if s == nil || isNilCleanupDependency(s.accountRepo) || isNilCleanupDependency(s.sessionClient) {
 		return
@@ -375,6 +407,9 @@ func (s *OpenAISessionCleanupService) processCleanupAccounts(ctx context.Context
 	}
 	var firstErr error
 	now := s.clockNow()
+	// The policy is installation-wide, so resolve it once per scan rather than
+	// issuing one settings lookup for every account in the page.
+	global, hasGlobal := s.globalCleanupConfig(ctx)
 	for i := range accounts {
 		if err := ctx.Err(); err != nil || s.isStopping() {
 			if err != nil {
@@ -387,6 +422,10 @@ func (s *OpenAISessionCleanupService) processCleanupAccounts(ctx context.Context
 			continue
 		}
 		config := ResolveOpenAINonCurrentSessionRevokeConfig(account)
+		if hasGlobal {
+			config.Enabled = global.Enabled
+			config.IntervalMinutes = global.IntervalMinutes
+		}
 		if !config.Enabled || !s.claimDue(account, config.IntervalMinutes, now) {
 			continue
 		}
@@ -565,8 +604,21 @@ func (s *OpenAISessionCleanupService) claimDue(account *Account, intervalMinutes
 
 // RunAccount executes cleanup for one account regardless of its due timestamp.
 // The account is reloaded first so an admin can disable the policy while a
-// previous scan is still in flight.
+// previous scan is still in flight.  It still honors the global enabled switch
+// (or the legacy account switch when no SettingService is injected).
 func (s *OpenAISessionCleanupService) RunAccount(ctx context.Context, accountID int64) error {
+	return s.runAccount(ctx, accountID, true)
+}
+
+// RunAccountNow executes an explicit operator-triggered cleanup without
+// requiring the periodic scheduler to be enabled.  The global switch controls
+// scheduled runs; the dedicated Account Device Sessions menu must still be able
+// to perform a one-off cleanup when that scheduler is turned off.
+func (s *OpenAISessionCleanupService) RunAccountNow(ctx context.Context, accountID int64) error {
+	return s.runAccount(ctx, accountID, false)
+}
+
+func (s *OpenAISessionCleanupService) runAccount(ctx context.Context, accountID int64, requireEnabled bool) error {
 	if s == nil || isNilCleanupDependency(s.accountRepo) || isNilCleanupDependency(s.sessionClient) || accountID <= 0 {
 		return errors.New("openai session cleanup service is not configured")
 	}
@@ -618,8 +670,14 @@ func (s *OpenAISessionCleanupService) RunAccount(ctx context.Context, accountID 
 	if account == nil || !account.IsActive() || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth || account.IsShadow() {
 		return ErrOpenAISessionCleanupAccountInvalid
 	}
-	if !ResolveOpenAINonCurrentSessionRevokeConfig(account).Enabled {
-		return ErrOpenAISessionCleanupDisabled
+	if requireEnabled {
+		if global, ok := s.globalCleanupConfig(ctx); ok {
+			if !global.Enabled {
+				return ErrOpenAISessionCleanupDisabled
+			}
+		} else if !ResolveOpenAINonCurrentSessionRevokeConfig(account).Enabled {
+			return ErrOpenAISessionCleanupDisabled
+		}
 	}
 	now := s.clockNow()
 	// Force this invocation while still reserving the account against concurrent

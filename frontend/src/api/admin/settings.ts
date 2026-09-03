@@ -11,6 +11,11 @@ import type {
   NotifyEmailEntry,
 } from "@/types";
 
+export interface OpenAISessionCleanupGlobalSettings {
+  enabled: boolean
+  interval_minutes: number
+}
+
 export interface DefaultSubscriptionSetting {
   group_id: number;
   validity_days: number;
@@ -1023,6 +1028,23 @@ export async function getSettings(): Promise<SystemSettings> {
   return data;
 }
 
+/** Read the global OpenAI device-session cleanup policy. */
+export async function getOpenAISessionCleanupSettings(): Promise<OpenAISessionCleanupGlobalSettings> {
+  const { data } = await apiClient.get<OpenAISessionCleanupGlobalSettings>('/admin/settings/openai-session-cleanup')
+  return data
+}
+
+/** Persist the global OpenAI device-session cleanup policy. */
+export async function updateOpenAISessionCleanupSettings(
+  settings: OpenAISessionCleanupGlobalSettings,
+): Promise<OpenAISessionCleanupGlobalSettings> {
+  const { data } = await apiClient.put<OpenAISessionCleanupGlobalSettings>(
+    '/admin/settings/openai-session-cleanup',
+    settings,
+  )
+  return data
+}
+
 /**
  * Update system settings
  * @param settings - Partial settings to update
@@ -1531,6 +1553,8 @@ export async function resetWebSearchUsage(payload: {
 export const settingsAPI = {
   getSettings,
   updateSettings,
+  getOpenAISessionCleanupSettings,
+  updateOpenAISessionCleanupSettings,
   testSmtpConnection,
   sendTestEmail,
   getEmailTemplates,

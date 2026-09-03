@@ -9,9 +9,9 @@ import (
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
-// Account-level settings for the periodic ChatGPT session cleanup job.  The
-// settings live in accounts.extra so installations can opt individual OAuth
-// accounts in without changing the global scheduler cadence.
+// Legacy account-extra settings for the periodic ChatGPT session cleanup job.
+// The active scheduler now reads the installation-wide setting; these keys and
+// resolvers remain for backwards-compatible account API consumers and upgrades.
 const (
 	OpenAISessionCleanupEnabledExtraKey         = "openai_session_cleanup_enabled"
 	OpenAISessionCleanupIntervalMinutesExtraKey = "openai_session_cleanup_interval_minutes"

@@ -369,10 +369,16 @@ import type {
   OpenAISessionCleanupUpdateRequest
 } from '@/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean
   account: Account | null
-}>()
+  /** Account management only lists/revokes sessions; global cleanup lives in
+   * the dedicated Account Device Sessions menu. Kept opt-in for compatibility
+   * with embedded consumers of this modal. */
+  showCleanup?: boolean
+}>(), {
+  showCleanup: true,
+})
 
 const emit = defineEmits<{
   (event: 'close'): void
@@ -411,6 +417,7 @@ const cleanupAPIAvailable = computed(() =>
 )
 
 const cleanupEligible = computed(() =>
+  props.showCleanup !== false &&
   props.account?.platform === 'openai' &&
   props.account?.type === 'oauth' &&
   props.account?.parent_account_id == null &&

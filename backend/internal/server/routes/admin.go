@@ -365,6 +365,11 @@ func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		openai.POST("/accounts/:id/subscription/refresh", h.Admin.OpenAIOAuth.RefreshAccountSubscription)
 		openai.POST("/create-from-oauth", h.Admin.OpenAIOAuth.CreateAccountFromOAuth)
 		openai.POST("/create-from-codex-pat", h.Admin.OpenAIOAuth.CreateAccountFromCodexPAT)
+		// Global device-session cleanup policy. The settings namespace is the
+		// canonical endpoint; these aliases keep the OpenAI tool discoverable.
+		openai.GET("/sessions/cleanup", middleware.AdminOnly(), h.Admin.Setting.GetOpenAISessionCleanupSettings)
+		openai.PUT("/sessions/cleanup", middleware.AdminOnly(), h.Admin.Setting.UpdateOpenAISessionCleanupSettings)
+		openai.POST("/sessions/cleanup/run", middleware.AdminOnly(), h.Admin.OpenAIOAuth.RunSessionsCleanup)
 		openai.GET("/accounts/:id/sessions", h.Admin.OpenAIOAuth.ListSessions)
 		openai.POST("/accounts/:id/sessions/revoke", h.Admin.OpenAIOAuth.RevokeSessions)
 		openai.GET("/accounts/:id/sessions/cleanup", h.Admin.OpenAIOAuth.GetSessionCleanup)
@@ -422,6 +427,9 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		// OpenAI OAuth image-tool unavailable cooldown configuration
 		adminSettings.GET("/openai-images-oauth-unavailable-cooldown", h.Admin.Setting.GetOpenAIImagesOAuthUnavailableCooldownSettings)
 		adminSettings.PUT("/openai-images-oauth-unavailable-cooldown", h.Admin.Setting.UpdateOpenAIImagesOAuthUnavailableCooldownSettings)
+		// 全局 OpenAI 设备会话清理策略（不再按账号配置）
+		adminSettings.GET("/openai-session-cleanup", h.Admin.Setting.GetOpenAISessionCleanupSettings)
+		adminSettings.PUT("/openai-session-cleanup", h.Admin.Setting.UpdateOpenAISessionCleanupSettings)
 		// 面板 API 限流配置
 		adminSettings.GET("/panel-rate-limit", h.Admin.Setting.GetPanelRateLimitSettings)
 		adminSettings.PUT("/panel-rate-limit", h.Admin.Setting.UpdatePanelRateLimitSettings)
