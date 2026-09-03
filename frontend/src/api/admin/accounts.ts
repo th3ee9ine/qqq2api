@@ -336,7 +336,7 @@ export async function revokeOpenAISessions(
 export async function trustOpenAISession(id: number, sessionId?: string): Promise<{ message: string }> {
   const { data } = await apiClient.post<{ message: string }>(
     `/admin/openai/accounts/${id}/sessions/trust`,
-    sessionId ? { session_id: sessionId } : undefined
+    sessionId ? { session_id: sessionId } : {}
   )
   return data
 }

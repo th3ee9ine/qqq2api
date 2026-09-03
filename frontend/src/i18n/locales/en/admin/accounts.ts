@@ -1529,6 +1529,7 @@ export default {
           OPENAI_SESSION_TRUST_PROXY_UNAVAILABLE: 'The account proxy could not connect to ChatGPT. Test or replace the proxy and retry.',
           OPENAI_SESSION_TRUST_REQUEST_FAILED: 'The current network could not connect to ChatGPT. Check the network and retry.',
           OPENAI_SESSION_TRUST_UPSTREAM_ERROR: 'OpenAI rejected the trust-device request. Refresh the account authorization and retry.',
+          OPENAI_SESSION_TRUST_PERSIST_FAILED: 'Failed to save the trusted-device state. Retry shortly.',
           OPENAI_CURRENT_SESSION_UNKNOWN: 'The current device could not be identified. Refresh the session list and retry.',
         },
         cleanup: {

@@ -20,10 +20,18 @@ import (
 var (
 	chatGPTAccountSessionsURL      = "https://chatgpt.com/backend-api/accounts/sessions"
 	chatGPTAccountSessionRevokeURL = "https://chatgpt.com/backend-api/accounts/sessions/revoke"
-	chatGPTAccountSessionTrustURL  = "https://chatgpt.com/backend-api/accounts/sessions/trust"
 )
 
 const maxOpenAIAccountSessionBatchSize = 50
+
+// OpenAI's Active sessions API exposes listing and revocation, but does not
+// expose a mutation for promoting a session to a trusted device.  Keep the
+// administrator's explicit trust choice in the account extra projection so it
+// survives refreshes and is applied consistently by both session UIs.
+const (
+	OpenAITrustedSessionIDsExtraKey = "openai_trusted_session_ids"
+	maxOpenAITrustedSessionIDs      = 128
+)
 
 // The active-sessions endpoint normally returns one row per device.  Some
 // response versions additionally nest concrete session records below a
@@ -135,6 +143,11 @@ func (s *OpenAIQuotaService) ListSessions(ctx context.Context, accountID int64) 
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSIONS_INVALID_RESPONSE", "failed to decode upstream response: %v", err)
 	}
+	// Trusted-device promotion is a local admin preference because the upstream
+	// Active sessions API currently has no trust-mutation endpoint.  A stale or
+	// unavailable account snapshot must not make an otherwise valid upstream
+	// session query fail, so merge this projection best-effort.
+	s.applyLocalTrustedSessionMarkers(ctx, accountID, result)
 	result.FetchedAt = time.Now().Unix()
 	return result, nil
 }
@@ -212,10 +225,10 @@ func (s *OpenAIQuotaService) RevokeSessions(ctx context.Context, accountID int64
 	return result, nil
 }
 
-// TrustSession marks a ChatGPT device session as trusted.  The admin UI only
-// exposes this action for the current/local device; the upstream control-plane
-// endpoint still accepts the concrete session identifier so the operation is
-// idempotent and remains safe when a device contains multiple app sessions.
+// TrustSession marks a ChatGPT device session as trusted in the account's
+// local session projection. The upstream Active sessions API exposes listing
+// and revocation only, so persisting the explicit admin choice locally keeps it
+// stable across refreshes without relying on an unsupported mutation route.
 func (s *OpenAIQuotaService) TrustSession(ctx context.Context, accountID int64, sessionID string) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -224,14 +237,52 @@ func (s *OpenAIQuotaService) TrustSession(ctx context.Context, accountID int64, 
 	if sessionID == "" || len(sessionID) > 512 {
 		return infraerrors.New(http.StatusBadRequest, "OPENAI_SESSION_INVALID_ID", "session id is invalid")
 	}
-
-	callCtx, cancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
-	defer cancel()
-	client, headers, proxyURL, err := s.prepareSessionRevoke(callCtx, accountID)
-	if err != nil {
-		return err
+	if s == nil || s.accountRepo == nil {
+		return infraerrors.New(http.StatusInternalServerError, "OPENAI_SESSION_TRUST_NOT_CONFIGURED", "openai account repository is not configured")
 	}
-	return trustOpenAIAccountSession(callCtx, client, headers, proxyURL, accountID, sessionID)
+
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		return infraerrors.New(http.StatusNotFound, "OPENAI_QUOTA_ACCOUNT_NOT_FOUND", "account not found")
+	}
+	if account.Platform != PlatformOpenAI {
+		return infraerrors.New(http.StatusBadRequest, "OPENAI_QUOTA_INVALID_PLATFORM", "account is not an OpenAI account")
+	}
+	if account.Type != AccountTypeOAuth {
+		return infraerrors.New(http.StatusBadRequest, "OPENAI_QUOTA_INVALID_TYPE", "account is not an OAuth account")
+	}
+	// Shadow accounts share the parent's credentials and therefore the parent's
+	// session projection.  Persist the marker on that parent so all account
+	// views resolve the same trusted state.
+	storageAccount := account
+	if account.IsShadow() {
+		storageAccount, err = resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil || storageAccount == nil {
+			return infraerrors.New(http.StatusBadRequest, "OPENAI_SESSION_TRUST_ACCOUNT_INVALID", "the account cannot store trusted session state")
+		}
+	}
+
+	trustedIDs := openAITrustedSessionIDs(storageAccount)
+	for _, trustedID := range trustedIDs {
+		if trustedID == sessionID {
+			return nil
+		}
+	}
+	if len(trustedIDs) >= maxOpenAITrustedSessionIDs {
+		return infraerrors.Newf(http.StatusBadRequest, "OPENAI_SESSION_TRUST_LIMIT_REACHED", "at most %d trusted sessions can be stored", maxOpenAITrustedSessionIDs)
+	}
+	trustedIDs = append(trustedIDs, sessionID)
+	if err := s.accountRepo.UpdateExtra(ctx, storageAccount.ID, map[string]any{
+		OpenAITrustedSessionIDsExtraKey: trustedIDs,
+	}); err != nil {
+		return infraerrors.Newf(http.StatusInternalServerError, "OPENAI_SESSION_TRUST_PERSIST_FAILED", "failed to persist trusted session state: %v", err)
+	}
+	if storageAccount.Extra == nil {
+		storageAccount.Extra = make(map[string]any)
+	}
+	storageAccount.Extra[OpenAITrustedSessionIDsExtraKey] = append([]string(nil), trustedIDs...)
+	slog.Info("openai_session_trust_local_success", "account_id", accountID, "storage_account_id", storageAccount.ID)
+	return nil
 }
 
 // TrustCurrentSession resolves the authoritative current device first, then
@@ -309,35 +360,82 @@ func revokeOpenAIAccountSession(
 	return nil
 }
 
-func trustOpenAIAccountSession(
-	ctx context.Context,
-	client *req.Client,
-	headers map[string]string,
-	proxyURL string,
-	accountID int64,
-	sessionID string,
-) error {
-	resp, err := client.R().
-		SetContext(ctx).
-		SetHeaders(headers).
-		SetBody(map[string]string{"session_id": sessionID}).
-		Post(chatGPTAccountSessionTrustURL)
-	if err != nil {
-		if strings.TrimSpace(proxyURL) != "" {
-			slog.Warn("openai_session_trust_proxy_unavailable", "account_id", accountID)
-			return infraerrors.New(http.StatusBadGateway, "OPENAI_SESSION_TRUST_PROXY_UNAVAILABLE", "the account proxy could not connect to ChatGPT")
-		}
-		return infraerrors.Newf(http.StatusBadGateway, "OPENAI_SESSION_TRUST_REQUEST_FAILED", "upstream request failed: %v", err)
+func (s *OpenAIQuotaService) applyLocalTrustedSessionMarkers(ctx context.Context, accountID int64, result *OpenAIAccountSessionList) {
+	if s == nil || s.accountRepo == nil || result == nil || len(result.Sessions) == 0 {
+		return
 	}
-	if !resp.IsSuccessState() {
-		slog.Warn("openai_session_trust_failed", "account_id", accountID, "status", resp.StatusCode)
-		if resp.StatusCode == http.StatusNotFound {
-			return infraerrors.New(http.StatusNotFound, "OPENAI_SESSION_NOT_FOUND", "session no longer exists")
-		}
-		return infraerrors.Newf(mapUpstreamStatus(resp.StatusCode), "OPENAI_SESSION_TRUST_UPSTREAM_ERROR", "upstream returned %d", resp.StatusCode)
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		return
 	}
-	slog.Info("openai_session_trust_success", "account_id", accountID)
-	return nil
+	if account.IsShadow() {
+		account, err = resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil || account == nil {
+			return
+		}
+	}
+	trusted := openAITrustedSessionIDSet(account)
+	if len(trusted) == 0 {
+		return
+	}
+	for index := range result.Sessions {
+		id := strings.TrimSpace(result.Sessions[index].ID)
+		if id != "" {
+			if _, ok := trusted[id]; ok {
+				result.Sessions[index].Trusted = true
+			}
+		}
+	}
+}
+
+func openAITrustedSessionIDs(account *Account) []string {
+	if account == nil {
+		return nil
+	}
+	ids := make([]string, 0, maxOpenAITrustedSessionIDs)
+	seen := make(map[string]struct{}, maxOpenAITrustedSessionIDs)
+	appendID := func(raw any) {
+		id := strings.TrimSpace(sessionScalarString(raw))
+		if id == "" || len(id) > 512 {
+			return
+		}
+		if _, exists := seen[id]; exists {
+			return
+		}
+		if len(ids) >= maxOpenAITrustedSessionIDs {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	raw, ok := account.Extra[OpenAITrustedSessionIDsExtraKey]
+	if !ok {
+		return ids
+	}
+	switch typed := raw.(type) {
+	case []string:
+		for _, id := range typed {
+			appendID(id)
+		}
+	case []any:
+		for _, id := range typed {
+			appendID(id)
+		}
+	case string:
+		// Accept a legacy single-value projection so upgrades do not discard a
+		// previously selected device.
+		appendID(typed)
+	}
+	return ids
+}
+
+func openAITrustedSessionIDSet(account *Account) map[string]struct{} {
+	ids := openAITrustedSessionIDs(account)
+	set := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		set[id] = struct{}{}
+	}
+	return set
 }
 
 func normalizeOpenAIAccountSessionIDs(sessionIDs []string) ([]string, error) {

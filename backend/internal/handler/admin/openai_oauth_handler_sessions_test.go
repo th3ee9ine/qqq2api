@@ -147,6 +147,30 @@ func TestOpenAITrustSession(t *testing.T) {
 	require.Equal(t, "Device session marked as trusted", envelope.Data["message"])
 }
 
+func TestOpenAITrustSessionAcceptsChunkedEmptyBodyForPathSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := &openAIAccountSessionServiceStub{}
+	handler := &OpenAIOAuthHandler{sessionService: stub}
+	router := gin.New()
+	router.POST("/api/v1/admin/openai/accounts/:id/sessions/:session_id/trust", handler.TrustSession)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/admin/openai/accounts/42/sessions/sess-path/trust",
+		strings.NewReader(""),
+	)
+	// Axios/fetch may use chunked transfer encoding, which reports a negative
+	// ContentLength even when the request body is empty.
+	request.ContentLength = -1
+	request.Header.Set("content-type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, int64(42), stub.accountID)
+	require.Equal(t, "sess-path", stub.trustedSessionID)
+}
+
 func TestOpenAIListSessionsPropagatesServiceError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := &OpenAIOAuthHandler{sessionService: &openAIAccountSessionServiceStub{listErr: errors.New("upstream failed")}}

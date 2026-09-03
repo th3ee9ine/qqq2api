@@ -54,6 +54,7 @@ export default {
       OPENAI_SESSION_TRUST_PROXY_UNAVAILABLE: '账号代理无法连接 ChatGPT，请检测代理后重试',
       OPENAI_SESSION_TRUST_REQUEST_FAILED: '当前网络无法连接 ChatGPT，请检查网络后重试',
       OPENAI_SESSION_TRUST_UPSTREAM_ERROR: 'OpenAI 拒绝了设置受信任设备请求，请刷新账号授权后重试',
+      OPENAI_SESSION_TRUST_PERSIST_FAILED: '受信任设备状态保存失败，请稍后重试',
     },
   },
 }

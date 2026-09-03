@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -677,9 +678,55 @@ func TestOpenAIAccountSessionServiceListsRevokesAndTrusts(t *testing.T) {
 	require.NoError(t, err)
 	err = svc.TrustSession(context.Background(), account.ID, "us_session-current")
 	require.NoError(t, err)
-	require.Equal(t, []string{http.MethodGet, http.MethodPost, http.MethodPost}, methods)
-	require.Equal(t, []string{"/backend-api/accounts/sessions", "/backend-api/accounts/sessions/revoke", "/backend-api/accounts/sessions/trust"}, paths)
-	require.Equal(t, []map[string]string{{"session_id": "us_session-test"}, {"session_id": "us_session-current"}}, postBodies)
+	require.Equal(t, []string{http.MethodGet, http.MethodPost}, methods)
+	require.Equal(t, []string{"/backend-api/accounts/sessions", "/backend-api/accounts/sessions/revoke"}, paths)
+	require.Equal(t, []map[string]string{{"session_id": "us_session-test"}}, postBodies)
+	require.Equal(t, map[string]any{
+		OpenAITrustedSessionIDsExtraKey: []string{"us_session-current"},
+	}, repo.extraUpdates[account.ID])
+}
+
+func TestOpenAIAccountSessionServiceListMergesLocalTrustedSessions(t *testing.T) {
+	account := &Account{
+		ID:       73,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			OpenAITrustedSessionIDsExtraKey: []any{"sess-trusted", "sess-trusted"},
+		},
+		Credentials: map[string]any{"chatgpt_account_id": "acct-local-trust"},
+	}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	cache := &stubQuotaTokenCache{tokens: map[string]string{OpenAITokenCacheKey(account): "access-local-trust"}}
+	tokenProvider := NewOpenAITokenProvider(repo, cache, nil)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"sessions":[{"id":"sess-trusted"},{"id":"sess-other","can_revoke":true}]}`))
+	}))
+	defer srv.Close()
+
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	list, err := svc.ListSessions(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Len(t, list.Sessions, 2)
+	require.True(t, list.Sessions[0].Trusted)
+	require.False(t, list.Sessions[1].Trusted)
+}
+
+func TestOpenAIAccountSessionServiceTrustPersistsFailure(t *testing.T) {
+	account := &Account{
+		ID:          74,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-trust-error"},
+	}
+	repo := &stubQuotaAccountRepo{
+		accounts:       map[int64]*Account{account.ID: account},
+		extraUpdateErr: errors.New("database unavailable"),
+	}
+	svc := NewOpenAIQuotaService(repo, nil, nil, nil)
+	err := svc.TrustSession(context.Background(), account.ID, "sess-trusted")
+	require.Equal(t, "OPENAI_SESSION_TRUST_PERSIST_FAILED", infraerrors.Reason(err))
 }
 
 func TestOpenAIAccountSessionServiceBatchRevokeReportsPartialSuccess(t *testing.T) {

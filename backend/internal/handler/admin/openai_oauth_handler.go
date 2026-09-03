@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -473,8 +474,8 @@ func (h *OpenAIOAuthHandler) TrustSession(c *gin.Context) {
 	// Keep an empty body valid for current-session-aware integrations.  A
 	// malformed non-empty body is still rejected rather than silently trusting a
 	// different session.
-	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&req); err != nil {
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
 			response.BadRequest(c, "Invalid request: "+err.Error())
 			return
 		}
