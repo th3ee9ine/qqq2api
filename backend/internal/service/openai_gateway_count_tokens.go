@@ -482,7 +482,7 @@ func (s *OpenAIGatewayService) buildInputTokensUpstreamRequest(
 	// stale or mismatched client UA cannot leave an inconsistent Originator.
 	// API-key relays intentionally retain their provider-specific headers.
 	if account.IsOpenAIOAuthLike() {
-		ApplyCodexCanonicalAuthIdentity(req.Header)
+		applyCodexAuthIdentityForAccount(req.Header, account)
 	}
 
 	return req, nil

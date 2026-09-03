@@ -209,7 +209,7 @@ func registerAgentIdentityTask(ctx context.Context, account *Account) (string, e
 	req.Header.Set("Accept", "application/json")
 	// task/register 同样属于 auth.openai.com 凭据面：使用当前官方稳定版
 	// 生成的 UA 与配套 Originator，但保持原生语义不发送 Responses Version。
-	ApplyCodexCanonicalAuthIdentity(req.Header)
+	applyCodexAuthIdentityForAccount(req.Header, account)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", errors.New("agent task registration request failed")

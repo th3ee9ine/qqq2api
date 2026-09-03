@@ -545,6 +545,9 @@ func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, account
 			return nil, "", fmt.Errorf("agent identity shadow credentials are unavailable")
 		}
 	}
+	// Account-local device identity takes precedence over the process default
+	// for every Codex control-plane request (sessions, quota and reset calls).
+	headers = buildCodexCommonHeadersForAccount(account, accessToken, chatGPTAccountID, fedRAMP)
 	if !account.IsOpenAIAgentIdentity() {
 		return headers, "", nil
 	}
@@ -577,6 +580,10 @@ func (s *OpenAIQuotaService) redactQuotaErrorBody(ctx context.Context, accountID
 // buildCodexCommonHeaders sets the request headers expected by the chatgpt.com
 // backend so calls succeed past Cloudflare/WASM checks.
 func buildCodexCommonHeaders(accessToken, chatGPTAccountID string, fedRAMP bool) map[string]string {
+	return buildCodexCommonHeadersForAccount(nil, accessToken, chatGPTAccountID, fedRAMP)
+}
+
+func buildCodexCommonHeadersForAccount(account *Account, accessToken, chatGPTAccountID string, fedRAMP bool) map[string]string {
 	headers := map[string]string{
 		"authorization":      "Bearer " + accessToken,
 		"chatgpt-account-id": chatGPTAccountID,
@@ -594,18 +601,9 @@ func buildCodexCommonHeaders(accessToken, chatGPTAccountID string, fedRAMP bool)
 	// Quota/control-plane calls use the same credential-face identity as the
 	// auth endpoints.  Keep Originator and User-Agent paired and sourced from
 	// the single canonical resolver (including runtime version synchronization).
-	identityHeaders := make(http.Header, 2)
-	ApplyCodexCanonicalAuthIdentity(identityHeaders)
-	if userAgent := identityHeaders.Get("user-agent"); userAgent != "" {
-		headers["user-agent"] = userAgent
-	} else {
-		headers["user-agent"] = codexCLIUserAgent
-	}
-	if originator := identityHeaders.Get("originator"); originator != "" {
-		headers["originator"] = originator
-	} else {
-		headers["originator"] = openaiQuotaCodexOriginator
-	}
+	identity := resolveCodexOutboundIdentityForAccount(account)
+	headers["user-agent"] = identity.userAgent
+	headers["originator"] = identity.originator
 	return headers
 }
 

@@ -678,7 +678,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 			req.Header.Set("accept", "text/event-stream")
 		}
 		if req.Header.Get("originator") == "" {
-			req.Header.Set("originator", resolveCodexOutboundIdentity("").originator)
+			req.Header.Set("originator", resolveCodexOutboundIdentityForAccount(account).originator)
 		}
 		// 用隔离后的 session 标识符覆盖客户端透传值，防止跨用户会话碰撞。
 		if clientSessionID == "" {
@@ -701,7 +701,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	}
 
 	// 透传模式也支持账户自定义 User-Agent 与 ForceCodexCLI 兜底。
-	customUA := account.GetOpenAIUserAgent()
+	customUA := account.GetOpenAICodexUserAgent()
 	if customUA != "" {
 		req.Header.Set("user-agent", customUA)
 	}
@@ -718,7 +718,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// （User-Agent / originator 配套，Version 使用官方最新稳定版同步值），
 	// 客户端自报身份不会到达上游。
 	if account.UsesOpenAICodexProtocol() {
-		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		enforceCodexIdentityHeadersWithAccount(req.Header, account)
 	}
 
 	if req.Header.Get("content-type") == "" {

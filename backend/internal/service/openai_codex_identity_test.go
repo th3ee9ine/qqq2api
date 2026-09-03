@@ -198,6 +198,82 @@ func TestEnforceCodexIdentityHeadersWithAccountOverrideUA(t *testing.T) {
 	})
 }
 
+func TestResolveCodexOutboundIdentityForAccount(t *testing.T) {
+	canonical := resolveCodexOutboundIdentity("")
+	t.Run("prefers local device session identity", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"user_agent": "codex_cli_rs/0.125.0 (Linux; x86_64)",
+			},
+			Extra: map[string]any{
+				"openai_local_device_user_agent": "codex_vscode/0.125.0 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.125.0)",
+				"openai_local_device_originator": "codex_vscode",
+			},
+		}
+		identity := resolveCodexOutboundIdentityForAccount(account)
+		require.Equal(t, "codex_vscode", identity.originator)
+		require.Contains(t, identity.userAgent, "codex_vscode/")
+		require.Equal(t, canonical.version, identity.version)
+	})
+
+	t.Run("nested local session values are supported", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				"openai_local_device_session": map[string]any{
+					"userAgent":  "codex-tui/0.125.0 (Linux; x86_64)",
+					"Originator": "codex-tui",
+				},
+			},
+		}
+		identity := resolveCodexOutboundIdentityForAccount(account)
+		require.Equal(t, "codex-tui", identity.originator)
+		require.Contains(t, identity.userAgent, "codex-tui/")
+	})
+
+	t.Run("credential pair from account import is supported", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Credentials: map[string]any{
+				"user_agent": "codex_cli_rs/0.125.0 (Linux; x86_64)",
+				"originator": "codex_cli_rs",
+			},
+		}
+		identity := resolveCodexOutboundIdentityForAccount(account)
+		require.Equal(t, "codex_cli_rs", identity.originator)
+		require.Contains(t, identity.userAgent, "codex_cli_rs/")
+	})
+
+	t.Run("empty or malformed local value falls back to canonical identity", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				"openai_local_device_user_agent": "Mozilla/5.0",
+				"openai_local_device_originator": "codex_vscode",
+			},
+		}
+		identity := resolveCodexOutboundIdentityForAccount(account)
+		require.Equal(t, canonical, identity)
+	})
+
+	t.Run("incomplete or mismatched local pair falls back atomically", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				"openai_local_device_user_agent": "codex_vscode/0.125.0 (Mac OS X 14.0; arm64)",
+				"openai_local_device_originator": "codex-tui",
+			},
+		}
+		require.Equal(t, canonical, resolveCodexOutboundIdentityForAccount(account))
+	})
+}
+
 // 规范身份跟随注入的解析器（后台面板 UA / 自动同步版本号），无需重启或发版。
 //
 // 不得给本用例加 t.Parallel()：它改写进程级解析器。

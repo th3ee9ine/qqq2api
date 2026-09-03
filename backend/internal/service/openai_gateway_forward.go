@@ -1434,7 +1434,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 
 	// Apply custom User-Agent if configured
-	customUA := account.GetOpenAIUserAgent()
+	customUA := account.GetOpenAICodexUserAgent()
 	if customUA != "" {
 		req.Header.Set("user-agent", customUA)
 	}
@@ -1456,7 +1456,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 官方最新稳定版同步值。
 	// 客户端自报身份不参与构造，浏览器型 UA 也因此不会再到达上游（原浏览器 UA 兜底已被吸收）。
 	if account.UsesOpenAICodexProtocol() {
-		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		enforceCodexIdentityHeadersWithAccount(req.Header, account)
 	}
 
 	// Ensure required headers exist
@@ -1482,5 +1482,5 @@ func (s *OpenAIGatewayService) codexIdentityOverrideUA(account *Account) string 
 	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		return ""
 	}
-	return account.GetOpenAIUserAgent()
+	return account.GetOpenAICodexUserAgent()
 }

@@ -262,7 +262,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	} else {
 		req.Header.Set("Originator", canonical.originator)
 	}
-	if customUA := account.GetOpenAIUserAgent(); customUA != "" {
+	if customUA := account.GetOpenAICodexUserAgent(); customUA != "" {
 		req.Header.Set("User-Agent", customUA)
 	} else if userAgent := openAIAlphaSearchInboundHeader(c, "User-Agent"); userAgent != "" {
 		req.Header.Set("User-Agent", userAgent)
@@ -279,7 +279,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 		req.Header.Set("Conversation_ID", isolated)
 	}
 	applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), apiKeyID)
-	enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+	enforceCodexIdentityHeadersWithAccount(req.Header, account)
 	account.ApplyHeaderOverrides(req.Header)
 	stripOpenAILegacyResponsesBeta(req.Header)
 	return req, nil
@@ -409,7 +409,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 		} else {
 			req.Header.Set("Originator", canonical.originator)
 		}
-		if customUA := account.GetOpenAIUserAgent(); customUA != "" {
+		if customUA := account.GetOpenAICodexUserAgent(); customUA != "" {
 			req.Header.Set("User-Agent", customUA)
 		} else if userAgent := openAIAlphaSearchInboundHeader(c, "User-Agent"); userAgent != "" {
 			req.Header.Set("User-Agent", userAgent)
@@ -419,7 +419,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 		if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 			req.Header.Set("User-Agent", canonical.userAgent)
 		}
-		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		enforceCodexIdentityHeadersWithAccount(req.Header, account)
 	}
 
 	account.ApplyHeaderOverrides(req.Header)

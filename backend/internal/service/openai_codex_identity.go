@@ -19,6 +19,11 @@ const codexUpstreamMinVersion = "0.144.0"
 // codexClientVersionMaxLen 官方版本号均为短 ASCII 串，远低于此上限。
 const codexClientVersionMaxLen = 64
 
+// Account-local device values are persisted administrator data.  Keep their
+// header footprint bounded and reject control/non-ASCII bytes before they can
+// reach net/http's request writer.
+const codexAccountLocalUserAgentMaxLen = 512
+
 // codexClientVersionPattern 允许 0.146.0 与 0.147.0-alpha.4 两类官方形态。
 var codexClientVersionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z.]+)?$`)
 
@@ -153,6 +158,19 @@ func ApplyCodexCanonicalAuthIdentity(h http.Header) {
 	h.Del("version")
 }
 
+// applyCodexAuthIdentityForAccount writes the account-aware identity for
+// credential/control-plane requests.  These endpoints intentionally omit the
+// Responses Version header, matching the native auth client contract.
+func applyCodexAuthIdentityForAccount(h http.Header, account *Account) {
+	if h == nil {
+		return
+	}
+	identity := resolveCodexOutboundIdentityForAccount(account)
+	h.Set("user-agent", identity.userAgent)
+	h.Set("originator", identity.originator)
+	h.Del("version")
+}
+
 // CodexCanonicalClientVersion 返回 Responses/WS 使用的当前 Codex 版本。
 func CodexCanonicalClientVersion() string {
 	return currentCodexResponsesVersion()
@@ -241,6 +259,69 @@ func resolveCodexOutboundIdentity(candidateUA string) codexOutboundIdentity {
 	}
 }
 
+// resolveCodexOutboundIdentityForAccount prefers the identity captured from
+// an account's local OpenAI device session.  A malformed or incomplete local
+// value falls back atomically to the process-wide canonical identity so that
+// User-Agent, Originator and Version can never leave the gateway mismatched.
+func resolveCodexOutboundIdentityForAccount(account *Account) codexOutboundIdentity {
+	if account == nil || !account.UsesOpenAICodexProtocol() {
+		return resolveCodexOutboundIdentity("")
+	}
+
+	localOriginator := strings.TrimSpace(account.GetOpenAILocalDeviceOriginator())
+	localUA := account.GetOpenAILocalDeviceUserAgent()
+	if localUA == "" && localOriginator != "" {
+		// Some account exports store the pair as credentials.user_agent plus
+		// credentials.originator (or flat Extra fields) rather than in the
+		// namespaced session object.
+		localUA = strings.TrimSpace(account.GetExtraString("user_agent"))
+		if localUA == "" {
+			localUA = strings.TrimSpace(account.GetOpenAIUserAgent())
+		}
+	}
+	candidateUA := strings.TrimSpace(localUA)
+	if candidateUA == "" {
+		// Keep compatibility with historical account imports that only carry
+		// credentials.user_agent and derive their Originator from the UA.
+		candidateUA = account.GetOpenAICodexUserAgent()
+	}
+	identity := resolveCodexOutboundIdentity(candidateUA)
+	if strings.TrimSpace(candidateUA) == "" {
+		return identity
+	}
+
+	// PairCodexClientIdentity is the authoritative sanity check for a local
+	// session UA.  resolveCodexOutboundIdentity already falls back when this
+	// check fails; only a valid pair is eligible for a stored Originator.
+	pairedOriginator, _, ok := openai.PairCodexClientIdentity(candidateUA)
+	if !ok || !isSaneCodexAccountLocalUserAgent(candidateUA) {
+		return resolveCodexOutboundIdentity("")
+	}
+	if localUA != "" {
+		// An explicitly stored local session is an atomic pair.  If its
+		// Originator is missing or no longer matches the UA, discard the whole
+		// local value rather than sending a mixed identity upstream.
+		if localOriginator == "" || !strings.EqualFold(localOriginator, pairedOriginator) {
+			return resolveCodexOutboundIdentity("")
+		}
+	}
+	return identity
+}
+
+func isSaneCodexAccountLocalUserAgent(userAgent string) bool {
+	userAgent = strings.TrimSpace(userAgent)
+	if userAgent == "" || len(userAgent) > codexAccountLocalUserAgentMaxLen ||
+		NormalizeCodexClientVersion(openai.CodexUserAgentVersion(userAgent)) == "" {
+		return false
+	}
+	for i := 0; i < len(userAgent); i++ {
+		if value := userAgent[i]; value < 0x20 || value > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // ensureCodexIdentityHeaders 补齐 OAuth（ChatGPT 内部接口）出站请求所需的 Codex 身份头。
 // 已有 User-Agent 与 version 保持不变，交给紧随其后的 enforceCodexIdentityHeaders 收口。
 // 本函数只管理客户端身份，不注入或改写上游能力协商头。
@@ -302,6 +383,36 @@ func enforceCodexIdentityHeadersWithUA(h http.Header, overrideUA string) {
 		return
 	}
 	identity := resolveCodexOutboundIdentity(overrideUA)
+	h.Set("user-agent", identity.userAgent)
+	h.Set("originator", identity.originator)
+	h.Set("version", identity.version)
+}
+
+// enforceCodexIdentityHeadersWithAccount is the account-aware counterpart of
+// enforceCodexIdentityHeadersWithUA.  It gives a valid local device-session
+// identity precedence over the global default while retaining the existing
+// opt-out pairing semantics.
+func enforceCodexIdentityHeadersWithAccount(h http.Header, account *Account) {
+	if h == nil || h.Get("originator") == "" {
+		return
+	}
+	if !codexIdentityEnforcement.Load() {
+		if account != nil {
+			if account.GetOpenAILocalDeviceUserAgent() != "" {
+				identity := resolveCodexOutboundIdentityForAccount(account)
+				h.Set("user-agent", identity.userAgent)
+				h.Set("originator", identity.originator)
+				h.Set("version", identity.version)
+				return
+			}
+			if ua := account.GetOpenAICodexUserAgent(); ua != "" {
+				h.Set("user-agent", ua)
+			}
+		}
+		pairCodexIdentityHeaders(h)
+		return
+	}
+	identity := resolveCodexOutboundIdentityForAccount(account)
 	h.Set("user-agent", identity.userAgent)
 	h.Set("originator", identity.originator)
 	h.Set("version", identity.version)

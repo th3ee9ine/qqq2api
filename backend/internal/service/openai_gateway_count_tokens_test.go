@@ -59,6 +59,31 @@ func TestBuildInputTokensUpstreamRequestOAuthUsesCanonicalAuthIdentity(t *testin
 	require.Empty(t, req.Header.Get("Version"), "input_tokens uses the auth identity pair, not Responses Version")
 }
 
+func TestBuildInputTokensUpstreamRequestOAuthPrefersAccountLocalIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/input_tokens", nil)
+
+	account := &Account{
+		ID:       503,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"openai_local_device_user_agent": "codex-tui/0.125.0 (Mac OS X 14.0; arm64) iTerm",
+			"openai_local_device_originator": "codex-tui",
+		},
+	}
+	req, err := (&OpenAIGatewayService{}).buildInputTokensUpstreamRequest(
+		context.Background(), c, account,
+		[]byte(`{"model":"gpt-5.4","input":"hello"}`),
+		"oauth-token",
+	)
+	require.NoError(t, err)
+	require.Equal(t, "codex-tui", req.Header.Get("Originator"))
+	require.Contains(t, req.Header.Get("User-Agent"), "codex-tui/")
+	require.Empty(t, req.Header.Get("Version"))
+}
+
 func TestBuildInputTokensUpstreamRequestAPIKeyKeepsProviderIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

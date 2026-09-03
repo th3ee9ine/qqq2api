@@ -29,6 +29,22 @@ func TestBuildCodexCommonHeadersUsesCanonicalAuthIdentity(t *testing.T) {
 	require.False(t, hasVersion)
 }
 
+func TestBuildCodexCommonHeadersForAccountPrefersLocalDeviceIdentity(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Extra: map[string]any{
+			"openai_local_device_user_agent": "codex_vscode/0.125.0 (Linux 6.8; x86_64) vscode",
+			"openai_local_device_originator": "codex_vscode",
+		},
+	}
+	headers := buildCodexCommonHeadersForAccount(account, "token", "account", false)
+	require.Equal(t, "codex_vscode", headers["originator"])
+	require.Contains(t, headers["user-agent"], "codex_vscode/")
+	_, hasVersion := headers["version"]
+	require.False(t, hasVersion)
+}
+
 func TestParseOpenAIRateLimitResetCreditDetails_PreservesAvailableCreditOrder(t *testing.T) {
 	body := []byte(`{
 		"availableCount":"2",

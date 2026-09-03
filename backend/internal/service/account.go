@@ -1721,6 +1721,140 @@ func (a *Account) GetOpenAIUserAgent() string {
 	return a.GetCredential("user_agent")
 }
 
+const (
+	// OpenAILocalDeviceUserAgentExtraKey and OpenAILocalDeviceOriginatorExtraKey
+	// are the canonical account Extra keys for an imported local Codex session.
+	OpenAILocalDeviceUserAgentExtraKey  = "openai_local_device_user_agent"
+	OpenAILocalDeviceOriginatorExtraKey = "openai_local_device_originator"
+)
+
+// GetOpenAILocalDeviceUserAgent returns a User-Agent captured from the
+// account's local OpenAI device session.  Older account exports used several
+// names (and some stored the values in a nested session object), so reads are
+// deliberately tolerant while writes can converge on
+// openai_local_device_user_agent.
+func (a *Account) GetOpenAILocalDeviceUserAgent() string {
+	if a == nil || !a.IsOpenAI() {
+		return ""
+	}
+	for _, key := range []string{
+		OpenAILocalDeviceUserAgentExtraKey,
+		"openai_device_user_agent",
+		"openai_session_user_agent",
+		"local_device_user_agent",
+		"openai_local_device_ua",
+		"openai_device_ua",
+	} {
+		if value := strings.TrimSpace(a.GetExtraString(key)); value != "" {
+			return value
+		}
+		if value := strings.TrimSpace(a.GetCredential(key)); value != "" {
+			return value
+		}
+	}
+	for _, key := range []string{
+		"openai_local_device_session",
+		"openai_device_session",
+		"local_device_session",
+		"openai_current_device_session",
+		"openai_local_device",
+		"openai_device",
+		"current_device_session",
+	} {
+		if value := accountNestedString(a.Extra[key], "user_agent", "userAgent", "ua"); value != "" {
+			return value
+		}
+		if value := accountNestedString(a.Credentials[key], "user_agent", "userAgent", "ua"); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// GetOpenAILocalDeviceOriginator returns the Originator captured from the
+// account's local OpenAI device session.  The value is validated together
+// with the local User-Agent by the Codex identity resolver before it is sent
+// upstream.
+func (a *Account) GetOpenAILocalDeviceOriginator() string {
+	if a == nil || !a.IsOpenAI() {
+		return ""
+	}
+	for _, key := range []string{
+		OpenAILocalDeviceOriginatorExtraKey,
+		"openai_device_originator",
+		"openai_session_originator",
+		"local_device_originator",
+		"openai_originator",
+		"originator",
+	} {
+		if value := strings.TrimSpace(a.GetExtraString(key)); value != "" {
+			return value
+		}
+		if value := strings.TrimSpace(a.GetCredential(key)); value != "" {
+			return value
+		}
+	}
+	for _, key := range []string{
+		"openai_local_device_session",
+		"openai_device_session",
+		"local_device_session",
+		"openai_current_device_session",
+		"openai_local_device",
+		"openai_device",
+		"current_device_session",
+	} {
+		if value := accountNestedString(a.Extra[key], "originator", "Originator"); value != "" {
+			return value
+		}
+		if value := accountNestedString(a.Credentials[key], "originator", "Originator"); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// GetOpenAICodexUserAgent prefers the local device-session identity and falls
+// back to the legacy account credential used by existing imports.
+func (a *Account) GetOpenAICodexUserAgent() string {
+	if a == nil {
+		return ""
+	}
+	if local := a.GetOpenAILocalDeviceUserAgent(); local != "" {
+		return local
+	}
+	return strings.TrimSpace(a.GetOpenAIUserAgent())
+}
+
+func accountNestedString(value any, keys ...string) string {
+	switch item := value.(type) {
+	case map[string]any:
+		for _, key := range keys {
+			if raw, ok := item[key]; ok {
+				if text, ok := raw.(string); ok && strings.TrimSpace(text) != "" {
+					return strings.TrimSpace(text)
+				}
+			}
+		}
+	case map[string]string:
+		for _, key := range keys {
+			if text := strings.TrimSpace(item[key]); text != "" {
+				return text
+			}
+		}
+	case json.RawMessage:
+		var nested map[string]any
+		if json.Unmarshal(item, &nested) == nil {
+			return accountNestedString(nested, keys...)
+		}
+	case string:
+		var nested map[string]any
+		if json.Unmarshal([]byte(item), &nested) == nil {
+			return accountNestedString(nested, keys...)
+		}
+	}
+	return ""
+}
+
 func (a *Account) GetChatGPTAccountID() string {
 	if !a.IsOpenAIOAuthLike() {
 		return ""
