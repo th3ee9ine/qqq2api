@@ -44,6 +44,10 @@ func (c *Coordinator) Check(ctx context.Context, req Request) Decision {
 			legacy, _ := c.checkLegacy(ctx, req)
 			return prioritize(legacy, local)
 		}
+		if local := DetectCyberPolicyRisk(req); local != nil {
+			legacy, _ := c.checkLegacy(ctx, req)
+			return prioritize(legacy, local)
+		}
 	}
 	mode := ModeOff
 	if c.prompt != nil {
