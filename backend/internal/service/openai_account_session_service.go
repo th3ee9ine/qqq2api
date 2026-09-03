@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,32 @@ var (
 )
 
 const maxOpenAIAccountSessionBatchSize = 50
+
+// The active-sessions endpoint normally returns one row per device.  Some
+// response versions additionally nest concrete session records below a
+// device's `sessions`/`app_sessions` field.  Keep recursive expansion tightly
+// bounded: this parser consumes an upstream response and must not let a
+// malformed payload turn into unbounded CPU or memory use.
+const (
+	maxOpenAIAccountSessionNestedDepth = 8
+	maxOpenAIAccountSessionRows        = 4096
+)
+
+var openAIAccountSessionNestedCollectionKeys = []string{
+	"sessions",
+	"active_sessions",
+	"activeSessions",
+	"app_sessions",
+	"appSessions",
+	"session",
+}
+
+var openAIAccountSessionNestedWrapperKeys = []string{
+	"data",
+	"result",
+	"payload",
+	"items",
+}
 
 // OpenAIAccountSession is the stable, privacy-conscious projection exposed to
 // the admin UI. Upstream has used both snake_case and camelCase names, so the
@@ -44,8 +71,9 @@ type OpenAIAccountSession struct {
 }
 
 type OpenAIAccountSessionList struct {
-	Sessions  []OpenAIAccountSession `json:"sessions"`
-	FetchedAt int64                  `json:"fetched_at"`
+	Sessions     []OpenAIAccountSession `json:"sessions"`
+	FetchedAt    int64                  `json:"fetched_at"`
+	CurrentKnown bool                   `json:"current_known"`
 }
 
 type OpenAIAccountSessionRevokeFailure struct {
@@ -67,6 +95,9 @@ type OpenAIAccountSessionBatchRevokeResult struct {
 // the same refreshed OAuth token, proxy, and browser-compatible client as quota
 // requests.
 func (s *OpenAIQuotaService) ListSessions(ctx context.Context, accountID int64) (*OpenAIAccountSessionList, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
@@ -111,6 +142,9 @@ func (s *OpenAIQuotaService) ListSessions(ctx context.Context, accountID int64) 
 // contract uses POST /accounts/sessions/revoke with the unified session id in a
 // JSON body (rather than DELETE /accounts/sessions/{id}).
 func (s *OpenAIQuotaService) RevokeSession(ctx context.Context, accountID int64, sessionID string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" || len(sessionID) > 512 {
 		return infraerrors.New(http.StatusBadRequest, "OPENAI_SESSION_INVALID_ID", "session id is invalid")
@@ -129,6 +163,9 @@ func (s *OpenAIQuotaService) RevokeSession(ctx context.Context, accountID int64,
 // credential and one upstream client. Individual failures are returned in the
 // result so the UI can remove successful rows and keep failed rows selected.
 func (s *OpenAIQuotaService) RevokeSessions(ctx context.Context, accountID int64, sessionIDs []string) (*OpenAIAccountSessionBatchRevokeResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	normalizedIDs, err := normalizeOpenAIAccountSessionIDs(sessionIDs)
 	if err != nil {
 		return nil, err
@@ -257,22 +294,350 @@ func decodeOpenAIAccountSessions(body []byte) (*OpenAIAccountSessionList, error)
 	if !ok {
 		return nil, fmt.Errorf("sessions collection is missing")
 	}
-
 	currentSessionID := openAIAccountCurrentSessionID(root)
+	// A device row can contain concrete session records in a nested
+	// `sessions`/`app_sessions` collection.  Expand only records carrying an
+	// explicit session identifier; metadata-only app descriptors remain attached to
+	// their parent row.  The parent row is retained for compatibility with the
+	// flat `devices` contract and to avoid dropping a canonical device-level
+	// revoke token.
+	// Pass the envelope marker into expansion as well: a child can be identified
+	// as current solely by `current_session_id`, without carrying its own boolean
+	// marker.  In that shape the parent device token must still be protected.
+	items = expandOpenAIAccountSessionItems(items, currentSessionID)
+
+	// Keep track of whether upstream gave us an authoritative current-device
+	// marker.  A missing marker is deliberately distinguishable from a row
+	// whose Current value is simply false: callers that perform destructive
+	// operations (such as scheduled session cleanup) can fail closed rather
+	// than treating every row as a non-current device.
+	currentKnown := currentSessionID != ""
 	result := &OpenAIAccountSessionList{Sessions: make([]OpenAIAccountSession, 0, len(items))}
 	for _, item := range items {
 		row, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
+		if openAIAccountSessionCurrentMarkerPresent(row) {
+			currentKnown = true
+		}
 		session := decodeOpenAIAccountSession(row)
-		if currentSessionID != "" && session.ID == currentSessionID {
+		// `current_device_id` is not consistently the same identifier used by
+		// the revoke endpoint.  Some response versions point at a render/device
+		// id while each row carries the revocation token in `session_id`.
+		// Compare the envelope marker with every stable row/device identifier so
+		// we preserve the current device instead of silently treating it as an
+		// old session.  This helper only adds preservation candidates; it never
+		// broadens the set of sessions eligible for revocation.
+		if currentSessionID != "" && openAIAccountSessionMatchesCurrentID(row, currentSessionID) {
 			session.Current = true
 			session.CanRevoke = false
 		}
 		result.Sessions = append(result.Sessions, session)
 	}
+	result.CurrentKnown = currentKnown
 	return result, nil
+}
+
+type openAIAccountNestedSessionRow struct {
+	row  map[string]any
+	kind string
+}
+
+// expandOpenAIAccountSessionItems recursively discovers concrete child
+// session rows below device/session rows.  It intentionally leaves scalar
+// values and metadata-only objects alone; decodeOpenAIAccountSession already
+// ignores non-map items just as it did before nested expansion was added.
+func expandOpenAIAccountSessionItems(items []any, currentIDs ...string) []any {
+	if len(items) == 0 {
+		return items
+	}
+	currentID := ""
+	if len(currentIDs) > 0 {
+		currentID = strings.TrimSpace(currentIDs[0])
+	}
+	expanded := make([]any, 0, len(items))
+	for _, item := range items {
+		row, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, nested := range expandOpenAIAccountSessionRow(row, 0, currentID) {
+			expanded = append(expanded, nested)
+			if len(expanded) >= maxOpenAIAccountSessionRows {
+				return expanded
+			}
+		}
+	}
+	return expanded
+}
+
+// expandOpenAIAccountSessionRow keeps the device row and appends any concrete
+// nested session rows.  A child inherits the parent's device metadata and
+// current marker so a current device can never become revokable merely because
+// the upstream response represented its sessions at a deeper level.
+func expandOpenAIAccountSessionRow(row map[string]any, depth int, currentID string) []map[string]any {
+	if row == nil {
+		return nil
+	}
+	if depth >= maxOpenAIAccountSessionNestedDepth {
+		return []map[string]any{row}
+	}
+	children := collectOpenAIAccountNestedSessionRows(row, depth+1)
+	if len(children) == 0 {
+		return []map[string]any{row}
+	}
+
+	result := make([]map[string]any, 0, 1+len(children))
+	result = append(result, row)
+	parentID := openAIAccountSessionNestedID(row, "session")
+	parentMustBeProtected := false
+	for _, child := range children {
+		childID := openAIAccountSessionNestedID(child.row, child.kind)
+		// A nested representation of the same canonical device token should not
+		// create a duplicate row or duplicate revoke request.
+		if parentID != "" && childID != "" && parentID == childID {
+			continue
+		}
+		merged := mergeOpenAIAccountSessionParent(row, child.row, child.kind)
+		expandedChildren := expandOpenAIAccountSessionRow(merged, depth+1, currentID)
+		for _, expanded := range expandedChildren {
+			// A concrete nested session can identify the current device even when
+			// the parent device row has no marker of its own.  The parent may still
+			// carry the canonical device-level revoke token; preserving only the
+			// child would therefore let cleanup revoke the current device through
+			// the parent row.  Protect the parent whenever any descendant is
+			// positively identified as current, including envelope-ID matches.
+			if descendantCurrent, descendantMarked := openAIAccountSessionEffectiveCurrentMarker(expanded); descendantMarked && descendantCurrent {
+				parentMustBeProtected = true
+			}
+			if currentID != "" && openAIAccountSessionMatchesCurrentID(expanded, currentID) {
+				parentMustBeProtected = true
+			}
+			result = append(result, expanded)
+			if len(result) >= maxOpenAIAccountSessionRows {
+				return result
+			}
+		}
+	}
+	if parentMustBeProtected {
+		// Do not mutate the decoded root map: callers may reuse the raw payload
+		// in diagnostics/tests.  A shallow marker overlay is enough because the
+		// decoder only reads scalar current/capability fields from this row.
+		protectedParent := cloneOpenAIAccountSessionValue(row).(map[string]any)
+		protectedParent["current"] = true
+		protectedParent["can_revoke"] = false
+		result[0] = protectedParent
+	}
+	return result
+}
+
+// collectOpenAIAccountNestedSessionRows walks only the known nested
+// collection/wrapper keys.  It never treats arbitrary map keys as session
+// identifiers, which prevents a device/app metadata id from reaching the
+// revocation path accidentally.
+func collectOpenAIAccountNestedSessionRows(row map[string]any, depth int) []openAIAccountNestedSessionRow {
+	if row == nil || depth > maxOpenAIAccountSessionNestedDepth {
+		return nil
+	}
+	children := make([]openAIAccountNestedSessionRow, 0)
+	for _, key := range openAIAccountSessionNestedCollectionKeys {
+		raw, exists := row[key]
+		if !exists {
+			continue
+		}
+		children = append(children, collectOpenAIAccountNestedValue(raw, key, depth+1)...)
+	}
+	return children
+}
+
+func collectOpenAIAccountNestedValue(value any, kind string, depth int) []openAIAccountNestedSessionRow {
+	if depth > maxOpenAIAccountSessionNestedDepth {
+		return nil
+	}
+	children := make([]openAIAccountNestedSessionRow, 0)
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			children = append(children, collectOpenAIAccountNestedValue(item, kind, depth+1)...)
+			if len(children) >= maxOpenAIAccountSessionRows {
+				return children[:maxOpenAIAccountSessionRows]
+			}
+		}
+	case map[string]any:
+		if openAIAccountSessionNestedID(typed, kind) != "" {
+			children = append(children, openAIAccountNestedSessionRow{row: typed, kind: kind})
+			return children
+		}
+		// A wrapper may sit between the device and its child records.  Follow
+		// only explicit collection keys; arbitrary metadata objects are ignored.
+		for _, key := range openAIAccountSessionNestedWrapperKeys {
+			if nested, exists := typed[key]; exists {
+				children = append(children, collectOpenAIAccountNestedValue(nested, kind, depth+1)...)
+			}
+		}
+		for _, key := range openAIAccountSessionNestedCollectionKeys {
+			if nested, exists := typed[key]; exists {
+				children = append(children, collectOpenAIAccountNestedValue(nested, key, depth+1)...)
+			}
+		}
+	}
+	return children
+}
+
+// openAIAccountSessionNestedID deliberately uses explicit session aliases for
+// every nested collection.  A generic `id` can identify a device, product
+// installation, or render record rather than a revocable account session, so
+// it is never promoted into a revoke token during recursive expansion.
+func openAIAccountSessionNestedID(row map[string]any, kind string) string {
+	if row == nil {
+		return ""
+	}
+	if id := sessionString(row,
+		"session_id", "sessionId",
+		"unified_session_id", "unifiedSessionId",
+		"session_uuid", "sessionUuid",
+	); id != "" {
+		return id
+	}
+	return ""
+}
+
+func mergeOpenAIAccountSessionParent(parent, child map[string]any, kind string) map[string]any {
+	merged := make(map[string]any, len(parent)+len(child))
+	for key, value := range parent {
+		if isOpenAIAccountSessionNestedCollectionKey(key) {
+			continue
+		}
+		merged[key] = cloneOpenAIAccountSessionValue(value)
+	}
+
+	childID := openAIAccountSessionNestedID(child, kind)
+	if childID != "" {
+		// Remove inherited explicit ids before overlaying the child.  Otherwise a
+		// parent session_id would win over a child's unified_session_id in
+		// decodeOpenAIAccountSession's precedence order.
+		for _, key := range []string{
+			"session_id", "sessionId",
+			"unified_session_id", "unifiedSessionId",
+			"session_uuid", "sessionUuid",
+		} {
+			delete(merged, key)
+		}
+	}
+	for key, value := range child {
+		if isOpenAIAccountSessionNestedCollectionKey(key) {
+			// Keep child collections so the next recursion level can inspect them;
+			// parent collections were removed above to prevent re-expansion loops.
+			merged[key] = cloneOpenAIAccountSessionValue(value)
+			continue
+		}
+		if isOpenAIAccountSessionDeviceMapKey(key) {
+			if parentMap, ok := merged[key].(map[string]any); ok {
+				if childMap, ok := value.(map[string]any); ok {
+					merged[key] = mergeOpenAIAccountSessionMaps(parentMap, childMap)
+					continue
+				}
+			}
+		}
+		merged[key] = cloneOpenAIAccountSessionValue(value)
+	}
+
+	parentCurrent, parentMarked := openAIAccountSessionEffectiveCurrentMarker(parent)
+	childCurrent, childMarked := openAIAccountSessionEffectiveCurrentMarker(child)
+	if parentMarked {
+		// A positive parent marker covers every nested app/session on that device.
+		// This intentionally wins over a stale child false marker.
+		if parentCurrent {
+			merged["current"] = true
+		} else if !childMarked {
+			merged["current"] = false
+		}
+	} else if childMarked && childCurrent {
+		// Keep an explicit positive child marker visible even when the parent did
+		// not expose device-level provenance.
+		merged["current"] = true
+	}
+
+	// Preserve useful parent app labels without carrying the parent's nested
+	// collection back into recursion.  Child-specific client names take
+	// precedence when available.
+	if sessionString(child, "app_name", "appName", "application_name", "applicationName", "product", "client_name", "clientName") == "" {
+		if names := sessionJoinedNames(parent, "apps", "applications", "products", "app_sessions", "appSessions"); names != "" {
+			merged["app_name"] = names
+		}
+	}
+	if clientName := sessionString(child, "client_name", "clientName"); clientName != "" && sessionString(child, "app_name", "appName", "application_name", "applicationName", "product") == "" {
+		merged["app_name"] = clientName
+	}
+	return merged
+}
+
+func isOpenAIAccountSessionNestedCollectionKey(key string) bool {
+	for _, candidate := range openAIAccountSessionNestedCollectionKeys {
+		if key == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func isOpenAIAccountSessionDeviceMapKey(key string) bool {
+	return key == "device" || key == "device_info" || key == "deviceInfo"
+}
+
+func mergeOpenAIAccountSessionMaps(parent, child map[string]any) map[string]any {
+	merged := make(map[string]any, len(parent)+len(child))
+	for key, value := range parent {
+		merged[key] = cloneOpenAIAccountSessionValue(value)
+	}
+	for key, value := range child {
+		merged[key] = cloneOpenAIAccountSessionValue(value)
+	}
+	return merged
+}
+
+func cloneOpenAIAccountSessionValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		cloned := make(map[string]any, len(typed))
+		for key, nested := range typed {
+			cloned[key] = cloneOpenAIAccountSessionValue(nested)
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, len(typed))
+		for index, nested := range typed {
+			cloned[index] = cloneOpenAIAccountSessionValue(nested)
+		}
+		return cloned
+	default:
+		return value
+	}
+}
+
+func openAIAccountSessionEffectiveCurrentMarker(row map[string]any) (bool, bool) {
+	current, marked := openAIAccountSessionCurrentMarker(row)
+	// A row-level descriptor can identify itself as the current session without
+	// carrying a boolean marker (for example
+	// {"session_id":"child", "current_session_id":"child"}).  The final
+	// decoder promotes that self-match to Current=true; mirror the same
+	// precedence during nested expansion so the parent device token is protected
+	// before cleanup derives revocation candidates.
+	if !current {
+		if markerID := openAIAccountSessionRowCurrentSessionID(row); markerID != "" && openAIAccountSessionMatchesCurrentID(row, markerID) {
+			current = true
+			marked = true
+		}
+	}
+	device := sessionMap(row, "device", "device_info", "deviceInfo")
+	if nestedCurrent, nestedMarked := openAIAccountSessionCurrentMarker(device); nestedMarked {
+		if nestedCurrent || !marked {
+			current = nestedCurrent
+		}
+		marked = true
+	}
+	return current, marked
 }
 
 func openAIAccountSessionItems(value any) ([]any, bool) {
@@ -280,23 +645,42 @@ func openAIAccountSessionItems(value any) ([]any, bool) {
 	case []any:
 		return typed, true
 	case map[string]any:
-		for _, key := range []string{"sessions", "active_sessions", "activeSessions", "items", "devices"} {
+		emptyCollection := false
+		for _, key := range []string{"sessions", "active_sessions", "activeSessions", "items", "devices", "result", "payload"} {
 			if raw, exists := typed[key]; exists {
 				if raw == nil {
-					return []any{}, true
+					emptyCollection = true
+					continue
 				}
 				if items, ok := raw.([]any); ok {
-					return items, true
+					if len(items) > 0 {
+						return items, true
+					}
+					emptyCollection = true
+					continue
 				}
 				if nested, ok := raw.(map[string]any); ok {
 					if items, found := openAIAccountSessionItems(nested); found {
-						return items, true
+						if len(items) > 0 {
+							return items, true
+						}
+						emptyCollection = true
 					}
 				}
 			}
 		}
-		if nested, exists := typed["data"]; exists {
-			return openAIAccountSessionItems(nested)
+		for _, key := range []string{"data", "result", "payload"} {
+			if nested, exists := typed[key]; exists {
+				if items, found := openAIAccountSessionItems(nested); found {
+					if len(items) > 0 {
+						return items, true
+					}
+					emptyCollection = true
+				}
+			}
+		}
+		if emptyCollection {
+			return []any{}, true
 		}
 	}
 	return nil, false
@@ -308,29 +692,81 @@ func decodeOpenAIAccountSession(row map[string]any) OpenAIAccountSession {
 	location := sessionMap(row, "location", "approximate_location", "approximateLocation")
 	actions := sessionMap(row, "actions", "capabilities")
 
-	id := sessionString(row, "id", "session_id", "sessionId", "session_uuid", "sessionUuid")
-	current := sessionBool(row, "current", "is_current", "isCurrent", "is_current_session", "isCurrentSession", "is_current_device", "isCurrentDevice")
+	// `session_id` is the common spelling, while a few session-manager
+	// responses call the same revocation token a unified session id.  Accept
+	// both forms (and the UUID aliases) so scheduled cleanup does not silently
+	// skip a valid non-current device just because the response version changed.
+	id := sessionString(row,
+		// Explicit session-token fields take precedence over a generic `id`.
+		// Current-device payloads may expose both a render/device id and the
+		// unified session id used by the revoke endpoint.
+		"session_id", "sessionId",
+		"unified_session_id", "unifiedSessionId",
+		"session_uuid", "sessionUuid",
+		"id",
+	)
+	// Some session-manager response versions wrap the revocation token on the
+	// nested device object.  Only accept fields whose names explicitly identify
+	// a session; a generic device `id` may be a hardware identifier and must not
+	// be sent to the logout endpoint by accident.
+	if id == "" {
+		id = sessionString(device,
+			"session_id", "sessionId",
+			"unified_session_id", "unifiedSessionId",
+			"session_uuid", "sessionUuid",
+		)
+	}
+	current, currentMarked := openAIAccountSessionCurrentMarker(row)
+	if !current {
+		if rowCurrentID := openAIAccountSessionRowCurrentSessionID(row); rowCurrentID != "" && openAIAccountSessionMatchesCurrentID(row, rowCurrentID) {
+			current = true
+			currentMarked = true
+		}
+	}
+	// Some versions of the device-session endpoint put the marker on the
+	// nested device object.  Honor it for both projection and CurrentKnown
+	// accounting while keeping the accepted aliases in one place.  A positive
+	// nested marker must not be masked by a stale/duplicated row-level `false`;
+	// preserving the current device is the safe precedence rule.
+	if nestedCurrent, nestedMarked := openAIAccountSessionCurrentMarker(device); nestedMarked {
+		if nestedCurrent || !currentMarked {
+			current = nestedCurrent
+		}
+		currentMarked = true
+	}
 	trusted := sessionBool(row, "trusted", "is_trusted", "isTrusted", "trusted_device", "trustedDevice", "is_trusted_device", "isTrustedDevice")
 	if !trusted {
 		trusted = strings.EqualFold(sessionString(row, "trust_status", "trustStatus", "device_trust_status", "deviceTrustStatus"), "trusted")
 	}
 	status := sessionString(row, "status", "session_status", "sessionStatus")
 	statusAvailable := true
-	if value, ok := sessionOptionalBool(row, "status_available", "statusAvailable", "is_status_available"); ok {
-		statusAvailable = value
+	if value, present, valid := sessionOptionalBoolDetailed(row, "status_available", "statusAvailable", "is_status_available"); present {
+		// An explicitly supplied but malformed availability flag is treated as
+		// unavailable.  This keeps both the UI and the scheduled destructive
+		// worker fail-closed when an upstream contract changes shape.
+		statusAvailable = valid && value
 	} else if normalized := strings.ToLower(strings.TrimSpace(status)); strings.Contains(normalized, "unavailable") || normalized == "unknown" || normalized == "unsupported" {
 		statusAvailable = false
 	}
-	canRevoke := id != "" && !current && statusAvailable
-	if value, ok := sessionOptionalBool(row, "can_revoke", "canRevoke", "can_logout", "canLogout", "can_sign_out", "canSignOut", "can_terminate", "canTerminate"); ok {
-		canRevoke = value && id != "" && !current && statusAvailable
-	} else if value, ok := sessionOptionalBool(actions, "can_revoke", "canRevoke", "can_logout", "canLogout", "can_sign_out", "canSignOut"); ok {
-		canRevoke = value && id != "" && !current && statusAvailable
+	// Keep the projection aligned with the revoke endpoint's input bound.  A
+	// malformed/oversized upstream identifier should not render an actionable
+	// logout button in the admin UI (and is ignored by scheduled cleanup).
+	validID := id != "" && len(id) <= 512
+	canRevoke := validID && !current && statusAvailable
+	if value, present, valid := sessionOptionalBoolDetailed(row, "can_revoke", "canRevoke", "can_logout", "canLogout", "can_sign_out", "canSignOut", "can_terminate", "canTerminate"); present {
+		// A malformed explicit capability must never widen the default
+		// (non-current + available) capability into a revocation action.
+		canRevoke = valid && value && validID && !current && statusAvailable
+	} else if value, present, valid := sessionOptionalBoolDetailed(actions, "can_revoke", "canRevoke", "can_logout", "canLogout", "can_sign_out", "canSignOut"); present {
+		canRevoke = valid && value && validID && !current && statusAvailable
 	}
 
 	deviceName := sessionString(row, "device_name", "deviceName", "display_name", "displayName")
 	if deviceName == "" {
-		deviceName = sessionString(device, "display_name", "displayName", "name", "model")
+		deviceName = sessionString(row, "human_readable_description", "humanReadableDescription", "device_model", "deviceModel")
+	}
+	if deviceName == "" {
+		deviceName = sessionString(device, "display_name", "displayName", "name", "model", "human_readable_description", "humanReadableDescription", "device_model", "deviceModel")
 	}
 	if deviceName == "" {
 		deviceName = sessionScalarString(row["device"])
@@ -404,15 +840,394 @@ func decodeOpenAIAccountSession(row map[string]any) OpenAIAccountSession {
 	}
 }
 
+// openAIAccountSessionCurrentMarker returns the value and whether upstream
+// supplied a parseable explicit current-device flag.  The second result is
+// intentionally separate from the value: an omitted marker and an explicit
+// false marker have different safety implications for callers that may revoke
+// sessions.
+func openAIAccountSessionCurrentMarker(row map[string]any) (bool, bool) {
+	if row == nil {
+		return false, false
+	}
+	if current, marked := sessionCurrentMarkerBool(row,
+		"current",
+		"is_current",
+		"isCurrent",
+		"current_session",
+		"currentSession",
+		"active_session",
+		"activeSession",
+		"is_current_session",
+		"isCurrentSession",
+		"current_device",
+		"currentDevice",
+		"is_current_device",
+		"isCurrentDevice",
+	); marked {
+		return current, true
+	}
+	// A few envelope/row variants use `current` as a descriptor object (for
+	// example `{\"current\":{\"session_id\":\"...\"}}`) instead of a boolean.
+	// Treat an explicitly identified descriptor as authoritative marker
+	// provenance; the decoder later matches its identifier to the row before
+	// protecting that session.  A match can only reduce the revoke set, so this
+	// remains fail-closed if the descriptor uses a different identifier space.
+	if raw, exists := row["current"]; exists {
+		if nested, ok := raw.(map[string]any); ok {
+			if current, marked := sessionCurrentMarkerBool(nested,
+				"current",
+				"is_current",
+				"isCurrent",
+				"is_current_session",
+				"isCurrentSession",
+				"current_device",
+				"currentDevice",
+				"is_current_device",
+				"isCurrentDevice",
+				"active_session",
+				"activeSession",
+			); marked {
+				return current, true
+			}
+			if sessionString(nested,
+				"id", "session_id", "sessionId",
+				"unified_session_id", "unifiedSessionId",
+				"session_uuid", "sessionUuid",
+				"render_id", "renderId", "device_id", "deviceId",
+				"hashed_device_id", "hashedDeviceId",
+				"current_session_id", "currentSessionId", "currentSessionID",
+				"current_device_id", "currentDeviceId", "currentDeviceID",
+				"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+				"active_session_id", "activeSessionId", "activeSessionID",
+			) != "" {
+				return false, true
+			}
+		}
+	}
+	// `current_session` may be an ID (scalar) or a descriptor object rather
+	// than a boolean. It is still authoritative marker presence, but the row is
+	// marked current only when its ID matches that descriptor (see the decoder).
+	for _, key := range []string{"current_session", "currentSession", "active_session", "activeSession"} {
+		raw, exists := row[key]
+		if !exists {
+			continue
+		}
+		if nested, ok := raw.(map[string]any); ok {
+			if sessionString(nested,
+				"id", "session_id", "sessionId",
+				"unified_session_id", "unifiedSessionId",
+				"session_uuid", "sessionUuid",
+				"render_id", "renderId", "device_id", "deviceId",
+				"hashed_device_id", "hashedDeviceId",
+				"current_session_id", "currentSessionId", "currentSessionID",
+				"current_device_id", "currentDeviceId", "currentDeviceID",
+				"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+				"active_session_id", "activeSessionId", "activeSessionID",
+			) != "" {
+				return false, true
+			}
+			continue
+		}
+		if id := sessionScalarString(raw); id != "" && !strings.EqualFold(id, "true") && !strings.EqualFold(id, "false") {
+			return false, true
+		}
+	}
+	// The marker can also be exposed as an *_id field or under a nested device
+	// descriptor.  Reuse the identifier extractor so those variants contribute
+	// to CurrentKnown and can be matched to the row's revoke token later.
+	if descriptorID := openAIAccountSessionRowCurrentSessionID(row); descriptorID != "" {
+		return false, true
+	}
+	// Some response variants represent current_session/current_device as an
+	// object carrying its own marker. Inspect only that explicitly named object
+	// so arbitrary device metadata is not mistaken for an authoritative flag.
+	for _, key := range []string{"current_session", "currentSession", "active_session", "activeSession", "current_device", "currentDevice"} {
+		nested, ok := row[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if current, marked := sessionCurrentMarkerBool(nested,
+			"current",
+			"is_current",
+			"isCurrent",
+			"is_current_session",
+			"isCurrentSession",
+			"current_device",
+			"currentDevice",
+			"is_current_device",
+			"isCurrentDevice",
+			"active_session",
+			"activeSession",
+		); marked {
+			return current, true
+		}
+	}
+	return false, false
+}
+
+// sessionCurrentMarkerBool parses a group of current-device aliases while
+// giving any positive marker precedence over explicit false values.  Upstream
+// payloads can contain both a stale row-level `current:false` and a newer
+// `is_current:true`; preserving the device is the only safe resolution for
+// that conflict.  A present-but-malformed marker is reported as unknown unless
+// another alias supplies a parseable value.
+func sessionCurrentMarkerBool(row map[string]any, keys ...string) (value bool, marked bool) {
+	if row == nil {
+		return false, false
+	}
+	present := false
+	for _, key := range keys {
+		raw, exists := row[key]
+		if !exists {
+			continue
+		}
+		present = true
+		parsed, ok := parseSessionBool(raw)
+		if !ok {
+			continue
+		}
+		if parsed {
+			return true, true
+		}
+		// Keep scanning: a later positive alias wins over this false marker.
+		marked = true
+	}
+	if present && marked {
+		return false, true
+	}
+	return false, false
+}
+
+func openAIAccountSessionRowCurrentSessionID(row map[string]any) string {
+	if row == nil {
+		return ""
+	}
+	for _, key := range []string{"current", "current_session", "currentSession", "active_session", "activeSession", "current_session_id", "currentSessionId", "currentSessionID", "active_session_id", "activeSessionId", "activeSessionID", "current_device_id", "currentDeviceId", "currentDeviceID", "current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID", "current_device", "currentDevice"} {
+		raw, exists := row[key]
+		if !exists {
+			continue
+		}
+		if nested, ok := raw.(map[string]any); ok {
+			if id := sessionString(nested,
+				"id", "session_id", "sessionId",
+				"unified_session_id", "unifiedSessionId",
+				"session_uuid", "sessionUuid",
+				"render_id", "renderId", "device_id", "deviceId",
+				"hashed_device_id", "hashedDeviceId",
+				"current_session_id", "currentSessionId", "currentSessionID",
+				"current_device_id", "currentDeviceId", "currentDeviceID",
+				"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+				"active_session_id", "activeSessionId", "activeSessionID",
+			); id != "" {
+				return id
+			}
+			continue
+		}
+		if key == "current_device" || key == "currentDevice" {
+			// A scalar current_device is commonly a display label; only an
+			// object descriptor carries a stable identifier.
+			continue
+		}
+		if id := sessionScalarString(raw); id != "" && !strings.EqualFold(id, "true") && !strings.EqualFold(id, "false") {
+			return id
+		}
+	}
+	// Device descriptors may carry the marker while the row's revocation token
+	// remains in `session_id`.  Inspect only explicitly named nested device
+	// objects; a generic device `id` by itself is not treated as a marker.
+	for _, containerKey := range []string{"device", "device_info", "deviceInfo"} {
+		nested, ok := row[containerKey].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range []string{"current_session", "currentSession", "active_session", "activeSession", "current_session_id", "currentSessionId", "currentSessionID", "active_session_id", "activeSessionId", "activeSessionID", "current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID", "current_device", "currentDevice"} {
+			raw, exists := nested[key]
+			if !exists {
+				continue
+			}
+			if descriptor, ok := raw.(map[string]any); ok {
+				if id := sessionString(descriptor,
+					"session_id", "sessionId", "unified_session_id", "unifiedSessionId",
+					"session_uuid", "sessionUuid", "id", "render_id", "renderId",
+					"device_id", "deviceId", "hashed_device_id", "hashedDeviceId",
+					"current_session_id", "currentSessionId", "currentSessionID",
+					"current_device_id", "currentDeviceId", "currentDeviceID",
+					"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+					"active_session_id", "activeSessionId", "activeSessionID",
+				); id != "" {
+					return id
+				}
+				continue
+			}
+			// A scalar current_session/currentSession is explicitly a session
+			// identifier; current_device is often a display label and is skipped.
+			if key == "current_session" || key == "currentSession" || key == "active_session" || key == "activeSession" || strings.Contains(strings.ToLower(key), "session_id") || strings.Contains(strings.ToLower(key), "sessionid") {
+				if id := sessionScalarString(raw); id != "" && !strings.EqualFold(id, "true") && !strings.EqualFold(id, "false") {
+					return id
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// openAIAccountSessionMatchesCurrentID reports whether an envelope/descriptor
+// current marker identifies this row.  The sessions endpoint has used several
+// identifier namespaces over time: `session_id` is the revoke token, while
+// `id`, `render_id`, `device_id`, or `hashed_device_id` can identify the same
+// device.  Matching all explicitly named identifiers is safe for cleanup: a
+// match only marks a row as current (and therefore protected), never as
+// revokable.
+func openAIAccountSessionMatchesCurrentID(row map[string]any, currentID string) bool {
+	currentID = strings.TrimSpace(currentID)
+	if row == nil || currentID == "" || len(currentID) > 512 {
+		return false
+	}
+	if sessionIdentifierMatches(row, currentID) {
+		return true
+	}
+	for _, key := range []string{"device", "device_info", "deviceInfo"} {
+		if nested, ok := row[key].(map[string]any); ok && sessionIdentifierMatches(nested, currentID) {
+			return true
+		}
+	}
+	return false
+}
+
+func sessionIdentifierMatches(row map[string]any, wanted string) bool {
+	if row == nil {
+		return false
+	}
+	for _, key := range []string{
+		"id", "render_id", "renderId", "device_id", "deviceId",
+		"hashed_device_id", "hashedDeviceId",
+		"session_id", "sessionId",
+		"unified_session_id", "unifiedSessionId",
+		"session_uuid", "sessionUuid",
+		"current_session_id", "currentSessionId", "currentSessionID",
+		"current_device_id", "currentDeviceId", "currentDeviceID",
+		"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+		"active_session_id", "activeSessionId", "activeSessionID",
+	} {
+		if value, exists := row[key]; exists {
+			if candidate := strings.TrimSpace(sessionScalarString(value)); candidate != "" && candidate == wanted {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func openAIAccountSessionCurrentMarkerPresent(row map[string]any) bool {
+	if _, marked := openAIAccountSessionCurrentMarker(row); marked {
+		return true
+	}
+	device := sessionMap(row, "device", "device_info", "deviceInfo")
+	_, marked := openAIAccountSessionCurrentMarker(device)
+	return marked
+}
+
 func openAIAccountCurrentSessionID(value any) string {
 	row, ok := value.(map[string]any)
 	if !ok {
 		return ""
 	}
-	if id := sessionString(row, "current_session_id", "currentSessionId"); id != "" {
+	if id := sessionString(row,
+		"current_session_id",
+		"currentSessionId",
+		"currentSessionID",
+		"current_device_id",
+		"currentDeviceId",
+		"currentDeviceID",
+		"current_device_session_id",
+		"currentDeviceSessionId",
+		"currentDeviceSessionID",
+		"active_session_id",
+		"activeSessionId",
+		"activeSessionID",
+	); id != "" {
 		return id
 	}
-	for _, key := range []string{"data", "active_sessions", "activeSessions"} {
+	// Although these fields are usually scalar strings, a few envelopes wrap
+	// the marker in a descriptor object.  Accept the same explicit identifier
+	// aliases there without guessing from arbitrary metadata.
+	for _, key := range []string{
+		"current_session_id", "currentSessionId", "currentSessionID",
+		"current_device_id", "currentDeviceId", "currentDeviceID",
+		"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+		"active_session_id", "activeSessionId", "activeSessionID",
+	} {
+		nested, ok := row[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if id := sessionString(nested,
+			"session_id", "sessionId", "unified_session_id", "unifiedSessionId",
+			"session_uuid", "sessionUuid", "id", "render_id", "renderId",
+			"device_id", "deviceId", "hashed_device_id", "hashedDeviceId",
+			"current_session_id", "currentSessionId", "currentSessionID",
+			"current_device_id", "currentDeviceId", "currentDeviceID",
+			"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+			"active_session_id", "activeSessionId", "activeSessionID",
+		); id != "" {
+			return id
+		}
+	}
+	// `current` itself may be a descriptor object or a scalar session token.
+	// Scalar boolean values are deliberately ignored; they are handled by the
+	// row-level marker parser above and do not identify a session to preserve.
+	if raw, exists := row["current"]; exists {
+		if nested, ok := raw.(map[string]any); ok {
+			if id := sessionString(nested,
+				"session_id", "sessionId", "unified_session_id", "unifiedSessionId",
+				"session_uuid", "sessionUuid", "id", "render_id", "renderId",
+				"device_id", "deviceId", "hashed_device_id", "hashedDeviceId",
+				"current_session_id", "currentSessionId", "currentSessionID",
+				"current_device_id", "currentDeviceId", "currentDeviceID",
+				"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+				"active_session_id", "activeSessionId", "activeSessionID",
+			); id != "" {
+				return id
+			}
+		} else if id := sessionScalarString(raw); id != "" && !strings.EqualFold(id, "true") && !strings.EqualFold(id, "false") {
+			return id
+		}
+	}
+	// A few response versions return the current device/session as a small
+	// object rather than a dedicated *_id field.  Do not coerce arbitrary
+	// scalar current_device values (often a display name) into a session id.
+	for _, key := range []string{"current_session", "currentSession", "active_session", "activeSession", "current_device", "currentDevice"} {
+		raw, exists := row[key]
+		if !exists {
+			continue
+		}
+		if nested, ok := raw.(map[string]any); ok {
+			if id := sessionString(nested,
+				"session_id", "sessionId",
+				"unified_session_id", "unifiedSessionId",
+				"session_uuid", "sessionUuid",
+				"id", "render_id", "renderId", "device_id", "deviceId",
+				"hashed_device_id", "hashedDeviceId",
+				"current_session_id", "currentSessionId", "currentSessionID",
+				"current_device_id", "currentDeviceId", "currentDeviceID",
+				"current_device_session_id", "currentDeviceSessionId", "currentDeviceSessionID",
+				"active_session_id", "activeSessionId", "activeSessionID",
+			); id != "" {
+				return id
+			}
+			continue
+		}
+		// `current_session` has also appeared as a scalar session identifier.
+		// Treat only that explicitly session-named field as an ID; a scalar
+		// `current_device` is commonly a human-readable device label and must
+		// not be guessed into a revocation token.
+		if key == "current_session" || key == "currentSession" || key == "active_session" || key == "activeSession" {
+			if id := sessionScalarString(raw); id != "" && !strings.EqualFold(id, "true") && !strings.EqualFold(id, "false") {
+				return id
+			}
+		}
+	}
+	for _, key := range []string{"data", "result", "payload", "sessions", "active_sessions", "activeSessions", "app_sessions", "appSessions", "session", "items", "devices"} {
 		if id := openAIAccountCurrentSessionID(row[key]); id != "" {
 			return id
 		}
@@ -457,9 +1272,37 @@ func sessionScalarString(value any) string {
 	case json.Number:
 		return typed.String()
 	case float64:
+		if math.IsNaN(typed) || math.IsInf(typed, 0) {
+			return ""
+		}
 		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case float32:
+		if math.IsNaN(float64(typed)) || math.IsInf(float64(typed), 0) {
+			return ""
+		}
+		return strconv.FormatFloat(float64(typed), 'f', -1, 32)
+	case int:
+		return strconv.Itoa(typed)
+	case int8:
+		return strconv.FormatInt(int64(typed), 10)
+	case int16:
+		return strconv.FormatInt(int64(typed), 10)
+	case int32:
+		return strconv.FormatInt(int64(typed), 10)
 	case int64:
 		return strconv.FormatInt(typed, 10)
+	case uint:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(typed), 10)
+	case uint64:
+		return strconv.FormatUint(typed, 10)
+	case uintptr:
+		return strconv.FormatUint(uint64(typed), 10)
 	}
 	return ""
 }
@@ -493,24 +1336,109 @@ func sessionBool(row map[string]any, keys ...string) bool {
 }
 
 func sessionOptionalBool(row map[string]any, keys ...string) (bool, bool) {
+	value, _, valid := sessionOptionalBoolDetailed(row, keys...)
+	return value, valid
+}
+
+// sessionOptionalBoolDetailed distinguishes an omitted field from a field
+// that was present but malformed.  The distinction is important for
+// destructive actions: omitted capability flags retain the compatibility
+// default, while malformed explicit flags fail closed.
+func sessionOptionalBoolDetailed(row map[string]any, keys ...string) (value bool, present bool, valid bool) {
 	for _, key := range keys {
-		value, exists := row[key]
+		raw, exists := row[key]
 		if !exists {
 			continue
 		}
-		switch typed := value.(type) {
-		case bool:
-			return typed, true
-		case string:
-			parsed, err := strconv.ParseBool(strings.TrimSpace(typed))
-			if err == nil {
-				return parsed, true
+		present = true
+		if parsed, ok := parseSessionBool(raw); ok {
+			return parsed, true, true
+		}
+		// Once an explicitly named capability is malformed, fail closed rather
+		// than falling through to a legacy alias that could accidentally widen
+		// the destructive action surface.
+		return false, true, false
+	}
+	return false, present, false
+}
+
+func parseSessionBool(value any) (bool, bool) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		text := strings.TrimSpace(typed)
+		parsed, err := strconv.ParseBool(text)
+		if err == nil {
+			return parsed, true
+		}
+		// A few JSON bridges serialize boolean flags as the numeric strings
+		// "0"/"1".  Accept only those two exact values; arbitrary numeric
+		// strings remain malformed and therefore fail closed.
+		if text == "0" || text == "1" {
+			return text == "1", true
+		}
+	case json.Number:
+		if parsed, err := typed.Int64(); err == nil {
+			if parsed == 0 || parsed == 1 {
+				return parsed == 1, true
 			}
-		case json.Number:
-			parsed, err := typed.Int64()
-			if err == nil {
-				return parsed != 0, true
+		} else if parsed, err := typed.Float64(); err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+			if parsed == 0 || parsed == 1 {
+				return parsed == 1, true
 			}
+		}
+	case float64:
+		if !math.IsNaN(typed) && !math.IsInf(typed, 0) && (typed == 0 || typed == 1) {
+			return typed == 1, true
+		}
+	case float32:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case int:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case int8:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case int16:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case int32:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case int64:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case uint:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case uint8:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case uint16:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case uint32:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case uint64:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
+		}
+	case uintptr:
+		if typed == 0 || typed == 1 {
+			return typed == 1, true
 		}
 	}
 	return false, false

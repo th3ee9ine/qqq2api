@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/th3ee9ine/qqq2api/internal/service"
@@ -34,9 +35,19 @@ func NewLeaderLockCache(rdb *redis.Client) service.LeaderLockCache {
 }
 
 func (c *leaderLockCache) TryAcquireLeaderLock(ctx context.Context, key, owner string, ttl time.Duration) (bool, error) {
+	// Reduced/test deployments may construct the cache through the Wire graph
+	// while Redis is intentionally disabled.  Returning an error lets the
+	// service-layer lock helper fall back to its no-backend behavior instead of
+	// dereferencing a nil client and panicking during the first scheduled scan.
+	if c == nil || c.rdb == nil {
+		return false, errors.New("leader lock redis client is not configured")
+	}
 	return c.rdb.SetNX(ctx, leaderLockKeyPrefix+key, owner, ttl).Result()
 }
 
 func (c *leaderLockCache) ReleaseLeaderLock(ctx context.Context, key, owner string) error {
+	if c == nil || c.rdb == nil {
+		return nil
+	}
 	return leaderLockReleaseScript.Run(ctx, c.rdb, []string{leaderLockKeyPrefix + key}, owner).Err()
 }

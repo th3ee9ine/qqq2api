@@ -420,11 +420,63 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 			service.OllamaCloudUsageAutoRefreshExtraKey,
 			service.OllamaCloudUsageSnapshotExtraKey:
 			continue
+		case service.OpenAISessionCleanupStateExtraKey,
+			service.OpenAIAutoRevokeNonCurrentSessionsLegacyStateExtraKey:
+			// Cleanup state is persisted in account.extra and therefore passes
+			// through every account mapper.  Do not reflect arbitrary legacy
+			// fields (provider errors, URLs, session identifiers, or malformed
+			// timestamps) back to the browser.  Keep the small aggregate
+			// projection available to account-list consumers, while preserving a
+			// map representation when JSONB supplied one.
+			if sanitized, ok := redactOpenAISessionCleanupState(value); ok {
+				redacted[key] = sanitized
+			}
 		default:
 			redacted[key] = value
 		}
 	}
 	return redacted
+}
+
+// redactOpenAISessionCleanupState converts the service-owned cleanup state to
+// its validated aggregate projection.  Account extras are normally decoded by
+// database drivers as map[string]any, but tests/importers may provide the
+// typed service value directly; preserve that shape where practical so this
+// mapper remains backwards compatible with existing callers.
+func redactOpenAISessionCleanupState(value any) (any, bool) {
+	state := service.SanitizeOpenAISessionCleanupState(value)
+	if state == nil {
+		return nil, false
+	}
+	if _, isMap := value.(map[string]any); isMap {
+		// A fresh map is required here: returning the original nested map would
+		// let a caller mutate the service account through the DTO response.
+		projection := map[string]any{
+			"status":                state.Status,
+			"revoked_count":         state.RevokedCount,
+			"failed_count":          state.FailedCount,
+			"current_session_known": state.CurrentSessionKnown,
+		}
+		// Match the service struct's omitempty tags so account-list responses do
+		// not grow a collection of meaningless empty strings after redaction.
+		if state.LastRunAt != "" {
+			projection["last_run_at"] = state.LastRunAt
+		}
+		if state.LastSuccessAt != "" {
+			projection["last_success_at"] = state.LastSuccessAt
+		}
+		if state.LastResultAt != "" {
+			projection["last_result_at"] = state.LastResultAt
+		}
+		if state.ErrorCode != "" {
+			projection["error_code"] = state.ErrorCode
+		}
+		if state.Message != "" {
+			projection["message"] = state.Message
+		}
+		return projection, true
+	}
+	return *state, true
 }
 
 func AccountFromService(a *service.Account) *Account {

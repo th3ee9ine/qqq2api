@@ -724,6 +724,12 @@ export default {
         codexFingerprintDevice: '仅设备',
         codexFingerprintSession: '设备+会话',
         codexFingerprintFull: '完全收敛',
+        sessionCleanup: {
+          title: '定时退出其他设备会话',
+          hint: '仅对 OpenAI OAuth 账号生效。后台会按周期查询 ChatGPT 登录设备，并退出所有已明确标记为非当前设备的会话；无法识别当前设备时会跳过本轮。',
+          interval: '检查间隔（分钟）',
+          intervalHint: '范围 5–10080 分钟，默认 60 分钟。当前设备始终保留。'
+        },
         codexImageTool: 'Codex 图片桥接策略',
         codexImageToolDesc:
           '统一控制 Codex /responses 文本请求的 hosted image_generation 桥接和客户端图片工具声明。hosted 工具自动注入仅适用于非 Responses Lite 请求；账号级策略优先于渠道和全局配置，不影响独立图片生成接口。',
@@ -1571,6 +1577,60 @@ export default {
           OPENAI_SESSION_REVOKE_PROXY_UNAVAILABLE: '账号代理无法连接 ChatGPT，请检测或更换代理后重试',
           OPENAI_SESSION_REVOKE_UPSTREAM_ERROR: 'OpenAI 拒绝了退出会话请求，请刷新账号授权后重试',
           OPENAI_SESSION_NOT_FOUND: '该设备会话已不存在，请刷新列表'
+        },
+        cleanup: {
+          title: '定时清理设备会话',
+          description: '按周期退出已明确标记为非当前设备的会话，并保留当前设备。无法识别当前设备时会跳过本轮。',
+          enabled: '启用定时清理',
+          interval: '检查间隔（分钟）',
+          intervalHint: '范围 5–10080 分钟，默认 60 分钟。',
+          save: '保存设置',
+          runNow: '立即执行',
+          loading: '正在加载清理设置...',
+          retry: '重试',
+          statusLabel: '状态',
+          status: {
+            running: '执行中',
+            success: '已完成',
+            skipped: '为安全起见已跳过',
+            failed: '失败',
+            unknown: '尚未执行'
+          },
+          lastRun: '最近执行',
+          lastSuccess: '最近成功',
+          resultCounts: '最近结果',
+          counts: '已退出 {revoked} 个 · 失败 {failed} 个',
+          currentDevice: '当前设备',
+          known: '已识别',
+          unknown: '未知',
+          saveSuccess: '会话清理设置已保存',
+          runSuccess: '会话清理已完成',
+          loadFailed: '加载会话清理设置失败',
+          saveFailed: '保存会话清理设置失败',
+          runFailed: '执行会话清理失败',
+          invalidInterval: '请输入 5–10080 分钟之间的整数间隔',
+          enableBeforeRun: '请先启用并保存定时清理，再立即执行',
+          errors: {
+            OPENAI_AUTO_REVOKE_NON_CURRENT_SESSIONS_ACCOUNT_INVALID: '会话清理仅支持 OpenAI OAuth 母账号。',
+            OPENAI_AUTO_REVOKE_NON_CURRENT_SESSIONS_ENABLED_INVALID: '会话清理开关值无效。',
+            OPENAI_AUTO_REVOKE_NON_CURRENT_SESSIONS_INTERVAL_INVALID: '会话清理间隔必须在 5–10080 分钟之间。',
+            OPENAI_CURRENT_SESSION_UNKNOWN: '未识别当前设备，未退出任何会话。',
+            OPENAI_SESSIONS_EMPTY_RESULT: '上游未返回会话结果。',
+            OPENAI_SESSIONS_PROXY_UNAVAILABLE: '账号代理无法连接 ChatGPT。',
+            OPENAI_SESSIONS_AUTH_FAILED: '无法完成 ChatGPT 会话请求的身份验证。',
+            OPENAI_SESSIONS_UPSTREAM_ERROR: 'ChatGPT 会话列表请求失败。',
+            OPENAI_SESSIONS_REQUEST_FAILED: 'ChatGPT 会话列表请求失败。',
+            OPENAI_SESSIONS_INVALID_RESPONSE: 'ChatGPT 返回的会话结果格式无效。',
+            OPENAI_SESSIONS_CLIENT_ERROR: '无法创建 ChatGPT 会话请求客户端。',
+            OPENAI_SESSION_REVOKE_PROXY_UNAVAILABLE: '账号代理无法连接 ChatGPT 执行退出。',
+            OPENAI_SESSION_REVOKE_UPSTREAM_ERROR: '一个或多个 ChatGPT 会话退出失败。',
+            OPENAI_SESSION_REVOKE_REQUEST_FAILED: '一个或多个 ChatGPT 会话退出失败。',
+            OPENAI_SESSION_NOT_FOUND: '目标会话已不存在。',
+            OPENAI_SESSION_CLEANUP_DISABLED: '请先启用会话清理再执行。',
+            OPENAI_SESSION_CLEANUP_ACCOUNT_INVALID: '会话清理仅支持状态正常的 OpenAI OAuth 母账号。',
+            OPENAI_SESSION_CLEANUP_ALREADY_RUNNING: '此账号的会话清理任务正在执行。',
+            OPENAI_SESSION_CLEANUP_FAILED: '会话清理请求失败。'
+          }
         }
       },
       stats: {

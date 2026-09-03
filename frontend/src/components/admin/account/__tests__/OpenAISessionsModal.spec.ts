@@ -3,10 +3,23 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Account } from '@/types'
 
-const { listSessionsMock, revokeSessionMock, revokeSessionsMock, showSuccessMock, showErrorMock, showWarningMock } = vi.hoisted(() => ({
+const {
+  listSessionsMock,
+  revokeSessionMock,
+  revokeSessionsMock,
+  getCleanupMock,
+  updateCleanupMock,
+  runCleanupMock,
+  showSuccessMock,
+  showErrorMock,
+  showWarningMock
+} = vi.hoisted(() => ({
   listSessionsMock: vi.fn(),
   revokeSessionMock: vi.fn(),
   revokeSessionsMock: vi.fn(),
+  getCleanupMock: vi.fn(),
+  updateCleanupMock: vi.fn(),
+  runCleanupMock: vi.fn(),
   showSuccessMock: vi.fn(),
   showErrorMock: vi.fn(),
   showWarningMock: vi.fn(),
@@ -18,6 +31,9 @@ vi.mock('@/api/admin', () => ({
       listOpenAISessions: listSessionsMock,
       revokeOpenAISession: revokeSessionMock,
       revokeOpenAISessions: revokeSessionsMock,
+      getOpenAISessionCleanup: getCleanupMock,
+      updateOpenAISessionCleanup: updateCleanupMock,
+      runOpenAISessionCleanup: runCleanupMock,
     },
   },
 }))
@@ -86,7 +102,26 @@ describe('OpenAISessionsModal', () => {
         can_revoke: true,
       }],
       fetched_at: 1,
+      current_known: true,
     })
+    getCleanupMock.mockResolvedValue({
+      enabled: true,
+      interval_minutes: 60,
+      state: {
+        status: 'success',
+        last_run_at: '2026-09-02T00:00:00Z',
+        last_success_at: '2026-09-02T00:00:00Z',
+        revoked_count: 2,
+        failed_count: 0,
+        current_session_known: true,
+      },
+    })
+    updateCleanupMock.mockImplementation(async (_id: number, updates: Record<string, unknown>) => ({
+      enabled: Boolean(updates.enabled),
+      interval_minutes: Number(updates.interval_minutes),
+      state: null,
+    }))
+    runCleanupMock.mockResolvedValue({ message: 'ok' })
     revokeSessionMock.mockResolvedValue({ message: 'ok' })
     revokeSessionsMock.mockResolvedValue({
       requested_count: 1,
@@ -105,6 +140,7 @@ describe('OpenAISessionsModal', () => {
     await flushPromises()
 
     expect(listSessionsMock).toHaveBeenCalledWith(42)
+    expect(getCleanupMock).toHaveBeenCalledWith(42)
     expect(wrapper.text()).toContain('MacBook Pro')
     expect(wrapper.text()).toContain('Shanghai, China')
     expect(wrapper.text()).toContain('admin.accounts.sessions.trusted')
@@ -139,5 +175,39 @@ describe('OpenAISessionsModal', () => {
     expect(revokeSessionsMock).toHaveBeenCalledWith(42, ['sess-1'])
     expect(showSuccessMock).toHaveBeenCalledWith('admin.accounts.sessions.logoutSelectedSuccess:1')
     expect(wrapper.text()).not.toContain('MacBook Pro')
+  })
+
+  it('加载、保存并立即执行定时会话清理', async () => {
+    const wrapper = mount(OpenAISessionsModal, {
+      props: { show: true, account },
+      global: { stubs: { BaseDialog: BaseDialogStub } },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="session-cleanup-settings"]').text()).toContain('admin.accounts.sessions.cleanup.status.success')
+    const interval = wrapper.get('[data-testid="session-cleanup-interval"]')
+    await interval.setValue(15)
+    await wrapper.get('[data-testid="session-cleanup-save"]').trigger('click')
+    await flushPromises()
+    expect(updateCleanupMock).toHaveBeenCalledWith(42, { enabled: true, interval_minutes: 15 })
+    expect(showSuccessMock).toHaveBeenCalledWith('admin.accounts.sessions.cleanup.saveSuccess')
+
+    await wrapper.get('[data-testid="session-cleanup-run-now"]').trigger('click')
+    await flushPromises()
+    expect(runCleanupMock).toHaveBeenCalledWith(42)
+    expect(showSuccessMock).toHaveBeenCalledWith('admin.accounts.sessions.cleanup.runSuccess')
+  })
+
+  it('拒绝超出范围的清理间隔', async () => {
+    const wrapper = mount(OpenAISessionsModal, {
+      props: { show: true, account },
+      global: { stubs: { BaseDialog: BaseDialogStub } },
+    })
+    await flushPromises()
+
+    await wrapper.get('[data-testid="session-cleanup-interval"]').setValue(4)
+    await wrapper.get('[data-testid="session-cleanup-save"]').trigger('click')
+    expect(updateCleanupMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.sessions.cleanup.invalidInterval')
   })
 })

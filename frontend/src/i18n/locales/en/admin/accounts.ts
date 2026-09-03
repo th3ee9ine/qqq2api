@@ -646,6 +646,12 @@ export default {
         codexFingerprintDevice: 'Device only',
         codexFingerprintSession: 'Device + Session',
         codexFingerprintFull: 'Full convergence',
+        sessionCleanup: {
+          title: 'Automatically log out other devices',
+          hint: 'Only applies to OpenAI OAuth accounts. The server periodically checks ChatGPT sign-ins and logs out sessions explicitly marked as non-current; a run is skipped when the current device cannot be identified.',
+          interval: 'Check interval (minutes)',
+          intervalHint: 'Allowed range: 5–10080 minutes. Default: 60 minutes. The current device is always preserved.'
+        },
         codexImageTool: 'Codex image bridge policy',
         codexImageToolDesc:
           'Controls the hosted image_generation bridge and client-declared image tools on Codex /responses text requests. Hosted auto-injection applies only to non-Responses Lite requests. Account policy takes precedence over channel and global settings; standalone image-generation endpoints are unaffected.',
@@ -1514,6 +1520,60 @@ export default {
           OPENAI_SESSION_REVOKE_PROXY_UNAVAILABLE: 'The account proxy could not connect to ChatGPT. Test or replace the proxy and retry.',
           OPENAI_SESSION_REVOKE_UPSTREAM_ERROR: 'OpenAI rejected the logout request. Refresh the account authorization and retry.',
           OPENAI_SESSION_NOT_FOUND: 'This device session no longer exists. Refresh the list.'
+        },
+        cleanup: {
+          title: 'Automatic session cleanup',
+          description: 'Periodically log out sessions explicitly marked as non-current while preserving the current device. Runs are skipped when the current device cannot be identified.',
+          enabled: 'Enable scheduled cleanup',
+          interval: 'Check interval (minutes)',
+          intervalHint: 'Allowed range: 5–10080 minutes. The default is 60 minutes.',
+          save: 'Save settings',
+          runNow: 'Run now',
+          loading: 'Loading cleanup settings...',
+          retry: 'Retry',
+          statusLabel: 'Status',
+          status: {
+            running: 'Running',
+            success: 'Completed',
+            skipped: 'Skipped for safety',
+            failed: 'Failed',
+            unknown: 'Not run'
+          },
+          lastRun: 'Last run',
+          lastSuccess: 'Last success',
+          resultCounts: 'Last result',
+          counts: '{revoked} logged out · {failed} failed',
+          currentDevice: 'Current device',
+          known: 'Identified',
+          unknown: 'Unknown',
+          saveSuccess: 'Session cleanup settings saved',
+          runSuccess: 'Session cleanup completed',
+          loadFailed: 'Failed to load session cleanup settings',
+          saveFailed: 'Failed to save session cleanup settings',
+          runFailed: 'Failed to run session cleanup',
+          invalidInterval: 'Enter an integer interval from 5 to 10080 minutes',
+          enableBeforeRun: 'Enable and save scheduled cleanup before running it',
+          errors: {
+            OPENAI_AUTO_REVOKE_NON_CURRENT_SESSIONS_ACCOUNT_INVALID: 'Session cleanup requires an OpenAI OAuth parent account.',
+            OPENAI_AUTO_REVOKE_NON_CURRENT_SESSIONS_ENABLED_INVALID: 'The cleanup enabled value is invalid.',
+            OPENAI_AUTO_REVOKE_NON_CURRENT_SESSIONS_INTERVAL_INVALID: 'The cleanup interval must be between 5 and 10080 minutes.',
+            OPENAI_CURRENT_SESSION_UNKNOWN: 'The current device was not identified; no sessions were logged out.',
+            OPENAI_SESSIONS_EMPTY_RESULT: 'The upstream returned no session result.',
+            OPENAI_SESSIONS_PROXY_UNAVAILABLE: 'The account proxy could not connect to ChatGPT.',
+            OPENAI_SESSIONS_AUTH_FAILED: 'The ChatGPT session request could not be authenticated.',
+            OPENAI_SESSIONS_UPSTREAM_ERROR: 'The ChatGPT session list request failed.',
+            OPENAI_SESSIONS_REQUEST_FAILED: 'The ChatGPT session list request failed.',
+            OPENAI_SESSIONS_INVALID_RESPONSE: 'ChatGPT returned an invalid session result.',
+            OPENAI_SESSIONS_CLIENT_ERROR: 'The ChatGPT session request client could not be created.',
+            OPENAI_SESSION_REVOKE_PROXY_UNAVAILABLE: 'The account proxy could not connect to ChatGPT for logout.',
+            OPENAI_SESSION_REVOKE_UPSTREAM_ERROR: 'One or more ChatGPT session logouts failed.',
+            OPENAI_SESSION_REVOKE_REQUEST_FAILED: 'One or more ChatGPT session logouts failed.',
+            OPENAI_SESSION_NOT_FOUND: 'The target session no longer exists.',
+            OPENAI_SESSION_CLEANUP_DISABLED: 'Enable session cleanup before running it.',
+            OPENAI_SESSION_CLEANUP_ACCOUNT_INVALID: 'Session cleanup requires an active OpenAI OAuth parent account.',
+            OPENAI_SESSION_CLEANUP_ALREADY_RUNNING: 'A session cleanup is already running for this account.',
+            OPENAI_SESSION_CLEANUP_FAILED: 'The session cleanup request failed.'
+          }
         }
       },
       stats: {

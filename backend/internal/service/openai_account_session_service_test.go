@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -49,6 +51,19 @@ func TestDecodeOpenAIAccountSessionsAcceptsEnvelopeAliases(t *testing.T) {
 	require.True(t, session.CanRevoke)
 }
 
+func TestDecodeOpenAIAccountSessionsPrefersNonEmptyNestedCollection(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{
+		"sessions": [],
+		"data": {"active_sessions": [{"id":"sess-nested","current":true}]}
+	}`))
+
+	require.NoError(t, err)
+	require.Len(t, result.Sessions, 1)
+	require.Equal(t, "sess-nested", result.Sessions[0].ID)
+	require.True(t, result.Sessions[0].Current)
+	require.True(t, result.CurrentKnown)
+}
+
 func TestDecodeOpenAIAccountSessionsNeverAllowsCurrentOrUnavailableSessionRevoke(t *testing.T) {
 	result, err := decodeOpenAIAccountSessions([]byte(`[
 		{"id":"current","current":true,"can_revoke":true},
@@ -72,6 +87,325 @@ func TestDecodeOpenAIAccountSessionsHonorsEnvelopeCurrentSessionID(t *testing.T)
 	require.Len(t, result.Sessions, 1)
 	require.True(t, result.Sessions[0].Current)
 	require.False(t, result.Sessions[0].CanRevoke)
+	require.True(t, result.CurrentKnown)
+}
+
+func TestDecodeOpenAIAccountSessionsHonorsCurrentDeviceIDAliases(t *testing.T) {
+	for _, payload := range []string{
+		`{"current":{"id":"sess-current"},"sessions":[{"id":"sess-current"},{"id":"sess-other","can_revoke":true}]}`,
+		`{"current_device_id":"sess-current","sessions":[{"id":"sess-current"},{"id":"sess-other","can_revoke":true}]}`,
+		`{"currentDevice":{"session_id":"sess-current"},"sessions":[{"id":"sess-current"},{"id":"sess-other","can_revoke":true}]}`,
+		`{"current_session":{"id":"sess-current"},"sessions":[{"id":"sess-current"},{"id":"sess-other","can_revoke":true}]}`,
+		`{"current_session":"sess-current","sessions":[{"id":"sess-current"},{"id":"sess-other","can_revoke":true}]}`,
+		`{"current_session_id":"sess-current","sessions":[{"unified_session_id":"sess-current"},{"unifiedSessionId":"sess-other","can_revoke":true}]}`,
+	} {
+		result, err := decodeOpenAIAccountSessions([]byte(payload))
+		require.NoError(t, err)
+		require.True(t, result.CurrentKnown)
+		require.True(t, result.Sessions[0].Current)
+		require.False(t, result.Sessions[0].CanRevoke)
+		require.True(t, result.Sessions[1].CanRevoke)
+	}
+}
+
+func TestDecodeOpenAIAccountSessionsHonorsActiveSessionAliases(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name: "snake case active session id",
+			payload: `{"active_session_id":"sess-current","sessions":[
+				{"session_id":"sess-current"},
+				{"session_id":"sess-old","can_revoke":true}
+			]}`,
+		},
+		{
+			name: "camel case active session id",
+			payload: `{"activeSessionId":"sess-current","sessions":[
+				{"session_id":"sess-current"},
+				{"session_id":"sess-old","can_revoke":true}
+			]}`,
+		},
+		{
+			name: "acronym active session id matches device id",
+			payload: `{"activeSessionID":"render-current","sessions":[
+				{"session_id":"sess-current","device":{"render_id":"render-current"}},
+				{"session_id":"sess-old","device":{"render_id":"render-old"},"can_revoke":true}
+			]}`,
+		},
+		{
+			name: "active session descriptor",
+			payload: `{"active_session":{"session_id":"sess-current"},"sessions":[
+				{"session_id":"sess-current"},
+				{"session_id":"sess-old","can_revoke":true}
+			]}`,
+		},
+		{
+			name: "camel active session descriptor matches nested device",
+			payload: `{"activeSession":{"id":"render-current"},"sessions":[
+				{"session_id":"sess-current","device":{"render_id":"render-current"}},
+				{"session_id":"sess-old","device":{"render_id":"render-old"},"can_revoke":true}
+			]}`,
+		},
+		{
+			name: "nested envelope active session descriptor",
+			payload: `{"data":{"activeSession":{"sessionId":"sess-current"},"items":[
+				{"session_id":"sess-current"},
+				{"session_id":"sess-old","can_revoke":true}
+			]}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := decodeOpenAIAccountSessions([]byte(tt.payload))
+			require.NoError(t, err)
+			require.True(t, result.CurrentKnown)
+			require.Len(t, result.Sessions, 2)
+			require.True(t, result.Sessions[0].Current)
+			require.False(t, result.Sessions[0].CanRevoke)
+			require.False(t, result.Sessions[1].Current)
+			require.True(t, result.Sessions[1].CanRevoke)
+		})
+	}
+}
+
+func TestDecodeOpenAIAccountSessionsHonorsRowActiveSessionDescriptor(t *testing.T) {
+	for _, row := range []string{
+		`{"id":"sess-current","active_session":"sess-current"}`,
+		`{"id":"sess-current","activeSession":{"session_id":"sess-current"}}`,
+	} {
+		result, err := decodeOpenAIAccountSessions([]byte(`{"sessions":[` + row + `,{"id":"sess-old","can_revoke":true}]}`))
+		require.NoError(t, err)
+		require.True(t, result.CurrentKnown)
+		require.True(t, result.Sessions[0].Current)
+		require.False(t, result.Sessions[0].CanRevoke)
+		require.True(t, result.Sessions[1].CanRevoke)
+	}
+}
+
+func TestDecodeOpenAIAccountSessionsHonorsRowCurrentDescriptor(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{"sessions":[
+		{"id":"sess-current","current":{"session_id":"sess-current"}},
+		{"id":"sess-old","can_revoke":true}
+	]}`))
+	require.NoError(t, err)
+	require.True(t, result.CurrentKnown)
+	require.True(t, result.Sessions[0].Current)
+	require.False(t, result.Sessions[0].CanRevoke)
+	require.True(t, result.Sessions[1].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsMatchesCurrentDeviceIdentifiersAcrossNamespaces(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		payload string
+	}{
+		{
+			name: "acronym current device id matches render id",
+			payload: `{"currentDeviceID":"render-current","sessions":[
+				{"id":"render-current","session_id":"sess-current"},
+				{"id":"render-old","session_id":"sess-old","can_revoke":true}
+			]}`,
+		},
+		{
+			name: "current device session id matches nested device id",
+			payload: `{"currentDeviceSessionID":"hashed-current","sessions":[
+				{"session_id":"sess-current","device":{"hashed_device_id":"hashed-current"}},
+				{"session_id":"sess-old","device":{"hashed_device_id":"hashed-old"},"can_revoke":true}
+			]}`,
+		},
+		{
+			name: "current device descriptor render id",
+			payload: `{"currentDevice":{"render_id":"render-current"},"sessions":[
+				{"session_id":"sess-current","device":{"render_id":"render-current"}},
+				{"session_id":"sess-old","device":{"render_id":"render-old"},"can_revoke":true}
+			]}`,
+		},
+		{
+			name: "acronym descriptor id object",
+			payload: `{"currentDeviceSessionID":{"id":"render-current"},"sessions":[
+				{"session_id":"sess-current","device":{"render_id":"render-current"}},
+				{"session_id":"sess-old","device":{"render_id":"render-old"},"can_revoke":true}
+			]}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := decodeOpenAIAccountSessions([]byte(test.payload))
+			require.NoError(t, err)
+			require.True(t, result.CurrentKnown)
+			require.Len(t, result.Sessions, 2)
+			require.True(t, result.Sessions[0].Current)
+			require.False(t, result.Sessions[0].CanRevoke)
+			require.False(t, result.Sessions[1].Current)
+			require.True(t, result.Sessions[1].CanRevoke)
+		})
+	}
+}
+
+func TestDecodeOpenAIAccountSessionsPositiveCurrentMarkerWinsConflict(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{"sessions":[
+		{"id":"sess-current","current":false,"is_current":true},
+		{"id":"sess-old","can_revoke":true}
+	]}`))
+
+	require.NoError(t, err)
+	require.True(t, result.CurrentKnown)
+	require.True(t, result.Sessions[0].Current)
+	require.False(t, result.Sessions[0].CanRevoke)
+	require.True(t, result.Sessions[1].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsMalformedCapabilityFailsClosedAcrossAliases(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{"sessions":[
+		{"id":"sess-old","can_revoke":"malformed","canLogout":true},
+		{"id":"sess-available","status_available":"malformed","statusAvailable":true}
+	]}`))
+
+	require.NoError(t, err)
+	require.Len(t, result.Sessions, 2)
+	require.False(t, result.Sessions[0].CanRevoke)
+	require.False(t, result.Sessions[1].StatusAvailable)
+	require.False(t, result.Sessions[1].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsNestedDeviceCurrentDescriptorMarksRow(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{"sessions":[
+		{"session_id":"sess-current","device":{"current_session":{"id":"render-current"},"render_id":"render-current"}},
+		{"session_id":"sess-old","device":{"render_id":"render-old"},"can_revoke":true}
+	]}`))
+
+	require.NoError(t, err)
+	require.True(t, result.CurrentKnown)
+	require.True(t, result.Sessions[0].Current)
+	require.False(t, result.Sessions[0].CanRevoke)
+	require.True(t, result.Sessions[1].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsMatchesNestedCurrentDeviceDescriptor(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{"sessions":[
+		{"session_id":"sess-current","device":{"current_device":{"render_id":"render-current"},"render_id":"render-current"}},
+		{"session_id":"sess-old","device":{"render_id":"render-old"},"can_revoke":true}
+	],"current_device_id":"render-current"}`))
+
+	require.NoError(t, err)
+	require.True(t, result.CurrentKnown)
+	require.True(t, result.Sessions[0].Current)
+	require.False(t, result.Sessions[0].CanRevoke)
+	require.True(t, result.Sessions[1].CanRevoke)
+}
+
+func TestSessionScalarStringSupportsCommonNumericTypes(t *testing.T) {
+	tests := []struct {
+		value any
+		want  string
+	}{
+		{value: int(-7), want: "-7"},
+		{value: int8(8), want: "8"},
+		{value: int16(16), want: "16"},
+		{value: int32(32), want: "32"},
+		{value: uint(9), want: "9"},
+		{value: uint16(16), want: "16"},
+		{value: uint64(64), want: "64"},
+		{value: float32(1.5), want: "1.5"},
+	}
+	for _, test := range tests {
+		require.Equal(t, test.want, sessionScalarString(test.value))
+	}
+	require.Empty(t, sessionScalarString(math.NaN()))
+}
+
+func TestParseSessionBoolAcceptsStrictNumericRepresentations(t *testing.T) {
+	for _, value := range []any{"0", "1", json.Number("0"), json.Number("1"), uintptr(0), uintptr(1)} {
+		parsed, ok := parseSessionBool(value)
+		require.True(t, ok, "expected %v to parse", value)
+		require.Equal(t, strings.HasSuffix(fmt.Sprint(value), "1"), parsed)
+	}
+	for _, value := range []any{"2", "yes", json.Number("2"), uintptr(2)} {
+		_, ok := parseSessionBool(value)
+		require.False(t, ok, "expected %v to remain malformed", value)
+	}
+}
+
+func TestDecodeOpenAIAccountSessionsTracksCurrentMarkerPresence(t *testing.T) {
+	tests := []struct {
+		name         string
+		payload      string
+		current      bool
+		currentKnown bool
+	}{
+		{
+			name:         "missing marker is unknown",
+			payload:      `{"sessions":[{"id":"sess-unknown"}]}`,
+			currentKnown: false,
+		},
+		{
+			name:         "explicit false marker is still known",
+			payload:      `{"sessions":[{"id":"sess-other","current":false}]}`,
+			currentKnown: true,
+		},
+		{
+			name:         "nested device marker",
+			payload:      `{"devices":[{"session_id":"sess-device","device":{"is_current_device":true}}]}`,
+			current:      true,
+			currentKnown: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := decodeOpenAIAccountSessions([]byte(tt.payload))
+			require.NoError(t, err)
+			require.Equal(t, tt.currentKnown, result.CurrentKnown)
+			require.Len(t, result.Sessions, 1)
+			require.Equal(t, tt.current, result.Sessions[0].Current)
+		})
+	}
+}
+
+func TestDecodeOpenAIAccountSessionsReadsNestedSessionIDAlias(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{"sessions":[
+		{"device":{"session_id":"sess-current","is_current":true}},
+		{"device":{"sessionId":"sess-old"},"can_revoke":true}
+	]}`))
+
+	require.NoError(t, err)
+	require.Len(t, result.Sessions, 2)
+	require.Equal(t, "sess-current", result.Sessions[0].ID)
+	require.True(t, result.Sessions[0].Current)
+	require.Equal(t, "sess-old", result.Sessions[1].ID)
+	require.True(t, result.Sessions[1].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsPrefersExplicitSessionIDOverDeviceID(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{"current_session_id":"sess-current","sessions":[
+		{"id":"device-render-id","session_id":"sess-current"},
+		{"id":"device-render-old","session_id":"sess-old","can_revoke":true}
+	]}`))
+
+	require.NoError(t, err)
+	require.Len(t, result.Sessions, 2)
+	require.Equal(t, "sess-current", result.Sessions[0].ID)
+	require.True(t, result.Sessions[0].Current)
+	require.False(t, result.Sessions[0].CanRevoke)
+	require.Equal(t, "sess-old", result.Sessions[1].ID)
+	require.True(t, result.Sessions[1].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsRecognizesRowCurrentSessionDescriptor(t *testing.T) {
+	for _, row := range []string{
+		`{"id":"sess-current","current_session":"sess-current"}`,
+		`{"id":"sess-current","currentSession":{"session_id":"sess-current"}}`,
+	} {
+		result, err := decodeOpenAIAccountSessions([]byte(`{"sessions":[` + row + `,{"id":"sess-old","can_revoke":true}]}`))
+		require.NoError(t, err)
+		require.Len(t, result.Sessions, 2)
+		require.True(t, result.CurrentKnown)
+		require.True(t, result.Sessions[0].Current)
+		require.False(t, result.Sessions[0].CanRevoke)
+		require.True(t, result.Sessions[1].CanRevoke)
+	}
 }
 
 func TestDecodeOpenAIAccountSessionsAcceptsCurrentDevicesContract(t *testing.T) {
@@ -114,6 +448,188 @@ func TestDecodeOpenAIAccountSessionsAcceptsCurrentDevicesContract(t *testing.T) 
 	require.False(t, session.Trusted)
 	require.True(t, session.StatusAvailable)
 	require.False(t, session.CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsExpandsNestedDeviceSessionsAndInheritsCurrentMarker(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{
+		"devices": [
+			{
+				"render_id": "render-current",
+				"display_name": "Current Mac",
+				"is_current_device": true,
+				"sessions": [
+					{"session_id": "sess-current-web", "client_name": "ChatGPT Web"},
+					{"session_id": "sess-current-codex", "client_name": "Codex"}
+				]
+			},
+			{
+				"render_id": "render-old",
+				"display_name": "Old Mac",
+				"is_current_device": false,
+				"app_sessions": [
+					{"client_name": "ChatGPT Web"},
+					{"session_id": "sess-old-codex", "client_name": "Codex"}
+				]
+			}
+		]
+	}`))
+
+	require.NoError(t, err)
+	// The two device rows remain visible, while concrete nested session rows
+	// are appended.  Metadata-only app descriptors do not become rows.
+	require.Len(t, result.Sessions, 5)
+	require.True(t, result.CurrentKnown)
+
+	byID := make(map[string]OpenAIAccountSession, len(result.Sessions))
+	for _, session := range result.Sessions {
+		byID[session.ID] = session
+	}
+	require.True(t, byID["sess-current-web"].Current)
+	require.False(t, byID["sess-current-web"].CanRevoke)
+	require.True(t, byID["sess-current-codex"].Current)
+	require.False(t, byID["sess-current-codex"].CanRevoke)
+	require.False(t, byID["sess-old-codex"].Current)
+	require.True(t, byID["sess-old-codex"].CanRevoke)
+	require.Equal(t, "ChatGPT Web", byID["sess-current-web"].AppName)
+	require.Equal(t, "Codex", byID["sess-current-codex"].AppName)
+}
+
+func TestDecodeOpenAIAccountSessionsDoesNotTreatAppMetadataIDsAsSessionIDs(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{
+		"devices": [{
+			"session_id": "device-session",
+			"display_name": "Mac",
+			"is_current_device": false,
+			"app_sessions": [
+				{"id": "chatgpt-installation-id", "client_name": "ChatGPT"},
+				{"name": "Codex", "id": "codex-installation-id"}
+			]
+		}]
+	}`))
+
+	require.NoError(t, err)
+	require.Len(t, result.Sessions, 1)
+	require.Equal(t, "device-session", result.Sessions[0].ID)
+	require.NotEqual(t, "chatgpt-installation-id", result.Sessions[0].ID)
+	require.NotEqual(t, "codex-installation-id", result.Sessions[0].ID)
+}
+
+func TestDecodeOpenAIAccountSessionsNestedWrappersAndCurrentSessionID(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{
+		"current_session_id": "nested-current",
+		"devices": [{
+			"render_id": "render-current",
+			"sessions": {"data": [{"session_id": "nested-current"}]}
+		}, {
+			"render_id": "render-old",
+			"sessions": {"payload": [{"session_id": "nested-old", "can_revoke": true}]}
+		}]
+	}`))
+
+	require.NoError(t, err)
+	require.Len(t, result.Sessions, 4)
+	byID := make(map[string]OpenAIAccountSession, len(result.Sessions))
+	for _, session := range result.Sessions {
+		if session.ID != "" {
+			byID[session.ID] = session
+		}
+	}
+	require.True(t, byID["nested-current"].Current)
+	require.False(t, byID["nested-current"].CanRevoke)
+	require.True(t, byID["nested-old"].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsProtectsParentTokenWhenNestedCurrentChildHasNoParentMarker(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{
+		"devices": [{
+			"session_id": "current-device-token",
+			"render_id": "current-render",
+			"sessions": [{"session_id": "current-child", "current": true}]
+		}, {
+			"session_id": "old-device-token",
+			"render_id": "old-render",
+			"sessions": [{"session_id": "old-child", "current": false, "can_revoke": true}]
+		}]
+	}`))
+
+	require.NoError(t, err)
+	byID := make(map[string]OpenAIAccountSession, len(result.Sessions))
+	for _, session := range result.Sessions {
+		byID[session.ID] = session
+	}
+	// The current child protects both its own token and the canonical parent
+	// device token.  Without this invariant cleanup could revoke the current
+	// device through the parent row.
+	require.True(t, byID["current-child"].Current)
+	require.False(t, byID["current-child"].CanRevoke)
+	require.True(t, byID["current-device-token"].Current)
+	require.False(t, byID["current-device-token"].CanRevoke)
+	require.True(t, byID["old-child"].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsProtectsParentForEnvelopeCurrentID(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{
+		"current_session_id": "current-child",
+		"devices": [{
+			"session_id": "current-device-token",
+			"render_id": "current-render",
+			"sessions": [{"session_id": "current-child"}]
+		}, {
+			"session_id": "old-device-token",
+			"sessions": [{"session_id": "old-child", "can_revoke": true}]
+		}]
+	}`))
+
+	require.NoError(t, err)
+	byID := make(map[string]OpenAIAccountSession, len(result.Sessions))
+	for _, session := range result.Sessions {
+		byID[session.ID] = session
+	}
+	require.True(t, byID["current-child"].Current)
+	require.False(t, byID["current-child"].CanRevoke)
+	require.True(t, byID["current-device-token"].Current)
+	require.False(t, byID["current-device-token"].CanRevoke)
+	require.True(t, byID["old-child"].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsProtectsParentForNestedSelfCurrentDescriptor(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{
+		"devices": [{
+			"session_id": "current-device-token",
+			"sessions": [{"session_id": "current-child", "current_session_id": "current-child"}]
+		}, {
+			"session_id": "old-device-token",
+			"sessions": [{"session_id": "old-child", "current": false, "can_revoke": true}]
+		}]
+	}`))
+
+	require.NoError(t, err)
+	byID := make(map[string]OpenAIAccountSession, len(result.Sessions))
+	for _, session := range result.Sessions {
+		byID[session.ID] = session
+	}
+	require.True(t, result.CurrentKnown)
+	require.True(t, byID["current-child"].Current)
+	require.False(t, byID["current-child"].CanRevoke)
+	// The parent row carries a canonical revoke token for the same device.  A
+	// child self-descriptor must protect it just like an explicit boolean marker.
+	require.True(t, byID["current-device-token"].Current)
+	require.False(t, byID["current-device-token"].CanRevoke)
+	require.True(t, byID["old-child"].CanRevoke)
+}
+
+func TestDecodeOpenAIAccountSessionsDoesNotPromoteGenericNestedIDs(t *testing.T) {
+	result, err := decodeOpenAIAccountSessions([]byte(`{
+		"devices": [{
+			"session_id": "device-session",
+			"sessions": [{"id": "render-id", "current": false}],
+			"app_sessions": [{"id": "app-id", "current": false}]
+		}]
+	}`))
+
+	require.NoError(t, err)
+	require.Len(t, result.Sessions, 1)
+	require.Equal(t, "device-session", result.Sessions[0].ID)
 }
 
 func TestOpenAIAccountSessionServiceListsAndRevokes(t *testing.T) {

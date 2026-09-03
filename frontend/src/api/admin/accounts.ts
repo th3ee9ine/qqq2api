@@ -27,7 +27,9 @@ import type {
   OllamaCloudUsageSettings,
   OllamaCloudUsageState,
   OpenAIAccountSessionList,
-  OpenAIAccountSessionBatchRevokeResult
+  OpenAIAccountSessionBatchRevokeResult,
+  OpenAISessionCleanupSettings,
+  OpenAISessionCleanupUpdateRequest
 } from '@/types'
 
 /**
@@ -326,6 +328,36 @@ export async function revokeOpenAISessions(
   const { data } = await apiClient.post<OpenAIAccountSessionBatchRevokeResult>(
     `/admin/openai/accounts/${id}/sessions/revoke`,
     { session_ids: sessionIds }
+  )
+  return data
+}
+
+/** Fetch the periodic non-current OpenAI session cleanup policy and status. */
+export async function getOpenAISessionCleanup(id: number): Promise<OpenAISessionCleanupSettings> {
+  const { data } = await apiClient.get<OpenAISessionCleanupSettings>(
+    `/admin/openai/accounts/${id}/sessions/cleanup`
+  )
+  return data
+}
+
+/** Update the periodic non-current OpenAI session cleanup policy. */
+export async function updateOpenAISessionCleanup(
+  id: number,
+  updates: OpenAISessionCleanupUpdateRequest
+): Promise<OpenAISessionCleanupSettings> {
+  const { data } = await apiClient.put<OpenAISessionCleanupSettings>(
+    `/admin/openai/accounts/${id}/sessions/cleanup`,
+    updates
+  )
+  return data
+}
+
+/** Trigger an immediate non-current OpenAI session cleanup run. */
+export async function runOpenAISessionCleanup(id: number): Promise<{ message: string }> {
+  const { data } = await apiClient.post<{ message: string }>(
+    `/admin/openai/accounts/${id}/sessions/cleanup/run`,
+    undefined,
+    { timeout: 130000 }
   )
   return data
 }
@@ -1107,6 +1139,9 @@ export const accountsAPI = {
   listOpenAISessions,
   revokeOpenAISession,
   revokeOpenAISessions,
+  getOpenAISessionCleanup,
+  updateOpenAISessionCleanup,
+  runOpenAISessionCleanup,
   applyOAuthCredentials,
   getStats,
   clearError,

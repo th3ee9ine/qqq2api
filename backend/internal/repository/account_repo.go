@@ -65,6 +65,8 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"upstream_billing_probe",
 	"upstream_billing_rate_sync",
 	"ollama_cloud_usage",
+	"openai_session_cleanup_",
+	"auto_revoke_non_current_sessions_",
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{

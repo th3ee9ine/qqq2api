@@ -77,3 +77,11 @@ func TestLeaderLockCache_TTLExpires(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok, "lock should be re-acquirable after the TTL expires")
 }
+
+func TestLeaderLockCache_NilRedisFailsOpenToServiceFallback(t *testing.T) {
+	cache := &leaderLockCache{}
+	ok, err := cache.TryAcquireLeaderLock(context.Background(), "key", "owner", time.Minute)
+	require.Error(t, err)
+	require.False(t, ok)
+	require.NoError(t, cache.ReleaseLeaderLock(context.Background(), "key", "owner"))
+}

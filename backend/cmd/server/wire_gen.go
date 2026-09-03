@@ -169,7 +169,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	imageStorageSettingService := service.ProvideImageStorageSettingService(settingRepository, secretEncryptor, imageStorageFactory, configConfig)
 	imageStorageHandler := admin.NewImageStorageHandler(imageStorageSettingService)
 	oAuthHandler := admin.NewOAuthHandler(oAuthService)
-	openAIOAuthHandler := admin.NewOpenAIOAuthHandler(openAIOAuthService, adminService, openAIQuotaService, rateLimitService)
+	openAIOAuthHandler := handler.ProvideOpenAIOAuthHandler(openAIOAuthService, adminService, openAIQuotaService, rateLimitService)
 	proxyHandler := admin.NewProxyHandler(adminService)
 	settingHandler := handler.ProvideAdminSettingHandler(settingService, emailService, turnstileService, aliyunCaptchaService, opsService, notificationEmailService, totpService, userService)
 	opsHandler := admin.NewOpsHandler(opsService)
@@ -210,7 +210,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	ollamaCloudUsageService := service.ProvideOllamaCloudUsageService(accountRepository, httpUpstream, settingService, secretEncryptor, configConfig, leaderLockCache, db)
-	adminHandlers := handler.ProvideAdminHandlers(dashboardHandler, groupHandler, modelPricingHandler, accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler, openAIOAuthHandler, proxyHandler, settingHandler, opsHandler, systemHandler, adminUsageHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, contentModerationHandler, promptAdminHandler, auditLogHandler, upstreamBillingProbeService, ollamaCloudUsageService)
+	openAISessionCleanupService := service.ProvideOpenAISessionCleanupService(accountRepository, openAIQuotaService, leaderLockCache)
+	adminHandlers := handler.ProvideAdminHandlersWithSessionCleanup(dashboardHandler, groupHandler, modelPricingHandler, accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler, openAIOAuthHandler, proxyHandler, settingHandler, opsHandler, systemHandler, adminUsageHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, contentModerationHandler, promptAdminHandler, auditLogHandler, upstreamBillingProbeService, ollamaCloudUsageService, openAISessionCleanupService)
 	usageRecordWorkerPool := service.NewUsageRecordWorkerPool(configConfig)
 	userMsgQueueCache := repository.NewUserMsgQueueCache(redisClient)
 	userMessageQueueService := service.ProvideUserMessageQueueService(userMsgQueueCache, rpmCache, configConfig)
@@ -248,7 +249,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	openAICodexVersionSyncService := service.ProvideOpenAICodexVersionSyncService(settingRepository, settingService, gitHubReleaseClient)
 	proxyExpiryService := service.ProvideProxyExpiryService(proxyRepository)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, openAICodexVersionSyncService, proxyExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, oAuthService, openAIOAuthService, openAIGatewayService, scheduledTestRunnerService, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, openAIQuotaAutoResetService, promptService, pluginManager)
+	v := provideCleanupWithSessionCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, openAICodexVersionSyncService, proxyExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, oAuthService, openAIOAuthService, openAIGatewayService, scheduledTestRunnerService, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, openAIQuotaAutoResetService, openAISessionCleanupService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -285,6 +286,9 @@ func providePluginHostInfo(buildInfo handler.BuildInfo) service.PluginHostInfo {
 	}
 }
 
+// provideCleanup preserves the pre-session-cleanup helper signature for
+// package-local integrations and tests.  The generated application uses the
+// explicit provider below so the worker receives its lifecycle shutdown hook.
 func provideCleanup(
 	entClient *ent.Client,
 	rdb *redis.Client,
@@ -320,6 +324,80 @@ func provideCleanup(
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
 ) func() {
+	return provideCleanupWithSessionCleanup(
+		entClient,
+		rdb,
+		opsMetricsCollector,
+		opsAggregation,
+		opsAlertEvaluator,
+		opsCleanup,
+		opsScheduledReport,
+		opsSystemLogSink,
+		opsService,
+		opsIngressReject,
+		apiKeyService,
+		authCacheInvalidationWorker,
+		schedulerSnapshot,
+		tokenRefresh,
+		accountExpiry,
+		codexVersionSync,
+		proxyExpiry,
+		usageCleanup,
+		idempotencyCleanup,
+		pricing,
+		emailQueue,
+		billingCache,
+		usageRecordWorkerPool,
+		oauth,
+		openaiOAuth,
+		openAIGateway,
+		scheduledTestRunner,
+		upstreamBillingProbe,
+		ollamaCloudUsage,
+		auditLog,
+		openAIAutoReset,
+		nil,
+		promptAudit,
+		pluginManager,
+	)
+}
+
+func provideCleanupWithSessionCleanup(
+	entClient *ent.Client,
+	rdb *redis.Client,
+	opsMetricsCollector *service.OpsMetricsCollector,
+	opsAggregation *service.OpsAggregationService,
+	opsAlertEvaluator *service.OpsAlertEvaluatorService,
+	opsCleanup *service.OpsCleanupService,
+	opsScheduledReport *service.OpsScheduledReportService,
+	opsSystemLogSink *service.OpsSystemLogSink,
+	opsService *service.OpsService,
+	opsIngressReject *service.OpsIngressRejectAggregator,
+	apiKeyService *service.APIKeyService,
+	authCacheInvalidationWorker *service.AuthCacheInvalidationWorker,
+	schedulerSnapshot *service.SchedulerSnapshotService,
+	tokenRefresh *service.TokenRefreshService,
+	accountExpiry *service.AccountExpiryService,
+	codexVersionSync *service.OpenAICodexVersionSyncService,
+	proxyExpiry *service.ProxyExpiryService,
+	usageCleanup *service.UsageCleanupService,
+	idempotencyCleanup *service.IdempotencyCleanupService,
+	pricing *service.PricingService,
+	emailQueue *service.EmailQueueService,
+	billingCache *service.BillingCacheService,
+	usageRecordWorkerPool *service.UsageRecordWorkerPool,
+	oauth *service.OAuthService,
+	openaiOAuth *service.OpenAIOAuthService,
+	openAIGateway *service.OpenAIGatewayService,
+	scheduledTestRunner *service.ScheduledTestRunnerService,
+	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	ollamaCloudUsage *service.OllamaCloudUsageService,
+	auditLog *service.AuditLogService,
+	openAIAutoReset *service.OpenAIQuotaAutoResetService,
+	openAISessionCleanup *service.OpenAISessionCleanupService,
+	promptAudit *securityaudit.PromptService,
+	pluginManager *service.PluginManager,
+) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -339,6 +417,12 @@ func provideCleanup(
 			{"OpenAIQuotaAutoResetService", func() error {
 				if openAIAutoReset != nil {
 					openAIAutoReset.Stop()
+				}
+				return nil
+			}},
+			{"OpenAISessionCleanupService", func() error {
+				if openAISessionCleanup != nil {
+					openAISessionCleanup.Stop()
 				}
 				return nil
 			}},

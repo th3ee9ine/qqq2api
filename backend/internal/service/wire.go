@@ -259,6 +259,25 @@ func ProvideOpenAIQuotaAutoResetService(
 	return service
 }
 
+// ProvideOpenAISessionCleanupService starts the account-level worker that
+// revokes explicitly identified non-current OpenAI device sessions.  The
+// OpenAI quota service already owns the credential refresh and upstream HTTP
+// contract, so it is used as the narrow session-control client here.
+func ProvideOpenAISessionCleanupService(
+	accountRepo AccountRepository,
+	quotaService *OpenAIQuotaService,
+	leaderLock LeaderLockCache,
+) *OpenAISessionCleanupService {
+	service := NewOpenAISessionCleanupService(accountRepo, quotaService, leaderLock)
+	// OpenAIQuotaService is optional in a few reduced/test deployments.  Do
+	// not start a goroutine with a typed-nil client; the returned service stays
+	// inert and can still be passed through the common lifecycle graph.
+	if quotaService != nil {
+		service.Start()
+	}
+	return service
+}
+
 func ProvideAccountUsageService(
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
@@ -818,6 +837,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
 	ProvideOpenAIQuotaAutoResetService,
+	ProvideOpenAISessionCleanupService,
 	ProvideClaudeTokenProvider,
 	ProvideRateLimitService,
 	ProvideAccountUsageService,

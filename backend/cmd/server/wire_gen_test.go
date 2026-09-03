@@ -94,7 +94,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	schedulerSnapshotSvc := service.NewSchedulerSnapshotService(nil, nil, nil, nil, cfg)
 	opsSystemLogSinkSvc := service.NewOpsSystemLogSink(nil)
 
-	cleanup := provideCleanup(
+	cleanup := provideCleanupWithSessionCleanup(
 		nil, // entClient
 		nil, // redis
 		&service.OpsMetricsCollector{},
@@ -126,6 +126,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // ollamaCloudUsage
 		nil, // auditLog
 		nil, // openAIAutoReset
+		nil, // openAISessionCleanup
 		nil, // promptAudit
 		nil, // pluginManager
 	)

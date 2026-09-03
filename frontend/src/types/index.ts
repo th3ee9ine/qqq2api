@@ -1186,6 +1186,9 @@ export interface Account {
       last_result_at?: string
       error_code?: string
     }
+    openai_session_cleanup_enabled?: boolean
+    openai_session_cleanup_interval_minutes?: number
+    openai_session_cleanup_state?: OpenAISessionCleanupState
   } & Record<string, unknown>)
   proxy_id: number | null
   proxy_fallback_origin_id?: number | null
@@ -1311,6 +1314,35 @@ export interface OpenAIAccountSession {
 export interface OpenAIAccountSessionList {
   sessions: OpenAIAccountSession[]
   fetched_at: number
+  /** Whether the upstream response identified the current device/session. */
+  current_known?: boolean
+}
+
+export type OpenAISessionCleanupStatus = 'running' | 'success' | 'skipped' | 'failed'
+
+/** Redacted runtime state for periodic OpenAI session cleanup. */
+export interface OpenAISessionCleanupState {
+  status: OpenAISessionCleanupStatus | string
+  last_run_at?: string
+  last_success_at?: string
+  last_result_at?: string
+  revoked_count: number
+  failed_count: number
+  current_session_known: boolean
+  error_code?: string
+  message?: string
+}
+
+/** Account-level periodic OpenAI session cleanup settings and status. */
+export interface OpenAISessionCleanupSettings {
+  enabled: boolean
+  interval_minutes: number
+  state?: OpenAISessionCleanupState | null
+}
+
+export interface OpenAISessionCleanupUpdateRequest {
+  enabled?: boolean
+  interval_minutes?: number
 }
 
 export interface OpenAIAccountSessionRevokeFailure {

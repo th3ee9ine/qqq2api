@@ -108,6 +108,48 @@ func TestAccountFromServiceShallow_RedactsOllamaCloudManagedExtra(t *testing.T) 
 	require.Contains(t, src.Extra, service.OllamaCloudUsageSessionExtraKey)
 }
 
+func TestAccountFromServiceShallow_RedactsOpenAISessionCleanupState(t *testing.T) {
+	legacyState := map[string]any{
+		"status":          "failed",
+		"last_success_at": "session_id=SECRET",
+		"last_run_at":     "2026-09-02T12:00:00+08:00",
+		"error_code":      "CUSTOM access_token=SECRET",
+		"message":         "https://chatgpt.example/sessions/SECRET",
+		"revoked_count":   -3,
+		"failed_count":    -1,
+		"private_field":   "bearer SECRET",
+	}
+	src := &service.Account{
+		ID:       12,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+		Extra: map[string]any{
+			service.OpenAISessionCleanupStateExtraKey: legacyState,
+			"ordinary": "kept",
+		},
+	}
+
+	got := AccountFromServiceShallow(src)
+	require.NotNil(t, got)
+	state, ok := got.Extra[service.OpenAISessionCleanupStateExtraKey].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, service.OpenAISessionCleanupStatusFailed, state["status"])
+	require.Empty(t, state["last_success_at"])
+	require.Equal(t, "2026-09-02T04:00:00Z", state["last_run_at"])
+	require.Equal(t, "OPENAI_SESSION_CLEANUP_FAILED", state["error_code"])
+	require.Equal(t, "the OpenAI session cleanup request failed", state["message"])
+	require.Equal(t, 0, state["revoked_count"])
+	require.Equal(t, 0, state["failed_count"])
+	require.NotContains(t, state, "private_field")
+	require.Equal(t, "kept", got.Extra["ordinary"])
+
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "SECRET")
+	// Mapping must not mutate the service account's nested state map.
+	require.Equal(t, "session_id=SECRET", legacyState["last_success_at"])
+}
+
 func TestAccountFromServiceShallow_NilCredentialsOmitsStatus(t *testing.T) {
 	src := &service.Account{ID: 1, Name: "n", Platform: "anthropic", Type: "oauth"}
 	got := AccountFromServiceShallow(src)

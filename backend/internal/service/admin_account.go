@@ -107,27 +107,36 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 	"quota_daily_reset_at":  {},
 	"quota_weekly_reset_at": {},
 	// Provider observations, capability probes, and transient scheduling state.
-	"model_rate_limits":                      {},
-	"session_window_utilization":             {},
-	"passive_usage_7d_utilization":           {},
-	"passive_usage_7d_reset":                 {},
-	"passive_usage_7d_oi_utilization":        {},
-	"passive_usage_7d_oi_reset":              {},
-	"passive_usage_sampled_at":               {},
-	"grok_usage_snapshot":                    {},
-	"grok_billing_snapshot":                  {},
-	"openai_responses_supported":             {},
-	"openai_compact_supported":               {},
-	"openai_compact_checked_at":              {},
-	"openai_compact_last_status":             {},
-	"openai_compact_last_error":              {},
-	"antigravity_credits_overages":           {},
-	"antigravity_force_token_refresh":        {},
-	"antigravity_force_token_refresh_at":     {},
-	"antigravity_force_token_refresh_reason": {},
-	"drive_storage_limit":                    {},
-	"drive_storage_usage":                    {},
-	"drive_tier_updated_at":                  {},
+	"model_rate_limits":               {},
+	"session_window_utilization":      {},
+	"passive_usage_7d_utilization":    {},
+	"passive_usage_7d_reset":          {},
+	"passive_usage_7d_oi_utilization": {},
+	"passive_usage_7d_oi_reset":       {},
+	"passive_usage_sampled_at":        {},
+	"grok_usage_snapshot":             {},
+	"grok_billing_snapshot":           {},
+	"openai_responses_supported":      {},
+	"openai_compact_supported":        {},
+	"openai_compact_checked_at":       {},
+	"openai_compact_last_status":      {},
+	"openai_compact_last_error":       {},
+	// Session-cleanup policy is meaningful only for OpenAI OAuth parents and
+	// must never be copied into a duplicate account (the duplicate operation
+	// currently accepts credential types other than OAuth).
+	OpenAISessionCleanupEnabledExtraKey:                       {},
+	OpenAISessionCleanupIntervalMinutesExtraKey:               {},
+	OpenAIAutoRevokeNonCurrentSessionsEnabledExtraKey:         {},
+	OpenAIAutoRevokeNonCurrentSessionsIntervalMinutesExtraKey: {},
+	OpenAISessionCleanupStateExtraKey:                         {},
+	OpenAIAutoRevokeNonCurrentSessionsLegacyStateExtraKey:     {},
+	"antigravity_credits_overages":                            {},
+	"antigravity_force_token_refresh":                         {},
+	"antigravity_force_token_refresh_at":                      {},
+	"antigravity_force_token_refresh_reason":                  {},
+	"drive_storage_limit":                                     {},
+	"drive_storage_usage":                                     {},
+	"drive_tier_updated_at":                                   {},
 	// Codex fingerprint convergence uses a per-account random seed, never copied from another account.
 	codexFingerprintSeedExtraKey:           {},
 	"codex_primary_used_percent":           {},
@@ -249,6 +258,9 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err != nil {
 		return nil, err
 	}
+	if source == nil {
+		return nil, ErrAccountNotFound
+	}
 	if err := requireActiveAccountPlatform(source.Platform); err != nil {
 		return nil, err
 	}
@@ -313,6 +325,10 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("normalize duplicate account extra: %w", err)
+	}
+	accountExtra, err = normalizeOpenAINonCurrentSessionRevokeExtra(input.Platform, input.Type, false, accountExtra)
+	if err != nil {
+		return nil, fmt.Errorf("normalize duplicate account session cleanup extra: %w", err)
 	}
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
@@ -409,6 +425,8 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	delete(accountExtra, OllamaCloudUsageSessionExtraKey)
 	delete(accountExtra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(accountExtra, OllamaCloudUsageSnapshotExtraKey)
+	delete(accountExtra, OpenAISessionCleanupStateExtraKey)
+	delete(accountExtra, OpenAIAutoRevokeNonCurrentSessionsLegacyStateExtraKey)
 	accountExtra = prepareCodexFingerprintExtraForCreate(input.Platform, input.Type, accountExtra)
 	account := &Account{
 		Name:        input.Name,
@@ -483,6 +501,10 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		return nil, err
 	}
 	accountExtra, err = normalizeOpenAIAutoResetCreditExtra(input.Platform, input.Type, false, accountExtra)
+	if err != nil {
+		return nil, err
+	}
+	accountExtra, err = normalizeOpenAINonCurrentSessionRevokeExtra(input.Platform, input.Type, false, accountExtra)
 	if err != nil {
 		return nil, err
 	}
@@ -591,9 +613,17 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
 	if err := requireActiveAccountPlatform(account.Platform); err != nil {
 		return nil, err
 	}
+	effectiveType := account.Type
+	if input.Type != "" {
+		effectiveType = input.Type
+	}
+	typeChanging := input.Type != "" && input.Type != account.Type
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -604,13 +634,35 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err != nil {
 			return nil, err
 		}
-		effectiveType := account.Type
-		if input.Type != "" {
-			effectiveType = input.Type
-		}
 		normalizedExtra, err = normalizeOpenAIAutoResetCreditExtra(account.Platform, effectiveType, account.IsShadow(), normalizedExtra)
 		if err != nil {
 			return nil, err
+		}
+		// A full account edit often round-trips an Extra object from an older
+		// client.  Preserve an existing cleanup policy when those fields are
+		// omitted, but discard stale policy keys when the account is explicitly
+		// migrated to an ineligible credential type.  The latter is intentionally
+		// allowed: carrying a dormant OpenAI-only setting into an API-key account
+		// should not make an otherwise valid type migration fail validation.
+		if typeChanging && !isOpenAINonCurrentSessionRevokeAccount(&Account{
+			Platform:        account.Platform,
+			Type:            effectiveType,
+			ParentAccountID: account.ParentAccountID,
+		}) {
+			normalizedExtra = stripOpenAINonCurrentSessionRevokeManagedExtra(normalizedExtra, true)
+		} else {
+			normalizedExtra = mergeOpenAINonCurrentSessionRevokeExistingConfig(account, effectiveType, normalizedExtra)
+		}
+		normalizedExtra, err = normalizeOpenAINonCurrentSessionRevokeExtra(account.Platform, effectiveType, account.IsShadow(), normalizedExtra)
+		if err != nil {
+			return nil, err
+		}
+		if !isOpenAINonCurrentSessionRevokeAccount(&Account{
+			Platform:        account.Platform,
+			Type:            effectiveType,
+			ParentAccountID: account.ParentAccountID,
+		}) {
+			normalizedExtra = stripOpenAINonCurrentSessionRevokeManagedExtra(normalizedExtra, true)
 		}
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
@@ -653,6 +705,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if input.Type != "" {
 		account.Type = input.Type
+	}
+	// If an account is migrated away from an OpenAI OAuth parent, discard the
+	// now-inapplicable policy and runtime-state keys instead of carrying dormant
+	// cleanup data into a different credential type.
+	if account.Extra != nil && !isOpenAINonCurrentSessionRevokeAccount(account) {
+		stripOpenAINonCurrentSessionRevokeManagedExtra(account.Extra, true)
 	}
 	if input.Notes != nil {
 		account.Notes = normalizeAccountNotes(input.Notes)
@@ -710,6 +768,20 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		} {
 			if v, ok := account.Extra[key]; ok {
 				normalizedExtra[key] = v
+			}
+		}
+		// Cleanup state is service-owned and may have been written by an older
+		// worker version with free-form fields.  Carry only the validated
+		// aggregate projection through a full account edit; otherwise a harmless
+		// credentials/name update could re-persist a legacy token-bearing state
+		// object verbatim.
+		if raw, ok := account.Extra[OpenAISessionCleanupStateExtraKey]; ok {
+			if state := SanitizeOpenAISessionCleanupState(raw); state != nil {
+				normalizedExtra[OpenAISessionCleanupStateExtraKey] = *state
+			}
+		} else if raw, ok := account.Extra[OpenAIAutoRevokeNonCurrentSessionsLegacyStateExtraKey]; ok {
+			if state := SanitizeOpenAISessionCleanupState(raw); state != nil {
+				normalizedExtra[OpenAISessionCleanupStateExtraKey] = *state
 			}
 		}
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
@@ -947,11 +1019,23 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	if err != nil {
 		return err
 	}
+	if account == nil {
+		return ErrAccountNotFound
+	}
 	if err := requireActiveAccountPlatform(account.Platform); err != nil {
 		return err
 	}
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
+	// The cleanup state remains service-owned, while the two policy keys are
+	// safe to merge atomically after account-aware validation.  This lets the
+	// dedicated cleanup endpoint avoid a read/replace race with unrelated
+	// runtime Extra updates.
+	updates = stripOpenAINonCurrentSessionRevokeManagedExtra(updates, false)
+	updates, err = normalizeOpenAINonCurrentSessionRevokePatch(account, updates)
+	if err != nil {
+		return err
+	}
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
 	delete(updates, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(updates, UpstreamBillingProbeExtraKey)
@@ -981,6 +1065,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
+	input.Extra = stripOpenAINonCurrentSessionRevokeManagedExtra(input.Extra, true)
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingRateSyncEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingProbeExtraKey)

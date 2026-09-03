@@ -2068,6 +2068,43 @@
         <p class="input-hint">{{ t('admin.accounts.autoResetCredit.thresholdHint') }}</p>
       </div>
 
+      <!-- Periodically remove non-current ChatGPT device sessions. -->
+      <div
+        v-if="isOpenAISessionCleanupAccount"
+        class="space-y-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="openai-session-cleanup-settings"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.sessionCleanup.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.sessionCleanup.hint') }}
+            </p>
+          </div>
+          <Toggle
+            v-model="openAISessionCleanupEnabled"
+            data-testid="openai-session-cleanup-enabled"
+            :aria-label="t('admin.accounts.openai.sessionCleanup.title')"
+          />
+        </div>
+        <div class="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label class="input-label">{{ t('admin.accounts.openai.sessionCleanup.interval') }}</label>
+            <input
+              v-model.number="openAISessionCleanupIntervalMinutes"
+              type="number"
+              min="5"
+              max="10080"
+              step="1"
+              class="input"
+              :disabled="!openAISessionCleanupEnabled"
+              data-testid="openai-session-cleanup-interval"
+            />
+            <p class="input-hint">{{ t('admin.accounts.openai.sessionCleanup.intervalHint') }}</p>
+          </div>
+        </div>
+      </div>
+
       <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
       <div
         v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
@@ -2604,6 +2641,9 @@ const isAnthropicOAuth = computed(() =>
   (props.account?.type === 'oauth' || props.account?.type === 'setup-token')
 )
 const isSparkShadow = computed(() => Boolean(props.account?.parent_account_id))
+const isOpenAISessionCleanupAccount = computed(() =>
+  isOpenAI.value && props.account?.type === 'oauth' && !isSparkShadow.value
+)
 
 const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
   if (props.account) emit('updated', { ...props.account, ollama_cloud_usage: state })
@@ -2660,6 +2700,10 @@ const autoPause7dDisabled = ref(false)
 const autoResetCreditEnabled = ref(false)
 const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
+// OpenAI OAuth session hygiene. The worker reads these values from account.extra
+// and keeps the current ChatGPT device session intact.
+const openAISessionCleanupEnabled = ref(false)
+const openAISessionCleanupIntervalMinutes = ref(60)
 const upstreamBillingProbeEnabled = ref(false)
 const upstreamBillingRateSyncEnabled = ref(false)
 const openaiPassthroughEnabled = ref(false)
@@ -3126,6 +3170,15 @@ function hydrate() {
   autoResetCreditEnabled.value = readBoolean(extra.auto_reset_credit_enabled)
   autoResetCredit5hThreshold.value = readPercent(extra.auto_reset_credit_5h_threshold) ?? 100
   autoResetCredit7dThreshold.value = readPercent(extra.auto_reset_credit_7d_threshold) ?? 100
+  const sessionCleanupEnabled = extra.openai_session_cleanup_enabled ??
+    extra.auto_revoke_non_current_sessions_enabled
+  openAISessionCleanupEnabled.value = isOpenAISessionCleanupAccount.value && readBoolean(sessionCleanupEnabled)
+  const rawSessionCleanupInterval = extra.openai_session_cleanup_interval_minutes ??
+    extra.auto_revoke_non_current_sessions_interval_minutes
+  const parsedSessionCleanupInterval = Number(rawSessionCleanupInterval)
+  openAISessionCleanupIntervalMinutes.value = Number.isFinite(parsedSessionCleanupInterval)
+    ? Math.min(10080, Math.max(5, Math.trunc(parsedSessionCleanupInterval)))
+    : 60
   upstreamBillingProbeEnabled.value = readBoolean(
     asRecord(account).upstream_billing_probe_enabled ?? extra.upstream_billing_probe_enabled
   )
@@ -3833,8 +3886,31 @@ async function handleSubmit() {
         extra.auto_reset_credit_enabled = autoResetCreditEnabled.value
         extra.auto_reset_credit_5h_threshold = autoResetCredit5hThreshold.value / 100
         extra.auto_reset_credit_7d_threshold = autoResetCredit7dThreshold.value / 100
+
+        // Session cleanup is intentionally scoped to OpenAI OAuth parent
+        // accounts.  Keep the interval normalized even while disabled so
+        // enabling the feature later never starts with an invalid value.
+        if (isOpenAISessionCleanupAccount.value) {
+          extra.openai_session_cleanup_enabled = openAISessionCleanupEnabled.value
+          extra.openai_session_cleanup_interval_minutes = Math.min(
+            10080,
+            Math.max(5, Math.trunc(Number(openAISessionCleanupIntervalMinutes.value) || 60))
+          )
+          delete extra.auto_revoke_non_current_sessions_enabled
+          delete extra.auto_revoke_non_current_sessions_interval_minutes
+        }
       }
     }
+  }
+
+  // Remove stale cleanup settings even when an account was migrated away from
+  // OpenAI.  Leaving these keys on an unrelated account would make the backend
+  // correctly reject an otherwise harmless edit as an invalid cleanup policy.
+  if (!isOpenAISessionCleanupAccount.value) {
+    delete extra.openai_session_cleanup_enabled
+    delete extra.openai_session_cleanup_interval_minutes
+    delete extra.auto_revoke_non_current_sessions_enabled
+    delete extra.auto_revoke_non_current_sessions_interval_minutes
   }
 
   if (isAnthropicApiKey.value) {

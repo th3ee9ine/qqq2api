@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type OpenAIOAuthHandler struct {
 	adminService       service.AdminService
 	quotaService       openAIQuotaService
 	sessionService     openAIAccountSessionService
+	sessionCleanup     openAISessionCleanupRunner
 	rateLimitService   openAIAccountStateRecoverer
 }
 
@@ -41,6 +43,15 @@ type openAIAccountSessionService interface {
 type openAIAccountStateRecoverer interface {
 	RecoverAccountState(ctx context.Context, accountID int64, options service.AccountRecoveryOptions) (*service.SuccessfulTestRecoveryResult, error)
 }
+
+// OpenAISessionCleanupRunner is the narrow worker seam used by the admin
+// handler.  Exporting the interface lets external integrations and tests wire
+// a compatible runner without depending on an unexported parameter type.
+type OpenAISessionCleanupRunner interface {
+	RunAccount(ctx context.Context, accountID int64) error
+}
+
+type openAISessionCleanupRunner = OpenAISessionCleanupRunner
 
 // openAIQuotaResetPostProcessTimeout bounds the work performed AFTER the
 // (non-refundable) reset credit has already been consumed upstream. The whole
@@ -89,6 +100,7 @@ func NewOpenAIOAuthHandler(
 	adminService service.AdminService,
 	quotaService *service.OpenAIQuotaService,
 	rateLimitService *service.RateLimitService,
+	optionalSessionCleanup ...openAISessionCleanupRunner,
 ) *OpenAIOAuthHandler {
 	h := &OpenAIOAuthHandler{
 		openaiOAuthService: openaiOAuthService,
@@ -104,7 +116,217 @@ func NewOpenAIOAuthHandler(
 	if rateLimitService != nil {
 		h.rateLimitService = rateLimitService
 	}
+	// Keep the historical four-argument constructor source-compatible while
+	// allowing integrations that wire the cleanup worker at construction time
+	// to pass a fifth dependency.  The generated Wire graph still uses the
+	// setter so older reduced deployments remain inert.
+	if len(optionalSessionCleanup) > 0 {
+		h.SetSessionCleanupService(optionalSessionCleanup[0])
+	}
 	return h
+}
+
+// SetSessionCleanupService injects the optional periodic non-current device
+// session cleanup worker.  A setter keeps the historical constructor stable for
+// lightweight handler tests and downstream integrations.
+func (h *OpenAIOAuthHandler) SetSessionCleanupService(cleanup openAISessionCleanupRunner) {
+	if h != nil {
+		if isNilOpenAISessionCleanupRunner(cleanup) {
+			cleanup = nil
+		}
+		h.sessionCleanup = cleanup
+	}
+}
+
+func isNilOpenAISessionCleanupRunner(value openAISessionCleanupRunner) bool {
+	if value == nil {
+		return true
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
+type openAISessionCleanupUpdateRequest struct {
+	Enabled         *bool `json:"enabled"`
+	IntervalMinutes *int  `json:"interval_minutes"`
+}
+
+type openAISessionCleanupResponse struct {
+	Enabled         bool                               `json:"enabled"`
+	IntervalMinutes int                                `json:"interval_minutes"`
+	State           *service.OpenAISessionCleanupState `json:"state,omitempty"`
+}
+
+func parseOpenAISessionCleanupAccount(c *gin.Context, adminService service.AdminService) (*service.Account, int64, bool) {
+	if isNilOpenAISessionCleanupDependency(adminService) {
+		response.Error(c, http.StatusInternalServerError, "admin account service is not configured")
+		return nil, 0, false
+	}
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "Invalid account ID")
+		return nil, 0, false
+	}
+	account, err := adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return nil, 0, false
+	}
+	if account == nil {
+		// A few lightweight AdminService implementations use the conventional
+		// (nil, nil) not-found result. Normalize it to the same 404 envelope as
+		// the production service instead of reporting a misleading platform
+		// mismatch.
+		response.ErrorFrom(c, service.ErrAccountNotFound)
+		return nil, 0, false
+	}
+	if account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeOAuth || account.IsShadow() {
+		response.BadRequest(c, "session cleanup requires an OpenAI OAuth parent account")
+		return nil, 0, false
+	}
+	return account, accountID, true
+}
+
+// AdminService is an interface in the handler constructor. Treat an interface
+// containing a typed-nil implementation the same as a nil interface so a
+// partially wired test/deployment returns a stable 500 instead of panicking.
+func isNilOpenAISessionCleanupDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
+func openAISessionCleanupStateFromAccount(account *service.Account) *service.OpenAISessionCleanupState {
+	if account == nil || account.Extra == nil {
+		return nil
+	}
+	raw := account.Extra[service.OpenAISessionCleanupStateExtraKey]
+	if raw == nil {
+		raw = account.Extra[service.OpenAIAutoRevokeNonCurrentSessionsLegacyStateExtraKey]
+	}
+	return service.SanitizeOpenAISessionCleanupState(raw)
+}
+
+// GetSessionCleanup returns the account-level periodic session cleanup policy
+// and its redacted runtime state.
+// GET /api/v1/admin/openai/accounts/:id/sessions/cleanup
+func (h *OpenAIOAuthHandler) GetSessionCleanup(c *gin.Context) {
+	if h == nil {
+		response.Error(c, http.StatusInternalServerError, "OpenAI OAuth handler is not configured")
+		return
+	}
+	account, _, ok := parseOpenAISessionCleanupAccount(c, h.adminService)
+	if !ok {
+		return
+	}
+	config := service.ResolveOpenAINonCurrentSessionRevokeConfig(account)
+	state := openAISessionCleanupStateFromAccount(account)
+	response.Success(c, openAISessionCleanupResponse{Enabled: config.Enabled, IntervalMinutes: config.IntervalMinutes, State: state})
+}
+
+// UpdateSessionCleanup updates only the cleanup settings while preserving all
+// unrelated account.extra keys.
+// PUT /api/v1/admin/openai/accounts/:id/sessions/cleanup
+func (h *OpenAIOAuthHandler) UpdateSessionCleanup(c *gin.Context) {
+	if h == nil {
+		response.Error(c, http.StatusInternalServerError, "OpenAI OAuth handler is not configured")
+		return
+	}
+	_, accountID, ok := parseOpenAISessionCleanupAccount(c, h.adminService)
+	if !ok {
+		return
+	}
+	var req openAISessionCleanupUpdateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	updates := make(map[string]any, 2)
+	if req.Enabled != nil {
+		updates[service.OpenAISessionCleanupEnabledExtraKey] = *req.Enabled
+	}
+	if req.IntervalMinutes != nil {
+		updates[service.OpenAISessionCleanupIntervalMinutesExtraKey] = *req.IntervalMinutes
+	}
+	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, updates); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	updated, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if updated == nil {
+		response.Error(c, http.StatusInternalServerError, "updated account was not found")
+		return
+	}
+	config := service.ResolveOpenAINonCurrentSessionRevokeConfig(updated)
+	state := openAISessionCleanupStateFromAccount(updated)
+	response.Success(c, openAISessionCleanupResponse{Enabled: config.Enabled, IntervalMinutes: config.IntervalMinutes, State: state})
+}
+
+// RunSessionCleanup triggers one immediate cleanup for an account.  It bypasses
+// the periodic due timestamp but still enforces the current-device safety gate.
+// POST /api/v1/admin/openai/accounts/:id/sessions/cleanup/run
+func (h *OpenAIOAuthHandler) RunSessionCleanup(c *gin.Context) {
+	if h == nil {
+		response.Error(c, http.StatusInternalServerError, "OpenAI OAuth handler is not configured")
+		return
+	}
+	_, accountID, ok := parseOpenAISessionCleanupAccount(c, h.adminService)
+	if !ok {
+		return
+	}
+	if isNilOpenAISessionCleanupRunner(h.sessionCleanup) {
+		response.BadRequest(c, "openai session cleanup service is not enabled")
+		return
+	}
+	if err := h.sessionCleanup.RunAccount(c.Request.Context(), accountID); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"message": "OpenAI session cleanup completed"})
+}
+
+// Explicitly prefixed aliases make the endpoint methods discoverable to
+// integrations that group OpenAI controls by operation name.
+func (h *OpenAIOAuthHandler) GetOpenAISessionCleanup(c *gin.Context) {
+	h.GetSessionCleanup(c)
+}
+
+func (h *OpenAIOAuthHandler) UpdateOpenAISessionCleanup(c *gin.Context) {
+	h.UpdateSessionCleanup(c)
+}
+
+func (h *OpenAIOAuthHandler) RunOpenAISessionCleanup(c *gin.Context) {
+	h.RunSessionCleanup(c)
+}
+
+// Legacy auto-revoke spellings retained for integrations that adopted the
+// original policy name before the UI-facing session-cleanup name shipped.
+func (h *OpenAIOAuthHandler) GetOpenAIAutoRevokeNonCurrentSessions(c *gin.Context) {
+	h.GetSessionCleanup(c)
+}
+
+func (h *OpenAIOAuthHandler) UpdateOpenAIAutoRevokeNonCurrentSessions(c *gin.Context) {
+	h.UpdateSessionCleanup(c)
+}
+
+func (h *OpenAIOAuthHandler) RunOpenAIAutoRevokeNonCurrentSessions(c *gin.Context) {
+	h.RunSessionCleanup(c)
 }
 
 // ListSessions returns the active ChatGPT sessions associated with an OpenAI

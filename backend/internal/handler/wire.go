@@ -9,7 +9,25 @@ import (
 	"github.com/google/wire"
 )
 
-// ProvideAdminHandlers creates the AdminHandlers struct
+// ProvideOpenAIOAuthHandler is the fixed-arity Wire provider for the OpenAI
+// OAuth admin handler.  NewOpenAIOAuthHandler intentionally accepts an
+// optional cleanup runner for source compatibility with integrations that
+// construct it directly; Wire cannot resolve a variadic dependency, so the
+// provider graph uses this four-argument wrapper and injects the cleanup
+// worker through SetSessionCleanupService in ProvideAdminHandlersWithSessionCleanup.
+func ProvideOpenAIOAuthHandler(
+	openaiOAuthService *service.OpenAIOAuthService,
+	adminService service.AdminService,
+	quotaService *service.OpenAIQuotaService,
+	rateLimitService *service.RateLimitService,
+) *admin.OpenAIOAuthHandler {
+	return admin.NewOpenAIOAuthHandler(openaiOAuthService, adminService, quotaService, rateLimitService)
+}
+
+// ProvideAdminHandlers creates the AdminHandlers struct.  The optional cleanup
+// argument keeps the historical constructor source-compatible for integrations
+// that build handlers directly; the Wire provider below uses the explicit
+// WithSessionCleanup variant so dependency injection remains deterministic.
 func ProvideAdminHandlers(
 	dashboardHandler *admin.DashboardHandler,
 	groupHandler *admin.GroupHandler,
@@ -34,9 +52,134 @@ func ProvideAdminHandlers(
 	auditLogHandler *admin.AuditLogHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
+	optionalSessionCleanup ...*service.OpenAISessionCleanupService,
 ) *AdminHandlers {
-	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
-	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
+	var openAISessionCleanup *service.OpenAISessionCleanupService
+	if len(optionalSessionCleanup) > 0 {
+		openAISessionCleanup = optionalSessionCleanup[0]
+	}
+	return provideAdminHandlersWithSessionCleanup(
+		dashboardHandler,
+		groupHandler,
+		modelPricingHandler,
+		accountHandler,
+		accountAdminHandler,
+		imageStorageHandler,
+		oauthHandler,
+		openaiOAuthHandler,
+		proxyHandler,
+		settingHandler,
+		opsHandler,
+		systemHandler,
+		usageHandler,
+		errorPassthroughHandler,
+		tlsFingerprintProfileHandler,
+		pluginHandler,
+		apiKeyHandler,
+		scheduledTestHandler,
+		contentModerationHandler,
+		promptAuditHandler,
+		auditLogHandler,
+		upstreamBillingProbe,
+		ollamaCloudUsage,
+		openAISessionCleanup,
+	)
+}
+
+// ProvideAdminHandlersWithSessionCleanup is the fixed-arity provider used by
+// Wire.  Keep it separate from the compatibility wrapper above because Wire
+// does not infer optional variadic dependencies.
+func ProvideAdminHandlersWithSessionCleanup(
+	dashboardHandler *admin.DashboardHandler,
+	groupHandler *admin.GroupHandler,
+	modelPricingHandler *admin.ModelPricingHandler,
+	accountHandler *admin.AccountHandler,
+	accountAdminHandler *admin.AccountAdminHandler,
+	imageStorageHandler *admin.ImageStorageHandler,
+	oauthHandler *admin.OAuthHandler,
+	openaiOAuthHandler *admin.OpenAIOAuthHandler,
+	proxyHandler *admin.ProxyHandler,
+	settingHandler *admin.SettingHandler,
+	opsHandler *admin.OpsHandler,
+	systemHandler *admin.SystemHandler,
+	usageHandler *admin.UsageHandler,
+	errorPassthroughHandler *admin.ErrorPassthroughHandler,
+	tlsFingerprintProfileHandler *admin.TLSFingerprintProfileHandler,
+	pluginHandler *admin.PluginHandler,
+	apiKeyHandler *admin.AdminAPIKeyHandler,
+	scheduledTestHandler *admin.ScheduledTestHandler,
+	contentModerationHandler *admin.ContentModerationHandler,
+	promptAuditHandler *securityaudit.PromptAdminHandler,
+	auditLogHandler *admin.AuditLogHandler,
+	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	ollamaCloudUsage *service.OllamaCloudUsageService,
+	openAISessionCleanup *service.OpenAISessionCleanupService,
+) *AdminHandlers {
+	return provideAdminHandlersWithSessionCleanup(
+		dashboardHandler,
+		groupHandler,
+		modelPricingHandler,
+		accountHandler,
+		accountAdminHandler,
+		imageStorageHandler,
+		oauthHandler,
+		openaiOAuthHandler,
+		proxyHandler,
+		settingHandler,
+		opsHandler,
+		systemHandler,
+		usageHandler,
+		errorPassthroughHandler,
+		tlsFingerprintProfileHandler,
+		pluginHandler,
+		apiKeyHandler,
+		scheduledTestHandler,
+		contentModerationHandler,
+		promptAuditHandler,
+		auditLogHandler,
+		upstreamBillingProbe,
+		ollamaCloudUsage,
+		openAISessionCleanup,
+	)
+}
+
+func provideAdminHandlersWithSessionCleanup(
+	dashboardHandler *admin.DashboardHandler,
+	groupHandler *admin.GroupHandler,
+	modelPricingHandler *admin.ModelPricingHandler,
+	accountHandler *admin.AccountHandler,
+	accountAdminHandler *admin.AccountAdminHandler,
+	imageStorageHandler *admin.ImageStorageHandler,
+	oauthHandler *admin.OAuthHandler,
+	openaiOAuthHandler *admin.OpenAIOAuthHandler,
+	proxyHandler *admin.ProxyHandler,
+	settingHandler *admin.SettingHandler,
+	opsHandler *admin.OpsHandler,
+	systemHandler *admin.SystemHandler,
+	usageHandler *admin.UsageHandler,
+	errorPassthroughHandler *admin.ErrorPassthroughHandler,
+	tlsFingerprintProfileHandler *admin.TLSFingerprintProfileHandler,
+	pluginHandler *admin.PluginHandler,
+	apiKeyHandler *admin.AdminAPIKeyHandler,
+	scheduledTestHandler *admin.ScheduledTestHandler,
+	contentModerationHandler *admin.ContentModerationHandler,
+	promptAuditHandler *securityaudit.PromptAdminHandler,
+	auditLogHandler *admin.AuditLogHandler,
+	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	ollamaCloudUsage *service.OllamaCloudUsageService,
+	openAISessionCleanup *service.OpenAISessionCleanupService,
+) *AdminHandlers {
+	// Keep the provider usable in reduced test/development graphs where one of
+	// the optional handlers is deliberately omitted.  The generated production
+	// graph supplies all three values, while these guards avoid a nil-pointer
+	// panic for compatibility callers that only need the remaining handlers.
+	if accountHandler != nil {
+		accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
+		accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
+	}
+	if openaiOAuthHandler != nil {
+		openaiOAuthHandler.SetSessionCleanupService(openAISessionCleanup)
+	}
 	return &AdminHandlers{
 		Dashboard:             dashboardHandler,
 		Group:                 groupHandler,
@@ -187,7 +330,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAccountAdminHandler,
 	admin.NewImageStorageHandler,
 	admin.NewOAuthHandler,
-	admin.NewOpenAIOAuthHandler,
+	ProvideOpenAIOAuthHandler,
 	admin.NewProxyHandler,
 	ProvideAdminSettingHandler,
 	admin.NewOpsHandler,
@@ -202,6 +345,6 @@ var ProviderSet = wire.NewSet(
 	admin.NewAuditLogHandler,
 
 	// AdminHandlers and Handlers constructors
-	ProvideAdminHandlers,
+	ProvideAdminHandlersWithSessionCleanup,
 	ProvideHandlers,
 )
