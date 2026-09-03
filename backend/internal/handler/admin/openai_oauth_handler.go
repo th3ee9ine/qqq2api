@@ -146,7 +146,7 @@ func (h *OpenAIOAuthHandler) SetSessionCleanupService(cleanup openAISessionClean
 	}
 }
 
-func isNilOpenAISessionCleanupRunner(value openAISessionCleanupRunner) bool {
+func isNilOpenAISessionCleanupRunner(value any) bool {
 	if value == nil {
 		return true
 	}
