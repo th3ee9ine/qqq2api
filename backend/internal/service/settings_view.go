@@ -243,6 +243,7 @@ type SystemSettings struct {
 	OpenAICodexClientVersion               string // Codex 统一身份版本热修复值；UA engine 与 Responses/WS Version 共用
 	OpenAICodexClientVersionSynced         string // 官方最新稳定 rust-v（只读）；UA engine 与 Responses/WS Version 共用
 	OpenAICodexVersionAutoSyncEnabled      bool   // 是否启用 Codex 客户端版本号自动同步（默认 true）
+	EnableOpenAIAccountLocalDeviceIdentity bool   // 是否优先使用账号本地设备会话中的 UA/Originator（默认 true）
 	MinCodexVersion                        string // codex_cli_only 最低 Codex 引擎版本；空=不检查
 	MaxCodexVersion                        string // codex_cli_only 最高 Codex 引擎版本；空=不检查
 	CodexCLIOnlyBlacklist                  string // codex_cli_only 全局黑名单 JSON（[]AllowedClientEntry，OR deny）

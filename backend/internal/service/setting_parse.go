@@ -241,6 +241,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexClientVersion:                           "",
 		SettingKeyOpenAICodexClientVersionSynced:                     "",
 		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
+		SettingKeyEnableOpenAIAccountLocalDeviceIdentity:             "true",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -881,6 +882,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.OpenAICodexVersionAutoSyncEnabled = v == "true"
 	} else {
 		result.OpenAICodexVersionAutoSyncEnabled = true
+	}
+	// 账号本地设备会话身份默认启用，保持历史行为；缺失/空值同样视为开启。
+	if v, ok := settings[SettingKeyEnableOpenAIAccountLocalDeviceIdentity]; ok && v != "" {
+		result.EnableOpenAIAccountLocalDeviceIdentity = v == "true"
+	} else {
+		result.EnableOpenAIAccountLocalDeviceIdentity = true
 	}
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]

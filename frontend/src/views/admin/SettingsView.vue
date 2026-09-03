@@ -5588,6 +5588,32 @@
                 />
               </div>
 
+              <!-- OpenAI Codex account-local device session identity -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.accountLocalDeviceIdentity",
+                      )
+                    }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.accountLocalDeviceIdentityHint",
+                      )
+                    }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.enable_openai_account_local_device_identity"
+                  data-testid="account-local-device-identity-toggle"
+                />
+              </div>
+
               <!-- OpenAI Codex UA -->
               <div>
                 <label
@@ -9871,6 +9897,7 @@ const form = reactive<SettingsForm>({
   enable_client_dateline_normalization: true,
   openai_codex_user_agent: "",
   openai_codex_client_version: "",
+  enable_openai_account_local_device_identity: true,
   // 只读展示：自动同步任务写入的官方最新稳定版，供 UA engine 与
   // Responses/WS Version 共用；不参与提交（提交载荷按字段显式构造）
   openai_codex_client_version_synced: "",
@@ -11147,6 +11174,8 @@ async function saveSettings() {
         form.openai_codex_user_agent?.trim() || "",
       openai_codex_client_version:
         form.openai_codex_client_version?.trim() || "",
+      enable_openai_account_local_device_identity:
+        form.enable_openai_account_local_device_identity,
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
       min_codex_version: form.min_codex_version?.trim() || "",

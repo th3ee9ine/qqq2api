@@ -478,6 +478,7 @@ const baseSettingsResponse = {
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
   openai_codex_user_agent: "",
+  enable_openai_account_local_device_identity: true,
   payment_enabled: true,
   payment_min_amount: 1,
   payment_max_amount: 10000,
@@ -1160,6 +1161,30 @@ describe("admin SettingsView", () => {
 
     const payload = updateSettings.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(payload.openai_ttft_mode).toBe("semantic");
+  });
+
+  it("loads and saves the account-local device identity switch", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      enable_openai_account_local_device_identity: true,
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const toggle = wrapper.get('[data-testid="account-local-device-identity-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+
+    await toggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enable_openai_account_local_device_identity: false,
+      }),
+    );
   });
 
   it("loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in", async () => {

@@ -1819,7 +1819,7 @@ func (a *Account) GetOpenAICodexUserAgent() string {
 	if a == nil {
 		return ""
 	}
-	if local := a.GetOpenAILocalDeviceUserAgent(); local != "" {
+	if local := a.GetOpenAILocalDeviceUserAgent(); local != "" && codexAccountLocalDeviceIdentityEnabled.Load() {
 		return local
 	}
 	return strings.TrimSpace(a.GetOpenAIUserAgent())

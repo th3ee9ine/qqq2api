@@ -88,11 +88,26 @@ var codexIdentityEnforcement = func() *atomic.Bool {
 	return v
 }()
 
+// codexAccountLocalDeviceIdentityEnabled controls whether account-local device
+// session User-Agent/Originator values are preferred over the global identity.
+// It defaults to true so existing deployments retain their historical behavior.
+var codexAccountLocalDeviceIdentityEnabled = func() *atomic.Bool {
+	v := &atomic.Bool{}
+	v.Store(true)
+	return v
+}()
+
 // SetCodexIdentityEnforcementEnabled 发布 Codex 出站身份强制统一开关。
 // enforceCodexIdentityHeaders 是所有出站路径共用的纯函数收口点，无法在热路径注入配置，
 // 故由持有配置的服务在构造时发布进程级快照。
 func SetCodexIdentityEnforcementEnabled(enabled bool) {
 	codexIdentityEnforcement.Store(enabled)
+}
+
+// SetCodexAccountLocalDeviceIdentityEnabled publishes the system setting that
+// controls account-local device-session identity preference.
+func SetCodexAccountLocalDeviceIdentityEnabled(enabled bool) {
+	codexAccountLocalDeviceIdentityEnabled.Store(enabled)
 }
 
 // codexCanonicalUserAgentResolver 返回当前生效的规范 Codex User-Agent（后台设置 / 自动同步版本号）。
@@ -264,7 +279,7 @@ func resolveCodexOutboundIdentity(candidateUA string) codexOutboundIdentity {
 // value falls back atomically to the process-wide canonical identity so that
 // User-Agent, Originator and Version can never leave the gateway mismatched.
 func resolveCodexOutboundIdentityForAccount(account *Account) codexOutboundIdentity {
-	if account == nil || !account.UsesOpenAICodexProtocol() {
+	if account == nil || !account.UsesOpenAICodexProtocol() || !codexAccountLocalDeviceIdentityEnabled.Load() {
 		return resolveCodexOutboundIdentity("")
 	}
 
@@ -397,7 +412,7 @@ func enforceCodexIdentityHeadersWithAccount(h http.Header, account *Account) {
 		return
 	}
 	if !codexIdentityEnforcement.Load() {
-		if account != nil {
+		if account != nil && codexAccountLocalDeviceIdentityEnabled.Load() {
 			if account.GetOpenAILocalDeviceUserAgent() != "" {
 				identity := resolveCodexOutboundIdentityForAccount(account)
 				h.Set("user-agent", identity.userAgent)

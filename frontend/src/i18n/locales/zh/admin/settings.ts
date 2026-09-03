@@ -493,6 +493,8 @@ export default {
         rewriteMessageCacheControlHint: '默认关闭，保留客户端在 messages 内容块中的 cache_control。开启后会清除客户端断点并注入代理断点，适合不自行管理缓存策略的客户端。',
         clientDatelineNormalization: '客户端 dateline 归一化',
         clientDatelineNormalizationHint: '默认开启。将 Anthropic OAuth/Setup Token 请求体中 "Today\'s date is …" 语句里的撇号与日期分隔符还原为 ASCII 撇号 + 短横线 (2026-07-01) 的规范形态，抹除某些客户端在检测到非官方 base URL 时注入的隐写指纹位。仅作用于 system prompt 与 <system-reminder> 块内，API Key 账号不受影响。',
+        accountLocalDeviceIdentity: '使用账号本地设备会话身份',
+        accountLocalDeviceIdentityHint: '开启后，OpenAI Codex 请求优先使用账号本地设备会话中的 User-Agent 和 Originator；为空或异常时自动回退到系统默认值。',
         openaiCodexUserAgent: 'Codex Desktop 上游 UA',
         openaiCodexUserAgentPlaceholder: 'Codex Desktop/0.150.1 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)',
         openaiCodexUserAgentHint: '发往 Codex 上游（包括 auth 与 Responses）的完整 User-Agent。留空时生成 Codex Desktop 身份；首段 engine 与 Responses/WS Version 使用同一官方最新稳定版，Originator 与 UA 客户端名配套为 Codex Desktop。尾部 (Codex Desktop; Desktop 应用 build) 是独立宿主标识，不会被 rust-v 覆盖；auth 保持原生逻辑，不发送 Version。',

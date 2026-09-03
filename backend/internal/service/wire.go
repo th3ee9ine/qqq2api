@@ -723,6 +723,9 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	SetCodexCanonicalResponsesVersionResolver(func() string {
 		return svc.GetOpenAICodexResponsesVersion(context.Background())
 	})
+	// Prime the account-local device identity switch so auth/control-plane
+	// requests observe the persisted setting before the first gateway request.
+	_, _, _ = svc.GetGatewayForwardingSettings(context.Background())
 	return svc
 }
 

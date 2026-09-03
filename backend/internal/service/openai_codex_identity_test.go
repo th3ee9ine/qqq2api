@@ -272,6 +272,20 @@ func TestResolveCodexOutboundIdentityForAccount(t *testing.T) {
 		}
 		require.Equal(t, canonical, resolveCodexOutboundIdentityForAccount(account))
 	})
+
+	t.Run("disabled switch uses the global identity", func(t *testing.T) {
+		SetCodexAccountLocalDeviceIdentityEnabled(false)
+		t.Cleanup(func() { SetCodexAccountLocalDeviceIdentityEnabled(true) })
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				OpenAILocalDeviceUserAgentExtraKey:  "codex_vscode/0.125.0 (Mac OS X 14.0; arm64)",
+				OpenAILocalDeviceOriginatorExtraKey: "codex_vscode",
+			},
+		}
+		require.Equal(t, canonical, resolveCodexOutboundIdentityForAccount(account))
+	})
 }
 
 // 规范身份跟随注入的解析器（后台面板 UA / 自动同步版本号），无需重启或发版。

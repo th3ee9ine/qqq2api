@@ -500,6 +500,8 @@ export default {
         rewriteMessageCacheControlHint: 'Default off: preserve client cache_control on message content blocks. When enabled, client breakpoints are stripped and proxy breakpoints are injected for clients that do not manage caching themselves.',
         clientDatelineNormalization: 'Client Dateline Normalization',
         clientDatelineNormalizationHint: 'Default on. Rewrites the "Today\'s date is …" sentence in Anthropic OAuth/Setup Token requests back to a canonical ASCII apostrophe and hyphen date format, erasing steganographic fingerprint bits some clients inject when they detect a non-official base URL. Applies to system prompts and <system-reminder> blocks only; API-Key accounts are unaffected.',
+        accountLocalDeviceIdentity: 'Use account device-session identity',
+        accountLocalDeviceIdentityHint: 'When enabled, OpenAI Codex requests prefer the account local device session User-Agent and Originator. Empty or invalid values fall back to the global defaults.',
         openaiCodexUserAgent: 'Codex Desktop upstream UA',
         openaiCodexUserAgentPlaceholder: 'Codex Desktop/0.150.1 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)',
         openaiCodexUserAgentHint: 'The complete User-Agent sent to Codex upstream endpoints, including auth and Responses. Leave empty to generate the Codex Desktop identity. Its leading engine and Responses/WS Version share the same latest official stable release, while Originator is paired with the UA client name as Codex Desktop. The trailing Desktop app build is an independent host identifier and is not overwritten by rust-v; auth keeps the native behavior and sends no Version.',
