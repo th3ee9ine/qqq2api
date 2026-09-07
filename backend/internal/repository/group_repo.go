@@ -463,7 +463,11 @@ func (r *groupRepository) ListWithFilters(ctx context.Context, params pagination
 }
 
 func (r *groupRepository) ListBindableWithFilters(ctx context.Context, params pagination.PaginationParams, platform, status, search string, isExclusive *bool) ([]service.Group, *pagination.PaginationResult, error) {
-	q := r.client.Group.Query().Where(group.PlatformNEQ(service.PlatformComposite))
+	// Simple mode only permits groups that can be bound directly to an active
+	// upstream account.  Composite and retired-provider groups can remain in
+	// the database for migration compatibility, but must be excluded before
+	// counting/pagination so totals and pages do not leak them.
+	q := r.client.Group.Query().Where(group.PlatformIn(service.PlatformAnthropic, service.PlatformOpenAI))
 	return r.listWithFiltersQuery(ctx, q, params, platform, status, search, isExclusive)
 }
 

@@ -145,7 +145,12 @@ type Group struct {
 // IsGroupBindableInSimpleMode is the shared policy for groups that may be
 // surfaced and bound to accounts while running in simple mode.
 func IsGroupBindableInSimpleMode(group *Group) bool {
-	return group != nil && group.Platform != PlatformComposite
+	// Simple mode binds groups directly to upstream accounts.  Keep the
+	// allowlist aligned with the active account-provider registry rather than
+	// merely hiding composite groups: persisted groups for retired providers
+	// may still exist for migration/backward compatibility, but must not be
+	// surfaced or accepted as new bindings.
+	return group != nil && IsActiveAccountPlatform(group.Platform)
 }
 
 func (g *Group) IsActive() bool {
