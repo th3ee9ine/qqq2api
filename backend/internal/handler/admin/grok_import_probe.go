@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/th3ee9ine/qqq2api/internal/config"
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
@@ -194,6 +195,7 @@ func (h *GrokOAuthHandler) scheduleGrokImportProbe(account *service.Account) {
 // ProvideAccountHandler injects the Grok active prober for production while
 // keeping NewAccountHandler convenient for focused unit tests.
 func ProvideAccountHandler(
+	cfg *config.Config,
 	adminService service.AdminService,
 	oauthService *service.OAuthService,
 	openaiOAuthService *service.OpenAIOAuthService,
@@ -222,5 +224,6 @@ func ProvideAccountHandler(
 		rpmCache,
 		tokenCacheInvalidator,
 	)
+	handler.cfg = cfg
 	return handler
 }

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
 const hotReloadCatalogJSON = `{

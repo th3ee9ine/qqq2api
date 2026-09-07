@@ -6,8 +6,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 )
 
 // loadAwareRestrictionFixture 构造走负载感知路径（load_batch 开启 + 并发服务存在）的

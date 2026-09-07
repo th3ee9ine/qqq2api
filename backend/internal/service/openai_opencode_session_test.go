@@ -8,10 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/th3ee9ine/qqq2api/internal/config"
-	"github.com/th3ee9ine/qqq2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/tlsfingerprint"
 )
 
 func newOpenCodeSessionTestContext(t *testing.T, value string) *gin.Context {

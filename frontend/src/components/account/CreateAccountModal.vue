@@ -2569,7 +2569,6 @@
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <!-- Group Selection - only shown outside simple mode -->
         <GroupSelector
-          v-if="!authStore.isSimpleMode"
           v-model="form.group_ids"
           :groups="groups"
           :platform="form.platform"

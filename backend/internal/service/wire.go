@@ -328,6 +328,7 @@ func ProvideAccountTestService(
 		tlsFPProfileService,
 	)
 	service.agentIdentityWS = openAIGatewayService
+	service.SetOpenAIGatewayService(openAIGatewayService)
 	service.SetSettingService(settingService)
 	service.SetPluginManager(pluginManager)
 	return service
@@ -766,6 +767,7 @@ func ProvideAPIKeyService(
 // and affiliate accrual methods remain source-compatible but are unreachable
 // and intentionally receive nil collaborators.
 func ProvideAdminService(
+	cfg *config.Config,
 	userRepo UserRepository,
 	groupRepo AdminGroupRepository,
 	accountRepo AdminAccountRepository,
@@ -786,6 +788,7 @@ func ProvideAdminService(
 	channelCacheInvalidator ChannelCacheInvalidator,
 ) AdminService {
 	return NewAdminService(
+		cfg,
 		userRepo,
 		groupRepo,
 		accountRepo,

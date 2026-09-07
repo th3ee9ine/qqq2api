@@ -472,7 +472,12 @@ router.beforeEach(async (to, _from, next) => {
 
   // 简易模式下限制访问某些页面
   if (authStore.isSimpleMode) {
-    const restrictedPaths = ['/admin/groups']
+    const restrictedPaths = [
+      '/admin/subscriptions',
+      '/admin/redeem',
+      '/subscriptions',
+      '/redeem'
+    ]
 
     if (restrictedPaths.some((path) => to.path.startsWith(path))) {
       // 简易模式下访问受限页面,重定向到仪表板

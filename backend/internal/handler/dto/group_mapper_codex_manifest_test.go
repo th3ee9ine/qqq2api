@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/th3ee9ine/qqq2api/internal/service"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // 固定账号 manifest 配置必须在管理端 DTO 完整序列化：漏映射会让编辑对话框回显
