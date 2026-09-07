@@ -7,8 +7,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
 // newPlazaService 构造 ListGroups 测试用的 ModelPlazaService（不接计费服务：展示定价原样透传）。
@@ -489,15 +489,15 @@ func TestListGroups_TimePricingPassthrough(t *testing.T) {
 	channels := []Channel{{
 		ID: 1, Name: "ch", Status: StatusActive, GroupIDs: []int64{10},
 		ModelPricing: []ChannelModelPricing{{
-			Platform: PlatformDeepseek, Models: []string{"deepseek-chat"}, BillingMode: BillingModeToken,
+			Platform: PlatformOpenAI, Models: []string{"gpt-5.4"}, BillingMode: BillingModeToken,
 			InputPrice: testPtrFloat64(0.28e-6), OutputPrice: testPtrFloat64(0.42e-6),
 			TimePricing: &ChannelTimePricing{Timezone: "Asia/Shanghai", Periods: []ChannelTimePricingPeriod{
 				{StartTime: "00:30", EndTime: "08:30", Multiplier: 0.5},
 			}},
 		}},
 	}}
-	groups := []Group{{ID: 10, Name: "cn", Platform: PlatformDeepseek, RateMultiplier: 1, LongContextPricingEnabled: true}}
-	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: PlatformDeepseek}, nil)
+	groups := []Group{{ID: 10, Name: "openai", Platform: PlatformOpenAI, RateMultiplier: 1, LongContextPricingEnabled: true}}
+	svc := newPlazaServiceWithBilling(channels, groups, map[int64]string{10: PlatformOpenAI}, nil)
 	out, err := svc.ListGroups(context.Background())
 	require.NoError(t, err)
 	m := out[0].Models[0]

@@ -388,7 +388,7 @@ async function onModelsUpdate(newModels: string[]) {
   try {
     const result = await channelsAPI.getModelDefaultPricing(addedModels[0], platform)
     if (result.found) {
-      emit('update', {
+      const updatedEntry: PricingFormEntry = {
         ...props.entry,
         models: newModels,
         input_price: perTokenToMTok(result.input_price ?? null),
@@ -398,8 +398,14 @@ async function onModelsUpdate(newModels: string[]) {
         cache_read_price: perTokenToMTok(result.cache_read_price ?? null),
         image_input_price: perTokenToMTok(result.image_input_price ?? null),
         image_output_price: perTokenToMTok(result.image_output_price ?? null),
-        max_reasoning_effort_multiplier: result.max_reasoning_effort_multiplier ?? null,
-      })
+      }
+      // Preserve the optional field only when the lookup endpoint returned it.
+      // This keeps older responses/API fixtures shape-compatible while allowing
+      // newer backends to populate the Anthropic reasoning-effort multiplier.
+      if (result.max_reasoning_effort_multiplier !== undefined) {
+        updatedEntry.max_reasoning_effort_multiplier = result.max_reasoning_effort_multiplier
+      }
+      emit('update', updatedEntry)
     }
   } catch {
     // Lookup failure must not prevent the model tag from being added.

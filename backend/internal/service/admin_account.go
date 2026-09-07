@@ -508,6 +508,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if err := ValidateUpstreamRequestIDHeaderExtra(accountExtra); err != nil {
+		return nil, err
+	}
 
 	// 绑定分组
 	groupIDs := input.GroupIDs
@@ -663,6 +666,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			ParentAccountID: account.ParentAccountID,
 		}) {
 			normalizedExtra = stripOpenAINonCurrentSessionRevokeManagedExtra(normalizedExtra, true)
+		}
+		if err := ValidateUpstreamRequestIDHeaderExtra(normalizedExtra); err != nil {
+			return nil, err
 		}
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
@@ -1047,6 +1053,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 			return err
 		}
 	}
+	if err := ValidateUpstreamRequestIDHeaderExtra(updates); err != nil {
+		return err
+	}
 	if len(updates) == 0 {
 		return nil
 	}
@@ -1072,6 +1081,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	delete(input.Extra, OllamaCloudUsageSessionExtraKey)
 	delete(input.Extra, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(input.Extra, OllamaCloudUsageSnapshotExtraKey)
+	if err := ValidateUpstreamRequestIDHeaderExtra(input.Extra); err != nil {
+		return nil, err
+	}
 
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)

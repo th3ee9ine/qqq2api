@@ -1957,6 +1957,13 @@
         <ProxySelector v-if="!autoAssignProxy" v-model="form.proxy_id" :proxies="proxies" />
       </div>
 
+      <!-- Optional response header used to correlate requests at the upstream. -->
+      <UpstreamRequestIdHeaderField
+        v-model="upstreamRequestIdHeader"
+        :platform="form.platform"
+        :type="accountCategory"
+      />
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -2341,6 +2348,36 @@
         </div>
       </div>
 
+      <!-- OpenAI API Key: backfill b64_json from image result URLs -->
+      <div
+        v-if="form.platform === 'openai' && accountCategory === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.imagesUrlToB64Json') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.imagesUrlToB64JsonDesc') }}
+          </p>
+        </div>
+        <button
+          type="button"
+          data-testid="openai-images-url-to-b64-json-toggle"
+          role="switch"
+          :aria-checked="openAIImagesUrlToB64JsonEnabled"
+          @click="openAIImagesUrlToB64JsonEnabled = !openAIImagesUrlToB64JsonEnabled"
+          :class="[
+            'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+            openAIImagesUrlToB64JsonEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+          ]"
+        >
+          <span
+            :class="[
+              'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+              openAIImagesUrlToB64JsonEnabled ? 'translate-x-5' : 'translate-x-0'
+            ]"
+          />
+        </button>
+      </div>
 
       <!-- OpenAI plan tier override (newer capability, styled like the baseline sections) -->
       <div
@@ -2704,6 +2741,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
+import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -2769,6 +2807,8 @@ const effectiveProxyId = computed(() => autoAssignProxy.value ? null : form.prox
 const apiKeyValue = ref('')
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const allowedModels = ref<string[]>([])
+// 上游ID：直接上游声明请求标识的响应头名，留空不记录。
+const upstreamRequestIdHeader = ref('')
 const upstreamBillingProbeEnabled = ref(true)
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
@@ -2787,6 +2827,8 @@ const vertexServiceAccountDragActive = ref(false)
 const vertexLocation = ref('global')
 const openAILongContextBillingEnabled = ref(false)
 const openAILongContextBillingTouched = ref(false)
+// Images 非流式响应缺少 b64_json 时，由网关下载 URL 并回填（仅 OpenAI API Key）。
+const openAIImagesUrlToB64JsonEnabled = ref(false)
 const openAIFlattenNamespaces = ref(false)
 const openAIWSMode = ref<OpenAIWSMode>('off')
 
@@ -3285,12 +3327,14 @@ function selectPlatform(platform: SupportedPlatform) {
   openAICompactModelMappings.value = []
   headerOverrideEnabled.value = false
   headerOverrideRows.value = []
+  upstreamRequestIdHeader.value = ''
   openaiPassthroughEnabled.value = false
   openAICodexCLIOnlyEnabled.value = false
   openAICodexCLIOnlyAppServerEnabled.value = false
   openAICodexFingerprintMode.value = 'off'
   openAICompactMode.value = 'auto'
   openAIResponsesMode.value = 'auto'
+  openAIImagesUrlToB64JsonEnabled.value = false
   openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
   codexImageToolMode.value = 'inherit'
   openAIPlanType.value = ''
@@ -3326,6 +3370,11 @@ function buildOpenAIExtra(forImport = false): Record<string, unknown> | undefine
   if (openAICompactMode.value !== 'auto') extra.openai_compact_mode = openAICompactMode.value
   if (accountCategory.value === 'apikey' && openAITextGenerationEnabled.value && openAIResponsesMode.value !== 'auto') {
     extra.openai_responses_mode = openAIResponsesMode.value
+  }
+  if (accountCategory.value === 'apikey' && openAIImagesUrlToB64JsonEnabled.value) {
+    extra.images_url_to_b64_json = true
+  } else {
+    delete extra.images_url_to_b64_json
   }
   if ((accountCategory.value === 'oauth' || accountCategory.value === 'setup-token') && openAICodexCLIOnlyEnabled.value) {
     extra.codex_cli_only = true
@@ -3446,6 +3495,12 @@ function buildOpenAICodexImportExtra(): Record<string, unknown> | undefined {
   return buildOpenAIExtra(true)
 }
 
+function withUpstreamRequestIdHeader(extra?: Record<string, unknown>): Record<string, unknown> | undefined {
+  const name = upstreamRequestIdHeader.value.trim()
+  if (!name) return extra
+  return { ...(extra || {}), upstream_request_id_header: name }
+}
+
 function formatCodexImportMessages(messages?: CodexSessionImportMessage[]): string {
   return (messages || []).map(item => {
     const name = item.name ? ` ${item.name}` : ''
@@ -3456,7 +3511,7 @@ function formatCodexImportMessages(messages?: CodexSessionImportMessage[]): stri
 function buildQuotaExtra(base?: Record<string, unknown>) {
   const extra: Record<string, unknown> = { ...(base || {}) }
   if (accountCategory.value !== 'apikey' && accountCategory.value !== 'bedrock') {
-    return Object.keys(extra).length ? extra : undefined
+    return withUpstreamRequestIdHeader(Object.keys(extra).length ? extra : undefined)
   }
   if (quotaLimit.value != null && quotaLimit.value > 0) extra.quota_limit = quotaLimit.value
   if (quotaDailyLimit.value != null && quotaDailyLimit.value > 0) extra.quota_daily_limit = quotaDailyLimit.value
@@ -3472,7 +3527,7 @@ function buildQuotaExtra(base?: Record<string, unknown>) {
   }
   if (quotaDailyResetMode.value === 'fixed' || quotaWeeklyResetMode.value === 'fixed') extra.quota_reset_timezone = quotaResetTimezone.value || 'UTC'
   writeQuotaNotifyToExtra(extra, 'create')
-  return Object.keys(extra).length ? extra : undefined
+  return withUpstreamRequestIdHeader(Object.keys(extra).length ? extra : undefined)
 }
 
 function buildBasePayload(
@@ -3487,7 +3542,7 @@ function buildBasePayload(
     platform,
     type,
     credentials,
-    extra,
+    extra: withUpstreamRequestIdHeader(extra),
     proxy_id: autoAssignProxy.value ? undefined : form.proxy_id,
     auto_assign_proxy: autoAssignProxy.value,
     concurrency: form.concurrency,
@@ -3960,6 +4015,7 @@ function resetForm() {
   apiKeyValue.value = ''
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   allowedModels.value = []
+  upstreamRequestIdHeader.value = ''
   upstreamBillingProbeEnabled.value = true
   headerOverrideEnabled.value = false
   headerOverrideRows.value = []
@@ -3977,6 +4033,7 @@ function resetForm() {
   vertexLocation.value = 'global'
   openAILongContextBillingEnabled.value = false
   openAILongContextBillingTouched.value = false
+  openAIImagesUrlToB64JsonEnabled.value = false
   openAIFlattenNamespaces.value = false
   openAIWSMode.value = 'off'
   modelRestrictionMode.value = 'whitelist'

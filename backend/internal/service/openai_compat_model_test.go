@@ -2303,7 +2303,7 @@ func TestForwardAsAnthropic_AstraContinuationRestoresHistoryAndDisablesUnsupport
 				require.False(t, gjson.GetBytes(sent, "previous_response_id").Exists())
 				require.Equal(t, "astra-session", gjson.GetBytes(sent, "prompt_cache_key").String())
 				require.Equal(t, int64(4), gjson.GetBytes(sent, "input.#").Int())
-				require.Contains(t, gjson.GetBytes(sent, "input.0.content.0.text").String(), "<sub2api-claude-code-todo-guard>")
+				require.Contains(t, gjson.GetBytes(sent, "input.0.content.0.text").String(), openAICompatClaudeCodeTodoGuardMarker)
 				require.Equal(t, "first", gjson.GetBytes(sent, "input.1.content.0.text").String())
 				require.Equal(t, "second", gjson.GetBytes(sent, "input.3.content.0.text").String())
 			}

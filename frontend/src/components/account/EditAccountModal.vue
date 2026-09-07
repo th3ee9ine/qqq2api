@@ -1256,6 +1256,15 @@
         </label>
         <ProxySelector v-if="!autoAssignProxy" v-model="proxyId" :proxies="proxies" />
       </div>
+
+      <!-- Optional response header used to correlate requests at the upstream. -->
+      <UpstreamRequestIdHeaderField
+        v-if="account"
+        v-model="upstreamRequestIdHeader"
+        :platform="account.platform"
+        :type="account.type"
+      />
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -1522,6 +1531,37 @@
           </div>
           <p class="input-hint">{{ t('admin.accounts.openai.endpointCapabilitiesDesc') }}</p>
         </div>
+      </div>
+
+      <!-- OpenAI API-key image responses can be backfilled from URL to b64_json. -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'apikey'"
+        class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div>
+          <label class="input-label mb-0">{{ t('admin.accounts.openai.imagesUrlToB64Json') }}</label>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.openai.imagesUrlToB64JsonDesc') }}
+          </p>
+        </div>
+        <button
+          type="button"
+          data-testid="openai-images-url-to-b64-json-toggle"
+          role="switch"
+          :aria-checked="openAIImagesUrlToB64JsonEnabled"
+          @click="openAIImagesUrlToB64JsonEnabled = !openAIImagesUrlToB64JsonEnabled"
+          :class="[
+            'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+            openAIImagesUrlToB64JsonEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+          ]"
+        >
+          <span
+            :class="[
+              'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+              openAIImagesUrlToB64JsonEnabled ? 'translate-x-5' : 'translate-x-0'
+            ]"
+          />
+        </button>
       </div>
 
       <div
@@ -2551,6 +2591,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
+import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -2662,6 +2703,8 @@ const autoResetCredit5hThreshold = ref(100)
 const autoResetCredit7dThreshold = ref(100)
 const upstreamBillingProbeEnabled = ref(false)
 const upstreamBillingRateSyncEnabled = ref(false)
+const upstreamRequestIdHeader = ref('')
+const openAIImagesUrlToB64JsonEnabled = ref(false)
 const openaiPassthroughEnabled = ref(false)
 const openAICodexCLIOnlyEnabled = ref(false)
 const openAICodexCLIOnlyAppServerEnabled = ref(false)
@@ -2726,6 +2769,11 @@ const {
 } = useQuotaNotifyState()
 
 loadQuotaNotifyGlobal()
+
+const readUpstreamRequestIdHeader = (extra: unknown): string => {
+  const value = asRecord(extra).upstream_request_id_header
+  return typeof value === 'string' ? value : ''
+}
 
 const baseUrlPlaceholder = computed(() =>
   isOpenAI.value ? 'https://api.openai.com' : 'https://api.anthropic.com'
@@ -3089,6 +3137,8 @@ function hydrate() {
   tempUnschedRules.value = parseTempUnschedRules(credentials.temp_unschedulable_rules)
   headerOverrideEnabled.value = credentials.header_override_enabled === true
   headerOverrideRows.value = splitHeaderOverridesObject(credentials.header_overrides)
+  upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
+  openAIImagesUrlToB64JsonEnabled.value = extra.images_url_to_b64_json === true
   openAILongContextBillingEnabled.value = readBoolean(extra.openai_long_context_billing_enabled)
   openAIFlattenNamespaces.value = readBoolean(extra.openai_responses_flatten_namespaces)
   openAICompactMode.value = extra.openai_compact_mode === 'force_on' || extra.openai_compact_mode === 'force_off'
@@ -3759,6 +3809,14 @@ async function handleSubmit() {
   }
 
   const extra = { ...asRecord(account.extra) }
+  const nextUpstreamRequestIdHeader = upstreamRequestIdHeader.value.trim()
+  if (nextUpstreamRequestIdHeader !== readUpstreamRequestIdHeader(account.extra)) {
+    if (nextUpstreamRequestIdHeader) {
+      extra.upstream_request_id_header = nextUpstreamRequestIdHeader
+    } else {
+      delete extra.upstream_request_id_header
+    }
+  }
   // Runtime state belongs to the quota-reset service and must never be
   // written back from an account edit request.
   delete extra.codex_auto_reset_credit_state
@@ -3791,6 +3849,11 @@ async function handleSubmit() {
         extra.openai_responses_mode = openAIResponsesMode.value
       } else {
         delete extra.openai_responses_mode
+      }
+      if (isApiKey.value && openAIImagesUrlToB64JsonEnabled.value) {
+        extra.images_url_to_b64_json = true
+      } else {
+        delete extra.images_url_to_b64_json
       }
       if (account.type === 'oauth' || account.type === 'setup-token') {
         if (openAICodexCLIOnlyEnabled.value) {

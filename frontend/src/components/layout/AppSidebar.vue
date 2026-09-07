@@ -220,7 +220,9 @@ const adminNavItems = computed(() => {
   return filter(baseAdminNavItems.value)
 })
 
-const expandedGroups = ref<Set<string>>(new Set())
+// Per-group expand/collapse overrides. Without an override, active routes
+// automatically expand their parent group; a user toggle wins until changed.
+const groupExpandOverrides = ref<Map<string, boolean>>(new Map())
 
 function toggleSidebar() { appStore.toggleSidebar() }
 function toggleTheme() {
@@ -241,16 +243,18 @@ function handleMenuItemClick(path: string) {
 }
 function isActive(path: string) { return route.path === path || route.path.startsWith(`${path}/`) }
 function isGroupActive(item: NavItem) { return !!item.children?.some((child) => route.path === child.path) }
-function isGroupExpanded(item: NavItem) { return expandedGroups.value.has(item.path) || isGroupActive(item) }
+function isGroupExpanded(item: NavItem) {
+  const override = groupExpandOverrides.value.get(item.path)
+  return override === undefined ? isGroupActive(item) : override
+}
 function handleGroupClick(item: NavItem) {
   if (sidebarCollapsed.value) return
   if (item.expandOnly) {
-    if (expandedGroups.value.has(item.path)) expandedGroups.value.delete(item.path)
-    else expandedGroups.value.add(item.path)
+    groupExpandOverrides.value.set(item.path, !isGroupExpanded(item))
     return
   }
   if (route.path !== item.path) void router.push(item.path)
-  expandedGroups.value.add(item.path)
+  groupExpandOverrides.value.set(item.path, true)
 }
 
 const savedTheme = localStorage.getItem('theme')

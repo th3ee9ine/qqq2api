@@ -525,23 +525,19 @@ func TestAdminService_UpdateGroup_RejectsInvalidReasoningEffortMappings(t *testi
 	require.Nil(t, repo.updated)
 }
 
-func TestAdminService_UpdateGroup_ClearsReasoningPolicyForUnsupportedPlatform(t *testing.T) {
-	existing := &Group{
-		ID:                      1,
-		Name:                    "openai-group",
-		Platform:                PlatformOpenAI,
-		Status:                  StatusActive,
-		MaxReasoningEffort:      "medium",
-		ReasoningEffortMappings: []ReasoningEffortMapping{{From: "max", To: "xhigh"}},
+func TestSanitizeGroupReasoningPolicy_ClearsUnsupportedPlatform(t *testing.T) {
+	group := &Group{
+		Platform:                    PlatformGemini,
+		MaxReasoningEffort:          "medium",
+		MaxReasoningEffortOverLimit: ReasoningEffortOverLimitDeny,
+		ReasoningEffortMappings:     []ReasoningEffortMapping{{From: "max", To: "xhigh"}},
 	}
-	repo := &groupRepoStubForAdmin{getByID: existing}
-	svc := &adminServiceImpl{groupRepo: repo}
 
-	_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{Platform: PlatformGemini})
+	sanitizeGroupReasoningEffortPolicy(group)
 
-	require.NoError(t, err)
-	require.Empty(t, repo.updated.MaxReasoningEffort)
-	require.Empty(t, repo.updated.ReasoningEffortMappings)
+	require.Empty(t, group.MaxReasoningEffort)
+	require.Equal(t, ReasoningEffortOverLimitDowngrade, group.MaxReasoningEffortOverLimit)
+	require.Empty(t, group.ReasoningEffortMappings)
 }
 
 func TestAdminService_UpdateGroup_RepairsRetiredSubscriptionConfiguration(t *testing.T) {

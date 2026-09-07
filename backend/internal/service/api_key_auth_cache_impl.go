@@ -14,7 +14,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
-const apiKeyAuthSnapshotVersion = 22 // v22: API key concurrency and group free_openai_fast fields
+const apiKeyAuthSnapshotVersion = 23 // v23: group codex_models_manifest_config field
 
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
