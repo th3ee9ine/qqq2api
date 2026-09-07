@@ -308,7 +308,17 @@ async function loadAvailableModels() {
   loadingModels.value = true
   selectedModelId.value = ''
   try {
-    availableModels.value = await adminAPI.accounts.getAvailableModels(props.account.id)
+    // OpenAI's upstream `/models` response does not require a display_name
+    // field (the id is the only universally available model name).  The
+    // account test endpoint forwards that response, so using display_name as
+    // the select label directly can result in an empty model picker.  Keep
+    // the API-provided label when present and fall back to the model id for
+    // upstream/custom models.
+    const models = await adminAPI.accounts.getAvailableModels(props.account.id)
+    availableModels.value = models.map(model => ({
+      ...model,
+      display_name: model.display_name?.trim() || model.id
+    }))
     const preferred = isOpenAI.value
       ? availableModels.value.find(model => {
         const id = model.id.toLowerCase()

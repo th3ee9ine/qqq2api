@@ -164,6 +164,22 @@ describe('AccountTestModal', () => {
     expect((wrapper.vm as any).selectedModelId).toBe('gpt-5.4')
   })
 
+  it('falls back to the model id when the upstream omits display_name', async () => {
+    // OpenAI-compatible /models endpoints commonly return only `id`.
+    getAvailableModels.mockResolvedValue([
+      { id: 'custom-model', object: 'model' }
+    ])
+    const wrapper = mountModal()
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect((wrapper.vm as any).availableModels).toEqual([
+      expect.objectContaining({ id: 'custom-model', display_name: 'custom-model' })
+    ])
+    expect((wrapper.vm as any).selectedModelId).toBe('custom-model')
+  })
+
   it('restores the Claude model-first test flow and omits OpenAI mode from the request', async () => {
     getAvailableModels.mockResolvedValue([
       { id: 'claude-haiku-4-5', display_name: 'Claude Haiku 4.5' },
