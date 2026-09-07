@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 	"golang.org/x/net/http/httpguts"
 )
 
