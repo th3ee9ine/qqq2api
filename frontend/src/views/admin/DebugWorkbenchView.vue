@@ -57,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 
@@ -66,6 +66,9 @@ const models = ['gpt-4o', 'gpt-4.1', 'o3-mini', 'gpt-Image-1']
 const form = reactive({ account: 'acc-01', model: 'gpt-4o', endpoint: 'chat/completions', system: 'You are a helpful assistant.', prompt: '请用一句话介绍这个调试工作台。', temperature: 0.7, maxTokens: 512, stream: false, headers: '{\n  "X-Debug-Trace": "true"\n}' })
 const imageForm = reactive({ prompt: '一张简洁的科技感蓝色渐变背景', size: '1024x1024', quality: 'standard' })
 const imageMode = ref(false); const running = ref(false); const responseStatus = ref(''); const activeTab = ref('inbound')
+watch(() => form.endpoint, (endpoint) => {
+  if (endpoint === 'images/generations') imageMode.value = true
+})
 const tabs = [{ key: 'inbound', label: '入站完整参数' }, { key: 'outbound', label: '出站完整参数' }, { key: 'upstream-request', label: '请求上游完整参数' }, { key: 'upstream-response', label: '上游完整响应参数' }]
 const presets = [{ label: '健康检查', prompt: '返回 OK' }, { label: '长文本', prompt: '请总结这段文本：' }, { label: 'JSON 输出', prompt: '仅输出合法 JSON，对象包含 message 字段。' }]
 const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/chat/completions', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: { model: form.model, messages: [{ role: 'user', content: form.prompt }], stream: form.stream } }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', body: { temperature: form.temperature, max_tokens: form.maxTokens } }, 'upstream-request': { url: 'https://api.openai.com/v1/chat/completions', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: { model: form.model, messages: [{ role: 'system', content: form.system }, { role: 'user', content: form.prompt }] } }, 'upstream-response': { status: '—', headers: {}, body: null } })
