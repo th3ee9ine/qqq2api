@@ -100,6 +100,12 @@ var migrationChecksumCompatibilityRules = map[string]migrationChecksumCompatibil
 	// current raw-value description and accept the released checksum so both
 	// databases initialized before and after the edit can upgrade in place.
 	"233_add_ops_error_request_details.sql": newMigrationChecksumCompatibilityRule("01d1cf6b131b68d076105628e4d88983e924ac8d7c2601a7d2d490aa13208be6", "484bcb3ceb635a9d44463453ff7446fe268c572654caf6d40bdc798fa18ac766"),
+	// 235 was resolved differently when the upstream migration was merged into
+	// the custom fork: released databases renamed models_list_config in place,
+	// while the fork keeps the legacy column and adds model_allowlist. Accept
+	// both immutable checksums so already-upgraded instances can continue with
+	// the forward repair migration without rewriting schema_migrations.
+	"235_group_model_allowlist.sql": newMigrationChecksumCompatibilityRule("2a6fb15c7d990a90dc1853d3db7cd6da87a65df6cb0da09ee312fcb12da51e26", "546fd53d114f9a8c402b019af71bf4685dc1968fd5cd25d054d095a58d806fbc"),
 }
 
 // ApplyMigrations 将嵌入的 SQL 迁移文件应用到指定的数据库。

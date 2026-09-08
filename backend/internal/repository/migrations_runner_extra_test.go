@@ -124,6 +124,20 @@ func TestMigration233ChecksumCompatibility(t *testing.T) {
 	require.False(t, isMigrationChecksumCompatible(name, releasedChecksum, "unknown-file-checksum"))
 }
 
+func TestMigration235ChecksumCompatibility(t *testing.T) {
+	const name = "235_group_model_allowlist.sql"
+	const releasedChecksum = "546fd53d114f9a8c402b019af71bf4685dc1968fd5cd25d054d095a58d806fbc"
+	const forkChecksum = "2a6fb15c7d990a90dc1853d3db7cd6da87a65df6cb0da09ee312fcb12da51e26"
+
+	// Databases that applied the upstream rename and databases initialized from
+	// the custom fork's additive migration must both upgrade without mutating
+	// their recorded migration checksum.
+	require.True(t, isMigrationChecksumCompatible(name, releasedChecksum, forkChecksum))
+	require.True(t, isMigrationChecksumCompatible(name, forkChecksum, releasedChecksum))
+	require.False(t, isMigrationChecksumCompatible(name, "unknown-db-checksum", forkChecksum))
+	require.False(t, isMigrationChecksumCompatible(name, releasedChecksum, "unknown-file-checksum"))
+}
+
 func TestEnsureAtlasBaselineAligned(t *testing.T) {
 	t.Run("skip_when_no_legacy_table", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
