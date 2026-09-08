@@ -605,10 +605,10 @@
             </div>
             <button
               type="button"
-              @click="createModelsListState.enabled = !createModelsListState.enabled"
+              @click="createModelAllowlistState.enabled = !createModelAllowlistState.enabled"
               :class="[
                 'relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors',
-                createModelsListState.enabled
+                createModelAllowlistState.enabled
                   ? 'bg-primary-500'
                   : 'bg-gray-300 dark:bg-dark-600',
               ]"
@@ -616,7 +616,7 @@
               <span
                 :class="[
                   'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
-                  createModelsListState.enabled ? 'translate-x-6' : 'translate-x-1',
+                  createModelAllowlistState.enabled ? 'translate-x-6' : 'translate-x-1',
                 ]"
               />
             </button>
@@ -3569,13 +3569,14 @@ import {
   supportsGroupOpenAIFast,
 } from "./groupsOpenAIFast";
 import {
-  buildModelsListConfig,
-  createModelsListState as createInitialModelsListState,
-  invertModelsListSelection,
-  moveModelsListItem,
-  selectAllModelsListItems,
-  setModelsListCandidates,
-} from "./groupsModelsList";
+  addCustomModelAllowlistItem,
+  buildModelAllowlistConfig,
+  createModelAllowlistState as createInitialModelAllowlistState,
+  invertModelAllowlistSelection,
+  moveModelAllowlistItem,
+  selectAllModelAllowlistItems,
+  setModelAllowlistCandidates,
+} from "./groupModelAllowlist";
 import { createModelsListCandidatesTracker } from "./groupsModelsListCandidates";
 import {
   isProfitControlPlatform,
@@ -4146,9 +4147,13 @@ const updateEditCodexManifestConfig = (value: CodexModelsManifestConfig) => {
   });
 };
 const modelsListCandidatesTracker = createModelsListCandidatesTracker();
+const modelAllowlistCandidatesTracker = modelsListCandidatesTracker;
+const modelsListEndpoint = (_platform: string) => "/admin/groups/model-allowlist-candidates";
 const createModelsListSelectedCount = computed(
-  () => createModelsListState.items.filter((item) => item.selected).length,
+  () => createModelAllowlistState.items.filter((item) => item.selected).length,
 );
+const createModelAllowlistSelectedCount = createModelsListSelectedCount;
+const editModelsListState = editModelAllowlistState;
 const editModelAllowlistSelectedCount = computed(
   () => editModelAllowlistState.items.filter((item) => item.selected).length,
 );
@@ -5074,7 +5079,7 @@ const handleEdit = async (group: AdminGroup) => {
     group.reasoning_effort_mappings,
     group.platform,
   );
-  resetModelsListState(editModelsListState, group.models_list_config);
+  resetModelAllowlistState(editModelsListState, group.models_list_config);
   // 固定账号 manifest 配置：回显配置并异步解析已存账号名称（失败显示 #<id>）。
   const savedCodexManifestConfig =
     group.codex_models_manifest_config ?? createCodexManifestDefaults();
@@ -5129,7 +5134,7 @@ const closeEditModal = () => {
   editForm.web_search_price_per_call = null;
   resetMessagesDispatchFormState(editForm);
   editForm.allow_live = false;
-  resetModelsListState(editModelsListState);
+  resetModelAllowlistState(editModelsListState);
   Object.assign(editCodexManifestConfig, createCodexManifestDefaults());
   editCodexManifestAccountNames.value = {};
   editCodexManifestRef.value?.resetValidation?.();
@@ -5558,8 +5563,8 @@ watch(
       createForm.require_oauth_only = false;
       createForm.require_privacy_set = false;
     }
-    resetModelsListState(createModelsListState);
-    loadModelsListCandidates("create", 0, newVal);
+    resetModelAllowlistState(createModelAllowlistState);
+    loadModelAllowlistCandidates("create", 0, newVal);
   },
 );
 
