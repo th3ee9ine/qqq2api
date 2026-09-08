@@ -74,7 +74,9 @@ function applyPreset(p: { prompt: string }) { form.prompt = p.prompt }
 function resetAll() { form.prompt = ''; responseStatus.value = ''; payloads['upstream-response'] = { status: '—', headers: {}, body: null } }
 async function runRequest() {
   running.value = true; responseStatus.value = ''
-  payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: JSON.parse(form.headers || '{}'), body: { model: form.model, messages: [{ role: 'user', content: form.prompt }], stream: form.stream } }
+  let customHeaders: Record<string, string> = {}
+  try { customHeaders = JSON.parse(form.headers || '{}') } catch { customHeaders = { 'X-Debug-Trace': 'true' } }
+  payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: customHeaders, body: { model: form.model, messages: [{ role: 'user', content: form.prompt }], stream: form.stream } }
   const upstreamBody = imageMode.value ? { model: form.model, prompt: imageForm.prompt, size: imageForm.size, quality: imageForm.quality } : { model: form.model, messages: [{ role: 'system', content: form.system }, { role: 'user', content: form.prompt }], temperature: form.temperature, max_tokens: form.maxTokens, stream: form.stream }
   payloads.outbound = { status: 'routing', transformed_model: form.model, route: `account://${form.account}`, body: upstreamBody }
   payloads['upstream-request'] = { url: `https://api.openai.com/v1/${form.endpoint}`, method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: upstreamBody }
