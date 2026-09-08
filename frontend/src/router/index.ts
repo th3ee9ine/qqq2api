@@ -77,7 +77,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/DebugWorkbenchView.vue'),
     meta: {
       requiresAuth: false,
-      title: 'Upstream Debug Workbench'
+      title: '上游接口调试工作台'
     }
   },
   {
@@ -263,7 +263,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiresAdmin: true,
-      title: 'Upstream Debug Workbench'
+      title: '上游接口调试工作台'
     }
   },
   // ==================== 404 Not Found ====================
