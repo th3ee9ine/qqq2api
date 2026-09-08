@@ -590,14 +590,14 @@
             <div>
               <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                 {{
-                  t("admin.groups.modelsList.title", {
+                  t("admin.groups.modelAllowlist.title", {
                     endpoint: modelsListEndpoint(createForm.platform),
                   })
                 }}
               </label>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 {{
-                  t("admin.groups.modelsList.hint", {
+                  t("admin.groups.modelAllowlist.hint", {
                     endpoint: modelsListEndpoint(createForm.platform),
                   })
                 }}
@@ -1937,14 +1937,14 @@
             <div>
               <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
                 {{
-                  t("admin.groups.modelsList.title", {
+                  t("admin.groups.modelAllowlist.title", {
                     endpoint: modelsListEndpoint(editForm.platform),
                   })
                 }}
               </label>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 {{
-                  t("admin.groups.modelsList.hint", {
+                  t("admin.groups.modelAllowlist.hint", {
                     endpoint: modelsListEndpoint(editForm.platform),
                   })
                 }}
