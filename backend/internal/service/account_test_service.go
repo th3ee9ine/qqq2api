@@ -18,10 +18,12 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -2722,7 +2724,12 @@ type OpenAITestDefaults struct {
 	UpstreamBody map[string]any    `json:"upstream_body,omitempty"`
 	Headers      map[string]string `json:"headers"`
 	URL          string            `json:"url,omitempty"`
-	Notes        []string          `json:"notes,omitempty"`
+	// Proxy metadata is included when a managed proxy is selected for the
+	// debug workbench. ProxyURL is always credential-free (host/port only).
+	ProxyID   *int64   `json:"proxy_id,omitempty"`
+	ProxyURL  string   `json:"proxy_url,omitempty"`
+	ProxyName string   `json:"proxy_name,omitempty"`
+	Notes     []string `json:"notes,omitempty"`
 }
 
 // BuildOpenAITestDefaults returns a credential-free template for the three
@@ -2814,6 +2821,15 @@ func (s *AccountTestService) BuildOpenAITestDefaults(account *Account, endpoint,
 				base = redactOpenAIBaseURL(account.GetOpenAIBaseURL())
 			}
 			result.URL = buildOpenAIResponsesURL(base)
+		}
+	}
+	// Surface the account's managed proxy binding as credential-free metadata so
+	// callers can show the effective route without exposing proxy credentials.
+	if account != nil && account.ProxyID != nil && account.Proxy != nil {
+		defaults.ProxyID = account.ProxyID
+		defaults.ProxyName = account.Proxy.Name
+		if account.Proxy.Protocol != "" && account.Proxy.Host != "" && account.Proxy.Port > 0 {
+			defaults.ProxyURL = account.Proxy.Protocol + "://" + net.JoinHostPort(account.Proxy.Host, strconv.Itoa(account.Proxy.Port))
 		}
 	}
 	return result

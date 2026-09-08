@@ -22,7 +22,6 @@
           <label class="block"><span class="field-label">GPT 账号</span><select v-model="form.account" class="input mt-1.5"><option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }} · {{ a.email }}</option></select></label>
           <label class="block"><span class="field-label">模型</span><select v-model="form.model" class="input mt-1.5"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select></label>
           <label class="block"><span class="field-label">请求方式</span><select v-model="form.endpoint" class="input mt-1.5"><option value="chat/completions">Chat Completions</option><option value="responses">Responses API</option><option value="images/generations">Images Generation</option></select></label>
-          <label class="block"><span class="field-label">代理 IP</span><select v-model="proxyId" class="input mt-1.5"><option :value="null">跟随账号默认</option><option v-for="proxy in proxies" :key="proxy.id" :value="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select></label>
           <label class="block"><span class="field-label">代理 IP</span><ProxySelector v-model="form.proxyId" :proxies="proxies" :disabled="running" /></label>
           <button type="button" class="btn btn-primary h-10 justify-center px-6" :disabled="running" @click="runRequest"><Icon :name="running ? 'refresh' : 'play'" size="sm" :class="running && 'animate-spin'" /> {{ running ? '请求中…' : '发送请求' }}</button>
         </div>
@@ -168,6 +167,7 @@ watch(() => form.proxyId, (proxyId) => {
   if (outbound) outbound.proxy = proxyInfo
   const upstream = payloads['upstream-request'] as Record<string, unknown>
   if (upstream) { upstream.proxy = proxyInfo; upstream.proxy_url = proxy ? `${proxy.protocol}://${proxy.host}:${proxy.port}` : null }
+  void loadDefaults()
 })
 const currentPayload = computed(() => JSON.stringify(payloads[activeTab.value], null, 2)); const imagePreviewUrl = computed(() => { const body = (payloads['upstream-response'] as any)?.body; return imageMode.value && body?.data?.[0]?.url ? String(body.data[0].url) : '' }); const tabDescription = computed(() => tabs.find(t => t.key === activeTab.value)?.label)
 const upstreamUrl = computed(() => String((payloads['upstream-request'] as any)?.url || `https://api.openai.com/v1/${form.endpoint}`))
@@ -175,7 +175,7 @@ async function loadDefaults() {
   const requestSeq = ++defaultsRequestSeq
   defaultsLoading.value = true
   try {
-    const defaults = await getUpstreamTestDefaults(form.endpoint, form.account, imageMode.value ? imageForm.prompt : undefined)
+    const defaults = await getUpstreamTestDefaults(form.endpoint, form.account, imageMode.value ? imageForm.prompt : undefined, form.proxyId)
     if (requestSeq !== defaultsRequestSeq) return
     form.apiParams = JSON.stringify(defaults.body, null, 2)
     form.headers = JSON.stringify(defaults.headers, null, 2)

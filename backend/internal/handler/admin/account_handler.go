@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -1312,7 +1313,7 @@ func (h *AccountHandler) Test(c *gin.Context) {
 // GetOpenAITestDefaults returns the same redacted request templates used by
 // account connectivity tests.  This is intentionally a GET so the debug
 // workbench can initialize itself without issuing a live upstream request.
-// GET /api/v1/admin/accounts/test-defaults?endpoint=responses&account_id=123
+// GET /api/v1/admin/accounts/test-defaults?endpoint=responses&account_id=123&proxy_id=456
 func (h *AccountHandler) GetOpenAITestDefaults(c *gin.Context) {
 	endpoint := c.Query("endpoint")
 	var account *service.Account
@@ -1333,6 +1334,33 @@ func (h *AccountHandler) GetOpenAITestDefaults(c *gin.Context) {
 		}
 	}
 	defaults := h.accountTestService.BuildOpenAITestDefaults(account, endpoint, c.Query("prompt"))
+	// A debug request may explicitly select a managed proxy independently of
+	// the account's persisted binding. Return credential-free metadata so the
+	// workbench can display the effective route while keeping proxy passwords
+	// out of the response. The live account test path continues to use the
+	// account binding and is unaffected by this optional query parameter.
+	if proxyRaw := strings.TrimSpace(c.Query("proxy_id")); proxyRaw != "" {
+		proxyID, err := strconv.ParseInt(proxyRaw, 10, 64)
+		if err != nil || proxyID <= 0 {
+			response.BadRequest(c, "Invalid proxy_id")
+			return
+		}
+		if h.adminService == nil {
+			response.BadRequest(c, "Proxy service unavailable")
+			return
+		}
+		proxy, err := h.adminService.GetProxy(c.Request.Context(), proxyID)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		defaults.ProxyID = &proxy.ID
+		defaults.ProxyName = proxy.Name
+		if proxy.Protocol != "" && proxy.Host != "" && proxy.Port > 0 {
+			defaults.ProxyURL = proxy.Protocol + "://" + net.JoinHostPort(proxy.Host, strconv.Itoa(proxy.Port))
+		}
+		defaults.Notes = append(defaults.Notes, "调试请求将使用所选托管代理（凭据已隐藏）")
+	}
 	response.Success(c, defaults)
 }
 
