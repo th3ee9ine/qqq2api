@@ -247,6 +247,16 @@ const routes: RouteRecordRaw[] = [
       descriptionKey: 'admin.usage.description'
     }
   },
+  {
+    path: '/admin/debug-workbench',
+    name: 'AdminDebugWorkbench',
+    component: () => import('@/views/admin/DebugWorkbenchView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Upstream Debug Workbench'
+    }
+  },
   // ==================== 404 Not Found ====================
   {
     path: '/:pathMatch(.*)*',

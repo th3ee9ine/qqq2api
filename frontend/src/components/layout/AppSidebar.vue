@@ -204,6 +204,7 @@ const baseAdminNavItems = computed<NavItem[]>(() => [
     ],
   },
   { path: '/admin/usage', label: t('nav.usage'), icon: 'chart' },
+  { path: '/admin/debug-workbench', label: '调试工作台', icon: 'terminal' },
   { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: 'shield', hideInSimpleMode: true },
   { path: '/keys', label: t('nav.apiKeys'), icon: 'key' },
   { path: '/admin/settings', label: t('nav.settings'), icon: 'cog' },
