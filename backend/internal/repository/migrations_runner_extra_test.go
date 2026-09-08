@@ -138,6 +138,17 @@ func TestMigration235ChecksumCompatibility(t *testing.T) {
 	require.False(t, isMigrationChecksumCompatible(name, releasedChecksum, "unknown-file-checksum"))
 }
 
+func TestMigration236ChecksumCompatibility(t *testing.T) {
+	const name = "236_group_model_allowlist_repair.sql"
+	const releasedChecksum = "0d8fbcd98750be1a58cec45fe2b866031b656ac6286b073ca061f8fa8fdc040e"
+	const forkChecksum = "a67a305b9bff1376ddf911d9b52a474244e9dcef05c61b4cce9915edd0469bce"
+
+	require.True(t, isMigrationChecksumCompatible(name, releasedChecksum, forkChecksum))
+	require.True(t, isMigrationChecksumCompatible(name, forkChecksum, releasedChecksum))
+	require.False(t, isMigrationChecksumCompatible(name, "unknown-db-checksum", forkChecksum))
+	require.False(t, isMigrationChecksumCompatible(name, releasedChecksum, "unknown-file-checksum"))
+}
+
 func TestEnsureAtlasBaselineAligned(t *testing.T) {
 	t.Run("skip_when_no_legacy_table", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
