@@ -29,6 +29,7 @@
           <button v-for="preset in presets" :key="preset.label" type="button" class="rounded-md border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:border-primary-400 hover:text-primary-600 dark:border-dark-600 dark:text-dark-200" @click="applyPreset(preset)">{{ preset.label }}</button>
           <label class="ml-auto inline-flex cursor-pointer items-center gap-2 text-xs text-gray-500 dark:text-dark-300"><input v-model="form.stream" type="checkbox" class="rounded border-gray-300 text-primary-600" /> 流式响应</label>
         </div>
+        <div class="mt-3 flex items-center gap-2 text-[11px] text-gray-400"><span class="font-medium uppercase tracking-wide">上游 URL</span><code class="rounded bg-gray-50 px-2 py-1 text-gray-600 dark:bg-dark-800 dark:text-dark-300">{{ upstreamUrl }}</code><span class="ml-auto">默认参数来源：{{ defaultsSource }}</span></div>
       </section>
 
       <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
@@ -39,50 +40,157 @@
             <label class="block"><span class="field-label">用户消息</span><textarea v-model="form.prompt" rows="4" class="input mt-1.5 resize-y" placeholder="输入要调试的内容…"></textarea></label>
             <div class="grid grid-cols-2 gap-3"><label><span class="field-label">Temperature</span><input v-model.number="form.temperature" type="number" min="0" max="2" step="0.1" class="input mt-1.5" /></label><label><span class="field-label">最大 Tokens</span><input v-model.number="form.maxTokens" type="number" min="1" class="input mt-1.5" /></label></div>
             <label class="block"><span class="field-label">自定义请求头</span><textarea v-model="form.headers" rows="3" class="input mt-1.5 font-mono text-xs" spellcheck="false"></textarea></label>
+            <label class="block"><span class="field-label">完整 API 参数 <span class="font-normal text-gray-400">（可直接编辑 JSON）</span></span><textarea v-model="form.apiParams" rows="10" class="input mt-1.5 resize-y font-mono text-xs leading-relaxed" spellcheck="false"></textarea></label>
           </div>
         </section>
 
         <section class="card overflow-hidden">
-          <div class="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-dark-700"><h2 class="section-title"><Icon name="beaker" size="sm" class="text-fuchsia-500" /> 生图测试</h2><label class="inline-flex items-center gap-2 text-xs text-gray-500"><input v-model="imageMode" type="checkbox" class="rounded border-gray-300 text-fuchsia-600" /> 启用</label></div>
-          <div class="space-y-4 p-4" :class="!imageMode && 'opacity-50 pointer-events-none'"><label class="block"><span class="field-label">图像提示词</span><textarea v-model="imageForm.prompt" rows="3" class="input mt-1.5 resize-y" placeholder="描述你想生成的图像…"></textarea></label><div class="grid grid-cols-2 gap-3"><label><span class="field-label">尺寸</span><select v-model="imageForm.size" class="input mt-1.5"><option>1024x1024</option><option>1536x1024</option><option>1024x1536</option></select></label><label><span class="field-label">质量</span><select v-model="imageForm.quality" class="input mt-1.5"><option>standard</option><option>hd</option></select></label></div><div class="flex min-h-24 items-center justify-center overflow-hidden rounded-lg border border-dashed border-gray-300 bg-gray-50 text-xs text-gray-400 dark:border-dark-600 dark:bg-dark-800/50"><img v-if="imagePreviewUrl" :src="imagePreviewUrl" alt="生成结果预览" class="max-h-48 max-w-full rounded object-contain" /><span v-else>生成结果将在此处预览</span></div></div>
+          <div class="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-dark-700"><h2 class="section-title"><Icon name="beaker" size="sm" class="text-fuchsia-500" /> 生图测试</h2><label class="inline-flex items-center gap-2 text-xs text-gray-500"><input v-model="imageMode" type="checkbox" :disabled="form.endpoint === 'images/generations'" class="rounded border-gray-300 text-fuchsia-600" /> 启用</label></div>
+          <div class="space-y-4 p-4" :class="!imageMode && 'opacity-50 pointer-events-none'"><label class="block"><span class="field-label">图像提示词</span><textarea v-model="imageForm.prompt" rows="3" class="input mt-1.5 resize-y" placeholder="描述你想生成的图像…"></textarea></label><div class="grid grid-cols-2 gap-3"><label><span class="field-label">数量 n</span><input v-model.number="imageForm.n" type="number" min="1" max="10" class="input mt-1.5" /></label><label><span class="field-label">响应格式</span><select v-model="imageForm.responseFormat" class="input mt-1.5"><option value="b64_json">b64_json</option><option value="url">url</option></select></label></div><div class="flex min-h-24 items-center justify-center overflow-hidden rounded-lg border border-dashed border-gray-300 bg-gray-50 text-xs text-gray-400 dark:border-dark-600 dark:bg-dark-800/50"><img v-if="imagePreviewUrl" :src="imagePreviewUrl" alt="生成结果预览" class="max-h-48 max-w-full rounded object-contain" /><span v-else>生成结果将在此处预览</span></div></div>
         </section>
       </div>
 
       <section class="card overflow-hidden">
         <div class="flex flex-wrap items-center gap-1 border-b border-gray-100 px-2 dark:border-dark-700"><button v-for="tab in tabs" :key="tab.key" type="button" class="tab-button" :class="activeTab === tab.key && 'tab-button-active'" @click="activeTab = tab.key">{{ tab.label }}<span v-if="tab.key === 'upstream-response' && responseStatus" class="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-600">{{ responseStatus }}</span></button></div>
-        <div class="p-4"><div class="mb-3 flex items-center justify-between"><div class="text-xs text-gray-500 dark:text-dark-300">{{ tabDescription }}</div><button type="button" class="btn btn-ghost px-2 py-1 text-xs" @click="copyCurrent"><Icon name="copy" size="sm" /> 复制 JSON</button></div><pre class="max-h-[380px] overflow-auto rounded-lg bg-gray-900 p-4 font-mono text-xs leading-relaxed text-gray-100">{{ currentPayload }}</pre></div>
+        <div class="p-4"><div class="mb-3 flex items-center justify-between"><div class="flex items-center gap-2 text-xs text-gray-500 dark:text-dark-300"><span>{{ tabDescription }}</span><span class="rounded bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500 dark:bg-dark-800 dark:text-dark-300">{{ defaultsLoading ? '同步默认参数…' : defaultsSource }}</span></div><button type="button" class="btn btn-ghost px-2 py-1 text-xs" @click="copyCurrent"><Icon name="copy" size="sm" /> 复制 JSON</button></div><pre class="max-h-[380px] overflow-auto rounded-lg bg-gray-900 p-4 font-mono text-xs leading-relaxed text-gray-100">{{ currentPayload }}</pre></div>
       </section>
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { getUpstreamTestDefaults } from '@/api/admin/debugWorkbench'
+import { list as listAccounts } from '@/api/admin/accounts'
 
-const accounts = [{ id: 'acc-01', name: 'GPT Team · 主账号', email: 'team@example.com' }, { id: 'acc-02', name: 'GPT Plus · 备用', email: 'backup@example.com' }]
-const models = ['gpt-4o', 'gpt-4.1', 'o3-mini', 'gpt-Image-1']
-const form = reactive({ account: 'acc-01', model: 'gpt-4o', endpoint: 'chat/completions', system: 'You are a helpful assistant.', prompt: '请用一句话介绍这个调试工作台。', temperature: 0.7, maxTokens: 512, stream: false, headers: '{\n  "X-Debug-Trace": "true"\n}' })
-const imageForm = reactive({ prompt: '一张简洁的科技感蓝色渐变背景', size: '1024x1024', quality: 'standard' })
+const accounts = ref([{ id: 'acc-01', name: 'GPT Team · 主账号', email: 'team@example.com' }, { id: 'acc-02', name: 'GPT Plus · 备用', email: 'backup@example.com' }])
+const models = ['gpt-5.4', 'gpt-4o', 'gpt-4.1', 'o3-mini', 'gpt-image-2']
+const defaultChatParams = {
+  model: 'gpt-5.4',
+  messages: [{ role: 'user', content: 'hi' }],
+  stream: true
+}
+const form = reactive({ account: 'acc-01', model: 'gpt-5.4', endpoint: 'chat/completions', system: '', prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: '{\n  "X-Debug-Trace": "true"\n}', apiParams: JSON.stringify(defaultChatParams, null, 2) })
+const imageForm = reactive({ prompt: 'hi', n: 1, responseFormat: 'b64_json' })
 const imageMode = ref(false); const running = ref(false); const responseStatus = ref(''); const activeTab = ref('inbound')
-watch(() => form.endpoint, (endpoint) => {
-  if (endpoint === 'images/generations') imageMode.value = true
+const defaultsSource = ref('本地样本默认值')
+const defaultsLoading = ref(false)
+const upstreamHeaders = ref<Record<string, string>>({ Authorization: 'Bearer ••••••••', 'Content-Type': 'application/json' })
+const defaultUpstreamUrl = ref('https://api.openai.com/v1/chat/completions')
+let defaultsRequestSeq = 0
+watch(() => form.endpoint, async (endpoint) => {
+  if (endpoint === 'images/generations') {
+    imageMode.value = true
+    form.model = 'gpt-image-2'
+    form.apiParams = JSON.stringify({ model: 'gpt-image-2', prompt: imageForm.prompt, n: 1, response_format: 'b64_json' }, null, 2)
+  } else if (endpoint === 'responses') {
+    imageMode.value = false
+    form.model = 'gpt-5.4'
+    form.apiParams = JSON.stringify({ model: 'gpt-5.4', instructions: 'You are Codex, based on GPT-5.', input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }], stream: true }, null, 2)
+  } else {
+    imageMode.value = false
+    form.model = 'gpt-5.4'
+    form.apiParams = JSON.stringify(defaultChatParams, null, 2)
+  }
+  await loadDefaults()
+})
+watch(() => form.account, () => { void loadDefaults() })
+watch(() => form.model, (model) => {
+  if (!model) return
+  try {
+    const body = JSON.parse(form.apiParams)
+    if (body && typeof body === 'object' && body.model !== model) {
+      body.model = model
+      form.apiParams = JSON.stringify(body, null, 2)
+    }
+  } catch { /* the JSON editor will show the validation error on send */ }
 })
 const tabs = [{ key: 'inbound', label: '入站完整参数' }, { key: 'outbound', label: '出站完整参数' }, { key: 'upstream-request', label: '请求上游完整参数' }, { key: 'upstream-response', label: '上游完整响应参数' }]
 const presets = [{ label: '健康检查', prompt: '返回 OK' }, { label: '长文本', prompt: '请总结这段文本：' }, { label: 'JSON 输出', prompt: '仅输出合法 JSON，对象包含 message 字段。' }]
-const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/chat/completions', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: { model: form.model, messages: [{ role: 'user', content: form.prompt }], stream: form.stream } }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', body: { temperature: form.temperature, max_tokens: form.maxTokens } }, 'upstream-request': { url: 'https://api.openai.com/v1/chat/completions', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: { model: form.model, messages: [{ role: 'system', content: form.system }, { role: 'user', content: form.prompt }] } }, 'upstream-response': { status: '—', headers: {}, body: null } })
+const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/chat/completions', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: defaultChatParams }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', body: defaultChatParams }, 'upstream-request': { url: 'https://api.openai.com/v1/chat/completions', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: defaultChatParams }, 'upstream-response': { status: '—', headers: {}, body: null } })
 const currentPayload = computed(() => JSON.stringify(payloads[activeTab.value], null, 2)); const imagePreviewUrl = computed(() => { const body = (payloads['upstream-response'] as any)?.body; return imageMode.value && body?.data?.[0]?.url ? String(body.data[0].url) : '' }); const tabDescription = computed(() => tabs.find(t => t.key === activeTab.value)?.label)
+const upstreamUrl = computed(() => String((payloads['upstream-request'] as any)?.url || `https://api.openai.com/v1/${form.endpoint}`))
+async function loadDefaults() {
+  const requestSeq = ++defaultsRequestSeq
+  defaultsLoading.value = true
+  try {
+    const defaults = await getUpstreamTestDefaults(form.endpoint, form.account, imageMode.value ? imageForm.prompt : undefined)
+    if (requestSeq !== defaultsRequestSeq) return
+    form.apiParams = JSON.stringify(defaults.body, null, 2)
+    form.headers = JSON.stringify(defaults.headers, null, 2)
+    upstreamHeaders.value = { ...defaults.headers }
+    defaultUpstreamUrl.value = defaults.url || `https://api.openai.com/v1/${form.endpoint}`
+    if (typeof defaults.body.model === 'string' && defaults.body.model) {
+      if (!models.includes(defaults.body.model)) models.unshift(defaults.body.model)
+      form.model = defaults.body.model
+    }
+    if (typeof defaults.body.prompt === 'string') imageForm.prompt = defaults.body.prompt
+    if (typeof defaults.body.n === 'number') imageForm.n = defaults.body.n
+    if (typeof defaults.body.response_format === 'string') imageForm.responseFormat = defaults.body.response_format
+    if (typeof defaults.body.stream === 'boolean') form.stream = defaults.body.stream
+    const body = JSON.parse(JSON.stringify(defaults.body))
+    payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: defaults.headers, body }
+    payloads.outbound = { status: 'ready', transformed_model: defaults.body.model, route: `account://${form.account}`, body: JSON.parse(JSON.stringify(defaults.body)) }
+    payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value }, body: JSON.parse(JSON.stringify(defaults.upstream_body || defaults.body)) }
+    defaultsSource.value = `后端默认 · ${defaults.account_type}`
+  } catch {
+    if (requestSeq !== defaultsRequestSeq) return
+    defaultsSource.value = '本地样本默认值（后端未连接）'
+  } finally {
+    if (requestSeq === defaultsRequestSeq) defaultsLoading.value = false
+  }
+}
+onMounted(async () => {
+  try {
+    const result = await listAccounts(1, 50, { platform: 'openai', status: 'active' })
+    const items = (result.items ?? []).map((item: any) => ({ id: String(item.id), name: item.name || `GPT 账号 ${item.id}`, email: item.email || item.account || '已配置账号' }))
+    if (items.length) {
+      accounts.value = items
+      form.account = items[0].id
+    }
+  } catch {
+    // Anonymous local fixture mode keeps the sample accounts above.
+  }
+  await loadDefaults()
+})
 function applyPreset(p: { prompt: string }) { form.prompt = p.prompt }
 function resetAll() { form.prompt = ''; responseStatus.value = ''; payloads['upstream-response'] = { status: '—', headers: {}, body: null } }
 async function runRequest() {
   running.value = true; responseStatus.value = ''
   let customHeaders: Record<string, string> = {}
-  try { customHeaders = JSON.parse(form.headers || '{}') } catch { customHeaders = { 'X-Debug-Trace': 'true' } }
-  payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json', ...customHeaders }, body: { model: form.model, messages: [{ role: 'user', content: form.prompt }], stream: form.stream } }
-  const upstreamBody = imageMode.value ? { model: form.model, prompt: imageForm.prompt, size: imageForm.size, quality: imageForm.quality } : { model: form.model, messages: [{ role: 'system', content: form.system }, { role: 'user', content: form.prompt }], temperature: form.temperature, max_tokens: form.maxTokens, stream: form.stream }
+  try {
+    const parsedHeaders = JSON.parse(form.headers || '{}')
+    if (!parsedHeaders || typeof parsedHeaders !== 'object' || Array.isArray(parsedHeaders)) throw new Error('请求头必须是 JSON 对象')
+    for (const [key, value] of Object.entries(parsedHeaders)) {
+      if (typeof value !== 'string') throw new Error('请求头值必须是字符串')
+      customHeaders[key] = value
+    }
+  } catch {
+    running.value = false
+    responseStatus.value = '请求头错误'
+    return
+  }
+  let apiBody: Record<string, unknown>
+  try {
+    const parsed = JSON.parse(form.apiParams)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('参数必须是 JSON 对象')
+    apiBody = parsed as Record<string, unknown>
+  } catch {
+    running.value = false
+    responseStatus.value = '参数错误'
+    return
+  }
+  // The JSON editor is the source of truth; controls below only provide a quick way to update it.
+  if (typeof apiBody.model === 'string' && apiBody.model.trim()) form.model = apiBody.model
+  else apiBody.model = form.model
+  if (imageMode.value) Object.assign(apiBody, { model: form.model, prompt: imageForm.prompt, n: imageForm.n, response_format: imageForm.responseFormat })
+  const requestBody = JSON.parse(JSON.stringify(apiBody)) as Record<string, unknown>
+  payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json', ...customHeaders }, body: requestBody }
+  const upstreamBody = JSON.parse(JSON.stringify(requestBody)) as Record<string, unknown>
   payloads.outbound = { status: 'routing', transformed_model: form.model, route: `account://${form.account}`, body: upstreamBody }
-  payloads['upstream-request'] = { url: `https://api.openai.com/v1/${form.endpoint}`, method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: upstreamBody }
+  payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value, ...customHeaders }, body: upstreamBody }
   await new Promise(r => setTimeout(r, 700)); responseStatus.value = '200'; payloads.outbound = { ...(payloads.outbound as Record<string, unknown>), status: 'completed' }
   payloads['upstream-response'] = imageMode.value ? { status: 200, headers: { 'content-type': 'application/json' }, body: { created: Math.floor(Date.now() / 1000), data: [{ url: 'https://images.example.com/debug-preview.png', revised_prompt: imageForm.prompt }] } } : { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'dbg_' + Date.now() }, body: { id: 'chatcmpl_debug', model: form.model, choices: [{ index: 0, message: { role: 'assistant', content: '调试请求已成功返回。' }, finish_reason: 'stop' }], usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 } } }; running.value = false
 }

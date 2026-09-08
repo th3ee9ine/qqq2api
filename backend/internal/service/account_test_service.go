@@ -2710,6 +2710,126 @@ func createOpenAIChatCompletionsTestPayload(modelID string, prompt string) map[s
 	}
 }
 
+// OpenAITestDefaults is the redacted request template used by the admin debug
+// workbench.  It intentionally reuses the same payload builders as account
+// connectivity tests so that the UI always starts with the currently deployed
+// API defaults rather than a second, stale copy.
+type OpenAITestDefaults struct {
+	Endpoint     string            `json:"endpoint"`
+	Source       string            `json:"source"`
+	AccountType  string            `json:"account_type"`
+	Body         map[string]any    `json:"body"`
+	UpstreamBody map[string]any    `json:"upstream_body,omitempty"`
+	Headers      map[string]string `json:"headers"`
+	URL          string            `json:"url,omitempty"`
+	Notes        []string          `json:"notes,omitempty"`
+}
+
+// BuildOpenAITestDefaults returns a credential-free template for the three
+// OpenAI endpoints supported by the debug workbench.  No network request is
+// made and no account credential is included in the result.
+func (s *AccountTestService) BuildOpenAITestDefaults(account *Account, endpoint, prompt string) OpenAITestDefaults {
+	endpoint = strings.Trim(strings.ToLower(endpoint), "/")
+	if endpoint == "" {
+		endpoint = "responses"
+	}
+	if endpoint == "v1/responses" {
+		endpoint = "responses"
+	}
+	if endpoint == "v1/chat/completions" {
+		endpoint = "chat/completions"
+	}
+	if endpoint == "v1/images/generations" {
+		endpoint = "images/generations"
+	}
+	accountType := AccountTypeOAuth
+	if account != nil && account.Type != "" {
+		accountType = account.Type
+	}
+	model := openai.DefaultTestModel
+	if account != nil {
+		model = account.GetMappedModel(model)
+	}
+	if strings.TrimSpace(prompt) == "" {
+		prompt = "hi"
+	}
+	result := OpenAITestDefaults{Endpoint: endpoint, Source: "AccountTestService", AccountType: accountType, Headers: map[string]string{"Content-Type": "application/json"}}
+	switch endpoint {
+	case "chat/completions":
+		result.Body = createOpenAIChatCompletionsTestPayload(model, prompt)
+		result.Body["stream"] = true
+		result.Headers["Accept"] = "text/event-stream"
+		result.Headers["Authorization"] = "Bearer ••••••••"
+		if account != nil && account.IsOAuth() {
+			result.UpstreamBody = createOpenAITestPayload(model, true)
+			result.Notes = append(result.Notes, "OAuth 账号实际测试会转换为 Responses API")
+		}
+		if account != nil && account.IsOAuth() {
+			result.URL = chatgptCodexAPIURL
+		} else {
+			base := "https://api.openai.com"
+			if account != nil && account.GetOpenAIBaseURL() != "" {
+				base = redactOpenAIBaseURL(account.GetOpenAIBaseURL())
+			}
+			result.URL = buildOpenAIChatCompletionsURL(base)
+		}
+	case "images/generations":
+		imageModel := "gpt-image-2"
+		if account != nil && strings.TrimSpace(account.GetMappedModel(imageModel)) != "" {
+			imageModel = account.GetMappedModel(imageModel)
+		}
+		result.Body = map[string]any{"model": imageModel, "prompt": defaultOpenAIImageTestPrompt, "n": 1, "response_format": "b64_json"}
+		result.Headers["Authorization"] = "Bearer ••••••••"
+		if account != nil && account.IsOAuth() {
+			if raw, err := buildOpenAIImagesResponsesRequest(&OpenAIImagesRequest{Endpoint: openAIImagesGenerationsEndpoint, Model: imageModel, Prompt: defaultOpenAIImageTestPrompt, N: 1}, imageModel); err == nil {
+				_ = json.Unmarshal(raw, &result.UpstreamBody)
+			}
+			result.URL = chatgptCodexAPIURL
+			result.Notes = append(result.Notes, "OAuth 图片测试通过 Responses image_generation 工具调用")
+		} else {
+			base := "https://api.openai.com"
+			if account != nil && account.GetOpenAIBaseURL() != "" {
+				base = redactOpenAIBaseURL(account.GetOpenAIBaseURL())
+			}
+			result.URL = buildOpenAIImagesURL(base, openAIImagesGenerationsEndpoint)
+		}
+	default:
+		result.Endpoint = "responses"
+		result.Body = createOpenAITestPayload(model, account != nil && account.IsOAuth())
+		result.Headers["Accept"] = "text/event-stream"
+		result.Headers["Authorization"] = "Bearer ••••••••"
+		if account != nil && account.IsOAuth() {
+			result.URL = chatgptCodexAPIURL
+		} else {
+			// API-key Responses probes use the same Codex identity headers as the
+			// live account test. Values are non-secret, with the per-request UUID
+			// represented as a placeholder in this static template.
+			identity := resolveCodexOutboundIdentity("")
+			result.Headers["User-Agent"] = identity.userAgent
+			result.Headers["Originator"] = identity.originator
+			result.Headers["Version"] = currentCodexResponsesVersion()
+			result.Headers["X-Codex-Window-ID"] = "<generated-per-request>"
+			base := "https://api.openai.com"
+			if account != nil && account.GetOpenAIBaseURL() != "" {
+				base = redactOpenAIBaseURL(account.GetOpenAIBaseURL())
+			}
+			result.URL = buildOpenAIResponsesURL(base)
+		}
+	}
+	return result
+}
+
+func redactOpenAIBaseURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "https://api.openai.com"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/")
+}
+
 // processClaudeStream processes the SSE stream from Claude API
 func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader) error {
 	reader := bufio.NewReader(body)

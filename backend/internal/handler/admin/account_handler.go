@@ -1309,6 +1309,33 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	}
 }
 
+// GetOpenAITestDefaults returns the same redacted request templates used by
+// account connectivity tests.  This is intentionally a GET so the debug
+// workbench can initialize itself without issuing a live upstream request.
+// GET /api/v1/admin/accounts/test-defaults?endpoint=responses&account_id=123
+func (h *AccountHandler) GetOpenAITestDefaults(c *gin.Context) {
+	endpoint := c.Query("endpoint")
+	var account *service.Account
+	if idRaw := strings.TrimSpace(c.Query("account_id")); idRaw != "" {
+		id, err := strconv.ParseInt(idRaw, 10, 64)
+		if err != nil {
+			response.BadRequest(c, "Invalid account_id")
+			return
+		}
+		if h.adminService == nil {
+			response.BadRequest(c, "Account service unavailable")
+			return
+		}
+		account, err = h.adminService.GetAccount(c.Request.Context(), id)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	defaults := h.accountTestService.BuildOpenAITestDefaults(account, endpoint, c.Query("prompt"))
+	response.Success(c, defaults)
+}
+
 // RecoverState handles unified recovery of recoverable account runtime state.
 // POST /api/v1/admin/accounts/:id/recover-state
 func (h *AccountHandler) RecoverState(c *gin.Context) {
