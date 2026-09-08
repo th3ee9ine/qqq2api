@@ -607,7 +607,7 @@ func openAIPaidCreditsSnapshotActive(extra map[string]any, now time.Time) bool {
 	}
 	if ts, ok := snapshot["fetched_at"]; ok {
 		sec := parseExtraInt(ts)
-		if sec <= 0 || now.Sub(time.Unix(sec, 0)) >= openAICodexAutoPauseStaleAfter {
+		if sec <= 0 || now.Sub(time.Unix(int64(sec), 0)) >= openAICodexAutoPauseStaleAfter {
 			return false
 		}
 	} else {
