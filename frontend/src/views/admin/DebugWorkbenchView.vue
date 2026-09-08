@@ -107,6 +107,44 @@ watch(() => form.model, (model) => {
     }
   } catch { /* the JSON editor will show the validation error on send */ }
 })
+watch(() => form.prompt, (value) => {
+  try {
+    const body = JSON.parse(form.apiParams)
+    if (form.endpoint === 'images/generations' || imageMode.value) body.prompt = value
+    else if (Array.isArray(body.messages)) {
+      const user = [...body.messages].reverse().find((item: any) => item?.role === 'user')
+      if (user) user.content = value
+    } else if (Array.isArray(body.input)) {
+      const item = [...body.input].reverse().find((entry: any) => entry?.role === 'user')
+      if (item?.content?.[0]) item.content[0].text = value
+    }
+    form.apiParams = JSON.stringify(body, null, 2)
+  } catch { /* keep invalid JSON visible for the send-time validation */ }
+})
+watch(() => form.system, (value) => {
+  if (form.endpoint !== 'chat/completions') return
+  try {
+    const body = JSON.parse(form.apiParams)
+    if (!Array.isArray(body.messages)) return
+    const index = body.messages.findIndex((item: any) => item?.role === 'system')
+    if (value.trim()) {
+      if (index >= 0) body.messages[index].content = value
+      else body.messages.unshift({ role: 'system', content: value })
+    } else if (index >= 0) body.messages.splice(index, 1)
+    form.apiParams = JSON.stringify(body, null, 2)
+  } catch { /* keep invalid JSON visible */ }
+})
+watch(() => form.stream, (value) => {
+  try { const body = JSON.parse(form.apiParams); if (body && typeof body === 'object') { body.stream = value; form.apiParams = JSON.stringify(body, null, 2) } } catch { /* validation on send */ }
+})
+watch(() => form.temperature, (value) => {
+  if (form.endpoint !== 'chat/completions') return
+  try { const body = JSON.parse(form.apiParams); if (value > 0) body.temperature = value; else delete body.temperature; form.apiParams = JSON.stringify(body, null, 2) } catch { /* validation on send */ }
+})
+watch(() => form.maxTokens, (value) => {
+  if (form.endpoint !== 'chat/completions') return
+  try { const body = JSON.parse(form.apiParams); if (value > 0) body.max_tokens = value; else delete body.max_tokens; form.apiParams = JSON.stringify(body, null, 2) } catch { /* validation on send */ }
+})
 const tabs = [{ key: 'inbound', label: '入站完整参数' }, { key: 'outbound', label: '出站完整参数' }, { key: 'upstream-request', label: '请求上游完整参数' }, { key: 'upstream-response', label: '上游完整响应参数' }]
 const presets = [{ label: '健康检查', prompt: '返回 OK' }, { label: '长文本', prompt: '请总结这段文本：' }, { label: 'JSON 输出', prompt: '仅输出合法 JSON，对象包含 message 字段。' }]
 const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/chat/completions', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: defaultChatParams }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', body: defaultChatParams }, 'upstream-request': { url: 'https://api.openai.com/v1/chat/completions', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: defaultChatParams }, 'upstream-response': { status: '—', headers: {}, body: null } })
@@ -126,6 +164,17 @@ async function loadDefaults() {
       if (!models.includes(defaults.body.model)) models.unshift(defaults.body.model)
       form.model = defaults.body.model
     }
+    if (Array.isArray(defaults.body.messages)) {
+      const system = defaults.body.messages.find((item: any) => item?.role === 'system')
+      form.system = typeof system?.content === 'string' ? system.content : ''
+      const user = [...defaults.body.messages].reverse().find((item: any) => item?.role === 'user')
+      if (typeof user?.content === 'string') form.prompt = user.content
+    } else if (Array.isArray(defaults.body.input)) {
+      const user = [...defaults.body.input].reverse().find((item: any) => item?.role === 'user')
+      const text = user?.content?.find?.((part: any) => part?.type === 'input_text')?.text
+      if (typeof text === 'string') form.prompt = text
+    }
+    if (typeof defaults.body.instructions === 'string' && form.endpoint === 'responses') form.system = defaults.body.instructions
     if (typeof defaults.body.prompt === 'string') imageForm.prompt = defaults.body.prompt
     if (typeof defaults.body.n === 'number') imageForm.n = defaults.body.n
     if (typeof defaults.body.response_format === 'string') imageForm.responseFormat = defaults.body.response_format
@@ -155,8 +204,27 @@ onMounted(async () => {
   }
   await loadDefaults()
 })
-function applyPreset(p: { prompt: string }) { form.prompt = p.prompt }
-function resetAll() { form.prompt = ''; responseStatus.value = ''; payloads['upstream-response'] = { status: '—', headers: {}, body: null } }
+function applyPreset(p: { prompt: string }) {
+  form.prompt = p.prompt
+  try {
+    const body = JSON.parse(form.apiParams)
+    if (form.endpoint === 'images/generations' || imageMode.value) body.prompt = p.prompt
+    else if (Array.isArray(body.messages)) {
+      const user = [...body.messages].reverse().find((item: any) => item?.role === 'user')
+      if (user) user.content = p.prompt
+      else body.messages.push({ role: 'user', content: p.prompt })
+    } else if (Array.isArray(body.input)) {
+      const item = [...body.input].reverse().find((entry: any) => entry?.role === 'user')
+      if (item?.content?.[0]) item.content[0].text = p.prompt
+    }
+    form.apiParams = JSON.stringify(body, null, 2)
+  } catch { /* validation is reported when the request is sent */ }
+}
+async function resetAll() {
+  responseStatus.value = ''
+  payloads['upstream-response'] = { status: '—', headers: {}, body: null }
+  await loadDefaults()
+}
 async function runRequest() {
   running.value = true; responseStatus.value = ''
   let customHeaders: Record<string, string> = {}
