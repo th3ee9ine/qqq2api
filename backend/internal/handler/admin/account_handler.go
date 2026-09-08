@@ -1259,6 +1259,7 @@ type TestAccountRequest struct {
 	ModelID string `json:"model_id"`
 	Prompt  string `json:"prompt"`
 	Mode    string `json:"mode"`
+	ProxyID *int64 `json:"proxy_id"`
 	// Optional media for Grok (and future) real generation tests.
 	// ImageDataURL / AudioDataURL are data:<mime>;base64,... payloads.
 	ImageDataURL string `json:"image_data_url"`
@@ -1295,6 +1296,22 @@ func (h *AccountHandler) Test(c *gin.Context) {
 	opts := service.AccountTestOptions{
 		ImageDataURL: req.ImageDataURL,
 		AudioDataURL: req.AudioDataURL,
+	}
+	if req.ProxyID != nil {
+		if *req.ProxyID <= 0 || h.adminService == nil {
+			response.BadRequest(c, "Invalid proxy_id")
+			return
+		}
+		proxy, proxyErr := h.adminService.GetProxy(c.Request.Context(), *req.ProxyID)
+		if proxyErr != nil {
+			response.ErrorFrom(c, proxyErr)
+			return
+		}
+		if proxy == nil || proxy.Protocol == "" || proxy.Host == "" || proxy.Port <= 0 {
+			response.BadRequest(c, "Invalid proxy configuration")
+			return
+		}
+		opts.Proxy = proxy
 	}
 
 	// Use AccountTestService to test the account with SSE streaming
@@ -1352,6 +1369,10 @@ func (h *AccountHandler) GetOpenAITestDefaults(c *gin.Context) {
 		proxy, err := h.adminService.GetProxy(c.Request.Context(), proxyID)
 		if err != nil {
 			response.ErrorFrom(c, err)
+			return
+		}
+		if proxy == nil || proxy.Protocol == "" || proxy.Host == "" || proxy.Port <= 0 {
+			response.BadRequest(c, "Invalid proxy configuration")
 			return
 		}
 		defaults.ProxyID = &proxy.ID

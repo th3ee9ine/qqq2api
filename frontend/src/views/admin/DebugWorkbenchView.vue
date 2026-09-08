@@ -63,7 +63,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { getUpstreamTestDefaults } from '@/api/admin/debugWorkbench'
+import { getUpstreamTestDefaults, runAccountConnectivityTest } from '@/api/admin/debugWorkbench'
 import { list as listAccounts } from '@/api/admin/accounts'
 import { proxiesAPI } from '@/api/admin/proxies'
 import ProxySelector from '@/components/common/ProxySelector.vue'
@@ -286,6 +286,23 @@ async function runRequest() {
   const upstreamBody = JSON.parse(JSON.stringify(requestBody)) as Record<string, unknown>
   payloads.outbound = { status: 'routing', transformed_model: form.model, route: `account://${form.account}`, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body: upstreamBody }
   payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value, ...customHeaders }, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, proxy_url: selectedProxy.value ? `${selectedProxy.value.protocol}://${selectedProxy.value.host}:${selectedProxy.value.port}` : null, body: upstreamBody }
+  // Use the real SSE connectivity test when a persisted account is selected;
+  // fixture accounts continue to use the local preview response.
+  if (/^\d+$/.test(form.account)) {
+    try {
+      const raw = await runAccountConnectivityTest(form.account, { model_id: String(apiBody.model || form.model), prompt: imageMode.value ? imageForm.prompt : form.prompt, mode: form.endpoint === 'images/generations' ? 'image' : '', ...(form.proxyId != null ? { proxy_id: form.proxyId } : {}) })
+      const events = raw.split(/\n\s*\n/).map((chunk) => chunk.match(/^data:\s*(.+)$/m)?.[1]).filter(Boolean).map((data) => { try { return JSON.parse(data as string) } catch { return { raw: data } } })
+      const completed = [...events].reverse().find((event: any) => event?.type === 'test_complete')
+      responseStatus.value = completed?.success === false ? '500' : '200'
+      payloads['upstream-response'] = { status: Number(responseStatus.value), headers: { 'content-type': 'text/event-stream' }, body: { events } }
+    } catch (error: any) {
+      responseStatus.value = 'error'
+      payloads['upstream-response'] = { status: 502, headers: {}, body: { error: error?.message || '上游请求失败' } }
+    } finally {
+      running.value = false
+    }
+    return
+  }
   await new Promise(r => setTimeout(r, 700)); responseStatus.value = '200'; payloads.outbound = { ...(payloads.outbound as Record<string, unknown>), status: 'completed' }
   payloads['upstream-response'] = imageMode.value ? { status: 200, headers: { 'content-type': 'application/json' }, body: { created: Math.floor(Date.now() / 1000), data: [{ url: 'https://images.example.com/debug-preview.png', revised_prompt: imageForm.prompt }] } } : { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'dbg_' + Date.now() }, body: { id: 'chatcmpl_debug', model: form.model, choices: [{ index: 0, message: { role: 'assistant', content: '调试请求已成功返回。' }, finish_reason: 'stop' }], usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 } } }; running.value = false
 }

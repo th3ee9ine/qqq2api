@@ -26,3 +26,11 @@ export async function getUpstreamTestDefaults(endpoint: string, accountId?: stri
   })
   return data
 }
+
+export async function runAccountConnectivityTest(accountId: string, payload: { model_id: string; prompt: string; mode: string; proxy_id?: number | null }) {
+  const response = await apiClient.post<string>(`/admin/accounts/${accountId}/test`, payload, {
+    responseType: 'text',
+    timeout: 120000
+  })
+  return response.data
+}

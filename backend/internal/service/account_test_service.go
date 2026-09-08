@@ -72,6 +72,9 @@ type TestEvent struct {
 type AccountTestOptions struct {
 	ImageDataURL string
 	AudioDataURL string
+	// Proxy overrides the account's persisted proxy for this one connectivity
+	// test. It is resolved and authorized by the admin handler.
+	Proxy *Proxy
 }
 
 func firstAccountTestOptions(opts []AccountTestOptions) AccountTestOptions {
@@ -320,6 +323,11 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	}
 	if err := requireActiveAccountPlatform(account.Platform); err != nil {
 		return s.sendErrorAndEnd(c, err.Error())
+	}
+	if testOpts.Proxy != nil {
+		proxy := testOpts.Proxy
+		account.Proxy = proxy
+		account.ProxyID = &proxy.ID
 	}
 
 	// Synthetic UI load-test accounts exercise the real SSE parsing and modal
