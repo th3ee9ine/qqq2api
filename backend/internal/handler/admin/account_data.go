@@ -331,6 +331,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 					if _, updateErr := h.adminService.UpdateProxy(ctx, existingID, &service.UpdateProxyInput{
 						Status:         normalizedStatus,
 						ExpiresAt:      existingExpiresAt,
+						ClearExpiresAt: existingExpiresAt == nil,
 						FallbackMode:   existingFallbackMode,
 						BackupProxyID:  existingBackupProxyID,
 						ExpiryWarnDays: item.ExpiryWarnDays,
@@ -418,6 +419,7 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 			if _, updateErr := h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
 				Status:         normalizedStatus,
 				ExpiresAt:      expiresAt,
+				ClearExpiresAt: expiresAt == nil,
 				FallbackMode:   fallbackMode,
 				BackupProxyID:  backupProxyID,
 				ExpiryWarnDays: item.ExpiryWarnDays,

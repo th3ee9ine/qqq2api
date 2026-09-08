@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	pkghttputil "github.com/th3ee9ine/qqq2api/internal/pkg/httputil"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/requestmodel"
 	servermiddleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
@@ -244,7 +245,7 @@ func TestCompositeRequestModelFromMultipartLiveSession(t *testing.T) {
 	require.NoError(t, writer.WriteField("session", `{"model":"live-alias"}`))
 	require.NoError(t, writer.Close())
 
-	require.Equal(t, "live-alias", compositeRequestModelFromBody(writer.FormDataContentType(), body.Bytes()))
+	require.Equal(t, "live-alias", requestmodel.FromBody(writer.FormDataContentType(), body.Bytes()))
 }
 
 func TestCompositeCodexControlPathsUseResponsesRoutes(t *testing.T) {

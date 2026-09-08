@@ -174,6 +174,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 				updateInput := &service.UpdateProxyInput{
 					Status:         normalizedStatus,
 					ExpiresAt:      existingExpiresAt,
+					ClearExpiresAt: existingExpiresAt == nil,
 					FallbackMode:   existingFallbackMode,
 					BackupProxyID:  existingBackupProxyID,
 					ExpiryWarnDays: item.ExpiryWarnDays,
@@ -263,6 +264,7 @@ func (h *ProxyHandler) ImportData(c *gin.Context) {
 			if _, err := h.adminService.UpdateProxy(ctx, created.ID, &service.UpdateProxyInput{
 				Status:         normalizedStatus,
 				ExpiresAt:      expiresAt,
+				ClearExpiresAt: expiresAt == nil,
 				FallbackMode:   fallbackMode,
 				BackupProxyID:  backupProxyID,
 				ExpiryWarnDays: item.ExpiryWarnDays,

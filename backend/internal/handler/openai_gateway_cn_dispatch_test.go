@@ -12,7 +12,7 @@ import (
 func TestAllowOpenAICompatibleMessagesDispatch_RetiredProvidersRejected(t *testing.T) {
 	require.True(t, allowOpenAICompatibleMessagesDispatch(nil, nil), "无 key 保持放行")
 
-	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformGrok} {
+	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformGrok} {
 		apiKey := &service.APIKey{Group: &service.Group{Platform: platform, AllowMessagesDispatch: false}}
 		require.False(t, allowOpenAICompatibleMessagesDispatch(nil, apiKey), "platform=%s", platform)
 	}

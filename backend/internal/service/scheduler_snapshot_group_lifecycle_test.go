@@ -336,7 +336,7 @@ func expectedGroupLifecycleBuckets(groupID int64) []SchedulerBucket {
 			buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeMixed})
 		}
 	}
-	return buckets
+	return count
 }
 
 func bucketStrings(buckets []SchedulerBucket) map[string]struct{} {

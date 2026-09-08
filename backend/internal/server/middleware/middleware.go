@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/googleapi"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
@@ -99,12 +100,27 @@ func abortWithOpenAIQuotaError(c *gin.Context, statusCode int, message string) {
 // GatewayErrorWriter 定义网关错误响应格式（不同协议使用不同格式）
 type GatewayErrorWriter func(c *gin.Context, status int, message string)
 
-// AnthropicErrorWriter 按 Anthropic API 规范输出错误
+// AnthropicErrorWriter 按 Anthropic API 规范输出错误；error.type 随状态码映射
+// （404 -> not_found_error，403 -> permission_error，其余 api_error）。
 func AnthropicErrorWriter(c *gin.Context, status int, message string) {
+	errorType := "api_error"
+	switch status {
+	case http.StatusNotFound:
+		errorType = "not_found_error"
+	case http.StatusForbidden:
+		errorType = "permission_error"
+	}
 	c.JSON(status, gin.H{
 		"type":  "error",
-		"error": gin.H{"type": "permission_error", "message": message},
+		"error": gin.H{"type": errorType, "message": message},
 	})
+}
+
+func GoogleErrorWriter(c *gin.Context, status int, message string) {
+	c.JSON(status, gin.H{"error": gin.H{"code": status, "message": message, "status": googleapi.HTTPStatusToGoogleStatus(status)}})
+}
+func OpenAIErrorWriter(c *gin.Context, status int, message string) {
+	c.JSON(status, gin.H{"error": gin.H{"message": message, "type": "invalid_request_error", "code": "model_not_found"}})
 }
 
 // RequireGroupAssignment 检查 API Key 是否已分配到分组，
