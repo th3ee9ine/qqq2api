@@ -72,7 +72,13 @@ const defaultChatParams = {
   messages: [{ role: 'user', content: 'hi' }],
   stream: true
 }
-const form = reactive({ account: 'acc-01', model: 'gpt-5.4', endpoint: 'chat/completions', system: '', prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: '{\n  "X-Debug-Trace": "true"\n}', apiParams: JSON.stringify(defaultChatParams, null, 2) })
+const defaultResponsesParams = {
+  model: 'gpt-5.4',
+  instructions: 'You are Codex, based on GPT-5.',
+  input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+  stream: true
+}
+const form = reactive({ account: 'acc-01', model: 'gpt-5.4', endpoint: 'responses', system: defaultResponsesParams.instructions, prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: '{\n  "Content-Type": "application/json",\n  "Accept": "text/event-stream",\n  "Authorization": "Bearer ••••••••"\n}', apiParams: JSON.stringify(defaultResponsesParams, null, 2) })
 const imageForm = reactive({ prompt: 'hi', n: 1, responseFormat: 'b64_json' })
 const imageMode = ref(false); const running = ref(false); const responseStatus = ref(''); const activeTab = ref('inbound')
 const defaultsSource = ref('本地样本默认值')
@@ -147,7 +153,7 @@ watch(() => form.maxTokens, (value) => {
 })
 const tabs = [{ key: 'inbound', label: '入站完整参数' }, { key: 'outbound', label: '出站完整参数' }, { key: 'upstream-request', label: '请求上游完整参数' }, { key: 'upstream-response', label: '上游完整响应参数' }]
 const presets = [{ label: '健康检查', prompt: '返回 OK' }, { label: '长文本', prompt: '请总结这段文本：' }, { label: 'JSON 输出', prompt: '仅输出合法 JSON，对象包含 message 字段。' }]
-const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/chat/completions', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: defaultChatParams }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', body: defaultChatParams }, 'upstream-request': { url: 'https://api.openai.com/v1/chat/completions', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: defaultChatParams }, 'upstream-response': { status: '—', headers: {}, body: null } })
+const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/responses', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: defaultResponsesParams }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', body: defaultResponsesParams }, 'upstream-request': { url: 'https://api.openai.com/v1/responses', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: defaultResponsesParams }, 'upstream-response': { status: '—', headers: {}, body: null } })
 const currentPayload = computed(() => JSON.stringify(payloads[activeTab.value], null, 2)); const imagePreviewUrl = computed(() => { const body = (payloads['upstream-response'] as any)?.body; return imageMode.value && body?.data?.[0]?.url ? String(body.data[0].url) : '' }); const tabDescription = computed(() => tabs.find(t => t.key === activeTab.value)?.label)
 const upstreamUrl = computed(() => String((payloads['upstream-request'] as any)?.url || `https://api.openai.com/v1/${form.endpoint}`))
 async function loadDefaults() {
