@@ -1110,6 +1110,7 @@ import {
 } from '@/composables/useStepUp'
 import { formatDateTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
+import { getIpArea } from '@/utils/ipRegion'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 
 const { t } = useI18n()
@@ -1689,7 +1690,13 @@ const applyQualityResult = (proxyId: number, result: ProxyQualityCheckResult) =>
 }
 
 const formatLocation = (proxy: Proxy) => {
-  const parts = [proxy.country, proxy.city].filter(Boolean) as string[]
+  const area = getIpArea(proxy.country_code)
+  const parts = [
+    area ? t(`admin.proxies.ipAreas.${area}`) : '',
+    proxy.country,
+    proxy.region,
+    proxy.city
+  ].filter(Boolean) as string[]
   return parts.join(' · ')
 }
 
@@ -1771,7 +1778,9 @@ const handleQualityCheck = async (proxy: Proxy) => {
         message: result.summary,
         ip_address: result.exit_ip,
         country: result.country,
-        country_code: result.country_code
+        country_code: result.country_code,
+        region: result.region,
+        city: result.city
       })
     }
     applyQualityResult(proxy.id, result)
@@ -1815,7 +1824,9 @@ const runBatchProxyQualityChecks = async (ids: number[]) => {
               message: result.summary,
               ip_address: result.exit_ip,
               country: result.country,
-              country_code: result.country_code
+              country_code: result.country_code,
+              region: result.region,
+              city: result.city
             })
           }
         }

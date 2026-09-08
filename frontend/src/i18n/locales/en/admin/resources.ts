@@ -84,6 +84,15 @@ export default {
         socks5: 'SOCKS5',
         socks5h: 'SOCKS5H (Remote DNS)'
       },
+      ipAreas: {
+        northAmerica: 'North America',
+        southAmerica: 'South America',
+        europe: 'Europe',
+        asia: 'Asia',
+        africa: 'Africa',
+        oceania: 'Oceania',
+        antarctica: 'Antarctica'
+      },
       columns: {
         name: 'Name',
         protocol: 'Protocol',

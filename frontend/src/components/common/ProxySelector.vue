@@ -116,6 +116,21 @@
               <div class="truncate text-xs text-gray-500 dark:text-gray-400">
                 {{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }}
               </div>
+              <div
+                v-if="
+                  proxy.country_code ||
+                  proxy.country ||
+                  proxy.region ||
+                  proxy.city ||
+                  testResults[proxy.id]?.country_code ||
+                  testResults[proxy.id]?.country ||
+                  testResults[proxy.id]?.region ||
+                  testResults[proxy.id]?.city
+                "
+                class="truncate text-xs text-primary-600 dark:text-primary-400"
+              >
+                {{ formatProxyLocation(proxy) }}
+              </div>
             </div>
 
             <!-- Individual test button -->
@@ -173,6 +188,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import Icon from '@/components/icons/Icon.vue'
 import type { Proxy } from '@/types'
+import { getIpArea } from '@/utils/ipRegion'
 
 const { t } = useI18n()
 
@@ -184,6 +200,7 @@ interface ProxyTestResult {
   city?: string
   region?: string
   country?: string
+  country_code?: string
 }
 
 interface Props {
@@ -220,8 +237,21 @@ const selectedLabel = computed(() => {
     return t('admin.accounts.noProxy')
   }
   const proxy = selectedProxy.value
-  return `${proxy.name} (${proxy.protocol}://${proxy.host}:${proxy.port})`
+  const location = formatProxyLocation(proxy)
+  return `${proxy.name} (${proxy.protocol}://${proxy.host}:${proxy.port}${location ? ` · ${location}` : ''})`
 })
+
+const formatProxyLocation = (proxy: Proxy) => {
+  const result = testResults[proxy.id]
+  const countryCode = proxy.country_code || result?.country_code
+  const area = getIpArea(countryCode)
+  return [
+    area ? t(`admin.proxies.ipAreas.${area}`) : '',
+    proxy.country || result?.country,
+    proxy.region || result?.region,
+    proxy.city || result?.city
+  ].filter(Boolean).join(' · ')
+}
 
 const filteredProxies = computed(() => {
   if (!searchQuery.value) {
@@ -231,7 +261,8 @@ const filteredProxies = computed(() => {
   return props.proxies.filter((proxy) => {
     const name = proxy.name.toLowerCase()
     const host = proxy.host.toLowerCase()
-    return name.includes(query) || host.includes(query)
+    const location = formatProxyLocation(proxy).toLowerCase()
+    return name.includes(query) || host.includes(query) || location.includes(query)
   })
 })
 

@@ -73,6 +73,15 @@ export default {
       dataExportConfirm: '确认导出',
       dataExported: '数据导出成功',
       dataExportFailed: '数据导出失败',
+      ipAreas: {
+        northAmerica: '北美',
+        southAmerica: '南美',
+        europe: '欧洲',
+        asia: '亚洲',
+        africa: '非洲',
+        oceania: '大洋洲',
+        antarctica: '南极洲'
+      },
       columns: {
         name: '名称',
         protocol: '协议',

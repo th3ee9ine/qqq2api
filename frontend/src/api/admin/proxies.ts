@@ -52,7 +52,11 @@ export async function list(
  * @returns List of all active proxies
  */
 export async function getAll(): Promise<Proxy[]> {
-  const { data } = await apiClient.get<Proxy[]>('/admin/proxies/all')
+  // Include the cached exit-IP geolocation so proxy selectors can show the
+  // area/country while an account is being assigned to an IP.
+  const { data } = await apiClient.get<Proxy[]>('/admin/proxies/all', {
+    params: { with_count: 'true' }
+  })
   return data
 }
 

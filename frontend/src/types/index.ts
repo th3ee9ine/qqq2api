@@ -993,6 +993,8 @@ export interface ProxyQualityCheckResult {
   exit_ip?: string
   country?: string
   country_code?: string
+  region?: string
+  city?: string
   base_latency_ms?: number
   passed_count: number
   warn_count: number
