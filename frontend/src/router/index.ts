@@ -69,7 +69,16 @@ const routes: RouteRecordRaw[] = [
   // ==================== Shared administrator tools ====================
   {
     path: '/',
-    redirect: '/home'
+    redirect: '/debug-workbench'
+  },
+  {
+    path: '/debug-workbench',
+    name: 'DebugWorkbenchPublic',
+    component: () => import('@/views/admin/DebugWorkbenchView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Upstream Debug Workbench'
+    }
   },
   {
     path: '/keys',
@@ -293,7 +302,7 @@ let authInitialized = false
 const navigationLoading = useNavigationLoadingState()
 // 延迟初始化预加载，传入 router 实例
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
-const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/legal']
+const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/legal', '/debug-workbench']
 // These legacy paths are intentionally kept out of the route table. Redirect
 // them for users with old bookmarks instead of exposing a dead page.
 const DISABLED_FEATURE_PATHS = [
