@@ -18,10 +18,12 @@
       </div>
 
       <section class="card p-4 md:p-5">
-        <div class="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr_1fr_auto] lg:items-end">
+        <div class="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr_1fr_1fr_1fr_auto] lg:items-end">
           <label class="block"><span class="field-label">GPT 账号</span><select v-model="form.account" class="input mt-1.5"><option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }} · {{ a.email }}</option></select></label>
           <label class="block"><span class="field-label">模型</span><select v-model="form.model" class="input mt-1.5"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select></label>
           <label class="block"><span class="field-label">请求方式</span><select v-model="form.endpoint" class="input mt-1.5"><option value="chat/completions">Chat Completions</option><option value="responses">Responses API</option><option value="images/generations">Images Generation</option></select></label>
+          <label class="block"><span class="field-label">代理 IP</span><select v-model="proxyId" class="input mt-1.5"><option :value="null">跟随账号默认</option><option v-for="proxy in proxies" :key="proxy.id" :value="proxy.id">{{ proxy.name }} · {{ proxy.host }}:{{ proxy.port }}</option></select></label>
+          <label class="block"><span class="field-label">代理 IP</span><ProxySelector v-model="form.proxyId" :proxies="proxies" :disabled="running" /></label>
           <button type="button" class="btn btn-primary h-10 justify-center px-6" :disabled="running" @click="runRequest"><Icon :name="running ? 'refresh' : 'play'" size="sm" :class="running && 'animate-spin'" /> {{ running ? '请求中…' : '发送请求' }}</button>
         </div>
         <div class="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3 dark:border-dark-700">
@@ -64,7 +66,11 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { getUpstreamTestDefaults } from '@/api/admin/debugWorkbench'
 import { list as listAccounts } from '@/api/admin/accounts'
+import { proxiesAPI } from '@/api/admin/proxies'
+import ProxySelector from '@/components/common/ProxySelector.vue'
+import type { Proxy } from '@/types'
 
+const proxies = ref<Proxy[]>([])
 const accounts = ref([{ id: 'acc-01', name: 'GPT Team · 主账号', email: 'team@example.com' }, { id: 'acc-02', name: 'GPT Plus · 备用', email: 'backup@example.com' }])
 const models = ['gpt-5.4', 'gpt-4o', 'gpt-4.1', 'o3-mini', 'gpt-image-2']
 const defaultChatParams = {
@@ -78,7 +84,7 @@ const defaultResponsesParams = {
   input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
   stream: true
 }
-const form = reactive({ account: 'acc-01', model: 'gpt-5.4', endpoint: 'responses', system: defaultResponsesParams.instructions, prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: '{\n  "Content-Type": "application/json",\n  "Accept": "text/event-stream",\n  "Authorization": "Bearer ••••••••"\n}', apiParams: JSON.stringify(defaultResponsesParams, null, 2) })
+const form = reactive({ account: 'acc-01', proxyId: null as number | null, model: 'gpt-5.4', endpoint: 'responses', system: defaultResponsesParams.instructions, prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: '{\n  "Content-Type": "application/json",\n  "Accept": "text/event-stream",\n  "Authorization": "Bearer ••••••••"\n}', apiParams: JSON.stringify(defaultResponsesParams, null, 2) })
 const imageForm = reactive({ prompt: 'hi', n: 1, responseFormat: 'b64_json' })
 const imageMode = ref(false); const running = ref(false); const responseStatus = ref(''); const activeTab = ref('inbound')
 const defaultsSource = ref('本地样本默认值')
@@ -153,7 +159,16 @@ watch(() => form.maxTokens, (value) => {
 })
 const tabs = [{ key: 'inbound', label: '入站完整参数' }, { key: 'outbound', label: '出站完整参数' }, { key: 'upstream-request', label: '请求上游完整参数' }, { key: 'upstream-response', label: '上游完整响应参数' }]
 const presets = [{ label: '健康检查', prompt: '返回 OK' }, { label: '长文本', prompt: '请总结这段文本：' }, { label: 'JSON 输出', prompt: '仅输出合法 JSON，对象包含 message 字段。' }]
-const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/responses', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: defaultResponsesParams }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', body: defaultResponsesParams }, 'upstream-request': { url: 'https://api.openai.com/v1/responses', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, body: defaultResponsesParams }, 'upstream-response': { status: '—', headers: {}, body: null } })
+const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/responses', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: defaultResponsesParams }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', proxy: null, body: defaultResponsesParams }, 'upstream-request': { url: 'https://api.openai.com/v1/responses', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, proxy: null, body: defaultResponsesParams }, 'upstream-response': { status: '—', headers: {}, body: null } })
+const selectedProxy = computed(() => form.proxyId == null ? null : proxies.value.find((p) => p.id === form.proxyId) || null)
+watch(() => form.proxyId, (proxyId) => {
+  const proxy = proxyId == null ? null : proxies.value.find((p) => p.id === proxyId)
+  const proxyInfo = proxy ? { id: proxy.id, name: proxy.name, protocol: proxy.protocol, host: proxy.host, port: proxy.port, ip_address: proxy.ip_address, country: proxy.country, country_code: proxy.country_code } : null
+  const outbound = payloads.outbound as Record<string, unknown>
+  if (outbound) outbound.proxy = proxyInfo
+  const upstream = payloads['upstream-request'] as Record<string, unknown>
+  if (upstream) { upstream.proxy = proxyInfo; upstream.proxy_url = proxy ? `${proxy.protocol}://${proxy.host}:${proxy.port}` : null }
+})
 const currentPayload = computed(() => JSON.stringify(payloads[activeTab.value], null, 2)); const imagePreviewUrl = computed(() => { const body = (payloads['upstream-response'] as any)?.body; return imageMode.value && body?.data?.[0]?.url ? String(body.data[0].url) : '' }); const tabDescription = computed(() => tabs.find(t => t.key === activeTab.value)?.label)
 const upstreamUrl = computed(() => String((payloads['upstream-request'] as any)?.url || `https://api.openai.com/v1/${form.endpoint}`))
 async function loadDefaults() {
@@ -186,9 +201,9 @@ async function loadDefaults() {
     if (typeof defaults.body.response_format === 'string') imageForm.responseFormat = defaults.body.response_format
     if (typeof defaults.body.stream === 'boolean') form.stream = defaults.body.stream
     const body = JSON.parse(JSON.stringify(defaults.body))
-    payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: defaults.headers, body }
-    payloads.outbound = { status: 'ready', transformed_model: defaults.body.model, route: `account://${form.account}`, body: JSON.parse(JSON.stringify(defaults.body)) }
-    payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value }, body: JSON.parse(JSON.stringify(defaults.upstream_body || defaults.body)) }
+    payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: defaults.headers, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body }
+    payloads.outbound = { status: 'ready', transformed_model: defaults.body.model, route: `account://${form.account}`, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body: JSON.parse(JSON.stringify(defaults.body)) }
+    payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value }, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, proxy_url: selectedProxy.value ? `${selectedProxy.value.protocol}://${selectedProxy.value.host}:${selectedProxy.value.port}` : null, body: JSON.parse(JSON.stringify(defaults.upstream_body || defaults.body)) }
     defaultsSource.value = `后端默认 · ${defaults.account_type}`
   } catch {
     if (requestSeq !== defaultsRequestSeq) return
@@ -207,6 +222,12 @@ onMounted(async () => {
     }
   } catch {
     // Anonymous local fixture mode keeps the sample accounts above.
+  }
+  try {
+    const proxyItems = await proxiesAPI.getAll()
+    proxies.value = (proxyItems || []).filter((proxy) => proxy.status === 'active')
+  } catch {
+    proxies.value = []
   }
   await loadDefaults()
 })
@@ -261,10 +282,10 @@ async function runRequest() {
   else apiBody.model = form.model
   if (imageMode.value) Object.assign(apiBody, { model: form.model, prompt: imageForm.prompt, n: imageForm.n, response_format: imageForm.responseFormat })
   const requestBody = JSON.parse(JSON.stringify(apiBody)) as Record<string, unknown>
-  payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json', ...customHeaders }, body: requestBody }
+  payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json', ...customHeaders }, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body: requestBody }
   const upstreamBody = JSON.parse(JSON.stringify(requestBody)) as Record<string, unknown>
-  payloads.outbound = { status: 'routing', transformed_model: form.model, route: `account://${form.account}`, body: upstreamBody }
-  payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value, ...customHeaders }, body: upstreamBody }
+  payloads.outbound = { status: 'routing', transformed_model: form.model, route: `account://${form.account}`, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body: upstreamBody }
+  payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value, ...customHeaders }, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, proxy_url: selectedProxy.value ? `${selectedProxy.value.protocol}://${selectedProxy.value.host}:${selectedProxy.value.port}` : null, body: upstreamBody }
   await new Promise(r => setTimeout(r, 700)); responseStatus.value = '200'; payloads.outbound = { ...(payloads.outbound as Record<string, unknown>), status: 'completed' }
   payloads['upstream-response'] = imageMode.value ? { status: 200, headers: { 'content-type': 'application/json' }, body: { created: Math.floor(Date.now() / 1000), data: [{ url: 'https://images.example.com/debug-preview.png', revised_prompt: imageForm.prompt }] } } : { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'dbg_' + Date.now() }, body: { id: 'chatcmpl_debug', model: form.model, choices: [{ index: 0, message: { role: 'assistant', content: '调试请求已成功返回。' }, finish_reason: 'stop' }], usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 } } }; running.value = false
 }
