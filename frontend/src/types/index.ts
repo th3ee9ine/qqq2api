@@ -617,6 +617,8 @@ export interface Group {
   allow_live: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
+  /** Upstream model allowlist configuration. */
+  model_allowlist?: ModelsListConfig
   require_oauth_only: boolean
   require_privacy_set: boolean
   created_at: string
@@ -652,7 +654,6 @@ export interface AdminGroup extends Group {
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   models_list_config?: ModelsListConfig
-  model_allowlist?: ModelsListConfig
 
   // 固定账号获取 Codex Model Manifest（仅 openai 分组）
   codex_models_manifest_config?: CodexModelsManifestConfig
