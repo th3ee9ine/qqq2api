@@ -543,6 +543,9 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 		pauseReached5h := !disabled5h && pause5h > 0 && has5h && utilization5h >= pause5h
 		pauseReached7d := !disabled7d && pause7d > 0 && has7d && utilization7d >= pause7d
 		if pauseReached5h || pauseReached7d {
+			if openAIPaidCreditsSnapshotActive(account.Extra, now) {
+				return false, openAIQuotaAutoPauseDecision{}
+			}
 			state := openAIAutoResetStateFromExtra(account.Extra)
 			if state != nil && state.Status == OpenAIAutoResetStatusAvailable && state.AvailableCount > 0 && !openAIAutoResetStateStale(state, now) {
 				return false, openAIQuotaAutoPauseDecision{}
@@ -553,6 +556,12 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 			}
 			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: pause7d, utilization: utilization7d, reason: "quota_auto_reset_credit_check_7d"}
 		}
+	}
+	// Fresh positive paid credits provide an independent allowance and should
+	// bypass local soft-pause thresholds. Auto-reset thresholds above still take
+	// precedence so an account can consume a reset credit when configured.
+	if openAIPaidCreditsSnapshotActive(account.Extra, time.Now()) {
+		return false, openAIQuotaAutoPauseDecision{}
 	}
 	// Per-account explicit-disable flags must take precedence over the global default.
 	// Without these, leaving the account threshold blank means "use global default",
@@ -579,6 +588,66 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 // resolveAccountExtraBool reads a bool-like value from account extra, tolerating
 // the few shapes JSON unmarshalling may produce (real bool, "true"/"false"
 // strings, 0/1 numbers).
+func openAIPaidCreditsSnapshotActive(extra map[string]any, now time.Time) bool {
+	if len(extra) == 0 {
+		return false
+	}
+	raw, ok := extra[openaiQuotaPaidCreditsKey]
+	if !ok || raw == nil {
+		return false
+	}
+	var snapshot map[string]any
+	switch v := raw.(type) {
+	case map[string]any:
+		snapshot = v
+	case *OpenAICredits:
+		return v.Unlimited || paidCreditsBalancePositive(v.Balance)
+	default:
+		return false
+	}
+	if ts, ok := snapshot["fetched_at"]; ok {
+		sec := parseExtraInt(ts)
+		if sec <= 0 || now.Sub(time.Unix(sec, 0)) >= openAICodexAutoPauseStaleAfter {
+			return false
+		}
+	} else {
+		return false
+	}
+	if b, ok := snapshot["unlimited"].(bool); ok && b {
+		return true
+	}
+	return paidCreditsBalancePositive(snapshot["balance"])
+}
+
+func paidCreditsBalancePositive(value any) bool {
+	if value == nil {
+		return false
+	}
+	var n float64
+	switch v := value.(type) {
+	case float64:
+		n = v
+	case float32:
+		n = float64(v)
+	case int:
+		n = float64(v)
+	case int64:
+		n = float64(v)
+	case string:
+		n, _ = strconv.ParseFloat(strings.TrimSpace(v), 64)
+	case *string:
+		if v == nil {
+			return false
+		}
+		n, _ = strconv.ParseFloat(strings.TrimSpace(*v), 64)
+	case json.Number:
+		n, _ = v.Float64()
+	default:
+		return false
+	}
+	return n > 0
+}
+
 func resolveAccountExtraBool(extra map[string]any, key string) bool {
 	if len(extra) == 0 {
 		return false

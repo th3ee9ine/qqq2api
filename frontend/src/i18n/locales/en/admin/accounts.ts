@@ -1564,6 +1564,8 @@ export default {
         estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
       },
       openaiQuotaReset: {
+        paidCreditsUnlimited: 'Extra credits: unlimited',
+        paidCreditsBalance: 'Extra credits balance: {balance}',
         count: 'Credits',
         reset: 'Reset',
         countTooltipLoad: 'Click to load the available reset-credit count',
