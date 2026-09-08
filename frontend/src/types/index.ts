@@ -1193,6 +1193,12 @@ export interface Account {
       available_count?: number
       credits?: { expires_at?: string }[]
     }
+    codex_paid_credits_snapshot?: {
+      has_credits?: boolean
+      unlimited?: boolean
+      balance?: number | string | null
+      fetched_at?: number
+    }
     auto_reset_credit_enabled?: boolean
     auto_reset_credit_5h_threshold?: number
     auto_reset_credit_7d_threshold?: number

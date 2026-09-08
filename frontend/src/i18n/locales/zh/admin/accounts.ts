@@ -492,6 +492,8 @@ export default {
         estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用'
       },
       openaiQuotaReset: {
+        paidCreditsUnlimited: '额外额度：无限',
+        paidCreditsBalance: '额外额度余额：{balance}',
         count: '次数',
         reset: '重置',
         countTooltipLoad: '点击查询剩余重置次数',

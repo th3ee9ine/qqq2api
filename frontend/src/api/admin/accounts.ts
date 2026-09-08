@@ -982,6 +982,14 @@ export interface OpenAIRateLimitResetCredits {
   credits?: OpenAIRateLimitResetCreditDetail[]
 }
 
+/** Paid Codex credits attached to a ChatGPT subscription. */
+export interface OpenAIPaidCredits {
+  has_credits?: boolean
+  unlimited?: boolean
+  /** Upstream may encode the balance as either a number or a string. */
+  balance?: number | string | null
+}
+
 export interface OpenAIQuotaUsage {
   user_id?: string
   account_id?: string
@@ -990,6 +998,7 @@ export interface OpenAIQuotaUsage {
   rate_limit?: OpenAIRateLimit | null
   additional_rate_limits?: OpenAIAdditionalRateLimit[]
   rate_limit_reset_credits?: OpenAIRateLimitResetCredits | null
+  credits?: OpenAIPaidCredits | null
   fetched_at: number
 }
 

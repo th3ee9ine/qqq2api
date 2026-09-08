@@ -64,6 +64,14 @@
     </div>
 
     <div
+      v-if="paidCreditsLabel"
+      class="text-[10px] text-emerald-600 dark:text-emerald-400"
+      data-testid="openai-paid-credits"
+    >
+      {{ paidCreditsLabel }}
+    </div>
+
+    <div
       v-if="autoResetState"
       class="flex flex-wrap items-center gap-1 text-[10px]"
       data-testid="auto-reset-credit-state"
@@ -171,7 +179,8 @@ import {
   refreshOpenAIQuota,
   resetOpenAIQuota,
   type OpenAIQuotaUsage,
-  type OpenAIQuotaResetResult
+  type OpenAIQuotaResetResult,
+  type OpenAIPaidCredits
 } from '@/api/admin/accounts'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
@@ -197,6 +206,21 @@ const resetMessage = ref<string | null>(null)
 const resetWarning = ref<string | null>(null)
 const showResetConfirm = ref(false)
 const showResetCreditDetails = ref(false)
+
+const paidCredits = computed<OpenAIPaidCredits | null>(() => {
+  const live = data.value?.credits
+  if (live) return live
+  const cached = props.account.extra?.codex_paid_credits_snapshot
+  return cached ? cached : null
+})
+
+const paidCreditsLabel = computed(() => {
+  const credits = paidCredits.value
+  if (!credits) return ''
+  if (credits.unlimited) return t('admin.accounts.openaiQuotaReset.paidCreditsUnlimited')
+  if (credits.balance == null || String(credits.balance).trim() === '') return ''
+  return t('admin.accounts.openaiQuotaReset.paidCreditsBalance', { balance: credits.balance })
+})
 
 type AutoResetCreditState = NonNullable<NonNullable<Account['extra']>['codex_auto_reset_credit_state']>
 const validAutoResetStatuses = new Set(['checking', 'available', 'resetting', 'success', 'no_credit', 'failed'])

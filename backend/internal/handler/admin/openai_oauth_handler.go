@@ -1113,10 +1113,23 @@ func (h *OpenAIOAuthHandler) RefreshQuota(c *gin.Context) {
 	// A failed snapshot write leaves the previous cache intact — report it as a
 	// partial success instead of discarding the usage payload we just fetched,
 	// which would leave the card without a credit count at all.
-	if err := h.quotaService.CacheResetCreditsSnapshot(c.Request.Context(), accountID, usage.RateLimitResetCredits); err != nil {
-		slog.Warn("openai_quota_reset_credit_cache_persist_failed", "account_id", accountID, "error", err)
-		response.Success(c, refreshResponse)
-		return
+	if usage.RateLimitResetCredits != nil {
+		if err := h.quotaService.CacheResetCreditsSnapshot(c.Request.Context(), accountID, usage.RateLimitResetCredits); err != nil {
+			slog.Warn("openai_quota_reset_credit_cache_persist_failed", "account_id", accountID, "error", err)
+			response.Success(c, refreshResponse)
+			return
+		}
+	}
+	// Paid credits are independent from reset-credit cards; cache them when
+	// present so scheduler decisions and account rows can use the same snapshot.
+	if usage.Credits != nil {
+		if cache, ok := h.quotaService.(interface {
+			CachePaidCreditsSnapshot(context.Context, int64, *service.OpenAICredits) error
+		}); ok {
+			if err := cache.CachePaidCreditsSnapshot(c.Request.Context(), accountID, usage.Credits); err != nil {
+				slog.Warn("openai_paid_credits_cache_persist_failed", "account_id", accountID, "error", err)
+			}
+		}
 	}
 	refreshResponse.CachePersisted = true
 	response.Success(c, refreshResponse)
