@@ -340,7 +340,7 @@ function preferredOpenAITextModel(models: ClaudeModel[]) {
     const id = model.id.toLowerCase()
     return id.startsWith('gpt-') && !id.startsWith('gpt-image-')
   })
-  const preferredIDs = ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-codex']
+  const preferredIDs = ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-codex', 'gpt-5.3-codex-spark']
   for (const preferredID of preferredIDs) {
     const match = textModels.find(model => model.id.toLowerCase() === preferredID)
     if (match) return match
