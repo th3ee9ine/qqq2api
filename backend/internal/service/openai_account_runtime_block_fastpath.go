@@ -625,7 +625,7 @@ func accountPersistedSchedulingCooldownActive(account *Account) bool {
 		return false
 	}
 	now := time.Now()
-	if account.TempUnschedulableUntil != nil && now.Before(*account.TempUnschedulableUntil) {
+	if account.hasActiveTemporarySchedulingPause(now) {
 		return true
 	}
 	if account.RateLimitResetAt != nil && now.Before(*account.RateLimitResetAt) {
@@ -688,12 +688,16 @@ func (s *OpenAIGatewayService) clearOpenAIAccountRuntimeBlockIfUnchanged(account
 	s.openaiAccountRuntimeBlockUntil.Delete(accountID)
 	s.openaiOAuth429RetryStartedAt.Delete(accountID)
 	s.openaiAccountRuntimeBlockGeneration.Store(accountID, s.openaiAccountRuntimeBlockSequence.Add(1))
+	if controller := s.getOpenAIOAuthAdmissionController(); controller != nil {
+		controller.clearDeferIfDeadline(accountID, snapshot.until)
+	}
 }
 
 // isOpenAIAccountRequestRuntimeBlocked treats persisted cooldown fields on the
 // scheduling Account as source of truth. When TempUnschedulableUntil,
-// RateLimitResetAt, and OverloadUntil are all inactive, a stale local account
-// block is dropped with generation+deadline CAS. Model-scoped transient blocks
+// RateLimitResetAt, and OverloadUntil are all inactive (including a threshold
+// pause superseded by fresh paid credits), a stale local account block is dropped
+// with generation+deadline CAS. Model-scoped transient blocks
 // are left alone. This is fail-open if a DB write failed or the snapshot has
 // not caught up yet: empty cooldown fields drop the local account-level block.
 func (s *OpenAIGatewayService) isOpenAIAccountRequestRuntimeBlocked(account *Account, requestedModel string) bool {

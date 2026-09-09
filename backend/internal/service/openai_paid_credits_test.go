@@ -12,7 +12,9 @@ func TestOpenAIPaidCreditsUnmarshalFlexible(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"hasCredits":true,"unlimited":false,"balance":12.50,"overage_limit_reached":false}`), &c); err != nil {
 		t.Fatal(err)
 	}
-	if !c.HasCredits || c.Balance != "12.5" {
+	// The decoder preserves the original JSON number text instead of rounding
+	// through float64; a trailing decimal zero is not a decoding failure.
+	if !c.HasCredits || c.Balance != "12.50" {
 		t.Fatalf("decoded: %#v", c)
 	}
 	var d OpenAIPaidCredits

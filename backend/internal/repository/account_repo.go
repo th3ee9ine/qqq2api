@@ -3694,22 +3694,39 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 func tempUnschedulablePredicate() dbpredicate.Account {
 	return dbpredicate.Account(func(s *entsql.Selector) {
 		col := s.C("temp_unschedulable_until")
-		paidThreshold := entsql.P(func(b *entsql.Builder) {
-			b.Ident(s.C("platform")).WriteString(" = ").Arg(service.PlatformOpenAI).
-				WriteString(" AND ").Ident(s.C("type")).WriteString(" = ").Arg(service.AccountTypeOAuth).
-				WriteString(" AND ").Ident(s.C("temp_unschedulable_reason")).WriteString(" LIKE ").Arg(`{"source":"account_scheduling_threshold"%`).
-				WriteString(" AND ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' ~ '^[0-9]+$'").
-				WriteString(" AND ( ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' )::bigint > EXTRACT(EPOCH FROM (NOW() - INTERVAL '2 hours'))").
-				WriteString(" AND ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' <= EXTRACT(EPOCH FROM NOW())").
-				WriteString(" AND COALESCE(").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,overage_limit_reached}', 'false') <> 'true'").
-				WriteString(" AND COALESCE(").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,has_credits}', 'true') <> 'false'").
-				WriteString(" AND (").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,unlimited}' = 'true' OR (COALESCE(").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,balance}', '') ~ '^[0-9]+(\\\\.[0-9]+)?$' AND (").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,balance}' )::numeric > 0))")
-		})
+
 		s.Where(entsql.Or(
 			entsql.IsNull(col),
 			entsql.LTE(col, entsql.Expr("NOW()")),
-			paidThreshold,
+			paidCreditsThresholdPausePredicate(s),
 		))
+	})
+}
+
+// paidCreditsThresholdPausePredicate mirrors the in-memory paid-credit override.
+// Strict JSONPath avoids unwrapping arrays, while silent numeric conversion rejects
+// malformed/overflowing JSON values without making every scheduler query fail.
+// PostgreSQL may reorder AND operands, so regex guards around ordinary casts are
+// not sufficient to make a query safe for arbitrary imported account metadata.
+func paidCreditsThresholdPausePredicate(s *entsql.Selector) *entsql.Predicate {
+	return entsql.P(func(b *entsql.Builder) {
+		b.Ident(s.C("platform")).WriteString(" = ").Arg(service.PlatformOpenAI).
+			WriteString(" AND ").Ident(s.C("type")).WriteString(" = ").Arg(service.AccountTypeOAuth).
+			WriteString(" AND ").Ident(s.C("parent_account_id")).WriteString(" IS NULL").
+			WriteString(" AND ").Ident(s.C("temp_unschedulable_reason")).WriteString(" LIKE ").Arg(`{"source":"account_scheduling_threshold"%`).
+			// Go accepts numeric timestamps or integer strings, but not fractional strings.
+			WriteString(" AND CASE WHEN jsonb_typeof(").Ident(s.C("extra")).WriteString(" #> '{codex_paid_credits_snapshot,fetched_at}') = 'number'").
+			WriteString(" OR (jsonb_typeof(").Ident(s.C("extra")).WriteString(" #> '{codex_paid_credits_snapshot,fetched_at}') = 'string'").
+			WriteString(" AND ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' ~ '^[[:space:]]*[+]?[0-9]+[[:space:]]*$')").
+			WriteString(" THEN COALESCE(jsonb_path_exists(").Ident(s.C("extra")).
+			WriteString(", 'strict $.codex_paid_credits_snapshot.fetched_at.double().floor() ? (@ > $oldest && @ <= $now)',").
+			WriteString(" jsonb_build_object('oldest', EXTRACT(EPOCH FROM (NOW() - INTERVAL '2 hours')), 'now', EXTRACT(EPOCH FROM NOW())), true), false) ELSE false END").
+			// Only JSON booleans activate flags, matching Go's bool type assertions.
+			WriteString(" AND COALESCE(").Ident(s.C("extra")).WriteString(" #> '{codex_paid_credits_snapshot,overage_limit_reached}', 'null'::jsonb) <> 'true'::jsonb").
+			WriteString(" AND COALESCE(").Ident(s.C("extra")).WriteString(" #> '{codex_paid_credits_snapshot,has_credits}', 'null'::jsonb) <> 'false'::jsonb").
+			WriteString(" AND (").Ident(s.C("extra")).WriteString(" #> '{codex_paid_credits_snapshot,unlimited}' = 'true'::jsonb").
+			WriteString(" OR COALESCE(jsonb_path_exists(").Ident(s.C("extra")).
+			WriteString(", 'strict $.codex_paid_credits_snapshot.balance.double() ? (@ > 0)', '{}'::jsonb, true), false))")
 	})
 }
 

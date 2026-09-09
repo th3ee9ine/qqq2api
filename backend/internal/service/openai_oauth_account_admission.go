@@ -263,6 +263,20 @@ func (c *openAIOAuthAdmissionController) clearDefer(accountID int64) {
 	c.mu.Unlock()
 }
 
+// clearDeferIfDeadline only removes the defer associated with a recovered
+// runtime block. A concurrent, newer defer and reserved request spacing survive.
+func (c *openAIOAuthAdmissionController) clearDeferIfDeadline(accountID int64, deadline time.Time) {
+	if c == nil || accountID <= 0 || deadline.IsZero() {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if state := c.accounts[accountID]; state != nil && state.notBefore.Equal(deadline) {
+		state.notBefore = time.Time{}
+		state.lastSeen = time.Now()
+	}
+}
+
 func (c *openAIOAuthAdmissionController) accountNotBefore(accountID int64) time.Time {
 	if c == nil || accountID <= 0 {
 		return time.Time{}
@@ -380,12 +394,8 @@ func (s *OpenAIGatewayService) openAIOAuthAdmissionNotBefore(account *Account, n
 	// accounts. Threshold pauses are therefore no longer admission blockers once
 	// credits are confirmed; credential, transport, and custom safety pauses stay
 	// hard blocks.
-	if account.TempUnschedulableUntil != nil {
-		thresholdPause := IsAccountSchedulingThresholdReason(account.TempUnschedulableReason)
-		paidCreditsActive := openAIPaidCreditsSnapshotActive(account.Extra, now)
-		if !thresholdPause || !paidCreditsActive {
-			advance(account.TempUnschedulableUntil)
-		}
+	if account.hasActiveTemporarySchedulingPause(now) {
+		advance(account.TempUnschedulableUntil)
 	}
 
 	if s != nil {

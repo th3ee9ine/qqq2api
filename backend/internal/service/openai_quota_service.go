@@ -301,12 +301,8 @@ func (s *OpenAIQuotaService) queryUsage(ctx context.Context, accountID int64, in
 }
 
 func (s *OpenAIQuotaService) clearPaidCreditsThresholdPause(ctx context.Context, accountID int64, credits *OpenAIPaidCredits, fetchedAt int64) {
-	if s == nil || s.accountRepo == nil || credits == nil || accountID <= 0 ||
-		!openAIPaidCreditsSnapshotActive(map[string]any{
-			"has_credits": credits.HasCredits, "unlimited": credits.Unlimited,
-			"balance": credits.Balance, "overage_limit_reached": credits.OverageLimitReached,
-			"fetched_at": fetchedAt,
-		}, time.Now()) {
+	if s == nil || s.accountRepo == nil || credits == nil || accountID <= 0 || fetchedAt <= 0 ||
+		!openAIPaidCreditsSnapshotActive(buildOpenAIPaidCreditsExtraUpdates(credits, fetchedAt), time.Now()) {
 		return
 	}
 	recovery, ok := s.accountRepo.(openAIPaidCreditsTempUnschedRecovery)
@@ -347,10 +343,12 @@ func (s *OpenAIQuotaService) CachePaidCreditsSnapshot(ctx context.Context, accou
 	if s == nil || s.accountRepo == nil {
 		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_NOT_CONFIGURED", "openai quota service is not configured")
 	}
-	updates := buildOpenAIPaidCreditsExtraUpdates(credits, time.Now().Unix())
+	fetchedAt := time.Now().Unix()
+	updates := buildOpenAIPaidCreditsExtraUpdates(credits, fetchedAt)
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
 		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_CACHE_WRITE_FAILED", "failed to cache paid credit details").WithCause(err)
 	}
+	s.clearPaidCreditsThresholdPause(ctx, accountID, credits, fetchedAt)
 	return nil
 }
 

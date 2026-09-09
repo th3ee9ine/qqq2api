@@ -192,20 +192,26 @@ func (a *Account) IsSchedulable() bool {
 	if a.RateLimitResetAt != nil && now.Before(*a.RateLimitResetAt) {
 		return false
 	}
-	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
-		// A quota-threshold pause is a local soft gate. A fresh paid-credit
-		// snapshot makes the parent OAuth account usable again; authentication,
-		// transport, and custom-rule pauses remain hard gates.
-		if !(a.IsOpenAIOAuth() && a.ParentAccountID == nil &&
-			IsAccountSchedulingThresholdReason(a.TempUnschedulableReason) &&
-			openAIPaidCreditsSnapshotActive(a.Extra, now)) {
-			return false
-		}
+	if a.hasActiveTemporarySchedulingPause(now) {
+		return false
 	}
 	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
 		return false
 	}
 	return true
+}
+
+// hasActiveTemporarySchedulingPause is shared by scheduler selection, runtime
+// cooldown recovery, and request admission. Paid credits only supersede a local
+// quota-threshold pause on an OpenAI OAuth parent; they never repair credentials,
+// transport failures, shadow-account quota, or API-key account restrictions.
+func (a *Account) hasActiveTemporarySchedulingPause(now time.Time) bool {
+	if a == nil || a.TempUnschedulableUntil == nil || !now.Before(*a.TempUnschedulableUntil) {
+		return false
+	}
+	return !(a.IsOpenAIOAuth() && a.ParentAccountID == nil &&
+		IsAccountSchedulingThresholdReason(a.TempUnschedulableReason) &&
+		openAIPaidCreditsSnapshotActive(a.Extra, now))
 }
 
 // IsCredentialUsableForShadow 报告本账号(作为某 spark 影子的母账号)的凭据/传输是否可被影子透传使用。
