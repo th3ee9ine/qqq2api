@@ -19,8 +19,8 @@
 
       <section class="card p-4 md:p-5">
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr_1fr_1fr_1fr_auto] lg:items-end">
-          <label class="block"><span class="field-label">GPT 账号</span><select v-model="form.account" class="input mt-1.5"><option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }} · {{ a.email }}</option></select></label>
-          <label class="block"><span class="field-label">模型</span><select v-model="form.model" class="input mt-1.5"><option v-for="m in models" :key="m" :value="m">{{ m }}</option></select></label>
+          <label class="block"><span class="field-label">GPT 账号 <span class="font-normal text-gray-400">（{{ accounts.length }} 个）</span></span><select v-model="form.account" class="input mt-1.5" :disabled="accountsLoading || !accounts.length"><option v-if="accountsLoading" value="">正在加载账号…</option><option v-else-if="!accounts.length" value="">暂无可用 GPT 账号</option><option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.status === 'active' ? '●' : '○' }} {{ a.name }} · {{ a.typeLabel }} · {{ a.email }}</option></select><span v-if="selectedAccount" class="mt-1 block truncate text-[11px] text-gray-400">{{ selectedAccount.platform || 'openai' }} · ID {{ selectedAccount.id }}</span><span v-if="accountsLoading" class="mt-1 block text-[11px] text-gray-400">正在加载账号…</span><span v-else-if="accountsError" class="mt-1 block text-[11px] text-amber-600">{{ accountsError }}</span></label>
+          <label class="block"><span class="field-label">模型 <span class="font-normal text-gray-400">（{{ models.length }} 个）</span></span><select v-model="form.model" class="input mt-1.5" :disabled="modelsLoading || !models.length"><option v-if="modelsLoading" value="">正在加载模型…</option><option v-else-if="!models.length" value="">暂无可用模型</option><option v-for="m in models" :key="m.id" :value="m.id">{{ m.display_name || m.id }}{{ m.id !== (m.display_name || m.id) ? ` · ${m.id}` : '' }}</option></select><span v-if="selectedModel" class="mt-1 block truncate text-[11px] text-gray-400">模型 ID：{{ selectedModel.id }}<span v-if="selectedModel.type"> · {{ selectedModel.type }}</span></span><span v-if="modelsLoading" class="mt-1 block text-[11px] text-gray-400">正在同步该账号的模型…</span><span v-else-if="modelsError" class="mt-1 block text-[11px] text-amber-600">{{ modelsError }}</span></label>
           <label class="block"><span class="field-label">请求方式</span><select v-model="form.endpoint" class="input mt-1.5"><option value="chat/completions">Chat Completions</option><option value="responses">Responses API</option><option value="images/generations">Images Generation</option></select></label>
           <label class="block"><span class="field-label">代理 IP</span><ProxySelector v-model="form.proxyId" :proxies="proxies" :disabled="running" /></label>
           <button type="button" class="btn btn-primary h-10 justify-center px-6" :disabled="running" @click="runRequest"><Icon :name="running ? 'refresh' : 'play'" size="sm" :class="running && 'animate-spin'" /> {{ running ? '请求中…' : '发送请求' }}</button>
@@ -64,14 +64,25 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { getUpstreamTestDefaults, runAccountConnectivityTest } from '@/api/admin/debugWorkbench'
-import { list as listAccounts } from '@/api/admin/accounts'
+import { getAvailableModels, list as listAccounts } from '@/api/admin/accounts'
 import { proxiesAPI } from '@/api/admin/proxies'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import type { Proxy } from '@/types'
 
 const proxies = ref<Proxy[]>([])
-const accounts = ref([{ id: 'acc-01', name: 'GPT Team · 主账号', email: 'team@example.com' }, { id: 'acc-02', name: 'GPT Plus · 备用', email: 'backup@example.com' }])
-const models = ['gpt-5.4', 'gpt-4o', 'gpt-4.1', 'o3-mini', 'gpt-image-2']
+type DebugAccount = { id: string; name: string; email: string; typeLabel: string; status: string; platform?: string }
+type DebugModel = { id: string; display_name?: string; type?: string; created_at?: string }
+const accounts = ref<DebugAccount[]>([
+  { id: 'acc-01', name: 'GPT Team · 主账号', email: 'team@example.com', typeLabel: 'OAuth', status: 'active', platform: 'openai' },
+  { id: 'acc-02', name: 'GPT Plus · 备用', email: 'backup@example.com', typeLabel: 'API Key', status: 'active', platform: 'openai' }
+])
+const models = ref<DebugModel[]>([
+  { id: 'gpt-5.4', display_name: 'GPT-5.4' },
+  { id: 'gpt-4o', display_name: 'GPT-4o' },
+  { id: 'gpt-4.1', display_name: 'GPT-4.1' },
+  { id: 'o3-mini', display_name: 'o3-mini' },
+  { id: 'gpt-image-2', display_name: 'GPT Image 2' }
+])
 const defaultChatParams = {
   model: 'gpt-5.4',
   messages: [{ role: 'user', content: 'hi' }],
@@ -88,9 +99,16 @@ const imageForm = reactive({ prompt: 'hi', n: 1, responseFormat: 'b64_json' })
 const imageMode = ref(false); const running = ref(false); const responseStatus = ref(''); const activeTab = ref('inbound')
 const defaultsSource = ref('本地样本默认值')
 const defaultsLoading = ref(false)
+const accountsLoading = ref(false)
+const accountsError = ref('')
+const modelsLoading = ref(false)
+const modelsError = ref('')
 const upstreamHeaders = ref<Record<string, string>>({ Authorization: 'Bearer ••••••••', 'Content-Type': 'application/json' })
 const defaultUpstreamUrl = ref('https://api.openai.com/v1/chat/completions')
+const selectedAccount = computed(() => accounts.value.find((account) => account.id === form.account) || null)
+const selectedModel = computed(() => models.value.find((model) => model.id === form.model) || null)
 let defaultsRequestSeq = 0
+let modelsRequestSeq = 0
 watch(() => form.endpoint, async (endpoint) => {
   if (endpoint === 'images/generations') {
     imageMode.value = true
@@ -107,7 +125,7 @@ watch(() => form.endpoint, async (endpoint) => {
   }
   await loadDefaults()
 })
-watch(() => form.account, () => { void loadDefaults() })
+watch(() => form.account, async () => { await loadAccountModels(); await loadDefaults() })
 watch(() => form.model, (model) => {
   if (!model) return
   try {
@@ -171,6 +189,30 @@ watch(() => form.proxyId, (proxyId) => {
 })
 const currentPayload = computed(() => JSON.stringify(payloads[activeTab.value], null, 2)); const imagePreviewUrl = computed(() => { const body = (payloads['upstream-response'] as any)?.body; return imageMode.value && body?.data?.[0]?.url ? String(body.data[0].url) : '' }); const tabDescription = computed(() => tabs.find(t => t.key === activeTab.value)?.label)
 const upstreamUrl = computed(() => String((payloads['upstream-request'] as any)?.url || `https://api.openai.com/v1/${form.endpoint}`))
+async function loadAccountModels() {
+  const accountId = form.account
+  const requestSeq = ++modelsRequestSeq
+  modelsError.value = ''
+  if (!/^\d+$/.test(accountId)) {
+    modelsLoading.value = false
+    return
+  }
+  modelsLoading.value = true
+  try {
+    const available = await getAvailableModels(Number(accountId))
+    const options = (available || []).map((m: any) => typeof m === 'string' ? { id: m, display_name: m } : { id: m?.id, display_name: m?.display_name || m?.id, type: m?.type, created_at: m?.created_at }).filter((m: DebugModel): m is DebugModel => typeof m.id === 'string' && m.id.length > 0)
+    if (requestSeq !== modelsRequestSeq) return
+    if (options.length) {
+      models.value = options
+      if (!models.value.some((model) => model.id === form.model)) form.model = options[0].id
+    } else modelsError.value = '该账号暂无可用模型'
+  } catch {
+    if (requestSeq === modelsRequestSeq) modelsError.value = '该账号模型列表加载失败，当前显示内置模型'
+  } finally {
+    if (requestSeq === modelsRequestSeq) modelsLoading.value = false
+  }
+}
+
 async function loadDefaults() {
   const requestSeq = ++defaultsRequestSeq
   defaultsLoading.value = true
@@ -182,7 +224,7 @@ async function loadDefaults() {
     upstreamHeaders.value = { ...defaults.headers }
     defaultUpstreamUrl.value = defaults.url || `https://api.openai.com/v1/${form.endpoint}`
     if (typeof defaults.body.model === 'string' && defaults.body.model) {
-      if (!models.includes(defaults.body.model)) models.unshift(defaults.body.model)
+      if (!models.value.some((model) => model.id === defaults.body.model)) models.value.unshift({ id: defaults.body.model, display_name: defaults.body.model })
       form.model = defaults.body.model
     }
     if (Array.isArray(defaults.body.messages)) {
@@ -213,22 +255,36 @@ async function loadDefaults() {
   }
 }
 onMounted(async () => {
+  accountsLoading.value = true
+  accountsError.value = ''
   try {
     const result = await listAccounts(1, 50, { platform: 'openai', status: 'active' })
-    const items = (result.items ?? []).map((item: any) => ({ id: String(item.id), name: item.name || `GPT 账号 ${item.id}`, email: item.email || item.account || '已配置账号' }))
+    const accountTypeLabel = (type: string) => {
+      const normalized = type.trim().toLowerCase()
+      return ({ oauth: 'OAuth', 'setup-token': 'Setup Token', apikey: 'API Key', 'api-key': 'API Key', upstream: 'Upstream' } as Record<string, string>)[normalized] || type || 'Account'
+    }
+    const items: DebugAccount[] = (result.items ?? []).map((item: any) => ({
+      id: String(item.id),
+      name: item.name || `GPT 账号 ${item.id}`,
+      email: item.email || item.account || '已配置账号',
+      status: item.status || 'active',
+      typeLabel: accountTypeLabel(String(item.type || 'oauth')),
+      platform: item.platform || 'openai'
+    }))
     if (items.length) {
       accounts.value = items
       form.account = items[0].id
     }
   } catch {
-    // Anonymous local fixture mode keeps the sample accounts above.
-  }
+    accountsError.value = '账号列表加载失败，当前显示本地样本'
+  } finally { accountsLoading.value = false }
   try {
     const proxyItems = await proxiesAPI.getAll()
     proxies.value = (proxyItems || []).filter((proxy) => proxy.status === 'active')
   } catch {
     proxies.value = []
   }
+  await loadAccountModels()
   await loadDefaults()
 })
 function applyPreset(p: { prompt: string }) {
