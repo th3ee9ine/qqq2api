@@ -164,6 +164,19 @@ describe('AccountTestModal', () => {
     expect((wrapper.vm as any).selectedModelId).toBe('gpt-5.4')
   })
 
+  it('prefers a current generally available model for OAuth account probes', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'gpt-5.4', display_name: 'GPT-5.4' },
+      { id: 'gpt-5.6-sol', display_name: 'GPT-5.6 Sol' }
+    ])
+    const wrapper = mountModal()
+
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect((wrapper.vm as any).selectedModelId).toBe('gpt-5.6-sol')
+  })
+
   it('falls back to the model id when the upstream omits display_name', async () => {
     // OpenAI-compatible /models endpoints commonly return only `id`.
     getAvailableModels.mockResolvedValue([

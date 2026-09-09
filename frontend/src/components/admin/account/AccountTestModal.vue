@@ -320,10 +320,8 @@ async function loadAvailableModels() {
       display_name: model.display_name?.trim() || model.id
     }))
     const preferred = isOpenAI.value
-      ? availableModels.value.find(model => {
-        const id = model.id.toLowerCase()
-        return id.startsWith('gpt-') && !id.startsWith('gpt-image-')
-      }) || availableModels.value.find(model => model.id.toLowerCase().startsWith('gpt-image-'))
+      ? preferredOpenAITextModel(availableModels.value)
+        || availableModels.value.find(model => model.id.toLowerCase().startsWith('gpt-image-'))
       : availableModels.value.find(model => model.id.includes('sonnet'))
     selectedModelId.value = preferred?.id || availableModels.value[0]?.id || ''
   } catch {
@@ -331,6 +329,23 @@ async function loadAvailableModels() {
   } finally {
     loadingModels.value = false
   }
+}
+
+// ChatGPT OAuth accounts can expose the shared Codex manifest while only
+// accepting a subset of its model slugs. Prefer current generally available
+// models for the connection probe; retain the catalog order as a fallback for
+// custom or older accounts.
+function preferredOpenAITextModel(models: ClaudeModel[]) {
+  const textModels = models.filter(model => {
+    const id = model.id.toLowerCase()
+    return id.startsWith('gpt-') && !id.startsWith('gpt-image-')
+  })
+  const preferredIDs = ['gpt-5.6-sol', 'gpt-5.5', 'gpt-5.5-codex']
+  for (const preferredID of preferredIDs) {
+    const match = textModels.find(model => model.id.toLowerCase() === preferredID)
+    if (match) return match
+  }
+  return textModels[0]
 }
 
 watch(supportsOpenAIImageTest, enabled => {
