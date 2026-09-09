@@ -20,7 +20,7 @@
       <section class="card p-4 md:p-5">
         <div class="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr_1fr_1fr_1fr_auto] lg:items-end">
           <label class="block"><span class="field-label">GPT 账号 <span class="font-normal text-gray-400">（{{ accounts.length }} 个）</span></span><select v-model="form.account" class="input mt-1.5" :disabled="accountsLoading || !accounts.length"><option v-if="accountsLoading" value="">正在加载账号…</option><option v-else-if="!accounts.length" value="">暂无可用 GPT 账号</option><option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.status === 'active' ? '●' : '○' }} {{ a.name }} · {{ a.typeLabel }} · {{ a.email }}</option></select><span v-if="selectedAccount" class="mt-1 block truncate text-[11px] text-gray-400">{{ selectedAccount.platform || 'openai' }} · ID {{ selectedAccount.id }}</span><span v-if="accountsLoading" class="mt-1 block text-[11px] text-gray-400">正在加载账号…</span><span v-else-if="accountsError" class="mt-1 block text-[11px] text-amber-600">{{ accountsError }}</span></label>
-          <label class="block"><span class="field-label">模型 <span class="font-normal text-gray-400">（{{ models.length }} 个）</span></span><select v-model="form.model" class="input mt-1.5" :disabled="modelsLoading || !models.length"><option v-if="modelsLoading" value="">正在加载模型…</option><option v-else-if="!models.length" value="">暂无可用模型</option><option v-for="m in models" :key="m.id" :value="m.id">{{ m.display_name || m.id }}{{ m.id !== (m.display_name || m.id) ? ` · ${m.id}` : '' }}</option></select><span v-if="selectedModel" class="mt-1 block truncate text-[11px] text-gray-400">模型 ID：{{ selectedModel.id }}<span v-if="selectedModel.type"> · {{ selectedModel.type }}</span></span><span v-if="modelsLoading" class="mt-1 block text-[11px] text-gray-400">正在同步该账号的模型…</span><span v-else-if="modelsError" class="mt-1 block text-[11px] text-amber-600">{{ modelsError }}</span></label>
+          <label class="block"><span class="field-label">模型 <span class="font-normal text-gray-400">（{{ models.length }} 个，可自定义）</span></span><input v-model="form.model" list="debug-model-options" class="input mt-1.5" :disabled="modelsLoading" placeholder="输入模型 ID 或从列表选择" autocomplete="off" @change="commitCustomModel" @keydown.enter.prevent="commitCustomModel" /><datalist id="debug-model-options"><option v-for="m in models" :key="m.id" :value="m.id">{{ m.display_name || m.id }}</option></datalist><span v-if="selectedModel" class="mt-1 block truncate text-[11px] text-gray-400">模型 ID：{{ selectedModel.id }}<span v-if="selectedModel.type"> · {{ selectedModel.type }}</span></span><span v-else-if="form.model" class="mt-1 block truncate text-[11px] text-primary-500">自定义模型：{{ form.model }}</span><span v-if="modelsLoading" class="mt-1 block text-[11px] text-gray-400">正在同步该账号的模型…</span><span v-else-if="modelsError" class="mt-1 block text-[11px] text-amber-600">{{ modelsError }}</span></label>
           <label class="block"><span class="field-label">请求方式</span><select v-model="form.endpoint" class="input mt-1.5"><option value="chat/completions">Chat Completions</option><option value="responses">Responses API</option><option value="images/generations">Images Generation</option></select></label>
           <label class="block"><span class="field-label">代理 IP</span><ProxySelector v-model="form.proxyId" :proxies="proxies" :disabled="running" /></label>
           <button type="button" class="btn btn-primary h-10 justify-center px-6" :disabled="running" @click="runRequest"><Icon :name="running ? 'refresh' : 'play'" size="sm" :class="running && 'animate-spin'" /> {{ running ? '请求中…' : '发送请求' }}</button>
@@ -298,6 +298,14 @@ onMounted(async () => {
   await loadAccountModels()
   await loadDefaults()
 })
+function commitCustomModel() {
+  const modelId = form.model.trim()
+  if (!modelId) return
+  form.model = modelId
+  if (!models.value.some((model) => model.id === modelId)) {
+    models.value.push({ id: modelId, display_name: modelId, type: 'custom' })
+  }
+}
 function applyPreset(p: { prompt: string }) {
   form.prompt = p.prompt
   try {
@@ -320,6 +328,7 @@ async function resetAll() {
   await loadDefaults()
 }
 async function runRequest() {
+  commitCustomModel()
   running.value = true; responseStatus.value = ''
   let customHeaders: Record<string, string> = {}
   try {
