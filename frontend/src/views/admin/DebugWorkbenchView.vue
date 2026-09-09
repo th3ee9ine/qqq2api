@@ -210,7 +210,10 @@ async function loadAccountModels() {
     if (options.length) {
       models.value = options
       if (!models.value.some((model) => model.id === form.model)) form.model = options[0].id
-    } else modelsError.value = '该账号暂无可用模型'
+    } else {
+      models.value = fallbackModels.map((model) => ({ ...model }))
+      modelsError.value = '该账号暂无可用模型，当前显示内置模型'
+    }
   } catch {
     if (requestSeq === modelsRequestSeq) {
       models.value = fallbackModels.map((model) => ({ ...model }))
