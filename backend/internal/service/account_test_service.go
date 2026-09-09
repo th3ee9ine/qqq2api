@@ -2834,10 +2834,10 @@ func (s *AccountTestService) BuildOpenAITestDefaults(account *Account, endpoint,
 	// Surface the account's managed proxy binding as credential-free metadata so
 	// callers can show the effective route without exposing proxy credentials.
 	if account != nil && account.ProxyID != nil && account.Proxy != nil {
-		defaults.ProxyID = account.ProxyID
-		defaults.ProxyName = account.Proxy.Name
+		result.ProxyID = account.ProxyID
+		result.ProxyName = account.Proxy.Name
 		if account.Proxy.Protocol != "" && account.Proxy.Host != "" && account.Proxy.Port > 0 {
-			defaults.ProxyURL = account.Proxy.Protocol + "://" + net.JoinHostPort(account.Proxy.Host, strconv.Itoa(account.Proxy.Port))
+			result.ProxyURL = account.Proxy.Protocol + "://" + net.JoinHostPort(account.Proxy.Host, strconv.Itoa(account.Proxy.Port))
 		}
 	}
 	return result
