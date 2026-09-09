@@ -72,17 +72,18 @@ import type { Proxy } from '@/types'
 const proxies = ref<Proxy[]>([])
 type DebugAccount = { id: string; name: string; email: string; typeLabel: string; status: string; platform?: string }
 type DebugModel = { id: string; display_name?: string; type?: string; created_at?: string }
-const accounts = ref<DebugAccount[]>([
-  { id: 'acc-01', name: 'GPT Team · 主账号', email: 'team@example.com', typeLabel: 'OAuth', status: 'active', platform: 'openai' },
-  { id: 'acc-02', name: 'GPT Plus · 备用', email: 'backup@example.com', typeLabel: 'API Key', status: 'active', platform: 'openai' }
-])
-const models = ref<DebugModel[]>([
+const fallbackModels: DebugModel[] = [
   { id: 'gpt-5.4', display_name: 'GPT-5.4' },
   { id: 'gpt-4o', display_name: 'GPT-4o' },
   { id: 'gpt-4.1', display_name: 'GPT-4.1' },
   { id: 'o3-mini', display_name: 'o3-mini' },
   { id: 'gpt-image-2', display_name: 'GPT Image 2' }
+]
+const accounts = ref<DebugAccount[]>([
+  { id: 'acc-01', name: 'GPT Team · 主账号', email: 'team@example.com', typeLabel: 'OAuth', status: 'active', platform: 'openai' },
+  { id: 'acc-02', name: 'GPT Plus · 备用', email: 'backup@example.com', typeLabel: 'API Key', status: 'active', platform: 'openai' }
 ])
+const models = ref<DebugModel[]>(fallbackModels.map((model) => ({ ...model })))
 const defaultChatParams = {
   model: 'gpt-5.4',
   messages: [{ role: 'user', content: 'hi' }],
@@ -194,20 +195,27 @@ async function loadAccountModels() {
   const requestSeq = ++modelsRequestSeq
   modelsError.value = ''
   if (!/^\d+$/.test(accountId)) {
+    models.value = fallbackModels.map((model) => ({ ...model }))
     modelsLoading.value = false
     return
   }
   modelsLoading.value = true
   try {
     const available = await getAvailableModels(Number(accountId))
-    const options = (available || []).map((m: any) => typeof m === 'string' ? { id: m, display_name: m } : { id: m?.id, display_name: m?.display_name || m?.id, type: m?.type, created_at: m?.created_at }).filter((m: DebugModel): m is DebugModel => typeof m.id === 'string' && m.id.length > 0)
+    const options = (available || [])
+      .map((m: any) => typeof m === 'string' ? { id: m, display_name: m } : { id: m?.id, display_name: m?.display_name || m?.id, type: m?.type, created_at: m?.created_at })
+      .filter((m: DebugModel): m is DebugModel => typeof m.id === 'string' && m.id.length > 0)
+      .filter((model, index, list) => list.findIndex((item) => item.id === model.id) === index)
     if (requestSeq !== modelsRequestSeq) return
     if (options.length) {
       models.value = options
       if (!models.value.some((model) => model.id === form.model)) form.model = options[0].id
     } else modelsError.value = '该账号暂无可用模型'
   } catch {
-    if (requestSeq === modelsRequestSeq) modelsError.value = '该账号模型列表加载失败，当前显示内置模型'
+    if (requestSeq === modelsRequestSeq) {
+      models.value = fallbackModels.map((model) => ({ ...model }))
+      modelsError.value = '该账号模型列表加载失败，当前显示内置模型'
+    }
   } finally {
     if (requestSeq === modelsRequestSeq) modelsLoading.value = false
   }
