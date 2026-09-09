@@ -2515,7 +2515,14 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 			updated_at = NOW()
 		WHERE id = $3
 			AND deleted_at IS NULL
-			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1)
+			AND (
+				temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1
+				OR (
+					temp_unschedulable_until > NOW()
+					AND temp_unschedulable_reason LIKE '{"source":"account_scheduling_threshold"%'
+					AND $2 NOT LIKE '{"source":"account_scheduling_threshold"%'
+				)
+			)
 	`, until, reason, id)
 	if err != nil {
 		return err
@@ -2532,6 +2539,37 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 	}
 	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
+}
+
+// ClearTempUnschedulableIfReason removes only a matching scheduling-threshold
+// pause. It is intentionally not part of AccountRepository: quota refreshes
+// use it as an optional capability so lightweight test repositories remain
+// source-compatible. The compare-and-swap guards against clearing a newer
+// authentication, transport, or custom-rule pause.
+func (r *accountRepository) ClearTempUnschedulableIfReason(ctx context.Context, id int64, until time.Time, reason string) (bool, error) {
+	result, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET temp_unschedulable_until = NULL,
+			temp_unschedulable_reason = NULL,
+			updated_at = NOW()
+		WHERE id = $1
+			AND deleted_at IS NULL
+			AND temp_unschedulable_until = $2
+			AND temp_unschedulable_reason = $3
+			AND temp_unschedulable_reason LIKE '{"source":"account_scheduling_threshold"%'
+	`, id, until, reason)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil || affected == 0 {
+		return false, err
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		return false, err
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return true, nil
 }
 
 func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
@@ -3656,9 +3694,21 @@ func (r *accountRepository) accountsToService(ctx context.Context, accounts []*d
 func tempUnschedulablePredicate() dbpredicate.Account {
 	return dbpredicate.Account(func(s *entsql.Selector) {
 		col := s.C("temp_unschedulable_until")
+		paidThreshold := entsql.P(func(b *entsql.Builder) {
+			b.Ident(s.C("platform")).WriteString(" = ").Arg(service.PlatformOpenAI).
+				WriteString(" AND ").Ident(s.C("type")).WriteString(" = ").Arg(service.AccountTypeOAuth).
+				WriteString(" AND ").Ident(s.C("temp_unschedulable_reason")).WriteString(" LIKE ").Arg(`{"source":"account_scheduling_threshold"%`).
+				WriteString(" AND ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' ~ '^[0-9]+$'").
+				WriteString(" AND ( ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' )::bigint > EXTRACT(EPOCH FROM (NOW() - INTERVAL '30 minutes'))").
+				WriteString(" AND ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' <= EXTRACT(EPOCH FROM NOW())").
+				WriteString(" AND COALESCE(").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,overage_limit_reached}', 'false') <> 'true'").
+				WriteString(" AND COALESCE(").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,has_credits}', 'true') <> 'false'").
+				WriteString(" AND (").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,unlimited}' = 'true' OR (COALESCE(").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,balance}', '') ~ '^[0-9]+(\\\\.[0-9]+)?$' AND (").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,balance}' )::numeric > 0))")
+		})
 		s.Where(entsql.Or(
 			entsql.IsNull(col),
 			entsql.LTE(col, entsql.Expr("NOW()")),
+			paidThreshold,
 		))
 	})
 }

@@ -172,6 +172,14 @@ func (s *RateLimitService) ApplyAccountSchedulingThreshold(ctx context.Context, 
 		s.applyAnthropicFableSchedulingThreshold(ctx, account, thresholds, now)
 		return false
 	}
+	// Paid credits are an independent allowance. Do not create a new local
+	// threshold pause for an OpenAI OAuth parent while that allowance is fresh;
+	// the regular OpenAI quota gate still evaluates any configured hard auto-reset
+	// threshold later in the request admission path.
+	if decision.Platform == PlatformOpenAI && account.IsOpenAIOAuth() && account.ParentAccountID == nil &&
+		openAIPaidCreditsSnapshotActive(account.Extra, now) {
+		return false
+	}
 
 	reason := BuildDetailedAccountSchedulingThresholdReason(AccountSchedulingThresholdReasonInput{
 		Platform:         decision.Platform,

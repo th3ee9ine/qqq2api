@@ -193,7 +193,14 @@ func (a *Account) IsSchedulable() bool {
 		return false
 	}
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
-		return false
+		// A quota-threshold pause is a local soft gate. A fresh paid-credit
+		// snapshot makes the parent OAuth account usable again; authentication,
+		// transport, and custom-rule pauses remain hard gates.
+		if !(a.IsOpenAIOAuth() && a.ParentAccountID == nil &&
+			IsAccountSchedulingThresholdReason(a.TempUnschedulableReason) &&
+			openAIPaidCreditsSnapshotActive(a.Extra, now)) {
+			return false
+		}
 	}
 	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
 		return false

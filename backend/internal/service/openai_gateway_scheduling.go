@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -606,17 +607,27 @@ func openAIPaidCreditsSnapshotActive(extra map[string]any, now time.Time) bool {
 	case map[string]any:
 		snapshot = v
 	case *OpenAICredits:
-		return v.Unlimited || paidCreditsBalancePositive(v.Balance)
+		// In-memory values have no freshness timestamp and must not bypass pause.
+		return false
 	default:
 		return false
 	}
 	if ts, ok := snapshot["fetched_at"]; ok {
 		sec := parseExtraInt(ts)
-		if sec <= 0 || now.Sub(time.Unix(int64(sec), 0)) >= openAICodexAutoPauseStaleAfter {
+		stamp := time.Unix(int64(sec), 0)
+		if sec <= 0 || stamp.After(now) || now.Sub(stamp) >= openAICodexAutoPauseStaleAfter {
 			return false
 		}
 	} else {
 		return false
+	}
+	if b, _ := snapshot["overage_limit_reached"].(bool); b {
+		return false
+	}
+	if b, exists := snapshot["has_credits"]; exists {
+		if hb, ok := b.(bool); ok && !hb {
+			return false
+		}
 	}
 	if b, ok := snapshot["unlimited"].(bool); ok && b {
 		return true
@@ -650,7 +661,7 @@ func paidCreditsBalancePositive(value any) bool {
 	default:
 		return false
 	}
-	return n > 0
+	return n > 0 && !math.IsNaN(n) && !math.IsInf(n, 0)
 }
 
 func resolveAccountExtraBool(extra map[string]any, key string) bool {

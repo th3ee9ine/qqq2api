@@ -84,31 +84,41 @@ type OpenAIRateLimitResetCredits struct {
 // Balance is intentionally any because upstream emits either a decimal string
 // or JSON number depending on account and region.
 type OpenAIPaidCredits struct {
-	HasCredits bool `json:"has_credits,omitempty"`
-	Unlimited  bool `json:"unlimited,omitempty"`
-	Balance    any  `json:"balance,omitempty"`
+	HasCredits          bool `json:"has_credits,omitempty"`
+	Unlimited           bool `json:"unlimited,omitempty"`
+	Balance             any  `json:"balance,omitempty"`
+	OverageLimitReached bool `json:"overage_limit_reached,omitempty"`
+	hasCreditsSet       bool
 }
 
 func (c *OpenAIPaidCredits) UnmarshalJSON(data []byte) error {
+	*c = OpenAIPaidCredits{}
 	var raw struct {
 		HasCredits      *bool           `json:"has_credits"`
 		HasCreditsCamel *bool           `json:"hasCredits"`
 		Unlimited       *bool           `json:"unlimited"`
 		UnlimitedCamel  *bool           `json:"isUnlimited"`
+		Overage         *bool           `json:"overage_limit_reached"`
+		OverageCamel    *bool           `json:"overageLimitReached"`
 		Balance         json.RawMessage `json:"balance"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	if raw.HasCredits != nil {
-		c.HasCredits = *raw.HasCredits
+		c.HasCredits, c.hasCreditsSet = *raw.HasCredits, true
 	} else if raw.HasCreditsCamel != nil {
-		c.HasCredits = *raw.HasCreditsCamel
+		c.HasCredits, c.hasCreditsSet = *raw.HasCreditsCamel, true
 	}
 	if raw.Unlimited != nil {
 		c.Unlimited = *raw.Unlimited
 	} else if raw.UnlimitedCamel != nil {
 		c.Unlimited = *raw.UnlimitedCamel
+	}
+	if raw.Overage != nil {
+		c.OverageLimitReached = *raw.Overage
+	} else if raw.OverageCamel != nil {
+		c.OverageLimitReached = *raw.OverageCamel
 	}
 	if len(raw.Balance) > 0 && string(raw.Balance) != "null" {
 		var str string
@@ -172,6 +182,10 @@ type OpenAIQuotaService struct {
 	privacyClientFactory PrivacyClientFactory
 	agentIdentityTaskMu  sync.Mutex
 	agentIdentityWS      agentIdentityWSConnectionInvalidator
+}
+
+type openAIPaidCreditsTempUnschedRecovery interface {
+	ClearTempUnschedulableIfReason(context.Context, int64, time.Time, string) (bool, error)
 }
 
 // NewOpenAIQuotaService constructs a quota service. token provider is required —
@@ -276,12 +290,40 @@ func (s *OpenAIQuotaService) queryUsage(ctx context.Context, accountID int64, in
 	}
 	// Persist a sanitized paid-credit snapshot opportunistically. Quota refresh
 	// remains successful even when this best-effort cache write fails.
-	if payload.Credits != nil && s.accountRepo != nil {
+	if s.accountRepo != nil {
 		if err := s.accountRepo.UpdateExtra(ctx, accountID, buildOpenAIPaidCreditsExtraUpdates(payload.Credits, payload.FetchedAt)); err != nil {
 			slog.Warn("openai_paid_credits_cache_write_failed", "account_id", accountID, "error", err)
+		} else {
+			s.clearPaidCreditsThresholdPause(ctx, accountID, payload.Credits, payload.FetchedAt)
 		}
 	}
 	return &payload, nil
+}
+
+func (s *OpenAIQuotaService) clearPaidCreditsThresholdPause(ctx context.Context, accountID int64, credits *OpenAIPaidCredits, fetchedAt int64) {
+	if s == nil || s.accountRepo == nil || credits == nil || accountID <= 0 ||
+		!openAIPaidCreditsSnapshotActive(map[string]any{
+			"has_credits": credits.HasCredits, "unlimited": credits.Unlimited,
+			"balance": credits.Balance, "overage_limit_reached": credits.OverageLimitReached,
+			"fetched_at": fetchedAt,
+		}, time.Now()) {
+		return
+	}
+	recovery, ok := s.accountRepo.(openAIPaidCreditsTempUnschedRecovery)
+	if !ok {
+		return
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil || account == nil || !account.IsOpenAIOAuth() || account.ParentAccountID != nil ||
+		account.TempUnschedulableUntil == nil || !IsAccountSchedulingThresholdReason(account.TempUnschedulableReason) {
+		return
+	}
+	cleared, err := recovery.ClearTempUnschedulableIfReason(ctx, accountID, *account.TempUnschedulableUntil, account.TempUnschedulableReason)
+	if err != nil {
+		slog.Warn("openai_paid_credits_threshold_pause_clear_failed", "account_id", accountID, "error", err)
+	} else if cleared {
+		slog.Info("openai_paid_credits_threshold_pause_cleared", "account_id", accountID)
+	}
 }
 
 // CacheResetCreditsSnapshot persists a complete reset-credit snapshot after an
@@ -302,17 +344,11 @@ func (s *OpenAIQuotaService) CacheResetCreditsSnapshot(ctx context.Context, acco
 // CachePaidCreditsSnapshot persists the latest purchased-credit balance for
 // scheduler decisions and account-list rendering.
 func (s *OpenAIQuotaService) CachePaidCreditsSnapshot(ctx context.Context, accountID int64, credits *OpenAICredits) error {
-	if credits == nil {
-		return nil
+	if s == nil || s.accountRepo == nil {
+		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_NOT_CONFIGURED", "openai quota service is not configured")
 	}
-	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
-		openaiQuotaPaidCreditsKey: map[string]any{
-			"has_credits": credits.HasCredits,
-			"unlimited":   credits.Unlimited,
-			"balance":     credits.Balance,
-			"fetched_at":  time.Now().Unix(),
-		},
-	}); err != nil {
+	updates := buildOpenAIPaidCreditsExtraUpdates(credits, time.Now().Unix())
+	if err := s.accountRepo.UpdateExtra(ctx, accountID, updates); err != nil {
 		return infraerrors.New(http.StatusInternalServerError, "OPENAI_QUOTA_CACHE_WRITE_FAILED", "failed to cache paid credit details").WithCause(err)
 	}
 	return nil
@@ -366,18 +402,22 @@ func (s *OpenAIQuotaService) cacheResetCreditsSnapshot(ctx context.Context, acco
 }
 
 func buildOpenAIPaidCreditsExtraUpdates(credits *OpenAICredits, fetchedAt int64) map[string]any {
-	if credits == nil {
-		return nil
-	}
-	// Construct a fresh value to avoid persisting any future upstream fields.
-	snapshot := map[string]any{"has_credits": credits.HasCredits, "unlimited": credits.Unlimited}
-	if credits.Balance != nil {
-		snapshot["balance"] = credits.Balance
-	}
 	if fetchedAt <= 0 {
 		fetchedAt = time.Now().Unix()
 	}
-	snapshot["fetched_at"] = fetchedAt
+	if credits == nil {
+		return map[string]any{openaiQuotaPaidCreditsKey: map[string]any{"has_credits": false, "unlimited": false, "fetched_at": fetchedAt}}
+	}
+	snapshot := map[string]any{"unlimited": credits.Unlimited, "fetched_at": fetchedAt}
+	if credits.HasCredits || credits.hasCreditsSet {
+		snapshot["has_credits"] = credits.HasCredits
+	}
+	if credits.Balance != nil {
+		snapshot["balance"] = credits.Balance
+	}
+	if credits.OverageLimitReached {
+		snapshot["overage_limit_reached"] = true
+	}
 	return map[string]any{openaiQuotaPaidCreditsKey: snapshot}
 }
 
