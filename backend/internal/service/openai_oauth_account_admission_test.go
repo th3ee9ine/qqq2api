@@ -167,6 +167,28 @@ func TestWaitForOpenAIOAuthAccountAdmissionHonorsRuntimeAndQuotaReset(t *testing
 	require.Greater(t, admissionErr.RetryAfter, time.Minute)
 }
 
+func TestOpenAIOAuthAdmissionSkipsThresholdPauseWithFreshPaidCredits(t *testing.T) {
+	now := time.Now()
+	account := testOpenAIOAuthAdmissionAccount(107)
+	blockedUntil := now.Add(time.Hour)
+	account.TempUnschedulableUntil = &blockedUntil
+	account.TempUnschedulableReason = BuildAccountSchedulingThresholdReason("quota exhausted")
+	account.Extra[openaiQuotaPaidCreditsKey] = map[string]any{
+		"has_credits":           true,
+		"unlimited":             false,
+		"balance":               "5000",
+		"overage_limit_reached": false,
+		"fetched_at":            now.Unix(),
+	}
+
+	got := (&OpenAIGatewayService{}).openAIOAuthAdmissionNotBefore(account, now)
+	require.True(t, got.IsZero(), "fresh paid credits should bypass only threshold temp pause")
+
+	account.TempUnschedulableReason = BuildTempUnschedReasonPayload("transport_error", "upstream unavailable")
+	got = (&OpenAIGatewayService{}).openAIOAuthAdmissionNotBefore(account, now)
+	require.Equal(t, blockedUntil, got, "non-threshold safety pause remains an admission blocker")
+}
+
 func TestOpenAIOAuth429DefersAlreadyQueuedAdmission(t *testing.T) {
 	interval := 40 * time.Millisecond
 	policy := testOpenAIOAuthAdmissionPolicy(interval, 180*time.Millisecond)

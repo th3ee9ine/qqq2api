@@ -376,7 +376,17 @@ func (s *OpenAIGatewayService) openAIOAuthAdmissionNotBefore(account *Account, n
 	}
 	advance(account.RateLimitResetAt)
 	advance(account.OverloadUntil)
-	advance(account.TempUnschedulableUntil)
+	// A fresh paid-credit snapshot is an independent allowance for OpenAI OAuth
+	// accounts. Threshold pauses are therefore no longer admission blockers once
+	// credits are confirmed; credential, transport, and custom safety pauses stay
+	// hard blocks.
+	if account.TempUnschedulableUntil != nil {
+		thresholdPause := IsAccountSchedulingThresholdReason(account.TempUnschedulableReason)
+		paidCreditsActive := openAIPaidCreditsSnapshotActive(account.Extra, now)
+		if !thresholdPause || !paidCreditsActive {
+			advance(account.TempUnschedulableUntil)
+		}
+	}
 
 	if s != nil {
 		if value, ok := s.openaiAccountRuntimeBlockUntil.Load(account.ID); ok {
