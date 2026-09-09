@@ -3699,7 +3699,7 @@ func tempUnschedulablePredicate() dbpredicate.Account {
 				WriteString(" AND ").Ident(s.C("type")).WriteString(" = ").Arg(service.AccountTypeOAuth).
 				WriteString(" AND ").Ident(s.C("temp_unschedulable_reason")).WriteString(" LIKE ").Arg(`{"source":"account_scheduling_threshold"%`).
 				WriteString(" AND ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' ~ '^[0-9]+$'").
-				WriteString(" AND ( ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' )::bigint > EXTRACT(EPOCH FROM (NOW() - INTERVAL '30 minutes'))").
+				WriteString(" AND ( ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' )::bigint > EXTRACT(EPOCH FROM (NOW() - INTERVAL '2 hours'))").
 				WriteString(" AND ").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,fetched_at}' <= EXTRACT(EPOCH FROM NOW())").
 				WriteString(" AND COALESCE(").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,overage_limit_reached}', 'false') <> 'true'").
 				WriteString(" AND COALESCE(").Ident(s.C("extra")).WriteString(" #>> '{codex_paid_credits_snapshot,has_credits}', 'true') <> 'false'").
