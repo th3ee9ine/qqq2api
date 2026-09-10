@@ -24,6 +24,12 @@ const codexClientVersionMaxLen = 64
 // reach net/http's request writer.
 const codexAccountLocalUserAgentMaxLen = 512
 
+// codexOriginatorMaxLen keeps the administrator-configured Originator within
+// the same bound used by the Codex client identity parser. A slash is rejected
+// because Originator is also used as the leading `{client}` segment of the
+// paired User-Agent.
+const codexOriginatorMaxLen = 64
+
 // codexClientVersionPattern 允许 0.146.0 与 0.147.0-alpha.4 两类官方形态。
 var codexClientVersionPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+){1,3}(-[0-9A-Za-z.]+)?$`)
 
@@ -52,7 +58,7 @@ func NormalizeStableCodexClientVersion(version string) string {
 }
 
 // normalizeStableCodexClientVersion 只接受不带预发布后缀的正式版。
-// 自动同步、缓存和 Responses/WS Version 必须共用这一规则；否则数据库中的
+// 全局自动同步、缓存和全局 Responses/WS Version 共用这一规则；否则数据库中的
 // 0.200.1-alpha.1 会被版本比较器视作与 0.200.1 相等，阻塞同 core 的正式版写入。
 func normalizeStableCodexClientVersion(version string) string {
 	version = NormalizeCodexClientVersion(version)
@@ -65,6 +71,26 @@ func normalizeStableCodexClientVersion(version string) string {
 		}
 	}
 	return version
+}
+
+// NormalizeCodexOriginatorHeader validates and trims an administrator supplied
+// Originator override. Empty means "derive from User-Agent/use the built-in
+// default". Only printable ASCII is accepted because the value is written to
+// both an HTTP header and the leading User-Agent client segment.
+func NormalizeCodexOriginatorHeader(originator string) string {
+	originator = strings.TrimSpace(originator)
+	if originator == "" {
+		return ""
+	}
+	if len(originator) > codexOriginatorMaxLen || strings.ContainsRune(originator, '/') {
+		return ""
+	}
+	for i := 0; i < len(originator); i++ {
+		if value := originator[i]; value < 0x20 || value > 0x7e {
+			return ""
+		}
+	}
+	return originator
 }
 
 // buildCodexCLIUserAgent 按官方稳定版拼出规范 Codex Desktop User-Agent。
@@ -89,7 +115,7 @@ var codexIdentityEnforcement = func() *atomic.Bool {
 }()
 
 // codexAccountLocalDeviceIdentityEnabled controls whether account-local device
-// session User-Agent/Originator values are preferred over the global identity.
+// session Originator/User-Agent/Version values are preferred over the global identity.
 // It defaults to true so existing deployments retain their historical behavior.
 var codexAccountLocalDeviceIdentityEnabled = func() *atomic.Bool {
 	v := &atomic.Bool{}
@@ -118,9 +144,16 @@ type codexCanonicalUserAgentResolver func() string
 // UA engine 与 Responses/WS Version 都消费该值，保证身份版本不会漂移。
 type codexCanonicalResponsesVersionResolver func() string
 
+// codexCanonicalOriginatorResolver returns the optional system-wide
+// Originator override. An empty result preserves the historical behavior of
+// deriving Originator from the selected User-Agent.
+type codexCanonicalOriginatorResolver func() string
+
 var (
 	codexCanonicalUAMu               sync.RWMutex
 	codexCanonicalUAResolver         codexCanonicalUserAgentResolver
+	codexCanonicalOriginatorMu       sync.RWMutex
+	codexCanonicalOriginator         codexCanonicalOriginatorResolver
 	codexCanonicalResponsesVersionMu sync.RWMutex
 	codexCanonicalResponsesVersion   codexCanonicalResponsesVersionResolver
 )
@@ -133,9 +166,18 @@ func SetCodexCanonicalUserAgentResolver(resolver func() string) {
 	codexCanonicalUAResolver = resolver
 }
 
+// SetCodexCanonicalOriginatorResolver injects the optional system-wide
+// Originator override resolver. Invalid values are ignored at read time and
+// fall back to the User-Agent-derived/default identity.
+func SetCodexCanonicalOriginatorResolver(resolver func() string) {
+	codexCanonicalOriginatorMu.Lock()
+	defer codexCanonicalOriginatorMu.Unlock()
+	codexCanonicalOriginator = resolver
+}
+
 // SetCodexCanonicalResponsesVersionResolver 注入 Responses/WS Version 解析器。
-// 未注入、返回非法值或返回值低于内置新版下限时，使用
-// codexResponsesVersionFallback。
+// SettingService 负责自动模式的版本下限与固定模式的精确版本选择。
+// 未注入或返回非法稳定版时使用 codexResponsesVersionFallback。
 func SetCodexCanonicalResponsesVersionResolver(resolver func() string) {
 	codexCanonicalResponsesVersionMu.Lock()
 	defer codexCanonicalResponsesVersionMu.Unlock()
@@ -148,6 +190,12 @@ func SetCodexCanonicalResponsesVersionResolver(resolver func() string) {
 func CodexCanonicalUserAgent() string {
 	userAgent, _ := resolveCodexOutboundUserAgentIdentity("")
 	return userAgent
+}
+
+// CodexCanonicalOriginator returns the currently effective global Originator.
+func CodexCanonicalOriginator() string {
+	_, originator := resolveCodexOutboundUserAgentIdentity("")
+	return originator
 }
 
 // CodexCanonicalAuthIdentity 返回凭据/控制面（auth.openai.com 换 Token、
@@ -204,15 +252,28 @@ func codexCanonicalUserAgent() string {
 	return codexCLIUserAgent
 }
 
-// currentCodexResponsesVersion 返回当前 Responses/WS Version。自动同步值
-// 只能向前推进，不得把进程内置的已知新版降级。
+// codexCanonicalOriginatorOverride returns only a valid, explicitly configured
+// override. Empty intentionally remains distinct from the built-in default so
+// a custom User-Agent can continue to derive its matching Originator when the
+// administrator leaves the Originator setting blank.
+func codexCanonicalOriginatorOverride() string {
+	codexCanonicalOriginatorMu.RLock()
+	resolver := codexCanonicalOriginator
+	codexCanonicalOriginatorMu.RUnlock()
+	if resolver == nil {
+		return ""
+	}
+	return NormalizeCodexOriginatorHeader(resolver())
+}
+
+// currentCodexResponsesVersion 返回设置解析器选定的稳定版。固定版本可以低于
+// 内置版本；自动模式的下限统一由 SettingService 处理，避免二次抬升历史版本。
 func currentCodexResponsesVersion() string {
 	codexCanonicalResponsesVersionMu.RLock()
 	resolver := codexCanonicalResponsesVersion
 	codexCanonicalResponsesVersionMu.RUnlock()
 	if resolver != nil {
-		if version := normalizeStableCodexClientVersion(resolver()); version != "" &&
-			CompareVersions(version, codexResponsesVersionFallback) >= 0 {
+		if version := normalizeStableCodexClientVersion(resolver()); version != "" {
 			return version
 		}
 	}
@@ -220,7 +281,7 @@ func currentCodexResponsesVersion() string {
 }
 
 // codexOutboundIdentity 是出站身份三元组：originator 与 User-Agent 首段必须配套，
-// User-Agent engine 与 Version 使用同一官方最新稳定 rust-v。
+// User-Agent engine 与 Version 同源；有效账号本地身份优先，否则采用全局稳定版本策略。
 type codexOutboundIdentity struct {
 	userAgent  string
 	originator string
@@ -244,15 +305,56 @@ func resolveCodexOutboundUserAgentIdentity(candidateUA string) (userAgent, origi
 // 让一次请求中的 UA engine 与 Version 即使恰逢同步切换也保持原子一致。
 func resolveCodexOutboundUserAgentIdentityWithVersion(candidateUA, version string) (userAgent, originator string) {
 	canonical := codexCanonicalUserAgent()
-	ua := strings.TrimSpace(candidateUA)
-	if ua == "" {
+	candidate := strings.TrimSpace(candidateUA)
+	ua := candidate
+	if candidate == "" {
 		ua = canonical
 	}
-	originator, pairedUA, ok := openai.PairCodexClientIdentity(ua)
-	if !ok {
-		if originator, pairedUA, ok = openai.PairCodexClientIdentity(canonical); !ok {
-			originator, pairedUA = openai.CodexDefaultOriginator, codexCLIUserAgent
+	if originatorOverride := codexCanonicalOriginatorOverride(); originatorOverride != "" {
+		// The upstream validates Originator against the User-Agent's leading
+		// client segment. Make the configured Originator authoritative and
+		// rewrite that segment while preserving the configured UA fingerprint.
+		// If the configured UA is not a bounded `{client}/{version}` value,
+		// retain the safe canonical fingerprint instead.
+		if !isSaneCodexUserAgentHeader(ua) {
+			ua = canonical
 		}
+		if !isSaneCodexUserAgentHeader(ua) {
+			ua = codexCLIUserAgent
+		}
+		if slash := strings.IndexByte(ua, '/'); slash > 0 {
+			ua = originatorOverride + ua[slash:]
+		}
+		if rebuilt := openai.SetCodexUserAgentVersion(ua, version); rebuilt != "" {
+			ua = rebuilt
+		}
+		return ua, originatorOverride
+	}
+	var pairedUA string
+	var ok bool
+	if candidate != "" {
+		// Request/account candidates are not the trusted global setting. Keep
+		// their historical official-client allow-list and trailer recovery.
+		originator, pairedUA, ok = openai.PairCodexClientIdentity(candidate)
+	}
+	if !ok {
+		// The global User-Agent setting is trusted administrator input and
+		// deliberately accepts client families beyond the built-in official
+		// allow-list used for request or account-local values. When Originator is
+		// empty, its leading `{client}/` segment is authoritative even if an
+		// official `(name; version)` trailer is present; otherwise a real
+		// CODEX_INTERNAL_ORIGINATOR_OVERRIDE-shaped setting would be silently
+		// rewritten back to the trailer client.
+		originator, pairedUA, ok = pairConfiguredCodexClientIdentity(canonical)
+	}
+	if !ok {
+		// Retain the strict parser as a defensive compatibility fallback for a
+		// legacy stored value whose leading segment cannot safely become an
+		// Originator but whose official trailer can still recover a valid pair.
+		originator, pairedUA, ok = openai.PairCodexClientIdentity(canonical)
+	}
+	if !ok {
+		originator, pairedUA = openai.CodexDefaultOriginator, codexCLIUserAgent
 	}
 	// UA engine 与 Responses/WS Version 使用同一解析器；Originator 由最终 UA
 	// 的客户端名配对，Desktop trailer 的 app build 保持独立。
@@ -260,6 +362,29 @@ func resolveCodexOutboundUserAgentIdentityWithVersion(candidateUA, version strin
 		pairedUA = rebuilt
 	}
 	return pairedUA, originator
+}
+
+// pairConfiguredCodexClientIdentity derives Originator from the leading
+// `{client}/` segment of an administrator-configured global User-Agent.  This
+// intentionally has a wider client-name vocabulary than
+// openai.PairCodexClientIdentity, while retaining the same bounded printable
+// ASCII and parseable-version requirements applied at the settings boundary.
+// Callers must only pass the canonical global setting, never request-provided
+// or account-local values.
+func pairConfiguredCodexClientIdentity(userAgent string) (originator, pairedUA string, ok bool) {
+	userAgent = strings.TrimSpace(userAgent)
+	if !isSaneCodexUserAgentHeader(userAgent) {
+		return "", "", false
+	}
+	slash := strings.IndexByte(userAgent, '/')
+	if slash <= 0 {
+		return "", "", false
+	}
+	originator = NormalizeCodexOriginatorHeader(userAgent[:slash])
+	if originator == "" {
+		return "", "", false
+	}
+	return originator, originator + userAgent[slash:], true
 }
 
 // resolveCodexOutboundIdentity 组合 User-Agent/originator 与同源官方稳定版 Version，
@@ -278,6 +403,8 @@ func resolveCodexOutboundIdentity(candidateUA string) codexOutboundIdentity {
 // an account's local OpenAI device session.  A malformed or incomplete local
 // value falls back atomically to the process-wide canonical identity so that
 // User-Agent, Originator and Version can never leave the gateway mismatched.
+// A valid explicit local Version wins; otherwise the local UA supplies its
+// engine version. Global manual/synced version floors only apply on fallback.
 func resolveCodexOutboundIdentityForAccount(account *Account) codexOutboundIdentity {
 	if account == nil || !account.UsesOpenAICodexProtocol() || !codexAccountLocalDeviceIdentityEnabled.Load() {
 		return resolveCodexOutboundIdentity("")
@@ -300,16 +427,16 @@ func resolveCodexOutboundIdentityForAccount(account *Account) codexOutboundIdent
 		// credentials.user_agent and derive their Originator from the UA.
 		candidateUA = account.GetOpenAICodexUserAgent()
 	}
-	identity := resolveCodexOutboundIdentity(candidateUA)
 	if strings.TrimSpace(candidateUA) == "" {
-		return identity
+		return resolveCodexOutboundIdentity("")
 	}
 
 	// PairCodexClientIdentity is the authoritative sanity check for a local
-	// session UA.  resolveCodexOutboundIdentity already falls back when this
-	// check fails; only a valid pair is eligible for a stored Originator.
-	pairedOriginator, _, ok := openai.PairCodexClientIdentity(candidateUA)
-	if !ok || !isSaneCodexAccountLocalUserAgent(candidateUA) {
+	// session UA. Only a valid pair is eligible for a stored Originator. A valid
+	// account-local identity intentionally takes precedence over the global
+	// Originator/User-Agent overrides when the corresponding switch is enabled.
+	pairedOriginator, pairedUA, ok := openai.PairCodexClientIdentity(candidateUA)
+	if !ok || !isSaneCodexUserAgentHeader(candidateUA) {
 		return resolveCodexOutboundIdentity("")
 	}
 	if localUA != "" {
@@ -320,10 +447,31 @@ func resolveCodexOutboundIdentityForAccount(account *Account) codexOutboundIdent
 			return resolveCodexOutboundIdentity("")
 		}
 	}
-	return identity
+	version := NormalizeCodexClientVersion(openai.CodexUserAgentVersion(pairedUA))
+	if rawVersion := account.GetOpenAILocalDeviceVersion(); rawVersion != "" {
+		// Validate before accepting a stored override. ASCII spaces may surround
+		// a version, but controls/non-ASCII and overlong raw values invalidate the
+		// complete local identity rather than mixing in a global Version.
+		version = NormalizeCodexClientVersion(rawVersion)
+		if len(rawVersion) > codexClientVersionMaxLen || version != strings.Trim(rawVersion, " ") {
+			return resolveCodexOutboundIdentity("")
+		}
+	}
+	if version == "" {
+		return resolveCodexOutboundIdentity("")
+	}
+	pairedUA = openai.SetCodexUserAgentVersion(pairedUA, version)
+	if pairedUA == "" || !isSaneCodexUserAgentHeader(pairedUA) {
+		return resolveCodexOutboundIdentity("")
+	}
+	return codexOutboundIdentity{
+		userAgent:  pairedUA,
+		originator: pairedOriginator,
+		version:    version,
+	}
 }
 
-func isSaneCodexAccountLocalUserAgent(userAgent string) bool {
+func isSaneCodexUserAgentHeader(userAgent string) bool {
 	userAgent = strings.TrimSpace(userAgent)
 	if userAgent == "" || len(userAgent) > codexAccountLocalUserAgentMaxLen ||
 		NormalizeCodexClientVersion(openai.CodexUserAgentVersion(userAgent)) == "" {
@@ -405,23 +553,21 @@ func enforceCodexIdentityHeadersWithUA(h http.Header, overrideUA string) {
 
 // enforceCodexIdentityHeadersWithAccount is the account-aware counterpart of
 // enforceCodexIdentityHeadersWithUA.  It gives a valid local device-session
-// identity precedence over the global default while retaining the existing
-// opt-out pairing semantics.
+// identity (including Version) precedence over the global default. Opting out
+// of global identity enforcement still preserves a configured local identity;
+// request-UA pairing is used only when no local account identity is present.
 func enforceCodexIdentityHeadersWithAccount(h http.Header, account *Account) {
 	if h == nil || h.Get("originator") == "" {
 		return
 	}
 	if !codexIdentityEnforcement.Load() {
-		if account != nil && codexAccountLocalDeviceIdentityEnabled.Load() {
-			if account.GetOpenAILocalDeviceUserAgent() != "" {
+		if account != nil && account.UsesOpenAICodexProtocol() && codexAccountLocalDeviceIdentityEnabled.Load() {
+			if account.GetOpenAICodexUserAgent() != "" || account.GetOpenAILocalDeviceOriginator() != "" || account.GetOpenAILocalDeviceVersion() != "" {
 				identity := resolveCodexOutboundIdentityForAccount(account)
 				h.Set("user-agent", identity.userAgent)
 				h.Set("originator", identity.originator)
 				h.Set("version", identity.version)
 				return
-			}
-			if ua := account.GetOpenAICodexUserAgent(); ua != "" {
-				h.Set("user-agent", ua)
 			}
 		}
 		pairCodexIdentityHeaders(h)
@@ -437,12 +583,7 @@ func enforceCodexIdentityHeadersWithAccount(h http.Header, account *Account) {
 // 配对 originator，并将 Responses/WS Version 同步到当前官方稳定版。
 func pairCodexIdentityHeaders(h http.Header) {
 	version := currentCodexResponsesVersion()
-	originator, pairedUA, ok := openai.PairCodexClientIdentity(h.Get("user-agent"))
-	if !ok {
-		pairedUA, originator = resolveCodexOutboundUserAgentIdentityWithVersion("", version)
-	} else if rebuilt := openai.SetCodexUserAgentVersion(pairedUA, version); rebuilt != "" {
-		pairedUA = rebuilt
-	}
+	pairedUA, originator := resolveCodexOutboundUserAgentIdentityWithVersion(h.Get("user-agent"), version)
 	h.Set("user-agent", pairedUA)
 	h.Set("originator", originator)
 	h.Set("version", version)

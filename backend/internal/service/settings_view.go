@@ -240,8 +240,10 @@ type SystemSettings struct {
 	EnableClientDatelineNormalization      bool   // 是否对 Anthropic OAuth/SetupToken 请求体做客户端 dateline 归一化（默认 true）
 	RewriteMessageCacheControl             bool   // 是否改写 messages[*].content[*].cache_control（默认 false）
 	AntigravityUserAgentVersion            string // Antigravity 上游 User-Agent 版本号；空值使用配置/默认值
+	OpenAICodexOriginator                  string // OpenAI Codex 上游 Originator 覆写；空值从最终 User-Agent 推导
 	OpenAICodexUserAgent                   string // OpenAI Codex 上游完整 User-Agent；首段 engine 由统一身份版本重建，尾部 app build 独立
-	OpenAICodexClientVersion               string // Codex 统一身份版本热修复值；UA engine 与 Responses/WS Version 共用
+	OpenAICodexClientVersion               string // Codex 统一身份版本；auto 热修复下限或 pinned 精确值
+	OpenAICodexClientVersionMode           string // auto（默认）或 pinned（固定版本）
 	OpenAICodexClientVersionSynced         string // 官方最新稳定 rust-v（只读）；UA engine 与 Responses/WS Version 共用
 	OpenAICodexVersionAutoSyncEnabled      bool   // 是否启用 Codex 客户端版本号自动同步（默认 true）
 	EnableOpenAIAccountLocalDeviceIdentity bool   // 是否优先使用账号本地设备会话中的 UA/Originator（默认 true）

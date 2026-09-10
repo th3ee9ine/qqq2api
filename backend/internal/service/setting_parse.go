@@ -239,8 +239,10 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyRewriteMessageCacheControl:                         strconv.FormatBool(s.defaultRewriteMessageCacheControl()),
 		SettingKeyEnableClientDatelineNormalization:                  "true",
 		SettingKeyAntigravityUserAgentVersion:                        "",
+		SettingKeyOpenAICodexOriginator:                              "",
 		SettingKeyOpenAICodexUserAgent:                               "",
 		SettingKeyOpenAICodexClientVersion:                           "",
+		SettingKeyOpenAICodexClientVersionMode:                       OpenAICodexClientVersionModeAuto,
 		SettingKeyOpenAICodexClientVersionSynced:                     "",
 		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingKeyEnableOpenAIAccountLocalDeviceIdentity:             "true",
@@ -877,8 +879,13 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.EnableClientDatelineNormalization = true
 	}
 	result.AntigravityUserAgentVersion = antigravity.NormalizeUserAgentVersion(settings[SettingKeyAntigravityUserAgentVersion])
-	result.OpenAICodexUserAgent = strings.TrimSpace(settings[SettingKeyOpenAICodexUserAgent])
+	result.OpenAICodexOriginator = NormalizeCodexOriginatorHeader(settings[SettingKeyOpenAICodexOriginator])
+	result.OpenAICodexUserAgent = NormalizeCodexUserAgentHeader(settings[SettingKeyOpenAICodexUserAgent])
 	result.OpenAICodexClientVersion = normalizeStableCodexClientVersion(settings[SettingKeyOpenAICodexClientVersion])
+	result.OpenAICodexClientVersionMode = NormalizeOpenAICodexClientVersionMode(settings[SettingKeyOpenAICodexClientVersionMode])
+	if result.OpenAICodexClientVersionMode == "" {
+		result.OpenAICodexClientVersionMode = OpenAICodexClientVersionModeAuto
+	}
 	result.OpenAICodexClientVersionSynced = normalizeStableCodexClientVersion(settings[SettingKeyOpenAICodexClientVersionSynced])
 	// 自动同步默认开启：缺失/空值一律视为开启，与 enable_client_dateline_normalization 同一惯例。
 	if v, ok := settings[SettingKeyOpenAICodexVersionAutoSyncEnabled]; ok && v != "" {

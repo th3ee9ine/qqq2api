@@ -964,11 +964,22 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 }
 
 // 账号级自定义 UA 是管理员的显式配置，WS 握手与 HTTP 出站必须一视同仁地生效——
-// 否则同一个账号在两种传输上以不同身份出站。指纹保留、版本段重建、originator 配套。
+// 开启账号本地身份时，保留账号 UA 的指纹和版本，Version 与 Originator 同源配套。
 func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	codexCanonicalResponsesVersionMu.RLock()
+	previousVersionResolver := codexCanonicalResponsesVersion
+	codexCanonicalResponsesVersionMu.RUnlock()
+	previousLocalIdentityEnabled := codexAccountLocalDeviceIdentityEnabled.Load()
+	previousEnforcement := codexIdentityEnforcement.Load()
 	SetCodexCanonicalResponsesVersionResolver(func() string { return "0.200.1" })
-	t.Cleanup(func() { SetCodexCanonicalResponsesVersionResolver(nil) })
+	SetCodexAccountLocalDeviceIdentityEnabled(true)
+	SetCodexIdentityEnforcementEnabled(true)
+	t.Cleanup(func() {
+		SetCodexCanonicalResponsesVersionResolver(previousVersionResolver)
+		SetCodexAccountLocalDeviceIdentityEnabled(previousLocalIdentityEnabled)
+		SetCodexIdentityEnforcementEnabled(previousEnforcement)
+	})
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -994,6 +1005,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testin
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
 	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
 	pool.setClientDialerForTest(captureDialer)
 
 	svc := &OpenAIGatewayService{
@@ -1014,7 +1026,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testin
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token": "oauth-token-1",
-			// 填写于某个历史版本的账号级 UA：指纹要保留，版本段不能被逐字沿用。
+			// 历史导入只有账号级 UA 时，从其首段推导本地 Version，不被更高全局值抬升。
 			"user_agent": "codex-tui/0.125.0 (Mac OS X 15.1.0; arm64) iTerm.app",
 		},
 		Extra: map[string]any{
@@ -1028,10 +1040,10 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testin
 	require.NotNil(t, result)
 	require.Equal(t, "codex-tui", captureDialer.lastHeaders.Get("originator"))
 	require.Equal(t,
-		"codex-tui/0.200.1 (Mac OS X 15.1.0; arm64) iTerm.app",
+		"codex-tui/0.125.0 (Mac OS X 15.1.0; arm64) iTerm.app",
 		captureDialer.lastHeaders.Get("user-agent"),
 	)
-	require.Equal(t, "0.200.1", captureDialer.lastHeaders.Get("version"))
+	require.Equal(t, "0.125.0", captureDialer.lastHeaders.Get("version"))
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheKey(t *testing.T) {

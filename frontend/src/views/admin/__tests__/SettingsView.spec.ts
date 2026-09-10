@@ -7,6 +7,8 @@ import SettingsView from "../SettingsView.vue";
 const {
   getSettings,
   updateSettings,
+  getOpenAICodexVersions,
+  syncOpenAICodexVersion,
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
   getAdminApiKey,
@@ -37,6 +39,8 @@ const {
   showSuccess,
 } = vi.hoisted(() => ({
   getSettings: vi.fn(),
+  getOpenAICodexVersions: vi.fn(),
+  syncOpenAICodexVersion: vi.fn(),
   updateSettings: vi.fn(),
   getWebSearchEmulationConfig: vi.fn(),
   updateWebSearchEmulationConfig: vi.fn(),
@@ -88,6 +92,8 @@ vi.mock("@/api", () => ({
     settings: {
       getSettings,
       updateSettings,
+      getOpenAICodexVersions,
+      syncOpenAICodexVersion,
       getWebSearchEmulationConfig,
       updateWebSearchEmulationConfig,
       getAdminApiKey,
@@ -155,6 +161,27 @@ vi.mock("@/utils/apiError", () => ({
 vi.mock("vue-i18n", async () => {
   const actual = await vi.importActual<typeof import("vue-i18n")>("vue-i18n");
   const translations: Record<string, string> = {
+    "admin.settings.gatewayForwarding.openaiCodexIdentityTitle":
+      "GPT/Codex 上游身份请求头",
+    "admin.settings.gatewayForwarding.openaiCodexIdentityHint":
+      "下方展示的基线默认值仅表示全局三项全部留空时的结果；混合填写时 Originator 和 User-Agent 会联动配对。",
+    "admin.settings.gatewayForwarding.openaiCodexOriginator": "Originator",
+    "admin.settings.gatewayForwarding.openaiCodexOriginatorPlaceholder":
+      "全局三项全部留空时使用基线默认值",
+    "admin.settings.gatewayForwarding.openaiCodexOriginatorHint":
+      "推理面与凭据/控制面的 Originator。",
+    "admin.settings.gatewayForwarding.openaiCodexUserAgent": "User-Agent",
+    "admin.settings.gatewayForwarding.openaiCodexUserAgentPlaceholder":
+      "全局三项全部留空时使用基线默认值",
+    "admin.settings.gatewayForwarding.openaiCodexUserAgentHint":
+      "推理面与凭据/控制面的 User-Agent。",
+    "admin.settings.gatewayForwarding.openaiCodexClientVersion": "Version",
+    "admin.settings.gatewayForwarding.openaiCodexClientVersionPlaceholder":
+      "全局三项全部留空时使用基线默认值",
+    "admin.settings.gatewayForwarding.openaiCodexClientVersionHint":
+      "Version 仅发往 Responses/WS 推理面。",
+    "admin.settings.gatewayForwarding.openaiCodexDefaultValue":
+      "全局三项全部留空时的基线默认值：{value}",
     "admin.settings.wechatConnect.title": "微信登录",
     "admin.settings.wechatConnect.description": "用于微信开放平台或公众号/小程序的第三方登录配置。",
     "admin.settings.wechatConnect.enabledLabel": "启用微信登录",
@@ -477,7 +504,16 @@ const baseSettingsResponse = {
   enable_anthropic_cache_ttl_1h_injection: false,
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
+  openai_codex_originator: "",
   openai_codex_user_agent: "",
+  openai_codex_client_version: "",
+  openai_codex_client_version_mode: "auto",
+  openai_codex_originator_default: "Codex Desktop",
+  openai_codex_user_agent_default:
+    "Codex Desktop/0.150.1 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
+  openai_codex_client_version_default: "0.150.1",
+  openai_codex_client_version_synced: "",
+  openai_codex_version_auto_sync_enabled: true,
   enable_openai_account_local_device_identity: true,
   payment_enabled: true,
   payment_min_amount: 1,
@@ -590,6 +626,22 @@ async function openGatewayTab(wrapper: ReturnType<typeof mountView>) {
 
 describe("admin SettingsView", () => {
   beforeEach(() => {
+    getOpenAICodexVersions.mockReset();
+    syncOpenAICodexVersion.mockReset();
+    getOpenAICodexVersions.mockResolvedValue({
+      versions: [
+        { version: "0.150.1", tag_name: "rust-v0.150.1", published_at: "2026-09-10T00:00:00Z", html_url: "https://github.com/openai/codex/releases/tag/rust-v0.150.1" },
+        { version: "0.149.0", tag_name: "rust-v0.149.0", published_at: "2026-09-09T00:00:00Z", html_url: "https://github.com/openai/codex/releases/tag/rust-v0.149.0" },
+      ], latest_version: "0.150.1", has_more: true, next_page: 2,
+    });
+    syncOpenAICodexVersion.mockResolvedValue({
+      latest_version: "0.151.0", synced_version: "0.151.0", updated: true,
+      defaults: {
+        originator: "Codex Desktop",
+        user_agent: "Codex Desktop/0.151.0 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
+        client_version: "0.151.0",
+      },
+    });
     getSettings.mockReset();
     updateSettings.mockReset();
     getWebSearchEmulationConfig.mockReset();
@@ -1185,6 +1237,258 @@ describe("admin SettingsView", () => {
         enable_openai_account_local_device_identity: false,
       }),
     );
+  });
+
+  it("loads defaults and trims GPT/Codex upstream identity headers when saving", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_codex_originator: "custom-client",
+      openai_codex_user_agent: "custom-client/0.200.0 (Linux; x86_64)",
+      openai_codex_client_version: "0.200.0",
+      openai_codex_originator_default: "Codex Desktop",
+      openai_codex_user_agent_default:
+        "Codex Desktop/0.201.0 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
+      openai_codex_client_version_default: "0.201.0",
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    const card = wrapper.get(
+      '[data-testid="openai-codex-upstream-identity-settings"]',
+    );
+    expect(card.text()).toContain("GPT/Codex 上游身份请求头");
+    expect(card.text()).toContain("基线默认值仅表示全局三项全部留空时的结果");
+    expect(
+      card.findAll("input").map((input) => input.attributes("data-testid")),
+    ).toEqual([
+      "openai-codex-originator",
+      "openai-codex-user-agent",
+      "openai-codex-version",
+    ]);
+    expect(
+      (
+        card.get('[data-testid="openai-codex-originator"]')
+          .element as HTMLInputElement
+      ).value,
+    ).toBe("custom-client");
+    expect(
+      card
+        .get('[data-testid="openai-codex-originator"]')
+        .attributes("placeholder"),
+    ).toBe("全局三项全部留空时使用基线默认值");
+    expect(
+      (
+        card.get('[data-testid="openai-codex-user-agent"]')
+          .element as HTMLInputElement
+      ).value,
+    ).toBe("custom-client/0.200.0 (Linux; x86_64)");
+    expect(
+      (
+        card.get('[data-testid="openai-codex-version"]')
+          .element as HTMLInputElement
+      ).value,
+    ).toBe("0.200.0");
+    expect(
+      card.get('[data-testid="openai-codex-originator-default"]').text(),
+    ).toBe("全局三项全部留空时的基线默认值：Codex Desktop");
+    expect(
+      card.get('[data-testid="openai-codex-user-agent-default"]').text(),
+    ).toContain("Codex Desktop/0.201.0");
+    expect(
+      card.get('[data-testid="openai-codex-version-default"]').text(),
+    ).toBe("全局三项全部留空时的基线默认值：0.201.0");
+
+    await card
+      .get('[data-testid="openai-codex-originator"]')
+      .setValue("  codex_vscode  ");
+    await card
+      .get('[data-testid="openai-codex-user-agent"]')
+      .setValue("  codex_vscode/0.202.0 (Linux; x86_64) vscode  ");
+    await card
+      .get('[data-testid="openai-codex-version"]')
+      .setValue("  0.202.0  ");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openai_codex_originator: "codex_vscode",
+        openai_codex_user_agent: "codex_vscode/0.202.0 (Linux; x86_64) vscode",
+        openai_codex_client_version: "0.202.0",
+      }),
+    );
+    const payload = updateSettings.mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(payload).not.toHaveProperty("openai_codex_originator_default");
+    expect(payload).not.toHaveProperty("openai_codex_user_agent_default");
+    expect(payload).not.toHaveProperty("openai_codex_client_version_default");
+  });
+
+  it("keeps empty GPT/Codex header overrides while showing dynamic defaults", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    expect(
+      (
+        wrapper.get('[data-testid="openai-codex-originator"]')
+          .element as HTMLInputElement
+      ).value,
+    ).toBe("");
+    expect(
+      wrapper.get('[data-testid="openai-codex-originator-default"]').text(),
+    ).toContain("Codex Desktop");
+    expect(
+      wrapper.get('[data-testid="openai-codex-version-default"]').text(),
+    ).toContain("0.150.1");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openai_codex_originator: "",
+        openai_codex_user_agent: "",
+        openai_codex_client_version: "",
+      }),
+    );
+  });
+
+  it("lazily loads official history and applies paired editable Originator and UA presets", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    expect(getOpenAICodexVersions).not.toHaveBeenCalled();
+    await openGatewayTab(wrapper);
+    await flushPromises();
+    expect(getOpenAICodexVersions).toHaveBeenCalledWith(1);
+    const origins = wrapper.get('[data-testid="openai-codex-originator-presets"]');
+    expect(origins.findAll("option").map((option) => option.text())).toEqual([
+      "Codex Desktop", "codex-tui", "codex_cli_rs", "codex_vscode", "codex_vscode_copilot", "codex_exec",
+    ]);
+    await origins.setValue("codex-tui");
+    expect((wrapper.get('[data-testid="openai-codex-originator"]').element as HTMLInputElement).value).toBe("codex-tui");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toContain("codex-tui/0.150.1");
+    const uas = wrapper.get('[data-testid="openai-codex-user-agent-presets"]');
+    const linux = uas.findAll("option").find((option) => option.text().includes("codex_cli_rs") && option.text().includes("Linux"))!;
+    await uas.setValue(linux.attributes("value"));
+    expect((wrapper.get('[data-testid="openai-codex-originator"]').element as HTMLInputElement).value).toBe("codex_cli_rs");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toContain("(Linux 6.8.0; x86_64)");
+    await wrapper.get('[data-testid="openai-codex-originator"]').setValue("custom-client");
+    await wrapper.get('[data-testid="openai-codex-user-agent"]').setValue("custom-client/0.150.1 (custom OS)");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      openai_codex_originator: "custom-client", openai_codex_user_agent: "custom-client/0.150.1 (custom OS)",
+    }));
+  });
+
+  it("pins historical versions below the default, updates only the UA engine, and clears back to auto", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    await flushPromises();
+    await wrapper.get('[data-testid="openai-codex-originator-presets"]').setValue("Codex Desktop");
+    await wrapper.get('[data-testid="openai-codex-version-history"]').setValue("0.149.0");
+    expect((wrapper.get('[data-testid="openai-codex-version-mode"]').element as HTMLSelectElement).value).toBe("pinned");
+    expect((wrapper.get('[data-testid="openai-codex-version"]').element as HTMLInputElement).value).toBe("0.149.0");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toBe(
+      "Codex Desktop/0.149.0 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
+    );
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      openai_codex_client_version: "0.149.0", openai_codex_client_version_mode: "pinned",
+    }));
+    await wrapper.get('[data-testid="openai-codex-version-mode"]').setValue("auto");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toContain("Codex Desktop/0.150.1");
+    await wrapper.get('[data-testid="openai-codex-version"]').setValue("0.140.0");
+    expect((wrapper.get('[data-testid="openai-codex-version-mode"]').element as HTMLSelectElement).value).toBe("pinned");
+    await wrapper.get('[data-testid="openai-codex-version"]').setValue("");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      openai_codex_client_version: "", openai_codex_client_version_mode: "auto",
+    }));
+  });
+
+  it("loads older releases with the server cursor, deduplicates versions, and preserves history on refresh failure", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    await flushPromises();
+    getOpenAICodexVersions.mockResolvedValueOnce({
+      versions: [
+        { version: "0.149.0", published_at: "2026-09-09T00:00:00Z" },
+        { version: "0.140.0", published_at: "2026-08-01T00:00:00Z" },
+      ], latest_version: "0.150.1", has_more: false, next_page: null,
+    });
+    await wrapper.get('[data-testid="openai-codex-versions-more"]').trigger("click");
+    await flushPromises();
+    expect(getOpenAICodexVersions).toHaveBeenLastCalledWith(2);
+    const history = wrapper.get('[data-testid="openai-codex-version-history"]');
+    expect(history.findAll("option").map((option) => option.attributes("value"))).toEqual(["0.150.1", "0.149.0", "0.140.0"]);
+    expect(wrapper.find('[data-testid="openai-codex-versions-more"]').exists()).toBe(false);
+    await history.setValue("0.140.0");
+    getOpenAICodexVersions.mockRejectedValueOnce(new Error("GitHub rate limited"));
+    await wrapper.get('[data-testid="openai-codex-versions-refresh"]').trigger("click");
+    await flushPromises();
+    expect(wrapper.get('[data-testid="openai-codex-versions-error"]').text()).toBe("error");
+    expect(history.findAll("option")).toHaveLength(3);
+    expect((wrapper.get('[data-testid="openai-codex-version"]').element as HTMLInputElement).value).toBe("0.140.0");
+  });
+
+  it("manually syncs with auto-sync disabled without overwriting pins or other unsaved fields", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse, openai_codex_version_auto_sync_enabled: false,
+      openai_codex_client_version: "0.140.0", openai_codex_client_version_mode: "pinned",
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    await flushPromises();
+    await wrapper.get('[data-testid="openai-codex-originator"]').setValue("custom-client");
+    await wrapper.get('[data-testid="openai-codex-user-agent"]').setValue("custom-client/0.140.0 (custom OS)");
+    await wrapper.get('[data-testid="openai-codex-sync"]').trigger("click");
+    await flushPromises();
+    expect(syncOpenAICodexVersion).toHaveBeenCalledOnce();
+    expect(getOpenAICodexVersions).toHaveBeenCalledTimes(2);
+    expect(showSuccess).toHaveBeenCalled();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-testid="openai-codex-version-default"]').text()).toContain("0.151.0");
+    expect((wrapper.get('[data-testid="openai-codex-version-mode"]').element as HTMLSelectElement).value).toBe("pinned");
+    expect((wrapper.get('[data-testid="openai-codex-version"]').element as HTMLInputElement).value).toBe("0.140.0");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toBe("custom-client/0.140.0 (custom OS)");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      openai_codex_originator: "custom-client", openai_codex_client_version: "0.140.0",
+      openai_codex_client_version_mode: "pinned", openai_codex_version_auto_sync_enabled: false,
+    }));
+  });
+
+  it("shows independent sync loading and preserves defaults on sync errors", async () => {
+    let rejectSync!: (error: Error) => void;
+    syncOpenAICodexVersion.mockReturnValueOnce(new Promise((_, reject) => { rejectSync = reject; }));
+    const wrapper = mountView();
+    await flushPromises();
+    await openGatewayTab(wrapper);
+    await flushPromises();
+    const button = wrapper.get('[data-testid="openai-codex-sync"]');
+    await button.trigger("click");
+    expect(button.attributes("disabled")).toBeDefined();
+    expect(button.text()).toContain("openaiCodexVersionSyncing");
+    rejectSync(new Error("upstream unavailable"));
+    await flushPromises();
+    expect(showError).toHaveBeenCalledWith("error");
+    expect(showSuccess).not.toHaveBeenCalled();
+    expect(button.attributes("disabled")).toBeUndefined();
+    expect(wrapper.get('[data-testid="openai-codex-version-default"]').text()).toContain("0.150.1");
+    expect(getOpenAICodexVersions).toHaveBeenCalledOnce();
   });
 
   it("loads fail-safe-off Ollama Cloud usage refresh settings and saves an explicit opt-in", async () => {

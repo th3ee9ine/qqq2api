@@ -254,8 +254,10 @@ type UpdateSettingsRequest struct {
 	RewriteMessageCacheControl             *bool   `json:"rewrite_message_cache_control"`
 	EnableClientDatelineNormalization      *bool   `json:"enable_client_dateline_normalization"`
 	AntigravityUserAgentVersion            *string `json:"-"`
+	OpenAICodexOriginator                  *string `json:"openai_codex_originator"`
 	OpenAICodexUserAgent                   *string `json:"openai_codex_user_agent"`
 	OpenAICodexClientVersion               *string `json:"openai_codex_client_version"`
+	OpenAICodexClientVersionMode           *string `json:"openai_codex_client_version_mode"`
 	OpenAICodexVersionAutoSyncEnabled      *bool   `json:"openai_codex_version_auto_sync_enabled"`
 	EnableOpenAIAccountLocalDeviceIdentity *bool   `json:"enable_openai_account_local_device_identity"`
 
@@ -428,20 +430,39 @@ var settingKeyJSONAliases = map[string]string{
 	"smtp_from_email": service.SettingKeySMTPFrom,
 }
 
+// settingOmittablePointerKeys opts selected pointer fields into the same
+// storage-level "omitted means do not write" behavior as value fields. Most
+// legacy pointer fields are deliberately merged from the handler's prior
+// snapshot for compatibility, but doing that for the independently editable
+// Codex identity controls can roll back a concurrent save: a request that did
+// not carry Originator could otherwise write the stale Originator it read
+// before another request committed. Dropping these absent keys lets the
+// repository's current value win, and refreshCachedSettingsAfterWrite reloads
+// the resulting snapshot before publishing caches.
+var settingOmittablePointerKeys = map[string]string{
+	"openai_codex_originator":                     service.SettingKeyOpenAICodexOriginator,
+	"openai_codex_user_agent":                     service.SettingKeyOpenAICodexUserAgent,
+	"openai_codex_client_version":                 service.SettingKeyOpenAICodexClientVersion,
+	"openai_codex_client_version_mode":            service.SettingKeyOpenAICodexClientVersionMode,
+	"openai_codex_version_auto_sync_enabled":      service.SettingKeyOpenAICodexVersionAutoSyncEnabled,
+	"enable_openai_account_local_device_identity": service.SettingKeyEnableOpenAIAccountLocalDeviceIdentity,
+}
+
 // settingKeyByJSONName maps the value-typed top-level JSON fields of
-// UpdateSettingsRequest to the setting key each one writes. Resolved once from
-// the struct tags so new fields are covered without touching this file.
+// UpdateSettingsRequest, plus the explicitly opted-in pointer fields above, to
+// the setting key each one writes. Value fields are resolved once from struct
+// tags so new fields are covered without touching this file.
 //
-// Pointer-typed fields are deliberately excluded: they already carry their own
-// "omitted = keep the stored value" merge in UpdateSettings, and some of them
-// rely on being rewritten on every save to re-normalize fail-closed security
-// state (see TestUpdateSettingsMalformedForwardedClientIPHeadersRemainFailClosedWhenOmitted).
-// Only the value-typed fields are indistinguishable from a deliberate clear.
+// Other pointer-typed fields remain excluded: they already carry their own
+// "omitted = keep the prior snapshot" merge in UpdateSettings, and some rely on
+// being rewritten on every save to re-normalize fail-closed security state (see
+// TestUpdateSettingsMalformedForwardedClientIPHeadersRemainFailClosedWhenOmitted).
+// Value-typed fields are otherwise indistinguishable from a deliberate clear.
 var settingKeyByJSONName = buildSettingKeyByJSONName()
 
 func buildSettingKeyByJSONName() map[string]string {
 	t := reflect.TypeOf(UpdateSettingsRequest{})
-	out := make(map[string]string, t.NumField())
+	out := make(map[string]string, t.NumField()+len(settingOmittablePointerKeys))
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		if field.Type.Kind() == reflect.Pointer {
@@ -457,6 +478,9 @@ func buildSettingKeyByJSONName() map[string]string {
 		}
 		out[name] = name
 	}
+	for jsonName, settingKey := range settingOmittablePointerKeys {
+		out[jsonName] = settingKey
+	}
 	return out
 }
 
@@ -466,7 +490,15 @@ func buildSettingKeyByJSONName() map[string]string {
 func omittedSettingKeys(sentFields map[string]json.RawMessage) service.OmittedSettingKeys {
 	omitted := make(service.OmittedSettingKeys, len(settingKeyByJSONName))
 	for jsonName, settingKey := range settingKeyByJSONName {
-		if _, sent := sentFields[jsonName]; !sent {
+		raw, sent := sentFields[jsonName]
+		if !sent {
+			omitted[settingKey] = struct{}{}
+			continue
+		}
+		// These pointer fields use nil as "leave unchanged" for both absent
+		// and explicit JSON null values. Keep null out of the write too, so
+		// it cannot re-publish a stale value merged by the handler.
+		if _, pointer := settingOmittablePointerKeys[jsonName]; pointer && strings.TrimSpace(string(raw)) == "null" {
 			omitted[settingKey] = struct{}{}
 		}
 	}
@@ -1435,17 +1467,38 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return
 		}
 	}
-	if req.OpenAICodexUserAgent != nil {
-		normalized := strings.TrimSpace(*req.OpenAICodexUserAgent)
-		req.OpenAICodexUserAgent = &normalized
-		// 仅做长度上限保护，不限制具体格式（运维需要可自由调整 codex 版本号）
-		if len(normalized) > 512 {
-			response.Error(c, http.StatusBadRequest, "openai_codex_user_agent must be at most 512 characters")
+	if req.OpenAICodexOriginator != nil {
+		raw := *req.OpenAICodexOriginator
+		normalized := service.NormalizeCodexOriginatorHeader(raw)
+		// NormalizeCodexOriginatorHeader trims Unicode whitespace for reuse by
+		// runtime reads. At the write boundary, only surrounding ASCII spaces
+		// are allowed; CR/LF, tabs, controls, and non-ASCII must be rejected.
+		trimmedASCII := strings.Trim(raw, " ")
+		if trimmedASCII != "" && (normalized == "" || normalized != trimmedASCII) {
+			response.Error(c, http.StatusBadRequest, "openai_codex_originator must be printable ASCII, contain no slash, and be at most 64 characters")
 			return
 		}
+		req.OpenAICodexOriginator = &normalized
+	}
+	if req.OpenAICodexUserAgent != nil {
+		raw := *req.OpenAICodexUserAgent
+		if !service.IsValidCodexUserAgentHeader(raw) {
+			response.Error(c, http.StatusBadRequest, "openai_codex_user_agent must be empty or a printable ASCII client/version value at most 512 characters")
+			return
+		}
+		normalized := service.NormalizeCodexUserAgentHeader(raw)
+		req.OpenAICodexUserAgent = &normalized
+	}
+	if req.OpenAICodexClientVersionMode != nil {
+		normalized := service.NormalizeOpenAICodexClientVersionMode(*req.OpenAICodexClientVersionMode)
+		if normalized == "" {
+			response.Error(c, http.StatusBadRequest, "openai_codex_client_version_mode must be auto or pinned")
+			return
+		}
+		req.OpenAICodexClientVersionMode = &normalized
 	}
 	if req.OpenAICodexClientVersion != nil {
-		// 该值是 UA engine 与 Responses/WS Version 共用的稳定版热修复下限；
+		// 该值是 UA engine 与 Responses/WS Version 共用的稳定版，支持自动下限和固定版本；
 		// 与后续持久化共用同一严格 X.Y.Z 校验，避免 API 接受后又被服务层静默清空。
 		normalized := strings.TrimSpace(*req.OpenAICodexClientVersion)
 		if normalized != "" && service.NormalizeStableCodexClientVersion(normalized) == "" {
@@ -1747,6 +1800,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.AntigravityUserAgentVersion
 		}(),
+		OpenAICodexOriginator: func() string {
+			if req.OpenAICodexOriginator != nil {
+				return *req.OpenAICodexOriginator
+			}
+			return previousSettings.OpenAICodexOriginator
+		}(),
 		OpenAICodexUserAgent: func() string {
 			if req.OpenAICodexUserAgent != nil {
 				return *req.OpenAICodexUserAgent
@@ -1760,6 +1819,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return previousSettings.OpenAICodexClientVersion
 		}(),
 		// 同步值由自动同步任务独占写入，面板保存时原样带回，避免被清空。
+		OpenAICodexClientVersionMode: func() string {
+			if req.OpenAICodexClientVersionMode != nil {
+				return *req.OpenAICodexClientVersionMode
+			}
+			return previousSettings.OpenAICodexClientVersionMode
+		}(),
 		OpenAICodexClientVersionSynced: previousSettings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled: func() bool {
 			if req.OpenAICodexVersionAutoSyncEnabled != nil {
@@ -2141,6 +2206,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		updatedPaymentCfg = &service.PaymentConfig{}
 	}
 	passkeyConfigured, passkeyRPID, passkeyRPOrigins := h.settingService.PasskeyConfiguration()
+	codexHeaderDefaults := service.ResolveOpenAICodexHeaderDefaults(updatedSettings.OpenAICodexClientVersionSynced)
 
 	payload := dto.SystemSettings{
 		RegistrationEnabled:                                    updatedSettings.RegistrationEnabled,
@@ -2305,10 +2371,15 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		RewriteMessageCacheControl:                             updatedSettings.RewriteMessageCacheControl,
 		EnableClientDatelineNormalization:                      updatedSettings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            updatedSettings.AntigravityUserAgentVersion,
+		OpenAICodexOriginator:                                  updatedSettings.OpenAICodexOriginator,
 		OpenAICodexUserAgent:                                   updatedSettings.OpenAICodexUserAgent,
 		OpenAICodexClientVersion:                               updatedSettings.OpenAICodexClientVersion,
+		OpenAICodexClientVersionMode:                           updatedSettings.OpenAICodexClientVersionMode,
 		OpenAICodexClientVersionSynced:                         updatedSettings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled:                      updatedSettings.OpenAICodexVersionAutoSyncEnabled,
+		OpenAICodexOriginatorDefault:                           codexHeaderDefaults.Originator,
+		OpenAICodexUserAgentDefault:                            codexHeaderDefaults.UserAgent,
+		OpenAICodexClientVersionDefault:                        codexHeaderDefaults.ClientVersion,
 		EnableOpenAIAccountLocalDeviceIdentity:                 updatedSettings.EnableOpenAIAccountLocalDeviceIdentity,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,

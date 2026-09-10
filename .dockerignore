@@ -63,6 +63,10 @@ config.local.yaml
 *.log
 logs/
 
+# Local browser verification artifacts
+/output/
+/.playwright-cli/
+
 # Temporary files
 tmp/
 temp/

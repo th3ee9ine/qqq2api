@@ -112,6 +112,10 @@ func (c *githubReleaseClientError) FetchRecentReleases(ctx context.Context, repo
 	return nil, c.err
 }
 
+func (c *githubReleaseClientError) FetchReleasesPage(ctx context.Context, repo string, page, perPage int) ([]*service.GitHubRelease, error) {
+	return nil, c.err
+}
+
 func (c *githubReleaseClientError) DownloadFile(ctx context.Context, url, dest string, maxSize int64) error {
 	return c.err
 }
@@ -147,6 +151,18 @@ func (c *githubReleaseClient) FetchLatestRelease(ctx context.Context, repo strin
 }
 
 func (c *githubReleaseClient) FetchRecentReleases(ctx context.Context, repo string, perPage int) ([]*service.GitHubRelease, error) {
+	return c.fetchReleases(ctx, repo, 0, perPage)
+}
+
+// FetchReleasesPage uses the same configured proxy, token and redirect policy as other release reads.
+func (c *githubReleaseClient) FetchReleasesPage(ctx context.Context, repo string, page, perPage int) ([]*service.GitHubRelease, error) {
+	if page < 1 {
+		return nil, fmt.Errorf("GitHub release page must be positive")
+	}
+	return c.fetchReleases(ctx, repo, page, perPage)
+}
+
+func (c *githubReleaseClient) fetchReleases(ctx context.Context, repo string, page, perPage int) ([]*service.GitHubRelease, error) {
 	if perPage <= 0 {
 		perPage = 10
 	}
@@ -154,6 +170,9 @@ func (c *githubReleaseClient) FetchRecentReleases(ctx context.Context, repo stri
 		perPage = 100 // GitHub API hard limit
 	}
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases?per_page=%d", repo, perPage)
+	if page > 0 {
+		url += fmt.Sprintf("&page=%d", page)
+	}
 
 	req, err := c.newAPIRequest(ctx, url)
 	if err != nil {

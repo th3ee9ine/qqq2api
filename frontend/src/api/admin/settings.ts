@@ -617,8 +617,13 @@ export interface SystemSettings {
   enable_anthropic_cache_ttl_1h_injection: boolean;
   rewrite_message_cache_control: boolean;
   enable_client_dateline_normalization: boolean;
+  openai_codex_originator: string;
   openai_codex_user_agent: string;
   openai_codex_client_version: string;
+  openai_codex_client_version_mode: "auto" | "pinned";
+  openai_codex_originator_default: string;
+  openai_codex_user_agent_default: string;
+  openai_codex_client_version_default: string;
   openai_codex_client_version_synced: string;
   openai_codex_version_auto_sync_enabled: boolean;
   enable_openai_account_local_device_identity: boolean;
@@ -928,8 +933,10 @@ export interface UpdateSettingsRequest {
   enable_anthropic_cache_ttl_1h_injection?: boolean;
   rewrite_message_cache_control?: boolean;
   enable_client_dateline_normalization?: boolean;
+  openai_codex_originator?: string;
   openai_codex_user_agent?: string;
   openai_codex_client_version?: string;
+  openai_codex_client_version_mode?: "auto" | "pinned";
   openai_codex_version_auto_sync_enabled?: boolean;
   enable_openai_account_local_device_identity?: boolean;
   // codex_cli_only 加固
@@ -1554,7 +1561,50 @@ export async function resetWebSearchUsage(payload: {
   );
 }
 
+export interface OpenAICodexVersionRelease {
+  version: string;
+  tag_name: string;
+  published_at: string;
+  html_url: string;
+}
+
+export interface OpenAICodexVersionsResponse {
+  versions: OpenAICodexVersionRelease[];
+  latest_version: string;
+  has_more: boolean;
+  next_page: number | null;
+}
+
+export interface OpenAICodexSyncResponse {
+  latest_version: string;
+  synced_version: string;
+  updated: boolean;
+  defaults: {
+    originator: string;
+    user_agent: string;
+    client_version: string;
+  };
+}
+
+export async function getOpenAICodexVersions(
+  page = 1,
+): Promise<OpenAICodexVersionsResponse> {
+  const { data } = await apiClient.get<OpenAICodexVersionsResponse>(
+    "/admin/settings/openai-codex/versions", { params: { page } },
+  );
+  return data;
+}
+
+export async function syncOpenAICodexVersion(): Promise<OpenAICodexSyncResponse> {
+  const { data } = await apiClient.post<OpenAICodexSyncResponse>(
+    "/admin/settings/openai-codex/sync",
+  );
+  return data;
+}
+
 export const settingsAPI = {
+  getOpenAICodexVersions,
+  syncOpenAICodexVersion,
   getSettings,
   updateSettings,
   getOpenAISessionCleanupSettings,

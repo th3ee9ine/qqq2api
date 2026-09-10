@@ -102,17 +102,105 @@ const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 // 尾部 Desktop app 版本保持独立。
 const DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
-// cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
-type cachedOpenAICodexUserAgent struct {
+// DefaultOpenAICodexOriginator 是未配置覆写时默认 Codex Desktop
+// 身份对应的 Originator。
+const DefaultOpenAICodexOriginator = openai.CodexDefaultOriginator
+
+// IsValidCodexUserAgentHeader reports whether an administrator-supplied
+// User-Agent override is a bounded printable-ASCII `{client}/{version}` value.
+// That shape is required because the effective Version is rebuilt in the UA
+// and an empty Originator is derived from its leading client segment. Empty and
+// ASCII-space-only values are valid because they explicitly clear the override.
+func IsValidCodexUserAgentHeader(userAgent string) bool {
+	if len(userAgent) > codexAccountLocalUserAgentMaxLen {
+		return false
+	}
+	for i := 0; i < len(userAgent); i++ {
+		if value := userAgent[i]; value < 0x20 || value > 0x7e {
+			return false
+		}
+	}
+	userAgent = strings.Trim(userAgent, " ")
+	if userAgent == "" {
+		return true
+	}
+	if !isSaneCodexUserAgentHeader(userAgent) {
+		return false
+	}
+	slash := strings.IndexByte(userAgent, '/')
+	if slash <= 0 {
+		return false
+	}
+	leading := userAgent[:slash]
+	return NormalizeCodexOriginatorHeader(leading) == leading
+}
+
+// NormalizeCodexUserAgentHeader validates and trims an administrator-supplied
+// User-Agent override. Invalid or non-pairable stored values are treated as an
+// empty override so the runtime falls back to the built-in identity.
+func NormalizeCodexUserAgentHeader(userAgent string) string {
+	if !IsValidCodexUserAgentHeader(userAgent) {
+		return ""
+	}
+	// Validate before trimming so CR/LF, tabs, other controls, and non-ASCII
+	// bytes are rejected even when they occur only at the value boundary.
+	userAgent = strings.Trim(userAgent, " ")
+	if userAgent == "" {
+		return ""
+	}
+	return userAgent
+}
+
+// OpenAICodexHeaderDefaults 是系统设置页展示的动态默认身份三元组。
+// Version 会跟随已同步的官方稳定版，但不受管理员手工覆写值影响，
+// 因此它精确表示清空三个输入框后的系统默认。
+type OpenAICodexHeaderDefaults struct {
+	Originator    string
+	UserAgent     string
+	ClientVersion string
+}
+
+// ResolveOpenAICodexHeaderDefaults 由内置版本下限和官方同步值
+// 计算系统设置页应展示的当前默认值。非法、预发布或较旧的
+// 同步值不会使默认身份降级。
+func ResolveOpenAICodexHeaderDefaults(syncedVersion string) OpenAICodexHeaderDefaults {
+	version := codexResponsesVersionFallback
+	if synced := normalizeStableCodexClientVersion(syncedVersion); synced != "" && CompareVersions(synced, version) > 0 {
+		version = synced
+	}
+	return OpenAICodexHeaderDefaults{
+		Originator:    DefaultOpenAICodexOriginator,
+		UserAgent:     buildCodexCLIUserAgent(version),
+		ClientVersion: version,
+	}
+}
+
+// cachedOpenAICodexHeaderOverride caches either the Originator override (where
+// an empty string is meaningful) or the normalized User-Agent/default value.
+// Both caches share one epoch so a settings save invalidates them as one
+// logical identity-header snapshot.
+type cachedOpenAICodexHeaderOverride struct {
 	value     string
+	epoch     uint64
 	expiresAt int64 // unix nano
+}
+
+// openAICodexHeaderOverrideLoadResult carries the cache generation that owns
+// one Originator/User-Agent load. A settings save advances the shared epoch;
+// an older in-flight DB read must then retry instead of returning or caching
+// the value it captured before the save.
+type openAICodexHeaderOverrideLoadResult struct {
+	value  string
+	epoch  uint64
+	stored bool
 }
 
 // cachedOpenAICodexResponsesVersion 缓存 Codex 统一身份版本。
 // User-Agent engine 与 Responses/WS Version 都消费该值。
 type cachedOpenAICodexResponsesVersion struct {
 	version   string
-	sourceOK  bool  // true = 已成功合并当前 DB 中的 manual/synced 值
+	sourceOK  bool  // true = 已成功合并当前 DB 中的 mode/manual/synced 值
+	pinned    bool  // 固定版本按所选稳定版精确生效，不应用自动模式的版本下限
 	expiresAt int64 // unix nano
 }
 
@@ -120,6 +208,7 @@ type cachedOpenAICodexResponsesVersion struct {
 // 设置更新会推进 epoch；旧代次的慢查询即使稍后返回，也不能回填或
 // 把旧结果交给失效之后的请求。
 type openAICodexResponsesVersionLoadResult struct {
+	pinned   bool
 	version  string
 	sourceOK bool
 	epoch    uint64
@@ -145,6 +234,18 @@ type cachedOpenAIQuotaAutoPauseSettings struct {
 const openAICodexUserAgentCacheTTL = 60 * time.Second
 const openAICodexUserAgentErrorTTL = 5 * time.Second
 const openAICodexUserAgentDBTimeout = 5 * time.Second
+
+const openAICodexUserAgentSFKey = "openai_codex_user_agent"
+
+const openAICodexOriginatorCacheTTL = 60 * time.Second
+const openAICodexOriginatorErrorTTL = 5 * time.Second
+const openAICodexOriginatorDBTimeout = 5 * time.Second
+
+const openAICodexOriginatorSFKey = "openai_codex_originator"
+
+func openAICodexHeaderOverrideSFKeyForEpoch(key string, epoch uint64) string {
+	return key + ":" + strconv.FormatUint(epoch, 10)
+}
 
 const codexRestrictionPolicyCacheTTL = 60 * time.Second
 const codexRestrictionPolicyDBTimeout = 5 * time.Second
@@ -279,53 +380,132 @@ func (s *SettingService) GetAntigravityUserAgentVersion(ctx context.Context) str
 	return fallback
 }
 
+// GetOpenAICodexOriginator 返回 OpenAI Codex 上游 Originator 覆写值。
+// 空值是有意义的：身份收口会从最终 User-Agent 推导配套 Originator。
+// 读取失败或存量异常值同样回落为空覆写，避免向上游写入非法头值。
+func (s *SettingService) GetOpenAICodexOriginator(ctx context.Context) string {
+	if s == nil {
+		return ""
+	}
+	return s.getOpenAICodexHeaderOverride(
+		ctx,
+		SettingKeyOpenAICodexOriginator,
+		openAICodexOriginatorSFKey,
+		"",
+		&s.openAICodexOriginatorCache,
+		&s.openAICodexOriginatorSF,
+		openAICodexOriginatorCacheTTL,
+		openAICodexOriginatorErrorTTL,
+		openAICodexOriginatorDBTimeout,
+		NormalizeCodexOriginatorHeader,
+	)
+}
+
 // GetOpenAICodexUserAgent 返回 OpenAI Codex 上游请求使用的 User-Agent。
 // 后台设置优先；为空时回退到内置默认值。
 func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
-	fallback := DefaultOpenAICodexUserAgent
+	if s == nil {
+		return DefaultOpenAICodexUserAgent
+	}
+	return s.getOpenAICodexHeaderOverride(
+		ctx,
+		SettingKeyOpenAICodexUserAgent,
+		openAICodexUserAgentSFKey,
+		DefaultOpenAICodexUserAgent,
+		&s.openAICodexUACache,
+		&s.openAICodexUASF,
+		openAICodexUserAgentCacheTTL,
+		openAICodexUserAgentErrorTTL,
+		openAICodexUserAgentDBTimeout,
+		NormalizeCodexUserAgentHeader,
+	)
+}
+
+// getOpenAICodexHeaderOverride loads one member of the global Originator/UA
+// override pair. The shared epoch makes a settings save a hard cache barrier:
+// a DB read that began before the save may finish, but cannot return or cache
+// its stale value after the new settings are published.
+func (s *SettingService) getOpenAICodexHeaderOverride(
+	ctx context.Context,
+	settingKey string,
+	singleflightKey string,
+	fallback string,
+	cache *atomic.Value,
+	group *singleflight.Group,
+	cacheTTL time.Duration,
+	errorTTL time.Duration,
+	dbTimeout time.Duration,
+	normalize func(string) string,
+) string {
 	if s == nil || s.settingRepo == nil {
 		return fallback
 	}
-	if cached, ok := s.openAICodexUACache.Load().(*cachedOpenAICodexUserAgent); ok && cached != nil {
-		if time.Now().UnixNano() < cached.expiresAt {
-			return cached.value
-		}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
-	result, _, _ := s.openAICodexUASF.Do("openai_codex_user_agent", func() (any, error) {
-		if cached, ok := s.openAICodexUACache.Load().(*cachedOpenAICodexUserAgent); ok && cached != nil {
-			if time.Now().UnixNano() < cached.expiresAt {
-				return cached.value, nil
+	for {
+		epoch := s.openAICodexHeaderOverridesEpoch.Load()
+		if cached, ok := cache.Load().(*cachedOpenAICodexHeaderOverride); ok && cached != nil {
+			if cached.epoch == epoch && time.Now().UnixNano() < cached.expiresAt &&
+				epoch == s.openAICodexHeaderOverridesEpoch.Load() {
+				return cached.value
 			}
 		}
-		if ctx == nil {
-			ctx = context.Background()
+
+		result, _, _ := group.Do(
+			openAICodexHeaderOverrideSFKeyForEpoch(singleflightKey, epoch),
+			func() (any, error) {
+				if epoch != s.openAICodexHeaderOverridesEpoch.Load() {
+					return openAICodexHeaderOverrideLoadResult{epoch: epoch}, nil
+				}
+				if cached, ok := cache.Load().(*cachedOpenAICodexHeaderOverride); ok && cached != nil {
+					if cached.epoch == epoch && time.Now().UnixNano() < cached.expiresAt &&
+						epoch == s.openAICodexHeaderOverridesEpoch.Load() {
+						return openAICodexHeaderOverrideLoadResult{
+							value:  cached.value,
+							epoch:  epoch,
+							stored: true,
+						}, nil
+					}
+				}
+
+				dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
+				defer cancel()
+				raw, err := s.settingRepo.GetValue(dbCtx, settingKey)
+				value := fallback
+				ttl := cacheTTL
+				if err != nil && !errors.Is(err, ErrSettingNotFound) {
+					slog.Warn("failed to get openai codex header setting", "setting_key", settingKey, "error", err)
+					ttl = errorTTL
+				} else if normalized := normalize(raw); normalized != "" {
+					value = normalized
+				}
+
+				if epoch != s.openAICodexHeaderOverridesEpoch.Load() {
+					return openAICodexHeaderOverrideLoadResult{value: value, epoch: epoch}, nil
+				}
+				cache.Store(&cachedOpenAICodexHeaderOverride{
+					value:     value,
+					epoch:     epoch,
+					expiresAt: time.Now().Add(ttl).UnixNano(),
+				})
+				return openAICodexHeaderOverrideLoadResult{
+					value:  value,
+					epoch:  epoch,
+					stored: true,
+				}, nil
+			},
+		)
+		loaded, ok := result.(openAICodexHeaderOverrideLoadResult)
+		if !ok {
+			return fallback
 		}
-		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAICodexUserAgentDBTimeout)
-		defer cancel()
-		value, err := s.settingRepo.GetValue(dbCtx, SettingKeyOpenAICodexUserAgent)
-		if err != nil && !errors.Is(err, ErrSettingNotFound) {
-			slog.Warn("failed to get openai codex user agent setting", "error", err)
-			s.openAICodexUACache.Store(&cachedOpenAICodexUserAgent{
-				value:     fallback,
-				expiresAt: time.Now().Add(openAICodexUserAgentErrorTTL).UnixNano(),
-			})
-			return fallback, nil
+		if !loaded.stored || loaded.epoch != s.openAICodexHeaderOverridesEpoch.Load() {
+			continue
 		}
-		ua := strings.TrimSpace(value)
-		if ua == "" {
-			ua = fallback
-		}
-		s.openAICodexUACache.Store(&cachedOpenAICodexUserAgent{
-			value:     ua,
-			expiresAt: time.Now().Add(openAICodexUserAgentCacheTTL).UnixNano(),
-		})
-		return ua, nil
-	})
-	if ua, ok := result.(string); ok && ua != "" {
-		return ua
+		return loaded.value
 	}
-	return fallback
 }
 
 // GetOpenAICodexClientVersion 返回 User-Agent 首段与 Responses/WS Version
@@ -335,8 +515,8 @@ func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string
 }
 
 // GetOpenAICodexResponsesVersion 返回 Codex 统一身份版本。
-// User-Agent engine 与 Responses/WS Version 使用同一个结果：自动同步值、管理员
-// 热修复值和编译期下限中取最高的合法稳定版，确保任一路径都不会声明旧版本。
+// User-Agent engine 与 Responses/WS Version 使用同一个结果：自动模式取同步值、
+// 管理员热修复值和编译期下限的最高稳定版；固定模式精确采用所选稳定版。
 func (s *SettingService) GetOpenAICodexResponsesVersion(ctx context.Context) string {
 	version, _, _ := s.getOpenAICodexResponsesVersion(ctx)
 	return version
@@ -346,9 +526,16 @@ func (s *SettingService) GetOpenAICodexResponsesVersion(ctx context.Context) str
 // manual/synced 候选值。同步任务借此区分「真实 fallback」与「DB 瞬时错误」，
 // 避免把错误回退值长时间发布到进程缓存。
 func (s *SettingService) getOpenAICodexResponsesVersion(ctx context.Context) (string, bool, uint64) {
+	version, sourceOK, epoch, _ := s.getOpenAICodexResponsesVersionWithMode(ctx)
+	return version, sourceOK, epoch
+}
+
+// Return version and mode from the same cached/repository snapshot. A sync error
+// may retain that exact identity briefly, without turning a pin into a floor.
+func (s *SettingService) getOpenAICodexResponsesVersionWithMode(ctx context.Context) (string, bool, uint64, bool) {
 	fallback := codexResponsesVersionFallback
 	if s == nil || s.settingRepo == nil {
-		return fallback, false, 0
+		return fallback, false, 0, false
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -358,7 +545,7 @@ func (s *SettingService) getOpenAICodexResponsesVersion(ctx context.Context) (st
 		epoch := s.openAICodexResponsesVersionEpoch.Load()
 		if cached, ok := s.openAICodexResponsesVersionCache.Load().(*cachedOpenAICodexResponsesVersion); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt && epoch == s.openAICodexResponsesVersionEpoch.Load() {
-				return cached.version, cached.sourceOK, epoch
+				return cached.version, cached.sourceOK, epoch, cached.pinned
 			}
 		}
 
@@ -372,6 +559,7 @@ func (s *SettingService) getOpenAICodexResponsesVersion(ctx context.Context) (st
 					if time.Now().UnixNano() < cached.expiresAt && epoch == s.openAICodexResponsesVersionEpoch.Load() {
 						return openAICodexResponsesVersionLoadResult{
 							version:  cached.version,
+							pinned:   cached.pinned,
 							sourceOK: cached.sourceOK,
 							epoch:    epoch,
 							stored:   true,
@@ -383,6 +571,7 @@ func (s *SettingService) getOpenAICodexResponsesVersion(ctx context.Context) (st
 				defer cancel()
 				values, err := s.settingRepo.GetMultiple(dbCtx, []string{
 					SettingKeyOpenAICodexClientVersion,
+					SettingKeyOpenAICodexClientVersionMode,
 					SettingKeyOpenAICodexClientVersionSynced,
 				})
 				if err != nil {
@@ -402,23 +591,28 @@ func (s *SettingService) getOpenAICodexResponsesVersion(ctx context.Context) (st
 				}
 
 				version := fallback
-				for _, candidate := range []string{
-					values[SettingKeyOpenAICodexClientVersion],
-					values[SettingKeyOpenAICodexClientVersionSynced],
-				} {
-					candidate = normalizeStableCodexClientVersion(candidate)
-					if candidate != "" && CompareVersions(candidate, version) > 0 {
-						version = candidate
+				manual := normalizeStableCodexClientVersion(values[SettingKeyOpenAICodexClientVersion])
+				pinned := values[SettingKeyOpenAICodexClientVersionMode] == OpenAICodexClientVersionModePinned && manual != ""
+				if pinned {
+					version = manual
+				} else {
+					for _, candidate := range []string{manual, values[SettingKeyOpenAICodexClientVersionSynced]} {
+						candidate = normalizeStableCodexClientVersion(candidate)
+						if candidate != "" && CompareVersions(candidate, version) > 0 {
+							version = candidate
+						}
 					}
 				}
-				version, stored := s.storeOpenAICodexResponsesVersionAtEpoch(
+				version, stored := s.storeOpenAICodexResponsesVersionModeAtEpoch(
 					version,
 					openAICodexClientVersionCacheTTL,
 					epoch,
 					true,
+					pinned,
 				)
 				return openAICodexResponsesVersionLoadResult{
 					version:  version,
+					pinned:   pinned,
 					sourceOK: true,
 					epoch:    epoch,
 					stored:   stored,
@@ -427,16 +621,20 @@ func (s *SettingService) getOpenAICodexResponsesVersion(ctx context.Context) (st
 		)
 		loaded, ok := result.(openAICodexResponsesVersionLoadResult)
 		if !ok {
-			return fallback, false, epoch
+			return fallback, false, epoch, false
 		}
 		// 失效与 DB 慢读并发时，旧 epoch 结果必须丢弃并在新代次重读。
 		if !loaded.stored || loaded.epoch != s.openAICodexResponsesVersionEpoch.Load() {
 			continue
 		}
 		if loaded.version == "" {
-			return fallback, loaded.sourceOK, loaded.epoch
+			return fallback, loaded.sourceOK, loaded.epoch, false
 		}
-		return loaded.version, loaded.sourceOK, loaded.epoch
+		if cached, ok := s.openAICodexResponsesVersionCache.Load().(*cachedOpenAICodexResponsesVersion); ok && cached != nil &&
+			loaded.epoch == s.openAICodexResponsesVersionEpoch.Load() {
+			return cached.version, cached.sourceOK, loaded.epoch, cached.pinned
+		}
+		continue
 	}
 }
 
@@ -448,8 +646,21 @@ func (s *SettingService) storeOpenAICodexResponsesVersionAtEpoch(
 	epoch uint64,
 	sourceOK bool,
 ) (string, bool) {
+	return s.storeOpenAICodexResponsesVersionModeAtEpoch(version, ttl, epoch, sourceOK, false)
+}
+
+func (s *SettingService) storeOpenAICodexResponsesVersionModeAtEpoch(
+	version string,
+	ttl time.Duration,
+	epoch uint64,
+	sourceOK bool,
+	pinned bool,
+) (string, bool) {
 	version = normalizeStableCodexClientVersion(version)
-	if version == "" || CompareVersions(version, codexResponsesVersionFallback) < 0 {
+	if version == "" {
+		version, pinned = codexResponsesVersionFallback, false
+	}
+	if !pinned && CompareVersions(version, codexResponsesVersionFallback) < 0 {
 		version = codexResponsesVersionFallback
 	}
 	s.openAICodexResponsesVersionMu.Lock()
@@ -458,9 +669,17 @@ func (s *SettingService) storeOpenAICodexResponsesVersionAtEpoch(
 		return "", false
 	}
 	if cached, ok := s.openAICodexResponsesVersionCache.Load().(*cachedOpenAICodexResponsesVersion); ok && cached != nil {
-		if current := normalizeStableCodexClientVersion(cached.version); current != "" &&
-			CompareVersions(current, version) > 0 {
-			version = current
+		// Settings saves invalidate the epoch. Within an epoch, background
+		// publications must neither lift a pin nor lower an automatic floor.
+		// A successful TTL reload may replace an expired pin so settings changed
+		// on another server instance still propagate without local invalidation.
+		if cached.pinned && (!sourceOK || time.Now().UnixNano() < cached.expiresAt) {
+			version, pinned = cached.version, true
+		} else if !cached.pinned && !pinned {
+			if current := normalizeStableCodexClientVersion(cached.version); current != "" &&
+				CompareVersions(current, version) > 0 {
+				version = current
+			}
 		}
 	}
 	if ttl <= 0 {
@@ -469,6 +688,7 @@ func (s *SettingService) storeOpenAICodexResponsesVersionAtEpoch(
 	s.openAICodexResponsesVersionCache.Store(&cachedOpenAICodexResponsesVersion{
 		version:   version,
 		sourceOK:  sourceOK,
+		pinned:    pinned,
 		expiresAt: time.Now().Add(ttl).UnixNano(),
 	})
 	return version, true
@@ -478,10 +698,15 @@ func (s *SettingService) storeOpenAICodexResponsesVersionAtEpoch(
 // 避免等待下一次 DB 回源或 60s TTL。发布只对调用时的当前 epoch 生效；
 // 若管理员设置恰好并发失效缓存，旧发布不会跨代回填。
 func (s *SettingService) PublishOpenAICodexResponsesVersion(version string) {
-	if s == nil {
+	if s == nil || s.settingRepo == nil {
 		return
 	}
-	epoch := s.openAICodexResponsesVersionEpoch.Load()
+	// Load the mode before publishing even on a cold/invalidated cache. A raw
+	// synced candidate does not grant permission to override a persisted pin.
+	_, sourceOK, epoch, pinned := s.getOpenAICodexResponsesVersionWithMode(context.Background())
+	if !sourceOK || pinned {
+		return
+	}
 	_, _ = s.storeOpenAICodexResponsesVersionAtEpoch(
 		version,
 		openAICodexClientVersionCacheTTL,

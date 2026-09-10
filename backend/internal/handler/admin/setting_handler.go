@@ -51,6 +51,7 @@ func firstNonEmpty(values ...string) string {
 
 // SettingHandler 系统设置处理器
 type SettingHandler struct {
+	codexVersionManager      codexVersionManager
 	settingService           *service.SettingService
 	emailService             *service.EmailService
 	turnstileService         *service.TurnstileService
@@ -131,6 +132,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		paymentCfg = &service.PaymentConfig{}
 	}
 	passkeyConfigured, passkeyRPID, passkeyRPOrigins := h.settingService.PasskeyConfiguration()
+	codexHeaderDefaults := service.ResolveOpenAICodexHeaderDefaults(settings.OpenAICodexClientVersionSynced)
 
 	payload := dto.SystemSettings{
 		RegistrationEnabled:                                    settings.RegistrationEnabled,
@@ -299,10 +301,15 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		RewriteMessageCacheControl:                             settings.RewriteMessageCacheControl,
 		EnableClientDatelineNormalization:                      settings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            settings.AntigravityUserAgentVersion,
+		OpenAICodexOriginator:                                  settings.OpenAICodexOriginator,
 		OpenAICodexUserAgent:                                   settings.OpenAICodexUserAgent,
 		OpenAICodexClientVersion:                               settings.OpenAICodexClientVersion,
+		OpenAICodexClientVersionMode:                           settings.OpenAICodexClientVersionMode,
 		OpenAICodexClientVersionSynced:                         settings.OpenAICodexClientVersionSynced,
 		OpenAICodexVersionAutoSyncEnabled:                      settings.OpenAICodexVersionAutoSyncEnabled,
+		OpenAICodexOriginatorDefault:                           codexHeaderDefaults.Originator,
+		OpenAICodexUserAgentDefault:                            codexHeaderDefaults.UserAgent,
+		OpenAICodexClientVersionDefault:                        codexHeaderDefaults.ClientVersion,
 		EnableOpenAIAccountLocalDeviceIdentity:                 settings.EnableOpenAIAccountLocalDeviceIdentity,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,

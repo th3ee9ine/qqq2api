@@ -651,13 +651,21 @@ const (
 	SettingKeyRewriteMessageCacheControl = "rewrite_message_cache_control"
 	// SettingKeyAntigravityUserAgentVersion Antigravity 上游 User-Agent 版本号（空值使用环境变量/默认值）
 	SettingKeyAntigravityUserAgentVersion = "antigravity_user_agent_version"
+	// SettingKeyOpenAICodexOriginator OpenAI Codex Originator 请求头覆写值。
+	// 空值表示不覆写，运行时从最终 User-Agent 推导配套值；
+	// 默认 Codex Desktop 身份的值为 "Codex Desktop"。
+	SettingKeyOpenAICodexOriginator = "openai_codex_originator"
 	// SettingKeyOpenAICodexUserAgent OpenAI Codex 完整 User-Agent（空值使用内置默认）
 	// 当客户端 UA 被识别为浏览器（Chrome/Firefox/Safari/Edge 等）时，转发给 OpenAI 上游前会替换为此值，
 	// 用于避免 Cloudflare 对浏览器型 UA 的质询拦截。
 	SettingKeyOpenAICodexUserAgent = "openai_codex_user_agent"
 	// SettingKeyOpenAICodexClientVersion 是 Codex 统一身份版本的管理员热修复值。
-	// UA engine 与 Responses/WS Version 同源，并在该值、官方同步值、内置下限中取最高稳定版。
+	// UA engine 与 Responses/WS Version 同源；auto 模式取最高稳定版，pinned 模式精确使用该值。
 	SettingKeyOpenAICodexClientVersion = "openai_codex_client_version"
+	// SettingKeyOpenAICodexClientVersionMode controls automatic version floors versus an exact pinned version.
+	SettingKeyOpenAICodexClientVersionMode = "openai_codex_client_version_mode"
+	OpenAICodexClientVersionModeAuto       = "auto"
+	OpenAICodexClientVersionModePinned     = "pinned"
 	// SettingKeyOpenAICodexClientVersionSynced 自动同步任务写入的官方 Codex 最新稳定版。
 	// 由 OpenAICodexVersionSyncService 独占写入，UA engine 与 Responses/WS Version 共用。
 	SettingKeyOpenAICodexClientVersionSynced = "openai_codex_client_version_synced"

@@ -750,6 +750,51 @@ func TestGetOpenAICodexCanonicalUserAgentBuildsFromVersion(t *testing.T) {
 	)
 }
 
+func TestResolveOpenAICodexHeaderDefaults(t *testing.T) {
+	t.Run("uses the built-in floor without a synced release", func(t *testing.T) {
+		defaults := ResolveOpenAICodexHeaderDefaults("")
+
+		require.Equal(t, openai.CodexDefaultOriginator, defaults.Originator)
+		require.Equal(t, codexResponsesVersionFallback, defaults.ClientVersion)
+		require.Equal(t, buildCodexCLIUserAgent(codexResponsesVersionFallback), defaults.UserAgent)
+	})
+
+	t.Run("advances all displayed defaults with a newer synced release", func(t *testing.T) {
+		defaults := ResolveOpenAICodexHeaderDefaults("0.200.1")
+
+		require.Equal(t, openai.CodexDefaultOriginator, defaults.Originator)
+		require.Equal(t, "0.200.1", defaults.ClientVersion)
+		require.Equal(t, buildCodexCLIUserAgent("0.200.1"), defaults.UserAgent)
+	})
+
+	for _, value := range []string{"0.140.0", "0.200.1-alpha.1", "invalid"} {
+		t.Run("rejects non-default candidate "+value, func(t *testing.T) {
+			defaults := ResolveOpenAICodexHeaderDefaults(value)
+			require.Equal(t, codexResponsesVersionFallback, defaults.ClientVersion)
+			require.Equal(t, buildCodexCLIUserAgent(codexResponsesVersionFallback), defaults.UserAgent)
+		})
+	}
+}
+
+func TestSettingServiceGetOpenAICodexOriginator(t *testing.T) {
+	t.Run("returns a normalized configured override", func(t *testing.T) {
+		svc := NewSettingService(&codexVersionSettingRepoStub{values: map[string]string{
+			SettingKeyOpenAICodexOriginator: "  codex-tui  ",
+		}}, nil)
+
+		require.Equal(t, "codex-tui", svc.GetOpenAICodexOriginator(context.Background()))
+	})
+
+	t.Run("empty missing and unsafe values mean derive from UA", func(t *testing.T) {
+		for _, value := range []string{"", "bad/originator", "bad\noriginator", "非 ASCII"} {
+			svc := NewSettingService(&codexVersionSettingRepoStub{values: map[string]string{
+				SettingKeyOpenAICodexOriginator: value,
+			}}, nil)
+			require.Empty(t, svc.GetOpenAICodexOriginator(context.Background()))
+		}
+	})
+}
+
 // 回归：面板完整 UA 是唯一能改 OS / 架构 / 终端指纹的地方，必须保留；但它填写于某个
 // 历史版本，逐字沿用会绕过版本自动同步、把出站身份永久钉死在陈旧版本上——而陈旧身份
 // 正是上游优先降载的那一侧。因此只借它的指纹，版本段一律用生效版本重建。
@@ -830,13 +875,14 @@ func TestGetOpenAICodexCanonicalUserAgentRebuildsPanelUAVersion(t *testing.T) {
 		)
 	})
 
-	// 非 `{client}/{version}` 形态无法重建，原样返回，由收口整体回退规范身份。
-	t.Run("非 Codex 形态原样返回", func(t *testing.T) {
+	// 非 `{client}/{version}` 形态无法重建也无法与 Originator
+	// 配对；存量异常值应当直接回退规范身份，不再向后传播。
+	t.Run("非 Codex 形态回退默认 UA", func(t *testing.T) {
 		svc := NewSettingService(&codexVersionSettingRepoStub{values: map[string]string{
 			SettingKeyOpenAICodexUserAgent: "not-a-codex-client",
 		}}, nil)
 
-		require.Equal(t, "not-a-codex-client", svc.GetOpenAICodexCanonicalUserAgent(context.Background()))
+		require.Equal(t, codexCLIUserAgent, svc.GetOpenAICodexCanonicalUserAgent(context.Background()))
 	})
 }
 

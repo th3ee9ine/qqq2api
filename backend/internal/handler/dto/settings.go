@@ -212,10 +212,15 @@ type SystemSettings struct {
 	RewriteMessageCacheControl             bool   `json:"rewrite_message_cache_control"`
 	EnableClientDatelineNormalization      bool   `json:"enable_client_dateline_normalization"`
 	AntigravityUserAgentVersion            string `json:"-"`
+	OpenAICodexOriginator                  string `json:"openai_codex_originator"`
 	OpenAICodexUserAgent                   string `json:"openai_codex_user_agent"`
 	OpenAICodexClientVersion               string `json:"openai_codex_client_version"`
+	OpenAICodexClientVersionMode           string `json:"openai_codex_client_version_mode"`
 	OpenAICodexClientVersionSynced         string `json:"openai_codex_client_version_synced"`
 	OpenAICodexVersionAutoSyncEnabled      bool   `json:"openai_codex_version_auto_sync_enabled"`
+	OpenAICodexOriginatorDefault           string `json:"openai_codex_originator_default"`
+	OpenAICodexUserAgentDefault            string `json:"openai_codex_user_agent_default"`
+	OpenAICodexClientVersionDefault        string `json:"openai_codex_client_version_default"`
 	EnableOpenAIAccountLocalDeviceIdentity bool   `json:"enable_openai_account_local_device_identity"`
 
 	// codex_cli_only 加固

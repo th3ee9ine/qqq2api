@@ -1752,10 +1752,11 @@ func (a *Account) GetOpenAIUserAgent() string {
 }
 
 const (
-	// OpenAILocalDeviceUserAgentExtraKey and OpenAILocalDeviceOriginatorExtraKey
-	// are the canonical account Extra keys for an imported local Codex session.
+	// These are the canonical account Extra keys for an imported local Codex
+	// session's User-Agent, Originator, and Version headers.
 	OpenAILocalDeviceUserAgentExtraKey  = "openai_local_device_user_agent"
 	OpenAILocalDeviceOriginatorExtraKey = "openai_local_device_originator"
+	OpenAILocalDeviceVersionExtraKey    = "openai_local_device_version"
 )
 
 // GetOpenAILocalDeviceUserAgent returns a User-Agent captured from the
@@ -1838,6 +1839,109 @@ func (a *Account) GetOpenAILocalDeviceOriginator() string {
 		}
 		if value := accountNestedString(a.Credentials[key], "originator", "Originator"); value != "" {
 			return value
+		}
+	}
+	return ""
+}
+
+// GetOpenAILocalDeviceVersion returns the Version captured from a local Codex
+// session. Keep nonempty values verbatim: an explicitly malformed version must
+// invalidate the local identity instead of looking absent to its resolver.
+func (a *Account) GetOpenAILocalDeviceVersion() string {
+	if a == nil || !a.IsOpenAI() {
+		return ""
+	}
+	for _, key := range []string{
+		OpenAILocalDeviceVersionExtraKey,
+		"openai_device_version",
+		"openai_session_version",
+		"local_device_version",
+		"openai_local_device_client_version",
+		"openai_device_client_version",
+		"openai_session_client_version",
+		"local_device_client_version",
+	} {
+		if raw, ok := a.Extra[key]; ok {
+			if value := accountRawLocalVersion(raw); value != "" {
+				return value
+			}
+		}
+		if raw, ok := a.Credentials[key]; ok {
+			if value := accountRawLocalVersion(raw); value != "" {
+				return value
+			}
+		}
+	}
+	for _, key := range []string{
+		"openai_local_device_session",
+		"openai_device_session",
+		"local_device_session",
+		"openai_current_device_session",
+		"openai_local_device",
+		"openai_device",
+		"current_device_session",
+	} {
+		if value := accountNestedLocalVersion(a.Extra[key]); value != "" {
+			return value
+		}
+		if value := accountNestedLocalVersion(a.Credentials[key]); value != "" {
+			return value
+		}
+	}
+	// Some older imports store the complete identity directly in credentials.
+	// A generic version is meaningful only for that legacy identity; importing
+	// local session data must not pick up an unrelated credential schema version.
+	if a.GetOpenAILocalDeviceUserAgent() == "" &&
+		strings.TrimSpace(a.GetOpenAIUserAgent()) != "" &&
+		a.GetOpenAILocalDeviceOriginator() != "" {
+		for _, key := range []string{"version", "Version", "client_version", "clientVersion"} {
+			if raw, ok := a.Credentials[key]; ok {
+				if value := accountRawLocalVersion(raw); value != "" {
+					return value
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// A present non-string value is explicitly invalid, not missing. Use a marker
+// that cannot normalize into a version through the string-valued interface.
+func accountRawLocalVersion(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return "<invalid-version>"
+}
+
+// accountNestedLocalVersion mirrors the supported imported session containers
+// without normalizing the header value before the identity resolver validates it.
+func accountNestedLocalVersion(value any) string {
+	keys := []string{"version", "Version", "client_version", "clientVersion"}
+	switch item := value.(type) {
+	case map[string]any:
+		for _, key := range keys {
+			if raw, ok := item[key]; ok {
+				if text := accountRawLocalVersion(raw); text != "" {
+					return text
+				}
+			}
+		}
+	case map[string]string:
+		for _, key := range keys {
+			if text := item[key]; text != "" {
+				return text
+			}
+		}
+	case json.RawMessage:
+		var nested map[string]any
+		if json.Unmarshal(item, &nested) == nil {
+			return accountNestedLocalVersion(nested)
+		}
+	case string:
+		var nested map[string]any
+		if json.Unmarshal([]byte(item), &nested) == nil {
+			return accountNestedLocalVersion(nested)
 		}
 	}
 	return ""

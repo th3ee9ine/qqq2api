@@ -1623,13 +1623,17 @@ func newCodexModelsTestAccount() *Account {
 }
 
 func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
+	SetCodexCanonicalResponsesVersionResolver(func() string { return "0.200.1" })
+	t.Cleanup(func() { SetCodexCanonicalResponsesVersionResolver(nil) })
+
 	manifestBody := `{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5"}]}`
 
-	var gotAuth, gotAccountID, gotOriginator, gotClientVersion string
+	var gotAuth, gotAccountID, gotOriginator, gotVersion, gotClientVersion string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotAccountID = r.Header.Get("chatgpt-account-id")
 		gotOriginator = r.Header.Get("Originator")
+		gotVersion = r.Header.Get("Version")
 		gotClientVersion = r.URL.Query().Get("client_version")
 		w.Header().Set("ETag", `W/"abc123"`)
 		w.Header().Set("Content-Type", "application/json")
@@ -1642,7 +1646,7 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	defer func() { chatgptCodexModelsURL = original }()
 
 	s := &OpenAIGatewayService{}
-	manifest, err := s.FetchCodexModelsManifest(context.Background(), newCodexModelsTestAccount(), "0.137.0", "")
+	manifest, err := s.FetchCodexModelsManifest(context.Background(), newCodexModelsTestAccount(), "0.144.0", "")
 	if err != nil {
 		t.Fatalf("FetchCodexModelsManifest returned error: %v", err)
 	}
@@ -1662,7 +1666,10 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	if gotOriginator != openai.CodexDefaultOriginator {
 		t.Errorf("originator header: got %q", gotOriginator)
 	}
-	if gotClientVersion != "0.137.0" {
+	if gotVersion != "0.200.1" {
+		t.Errorf("version header must follow the configured canonical identity: got %q", gotVersion)
+	}
+	if gotClientVersion != "0.144.0" {
 		t.Errorf("client_version query: got %q", gotClientVersion)
 	}
 }
@@ -1911,6 +1918,9 @@ func TestFetchCodexModelsManifestMissingToken(t *testing.T) {
 }
 
 func TestFetchCodexModelsManifestAPIKeyCustomUpstream(t *testing.T) {
+	SetCodexCanonicalResponsesVersionResolver(func() string { return "0.200.1" })
+	t.Cleanup(func() { SetCodexCanonicalResponsesVersionResolver(nil) })
+
 	manifestBody := `{"models":[{"slug":"deepseek-v4-pro"}]}`
 	var gotRequest *http.Request
 	var gotProxyURL string
@@ -1957,7 +1967,7 @@ func TestFetchCodexModelsManifestAPIKeyCustomUpstream(t *testing.T) {
 		t.Errorf("originator header: got %q", gotRequest.Header.Get("Originator"))
 	}
 	if gotRequest.Header.Get("Version") != "0.144.0" {
-		t.Errorf("version header must match the valid client_version: got %q", gotRequest.Header.Get("Version"))
+		t.Errorf("custom relay version header must preserve client_version negotiation: got %q", gotRequest.Header.Get("Version"))
 	}
 	if gotRequest.Header.Get("User-Agent") != CodexCanonicalUserAgent() {
 		t.Errorf("user-agent header: got %q", gotRequest.Header.Get("User-Agent"))

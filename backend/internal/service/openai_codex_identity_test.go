@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -215,7 +216,32 @@ func TestResolveCodexOutboundIdentityForAccount(t *testing.T) {
 		identity := resolveCodexOutboundIdentityForAccount(account)
 		require.Equal(t, "codex_vscode", identity.originator)
 		require.Contains(t, identity.userAgent, "codex_vscode/")
-		require.Equal(t, canonical.version, identity.version)
+		require.Equal(t, "0.125.0", identity.version)
+		require.Equal(t, account.GetOpenAILocalDeviceUserAgent(), identity.userAgent)
+	})
+
+	t.Run("local device identity takes precedence over global header overrides", func(t *testing.T) {
+		SetCodexCanonicalUserAgentResolver(func() string {
+			return "codex-tui/0.125.0 (Linux; x86_64)"
+		})
+		SetCodexCanonicalOriginatorResolver(func() string { return "codex_cli_rs" })
+		t.Cleanup(func() {
+			SetCodexCanonicalUserAgentResolver(nil)
+			SetCodexCanonicalOriginatorResolver(nil)
+		})
+
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				OpenAILocalDeviceUserAgentExtraKey:  "codex_vscode/0.125.0 (Mac OS X 14.0; arm64) vscode",
+				OpenAILocalDeviceOriginatorExtraKey: "codex_vscode",
+			},
+		}
+		identity := resolveCodexOutboundIdentityForAccount(account)
+		require.Equal(t, "codex_vscode", identity.originator)
+		require.Contains(t, identity.userAgent, "codex_vscode/")
+		require.NotContains(t, identity.userAgent, "codex_cli_rs/")
 	})
 
 	t.Run("nested local session values are supported", func(t *testing.T) {
@@ -531,8 +557,8 @@ func TestCodexCanonicalResponsesVersionFollowsResolver(t *testing.T) {
 	require.Equal(t, "0.200.1", h.Get("version"))
 }
 
-func TestCodexCanonicalResponsesVersionRejectsOldInvalidAndPrereleaseValues(t *testing.T) {
-	for _, value := range []string{"0.146.0", "latest", "0.200.1-alpha.1", ""} {
+func TestCodexCanonicalResponsesVersionRejectsInvalidAndPrereleaseValues(t *testing.T) {
+	for _, value := range []string{"latest", "0.200.1-alpha.1", ""} {
 		t.Run(value, func(t *testing.T) {
 			SetCodexCanonicalResponsesVersionResolver(func() string { return value })
 			t.Cleanup(func() { SetCodexCanonicalResponsesVersionResolver(nil) })
@@ -543,6 +569,7 @@ func TestCodexCanonicalResponsesVersionRejectsOldInvalidAndPrereleaseValues(t *t
 
 func TestCodexCanonicalUserAgentFallsBackWithoutResolver(t *testing.T) {
 	SetCodexCanonicalUserAgentResolver(nil)
+	SetCodexCanonicalOriginatorResolver(nil)
 	SetCodexCanonicalResponsesVersionResolver(nil)
 
 	require.Equal(t, codexCLIUserAgent, CodexCanonicalUserAgent())
@@ -557,6 +584,113 @@ func TestCodexCanonicalUserAgentFallsBackWithoutResolver(t *testing.T) {
 	require.Equal(t, openai.CodexDefaultOriginator, h.Get("originator"))
 	require.Equal(t, codexCLIUserAgent, h.Get("user-agent"))
 	require.Empty(t, h.Get("version"))
+}
+
+func TestNormalizeCodexOriginatorHeader(t *testing.T) {
+	require.Equal(t, "Codex Desktop", NormalizeCodexOriginatorHeader("  Codex Desktop  "))
+	require.Equal(t, "codex_cli_rs", NormalizeCodexOriginatorHeader("codex_cli_rs"))
+	require.Empty(t, NormalizeCodexOriginatorHeader(""))
+	require.Empty(t, NormalizeCodexOriginatorHeader("bad/originator"))
+	require.Empty(t, NormalizeCodexOriginatorHeader("bad\noriginator"))
+	require.Empty(t, NormalizeCodexOriginatorHeader(strings.Repeat("x", codexOriginatorMaxLen+1)))
+}
+
+func TestCodexCanonicalIdentityUsesConfiguredOriginator(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string {
+		return "codex-tui/0.144.1 (Linux 6.8; x86_64) xterm (codex-tui; 0.144.1)"
+	})
+	SetCodexCanonicalOriginatorResolver(func() string { return "codex_cli_rs" })
+	SetCodexCanonicalResponsesVersionResolver(func() string { return "0.200.1" })
+	t.Cleanup(func() {
+		SetCodexCanonicalUserAgentResolver(nil)
+		SetCodexCanonicalOriginatorResolver(nil)
+		SetCodexCanonicalResponsesVersionResolver(nil)
+	})
+
+	headers := make(http.Header)
+	ensureCodexIdentityHeaders(headers)
+	enforceCodexIdentityHeaders(headers)
+	require.Equal(t, "codex_cli_rs", headers.Get("Originator"))
+	require.Equal(t, "0.200.1", headers.Get("Version"))
+	require.Equal(t,
+		"codex_cli_rs/0.200.1 (Linux 6.8; x86_64) xterm (codex-tui; 0.200.1)",
+		headers.Get("User-Agent"),
+	)
+
+	authHeaders := http.Header{"Version": []string{"stale"}}
+	ApplyCodexCanonicalAuthIdentity(authHeaders)
+	require.Equal(t, "codex_cli_rs", authHeaders.Get("Originator"))
+	require.Equal(t,
+		"codex_cli_rs/0.200.1 (Linux 6.8; x86_64) xterm (codex-tui; 0.200.1)",
+		authHeaders.Get("User-Agent"),
+	)
+	require.Empty(t, authHeaders.Get("Version"), "credential/control requests keep the native no-Version contract")
+}
+
+func TestCodexCanonicalIdentityDerivesOriginatorFromConfiguredCustomUserAgent(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string {
+		return "my-gateway/1.2.3 (Linux; x86_64)"
+	})
+	SetCodexCanonicalOriginatorResolver(nil)
+	SetCodexCanonicalResponsesVersionResolver(func() string { return "0.200.1" })
+	t.Cleanup(func() {
+		SetCodexCanonicalUserAgentResolver(nil)
+		SetCodexCanonicalOriginatorResolver(nil)
+		SetCodexCanonicalResponsesVersionResolver(nil)
+	})
+
+	headers := make(http.Header)
+	ensureCodexIdentityHeaders(headers)
+	enforceCodexIdentityHeaders(headers)
+	require.Equal(t, "my-gateway", headers.Get("Originator"))
+	require.Equal(t, "my-gateway/0.200.1 (Linux; x86_64)", headers.Get("User-Agent"))
+	require.Equal(t, "0.200.1", headers.Get("Version"))
+
+	authHeaders := http.Header{"Version": []string{"stale"}}
+	ApplyCodexCanonicalAuthIdentity(authHeaders)
+	require.Equal(t, "my-gateway", authHeaders.Get("Originator"))
+	require.Equal(t, "my-gateway/0.200.1 (Linux; x86_64)", authHeaders.Get("User-Agent"))
+	require.Empty(t, authHeaders.Get("Version"))
+}
+
+func TestConfiguredCustomUserAgentLeadingClientWinsOverOfficialTrailer(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(func() string {
+		return "my-gateway/1.2.3 (Linux; x86_64) xterm (codex-tui; 1.2.3)"
+	})
+	SetCodexCanonicalOriginatorResolver(nil)
+	SetCodexCanonicalResponsesVersionResolver(func() string { return "0.200.1" })
+	t.Cleanup(func() {
+		SetCodexCanonicalUserAgentResolver(nil)
+		SetCodexCanonicalOriginatorResolver(nil)
+		SetCodexCanonicalResponsesVersionResolver(nil)
+	})
+
+	identity := resolveCodexOutboundIdentity("")
+	require.Equal(t, "my-gateway", identity.originator)
+	require.Equal(t,
+		"my-gateway/0.200.1 (Linux; x86_64) xterm (codex-tui; 0.200.1)",
+		identity.userAgent,
+	)
+	require.Equal(t, "0.200.1", identity.version)
+
+	// A request-provided candidate keeps the strict official-client parser and
+	// cannot opt into the trusted global leading-client derivation.
+	identity = resolveCodexOutboundIdentity("request-client/9.9.9 (codex_vscode; 9.9.9)")
+	require.Equal(t, "codex_vscode", identity.originator)
+	require.Equal(t, "codex_vscode/0.200.1 (codex_vscode; 9.9.9)", identity.userAgent)
+}
+
+func TestCodexOriginatorOverrideIsIgnoredWhenInvalid(t *testing.T) {
+	SetCodexCanonicalUserAgentResolver(nil)
+	SetCodexCanonicalOriginatorResolver(func() string { return "bad/originator" })
+	SetCodexCanonicalResponsesVersionResolver(nil)
+	t.Cleanup(func() { SetCodexCanonicalOriginatorResolver(nil) })
+
+	headers := make(http.Header)
+	ensureCodexIdentityHeaders(headers)
+	enforceCodexIdentityHeaders(headers)
+	require.Equal(t, openai.CodexDefaultOriginator, headers.Get("Originator"))
+	require.Equal(t, codexCLIUserAgent, headers.Get("User-Agent"))
 }
 
 func TestCodexResponsesVersionFallbackUsesCurrentOfficialStable(t *testing.T) {

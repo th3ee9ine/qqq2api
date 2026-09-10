@@ -416,6 +416,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 	{
 		adminSettings.GET("", h.Admin.Setting.GetSettings)
 		adminSettings.PUT("", h.Admin.Setting.UpdateSettings)
+		adminSettings.GET("/openai-codex/versions", middleware.AdminOnly(), h.Admin.Setting.GetOpenAICodexVersions)
+		adminSettings.POST("/openai-codex/sync", middleware.AdminOnly(), h.Admin.Setting.SyncOpenAICodexVersion)
 		// Standalone object storage for asynchronous OpenAI image tasks. This is
 		// deliberately separate from the removed database-backup subsystem.
 		adminSettings.GET("/image-storage", h.Admin.ImageStorage.Get)

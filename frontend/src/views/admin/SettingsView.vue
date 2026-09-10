@@ -5614,64 +5614,256 @@
                 />
               </div>
 
-              <!-- OpenAI Codex UA -->
-              <div>
-                <label
-                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  {{
-                    t(
-                      "admin.settings.gatewayForwarding.openaiCodexUserAgent",
-                    )
-                  }}
-                </label>
-                <input
-                  v-model="form.openai_codex_user_agent"
-                  type="text"
-                  class="input w-full font-mono text-sm"
-                  :placeholder="
-                    t(
-                      'admin.settings.gatewayForwarding.openaiCodexUserAgentPlaceholder',
-                    )
-                  "
-                />
-                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{
-                    t(
-                      "admin.settings.gatewayForwarding.openaiCodexUserAgentHint",
-                    )
-                  }}
-                </p>
-              </div>
+              <!-- GPT/Codex upstream identity headers -->
+              <div
+                class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/60"
+                data-testid="openai-codex-upstream-identity-settings"
+              >
+                <div>
+                  <h3
+                    class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.openaiCodexIdentityTitle",
+                      )
+                    }}
+                  </h3>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.openaiCodexIdentityHint",
+                      )
+                    }}
+                  </p>
+                </div>
 
-              <!-- Codex 客户端版本号 -->
-              <div>
-                <label
-                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  {{
-                    t(
-                      "admin.settings.gatewayForwarding.openaiCodexClientVersion",
-                    )
-                  }}
-                </label>
-                <input
-                  v-model="form.openai_codex_client_version"
-                  type="text"
-                  class="input w-full font-mono text-sm"
-                  :placeholder="
-                    t(
-                      'admin.settings.gatewayForwarding.openaiCodexClientVersionPlaceholder',
-                    )
-                  "
-                />
-                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{
-                    t(
-                      "admin.settings.gatewayForwarding.openaiCodexClientVersionHint",
-                    )
-                  }}
-                </p>
+                <div class="mt-4 space-y-4">
+                  <!-- Originator -->
+                  <div>
+                    <label
+                      for="openai-codex-originator"
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexOriginator",
+                        )
+                      }}
+                    </label>
+                    <Select
+                      :model-value="form.openai_codex_originator"
+                      :options="codexOriginatorOptions"
+                      searchable
+                      class="mb-2"
+                      data-testid="openai-codex-originator-presets"
+                      :aria-label="t('admin.settings.gatewayForwarding.openaiCodexOriginatorPresets')"
+                      :placeholder="t('admin.settings.gatewayForwarding.openaiCodexOriginatorPresets')"
+                      @update:model-value="applyCodexOriginatorPreset"
+                    />
+                    <input
+                      id="openai-codex-originator"
+                      v-model="form.openai_codex_originator"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      data-testid="openai-codex-originator"
+                      maxlength="64"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.openaiCodexOriginatorPlaceholder',
+                        )
+                      "
+                    />
+                    <p
+                      v-if="form.openai_codex_originator_default"
+                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
+                      data-testid="openai-codex-originator-default"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
+                          {
+                            value: form.openai_codex_originator_default,
+                          },
+                        )
+                      }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexOriginatorHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+
+                  <!-- User-Agent -->
+                  <div>
+                    <label
+                      for="openai-codex-user-agent"
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexUserAgent",
+                        )
+                      }}
+                    </label>
+                    <Select
+                      :model-value="form.openai_codex_user_agent"
+                      :options="codexUserAgentOptions"
+                      searchable
+                      class="mb-2"
+                      data-testid="openai-codex-user-agent-presets"
+                      :aria-label="t('admin.settings.gatewayForwarding.openaiCodexUserAgentPresets')"
+                      :placeholder="t('admin.settings.gatewayForwarding.openaiCodexUserAgentPresets')"
+                      @update:model-value="applyCodexUserAgentPreset"
+                    />
+                    <input
+                      id="openai-codex-user-agent"
+                      v-model="form.openai_codex_user_agent"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      data-testid="openai-codex-user-agent"
+                      maxlength="512"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.openaiCodexUserAgentPlaceholder',
+                        )
+                      "
+                    />
+                    <p
+                      v-if="form.openai_codex_user_agent_default"
+                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
+                      data-testid="openai-codex-user-agent-default"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
+                          {
+                            value: form.openai_codex_user_agent_default,
+                          },
+                        )
+                      }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexUserAgentHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+
+                  <!-- Version -->
+                  <div>
+                    <label
+                      for="openai-codex-version"
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexClientVersion",
+                        )
+                      }}
+                    </label>
+                    <div class="mb-2 grid gap-2 sm:grid-cols-2">
+                      <Select
+                        :model-value="form.openai_codex_client_version_mode"
+                        :options="codexVersionModeOptions"
+                        data-testid="openai-codex-version-mode"
+                        :aria-label="t('admin.settings.gatewayForwarding.openaiCodexVersionMode')"
+                        @update:model-value="setCodexVersionMode"
+                      />
+                      <Select
+                        :model-value="form.openai_codex_client_version"
+                        :options="codexVersionOptions"
+                        :loading="codexVersionsLoading"
+                        searchable
+                        data-testid="openai-codex-version-history"
+                        :aria-label="t('admin.settings.gatewayForwarding.openaiCodexVersionHistory')"
+                        :placeholder="t('admin.settings.gatewayForwarding.openaiCodexVersionHistory')"
+                        @update:model-value="selectCodexVersion"
+                      />
+                    </div>
+                    <input
+                      id="openai-codex-version"
+                      v-model="form.openai_codex_client_version"
+                      @input="onCodexVersionInput"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      data-testid="openai-codex-version"
+                      maxlength="64"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.openaiCodexClientVersionPlaceholder',
+                        )
+                      "
+                    />
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="btn btn-secondary text-xs"
+                        :disabled="codexSyncLoading || saving"
+                        data-testid="openai-codex-sync"
+                        @click="syncCodexVersion"
+                      >
+                        {{ t(codexSyncLoading ? 'admin.settings.gatewayForwarding.openaiCodexVersionSyncing' : 'admin.settings.gatewayForwarding.openaiCodexVersionSyncNow') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-secondary text-xs"
+                        :disabled="codexVersionsLoading || codexSyncLoading"
+                        data-testid="openai-codex-versions-refresh"
+                        @click="loadCodexVersions()"
+                      >
+                        {{ t(codexVersionsLoading ? 'common.loading' : 'admin.settings.gatewayForwarding.openaiCodexVersionRefresh') }}
+                      </button>
+                      <button
+                        v-if="codexVersionsNextPage !== null"
+                        type="button"
+                        class="btn btn-secondary text-xs"
+                        :disabled="codexVersionsLoading || codexSyncLoading"
+                        data-testid="openai-codex-versions-more"
+                        @click="loadCodexVersions(codexVersionsNextPage)"
+                      >
+                        {{ t('admin.settings.gatewayForwarding.openaiCodexVersionLoadMore') }}
+                      </button>
+                    </div>
+                    <p
+                      v-if="codexVersionsError"
+                      role="alert"
+                      class="mt-2 text-xs text-red-600 dark:text-red-400"
+                      data-testid="openai-codex-versions-error"
+                    >{{ codexVersionsError }}</p>
+                    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('admin.settings.gatewayForwarding.openaiCodexVersionSource') }}
+                      <a class="text-primary-600 hover:underline" href="https://github.com/openai/codex/releases" target="_blank" rel="noopener noreferrer">openai/codex</a>
+                      <span v-if="codexLatestVersion"> · {{ t('admin.settings.gatewayForwarding.openaiCodexVersionLatest', { version: codexLatestVersion }) }}</span>
+                    </p>
+                    <p
+                      v-if="form.openai_codex_client_version_default"
+                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
+                      data-testid="openai-codex-version-default"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
+                          {
+                            value: form.openai_codex_client_version_default,
+                          },
+                        )
+                      }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexClientVersionHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <!-- Codex 版本号自动同步 -->
@@ -8928,6 +9120,7 @@ import type {
   WebSearchEmulationConfig,
   WebSearchProviderConfig,
   WebSearchTestResult,
+  OpenAICodexVersionRelease,
 } from "@/api/admin/settings";
 import type { ImageStorageConfig } from "@/api/admin/imageStorage";
 import type {
@@ -8940,6 +9133,10 @@ import type { ProviderInstance } from "@/types/payment";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import Icon from "@/components/icons/Icon.vue";
 import Select from "@/components/common/Select.vue";
+import {
+  buildCodexUserAgentTemplate, codexOriginators, compareCodexVersions,
+  isStableCodexVersion, setCodexTemplateVersion,
+} from "./codexHeaderPresets";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import PaymentProviderList from "@/components/payment/PaymentProviderList.vue";
 import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vue";
@@ -9909,8 +10106,15 @@ const form = reactive<SettingsForm>({
   enable_anthropic_cache_ttl_1h_injection: false,
   rewrite_message_cache_control: false,
   enable_client_dateline_normalization: true,
+  openai_codex_originator: "",
   openai_codex_user_agent: "",
   openai_codex_client_version: "",
+  openai_codex_client_version_mode: "auto",
+  // 只读展示：与后端实际出站解析链同源的当前默认请求头值，
+  // 保持可编辑字段为空时的“恢复默认”语义；不参与提交。
+  openai_codex_originator_default: "",
+  openai_codex_user_agent_default: "",
+  openai_codex_client_version_default: "",
   enable_openai_account_local_device_identity: true,
   // 只读展示：自动同步任务写入的官方最新稳定版，供 UA engine 与
   // Responses/WS Version 共用；不参与提交（提交载荷按字段显式构造）
@@ -10866,6 +11070,150 @@ function removeCodexWhitelistRow(i: number): void {
   codexWhitelistRows.value.splice(i, 1);
 }
 
+const codexVersions = ref<OpenAICodexVersionRelease[]>([]);
+const codexVersionsLoading = ref(false);
+const codexVersionsLoaded = ref(false);
+const codexVersionsError = ref("");
+const codexVersionsNextPage = ref<number | null>(null);
+const codexLatestVersion = ref("");
+const codexSyncLoading = ref(false);
+const codexOriginatorOptions = codexOriginators.map((value) => ({ value, label: value }));
+const codexVersionModeOptions = computed(() => [
+  { value: "auto", label: t("admin.settings.gatewayForwarding.openaiCodexVersionModeAuto") },
+  { value: "pinned", label: t("admin.settings.gatewayForwarding.openaiCodexVersionModePinned") },
+]);
+const codexTemplateVersion = computed(() => {
+  const manual = form.openai_codex_client_version.trim();
+  if (form.openai_codex_client_version_mode === "pinned" && isStableCodexVersion(manual)) {
+    return manual;
+  }
+  return [manual, form.openai_codex_client_version_synced, form.openai_codex_client_version_default]
+    .filter(isStableCodexVersion).sort((a, b) => compareCodexVersions(b, a))[0] || "0.150.1";
+});
+const codexUserAgentOptions = computed(() => {
+  const version = codexTemplateVersion.value;
+  const options = codexOriginators.map((originator) => ({
+    value: buildCodexUserAgentTemplate(originator, version, form.openai_codex_user_agent_default),
+    label: `${originator} / ${version} · ${t("admin.settings.gatewayForwarding.openaiCodexTemplate")}`,
+  }));
+  for (const originator of ["codex_cli_rs", "codex-tui"]) {
+    options.push({
+      value: buildCodexUserAgentTemplate(originator, version, form.openai_codex_user_agent_default, true),
+      label: `${originator} / ${version} · Linux x86_64 · ${t("admin.settings.gatewayForwarding.openaiCodexTemplate")}`,
+    });
+  }
+  return options;
+});
+const codexVersionOptions = computed(() => {
+  const releases = new Map(codexVersions.value.map((release) => [release.version, release]));
+  // Retain a saved/custom version even when it is outside the loaded page.
+  const versions = new Set([
+    ...releases.keys(), form.openai_codex_client_version.trim(),
+    form.openai_codex_client_version_default, form.openai_codex_client_version_synced,
+  ].filter(isStableCodexVersion));
+  return [...versions].sort((a, b) => compareCodexVersions(b, a)).map((version) => {
+    const release = releases.get(version);
+    const date = release?.published_at?.slice(0, 10);
+    return {
+      value: version,
+      label: `${version}${date ? ` · ${date}` : ""}${version === codexLatestVersion.value ? ` · ${t("admin.settings.gatewayForwarding.openaiCodexLatestLabel")}` : ""}`,
+    };
+  });
+});
+
+function applyCodexOriginatorPreset(value: unknown): void {
+  if (typeof value !== "string") return;
+  form.openai_codex_originator = value;
+  form.openai_codex_user_agent = buildCodexUserAgentTemplate(
+    value, codexTemplateVersion.value, form.openai_codex_user_agent_default,
+  );
+}
+
+function applyCodexUserAgentPreset(value: unknown): void {
+  if (typeof value !== "string") return;
+  form.openai_codex_user_agent = value;
+  form.openai_codex_originator = value.split("/")[0] || "";
+}
+
+function syncCodexFormUserAgentVersion(): void {
+  if (form.openai_codex_user_agent.trim()) {
+    form.openai_codex_user_agent = setCodexTemplateVersion(
+      form.openai_codex_user_agent.trim(), codexTemplateVersion.value,
+    );
+  }
+}
+
+function setCodexVersionMode(value: unknown): void {
+  form.openai_codex_client_version_mode = value === "pinned" ? "pinned" : "auto";
+  if (value === "pinned" && !form.openai_codex_client_version.trim()) {
+    form.openai_codex_client_version = codexTemplateVersion.value;
+  }
+  syncCodexFormUserAgentVersion();
+}
+
+function onCodexVersionInput(): void {
+  form.openai_codex_client_version_mode = form.openai_codex_client_version.trim() ? "pinned" : "auto";
+  syncCodexFormUserAgentVersion();
+}
+
+function selectCodexVersion(value: unknown): void {
+  if (typeof value !== "string") return;
+  form.openai_codex_client_version = value;
+  onCodexVersionInput();
+}
+
+async function loadCodexVersions(page = 1): Promise<void> {
+  if (codexVersionsLoading.value) return;
+  codexVersionsLoading.value = true;
+  codexVersionsError.value = "";
+  try {
+    const result = await adminAPI.settings.getOpenAICodexVersions(page);
+    const releases = new Map((page === 1 ? [] : codexVersions.value).map((release) => [release.version, release]));
+    for (const release of result.versions) releases.set(release.version, release);
+    codexVersions.value = [...releases.values()];
+    if (isStableCodexVersion(result.latest_version) && (
+      !codexLatestVersion.value || compareCodexVersions(result.latest_version, codexLatestVersion.value) > 0
+    )) codexLatestVersion.value = result.latest_version;
+    codexVersionsNextPage.value = result.has_more ? result.next_page : null;
+  } catch (error) {
+    codexVersionsError.value = extractApiErrorMessage(
+      error, t("admin.settings.gatewayForwarding.openaiCodexVersionLoadFailed"),
+    );
+  } finally {
+    codexVersionsLoaded.value = true;
+    codexVersionsLoading.value = false;
+  }
+}
+
+async function syncCodexVersion(): Promise<void> {
+  if (codexSyncLoading.value || saving.value) return;
+  codexSyncLoading.value = true;
+  try {
+    const result = await adminAPI.settings.syncOpenAICodexVersion();
+    // This endpoint persists only the synced baseline. Preserve every unsaved
+    // override, including a pinned historical version and the auto-sync toggle.
+    form.openai_codex_client_version_synced = result.synced_version;
+    form.openai_codex_originator_default = result.defaults.originator;
+    form.openai_codex_user_agent_default = result.defaults.user_agent;
+    form.openai_codex_client_version_default = result.defaults.client_version;
+    codexLatestVersion.value = result.latest_version;
+    appStore.showSuccess(t("admin.settings.gatewayForwarding.openaiCodexVersionSyncSuccess", {
+      version: result.synced_version,
+    }));
+    await loadCodexVersions();
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(
+      error, t("admin.settings.gatewayForwarding.openaiCodexVersionSyncFailed"),
+    ));
+  } finally {
+    codexSyncLoading.value = false;
+  }
+}
+
+watch(activeTab, (tab) => {
+  if (tab === "gateway" && !codexVersionsLoaded.value) void loadCodexVersions();
+});
+
 const codexSyncedVersionLabel = computed(() => {
   const synced = form.openai_codex_client_version_synced?.trim();
   if (!synced) return "";
@@ -11188,10 +11536,15 @@ async function saveSettings() {
       rewrite_message_cache_control: form.rewrite_message_cache_control,
       enable_client_dateline_normalization:
         form.enable_client_dateline_normalization,
+      openai_codex_originator:
+        form.openai_codex_originator?.trim() || "",
       openai_codex_user_agent:
         form.openai_codex_user_agent?.trim() || "",
       openai_codex_client_version:
         form.openai_codex_client_version?.trim() || "",
+      openai_codex_client_version_mode: form.openai_codex_client_version?.trim()
+        ? form.openai_codex_client_version_mode
+        : "auto",
       enable_openai_account_local_device_identity:
         form.enable_openai_account_local_device_identity,
       openai_codex_version_auto_sync_enabled:

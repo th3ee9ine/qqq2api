@@ -1688,13 +1688,17 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	identity := resolveCodexOutboundIdentityForAccount(credAccount)
 	headers.Set("Originator", identity.originator)
 	headers.Set("User-Agent", identity.userAgent)
-	// Version 头优先与 client_version 查询参数同源：客户端自报版本合法且不低于上游
-	// 门槛时原样使用；否则回退规范版本，避免陈旧 version 触发上游 404（issue #3901）。
-	// client_version 查询参数本身始终按客户端原值透传（内容协商语义，契约见
-	// TestFetchCodexModelsManifestPassthrough）。
-	headerVersion := NormalizeCodexClientVersion(clientVersion)
-	if headerVersion == "" || CompareVersions(headerVersion, codexUpstreamMinVersion) < 0 {
-		headerVersion = identity.version
+	// Version 请求头与 Responses/WS 共用账号身份解析：有效本地设备身份
+	// 优先，否则使用全局配置，避免入站 client_version 覆盖最终身份。
+	// client_version 查询参数本身仍按客户端原值透传，仅用于内容协商。
+	headerVersion := identity.version
+	if useAPIKeyUpstream {
+		// 第三方/API-key relay 不是 ChatGPT Codex 身份面，保留旧有的
+		// client_version 协商语义，不用系统 Version 覆写它。
+		if candidate := NormalizeCodexClientVersion(clientVersion); candidate != "" &&
+			CompareVersions(candidate, codexUpstreamMinVersion) >= 0 {
+			headerVersion = candidate
+		}
 	}
 	headers.Set("Version", headerVersion)
 

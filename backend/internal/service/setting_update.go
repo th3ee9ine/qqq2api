@@ -43,10 +43,11 @@ func (s *SettingService) UpdateSettingsOmitting(ctx context.Context, settings *S
 	}
 	omitted.dropFrom(updates)
 
-	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+	revision, err := s.persistSystemSettingsAndRefresh(ctx, updates, settings, omitted)
+	if err != nil {
 		return err
 	}
-	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	s.notifySettingsUpdated(revision)
 	return nil
 }
 
@@ -73,11 +74,37 @@ func (s *SettingService) UpdateSettingsWithAuthSourceDefaultsOmitting(ctx contex
 	}
 	omitted.dropFrom(updates)
 
-	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+	revision, err := s.persistSystemSettingsAndRefresh(ctx, updates, settings, omitted)
+	if err != nil {
 		return err
 	}
-	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	s.notifySettingsUpdated(revision)
 	return nil
+}
+
+// persistSystemSettingsAndRefresh serializes a repository commit through the
+// publication of every corresponding runtime cache. Keeping both operations in
+// one helper prevents either update entrypoint from accidentally narrowing the
+// lock to SetMultiple and reintroducing an older-write/newer-cache inversion.
+func (s *SettingService) persistSystemSettingsAndRefresh(
+	ctx context.Context,
+	updates map[string]string,
+	settings *SystemSettings,
+	omitted OmittedSettingKeys,
+) (uint64, error) {
+	s.settingsUpdateMu.Lock()
+	defer s.settingsUpdateMu.Unlock()
+	// Validate the actual merged pair under the write lock, not the handler's
+	// potentially stale settings snapshot. Omitted fields stay in storage.
+	if err := s.validateOpenAICodexVersionUpdates(ctx, updates); err != nil {
+		return 0, err
+	}
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return 0, err
+	}
+	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
+	s.settingsUpdateRevision++
+	return s.settingsUpdateRevision, nil
 }
 
 // refreshCachedSettingsAfterWrite keeps the in-process caches in step with the
@@ -462,8 +489,29 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyEnableAnthropicCacheTTL1hInjection] = strconv.FormatBool(settings.EnableAnthropicCacheTTL1hInjection)
 	updates[SettingKeyRewriteMessageCacheControl] = strconv.FormatBool(settings.RewriteMessageCacheControl)
 	updates[SettingKeyEnableClientDatelineNormalization] = strconv.FormatBool(settings.EnableClientDatelineNormalization)
-	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
-	updates[SettingKeyOpenAICodexClientVersion] = normalizeStableCodexClientVersion(settings.OpenAICodexClientVersion)
+	rawOriginator := settings.OpenAICodexOriginator
+	originator := NormalizeCodexOriginatorHeader(rawOriginator)
+	trimmedOriginator := strings.Trim(rawOriginator, " ")
+	if trimmedOriginator != "" && (originator == "" || originator != trimmedOriginator) {
+		return nil, fmt.Errorf("%s must be printable ASCII, contain no slash, and be at most 64 characters", SettingKeyOpenAICodexOriginator)
+	}
+	updates[SettingKeyOpenAICodexOriginator] = originator
+	rawCodexUA := settings.OpenAICodexUserAgent
+	if !IsValidCodexUserAgentHeader(rawCodexUA) {
+		return nil, fmt.Errorf("%s must be empty or a printable ASCII client/version value at most 512 characters", SettingKeyOpenAICodexUserAgent)
+	}
+	codexUA := NormalizeCodexUserAgentHeader(rawCodexUA)
+	updates[SettingKeyOpenAICodexUserAgent] = codexUA
+	versionMode := NormalizeOpenAICodexClientVersionMode(settings.OpenAICodexClientVersionMode)
+	if versionMode == "" {
+		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_CLIENT_VERSION_MODE", "openai_codex_client_version_mode must be auto or pinned")
+	}
+	version := normalizeStableCodexClientVersion(settings.OpenAICodexClientVersion)
+	if strings.TrimSpace(settings.OpenAICodexClientVersion) != "" && version == "" {
+		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_CLIENT_VERSION", "openai_codex_client_version must be empty or a stable X.Y.Z version")
+	}
+	updates[SettingKeyOpenAICodexClientVersion] = version
+	updates[SettingKeyOpenAICodexClientVersionMode] = versionMode
 	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
 	updates[SettingKeyEnableOpenAIAccountLocalDeviceIdentity] = strconv.FormatBool(settings.EnableOpenAIAccountLocalDeviceIdentity)
 	// SettingKeyOpenAICodexClientVersionSynced 由自动同步任务独占写入，此处不得覆盖，
@@ -700,13 +748,25 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 	})
 	SetCodexAccountLocalDeviceIdentityEnabled(settings.EnableOpenAIAccountLocalDeviceIdentity)
-	s.openAICodexUASF.Forget("openai_codex_user_agent")
-	codexUA := strings.TrimSpace(settings.OpenAICodexUserAgent)
+	// Advance the Originator/UA generation before publishing either cache.
+	// In-flight reads from the previous generation may still complete after
+	// singleflight.Forget, but their epoch no longer permits them to return or
+	// overwrite these freshly saved values.
+	newHeaderEpoch := s.openAICodexHeaderOverridesEpoch.Add(1)
+	s.openAICodexOriginatorSF.Forget(openAICodexHeaderOverrideSFKeyForEpoch(openAICodexOriginatorSFKey, newHeaderEpoch-1))
+	s.openAICodexOriginatorCache.Store(&cachedOpenAICodexHeaderOverride{
+		value:     NormalizeCodexOriginatorHeader(settings.OpenAICodexOriginator),
+		epoch:     newHeaderEpoch,
+		expiresAt: time.Now().Add(openAICodexOriginatorCacheTTL).UnixNano(),
+	})
+	s.openAICodexUASF.Forget(openAICodexHeaderOverrideSFKeyForEpoch(openAICodexUserAgentSFKey, newHeaderEpoch-1))
+	codexUA := NormalizeCodexUserAgentHeader(settings.OpenAICodexUserAgent)
 	if codexUA == "" {
 		codexUA = DefaultOpenAICodexUserAgent
 	}
-	s.openAICodexUACache.Store(&cachedOpenAICodexUserAgent{
+	s.openAICodexUACache.Store(&cachedOpenAICodexHeaderOverride{
 		value:     codexUA,
+		epoch:     newHeaderEpoch,
 		expiresAt: time.Now().Add(openAICodexUserAgentCacheTTL).UnixNano(),
 	})
 	// 版本号缓存只做失效，不在此重算：生效值还取决于自动同步写入的 synced 键，
@@ -765,8 +825,67 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	// codex_cli_only 加固策略缓存：设置更新后强制下次重载（涉及 4 个键 + JSON 解析，直接置过期）。
 	s.codexRestrictionPolicySF.Forget("codex_restriction_policy")
 	s.codexRestrictionPolicyCache.Store(&cachedCodexRestrictionPolicy{expiresAt: 0})
-	if s.onUpdate != nil {
-		s.onUpdate() // Invalidate cache after settings update
+}
+
+// notifySettingsUpdated queues an external-observer notification for a
+// committed settings revision. Persistence and in-process cache publication are
+// serialized by settingsUpdateMu, but observers stay outside that mutex because
+// they may perform I/O or re-enter a settings update.
+//
+// A single drainer invokes observers without holding settingsNotificationMu.
+// This keeps callbacks re-entrant while preventing concurrent callbacks from
+// publishing an older DB snapshot after a newer one. If several saves arrive
+// while an observer is running, their edge-triggered notifications are
+// coalesced and the drainer runs once more for the newest pending revision.
+func (s *SettingService) notifySettingsUpdated(revision uint64) {
+	if s == nil || revision == 0 {
+		return
+	}
+
+	s.settingsNotificationMu.Lock()
+	if revision > s.settingsNotificationPending {
+		s.settingsNotificationPending = revision
+	}
+	if s.settingsNotificationRunning || s.settingsNotificationPending <= s.settingsNotificationCompleted {
+		s.settingsNotificationMu.Unlock()
+		return
+	}
+	s.settingsNotificationRunning = true
+	s.settingsNotificationMu.Unlock()
+
+	for {
+		s.settingsNotificationMu.Lock()
+		targetRevision := s.settingsNotificationPending
+		s.settingsNotificationMu.Unlock()
+
+		s.invokeSettingsUpdatedObservers()
+
+		s.settingsNotificationMu.Lock()
+		if targetRevision > s.settingsNotificationCompleted {
+			s.settingsNotificationCompleted = targetRevision
+		}
+		if s.settingsNotificationPending <= s.settingsNotificationCompleted {
+			s.settingsNotificationRunning = false
+			s.settingsNotificationMu.Unlock()
+			return
+		}
+		s.settingsNotificationMu.Unlock()
+	}
+}
+
+func (s *SettingService) invokeSettingsUpdatedObservers() {
+	s.onUpdateMu.RLock()
+	onUpdate := s.onUpdate
+	s.onUpdateMu.RUnlock()
+	if onUpdate != nil {
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.Error("settings update callback panicked", "panic", recovered)
+				}
+			}()
+			onUpdate() // Invalidate cache after settings update
+		}()
 	}
 	s.notifyChannelMonitorRuntimeListeners()
 }
