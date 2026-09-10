@@ -382,7 +382,14 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	if s.rateLimitService != nil {
-		s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
+		windowHeaders := resp.Header.Clone()
+		defer func() {
+			updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			go func() {
+				defer cancel()
+				s.rateLimitService.UpdateSessionWindow(updateCtx, account, windowHeaders)
+			}()
+		}()
 	}
 
 	writeAnthropicPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

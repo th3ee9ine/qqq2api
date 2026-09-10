@@ -704,8 +704,19 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 	}
-	// 更新5h窗口状态
-	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
+	// 窗口/被动用量更新只涉及持久化，不应阻塞首个 SSE 事件。延后到流结束
+	// 后异步执行，仍保持一次请求一次更新及原有错误处理语义；使用独立的
+	// 短超时 context，避免客户端断开后丢失状态写入。
+	if s.rateLimitService != nil {
+		windowHeaders := resp.Header.Clone()
+		defer func() {
+			updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			go func() {
+				defer cancel()
+				s.rateLimitService.UpdateSessionWindow(updateCtx, account, windowHeaders)
+			}()
+		}()
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

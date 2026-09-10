@@ -31,15 +31,18 @@ import (
 // （GLM effort 归一化、fast policy、Grok 分支、ClientDisconnect 语义等）仍留在
 // 调用方，属于有意保留的行为差异，不在此强行统一。
 
-// newUpstreamSSEScanner 构造读取上游 SSE 流的行扫描器，按配置放大单行上限。
-func (s *OpenAIGatewayService) newUpstreamSSEScanner(r io.Reader) *bufio.Scanner {
+// newUpstreamSSEScanner 构造读取上游 SSE 流的行扫描器，复用初始缓冲区。
+// 读取 scanner 的 goroutine 必须在退出时归还 buffer；不能由可能提前返回的
+// 调用方归还，否则仍在读上游的 scanner 会与后续请求共用同一块内存。
+func (s *OpenAIGatewayService) newUpstreamSSEScanner(r io.Reader) (*bufio.Scanner, *sseScannerBuf64K) {
 	scanner := bufio.NewScanner(r)
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
 		maxLineSize = s.cfg.Gateway.MaxLineSize
 	}
-	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
-	return scanner
+	buffer := getSSEScannerBuf64K()
+	scanner.Buffer(buffer[:], maxLineSize)
+	return scanner, buffer
 }
 
 // newStreamHeaderWriter 返回幂等的 SSE 响应头写入闭包：首次调用时透传过滤后的
@@ -265,7 +268,8 @@ func (s *OpenAIGatewayService) scanCCStream(
 ) ccStreamScanState {
 	var st ccStreamScanState
 
-	scanner := s.newUpstreamSSEScanner(resp.Body)
+	scanner, scanBuf := s.newUpstreamSSEScanner(resp.Body)
+	defer putSSEScannerBuf64K(scanBuf)
 	for scanner.Scan() {
 		line := scanner.Text()
 		payload, ok := extractOpenAISSEDataLine(line)

@@ -245,24 +245,19 @@ func newSchedulerCacheWithChunkSizes(rdb *redis.Client, mgetChunkSize, writeChun
 
 func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.SchedulerBucket) ([]*service.Account, bool, error) {
 	readyKey := schedulerBucketKey(schedulerReadyPrefix, bucket)
-	readyVal, err := c.rdb.Get(ctx, readyKey).Result()
-	if err == redis.Nil {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	if readyVal != "1" {
-		return nil, false, nil
-	}
-
 	activeKey := schedulerBucketKey(schedulerActivePrefix, bucket)
-	activeVal, err := c.rdb.Get(ctx, activeKey).Result()
-	if err == redis.Nil {
-		return nil, false, nil
-	}
+	// Read readiness and the published version in one command. This saves a
+	// round trip while preserving the existing readiness check semantics.
+	state, err := c.rdb.MGet(ctx, readyKey, activeKey).Result()
 	if err != nil {
 		return nil, false, err
+	}
+	if len(state) != 2 || state[0] != "1" || state[1] == nil {
+		return nil, false, nil
+	}
+	activeVal, ok := state[1].(string)
+	if !ok {
+		return nil, false, nil
 	}
 
 	snapshotKey := schedulerSnapshotKey(bucket, activeVal)
@@ -276,20 +271,23 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 		return nil, false, nil
 	}
 
-	keys := make([]string, 0, len(ids))
-	lastUsedKeys := make([]string, 0, len(ids))
+	keys := make([]string, 0, len(ids)*2)
 	for _, id := range ids {
 		keys = append(keys, schedulerAccountMetaKey(id))
-		lastUsedKeys = append(lastUsedKeys, schedulerLastUsedKey(id))
 	}
-	values, err := c.mgetChunked(ctx, keys)
+	for _, id := range ids {
+		keys = append(keys, schedulerLastUsedKey(id))
+	}
+	// Metadata and last-used timestamps share one pipelined read. Keep every
+	// MGET bounded, but avoid paying one network round trip per 128 accounts.
+	allValues, err := c.mgetChunked(ctx, keys)
 	if err != nil {
 		return nil, false, err
 	}
-	lastUsedValues, err := c.mgetChunked(ctx, lastUsedKeys)
-	if err != nil {
-		return nil, false, err
+	if len(allValues) != len(keys) {
+		return nil, false, fmt.Errorf("scheduler snapshot read returned %d values for %d keys", len(allValues), len(keys))
 	}
+	values, lastUsedValues := allValues[:len(ids)], allValues[len(ids):]
 
 	accounts := make([]*service.Account, 0, len(values))
 	for i, val := range values {
@@ -843,17 +841,29 @@ func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any,
 		return []any{}, nil
 	}
 
-	out := make([]any, 0, len(keys))
 	chunkSize := c.mgetChunkSize
 	if chunkSize <= 0 {
 		chunkSize = defaultSchedulerSnapshotMGetChunkSize
 	}
+	if len(keys) <= chunkSize {
+		return c.rdb.MGet(ctx, keys...).Result()
+	}
+
+	pipe := c.rdb.Pipeline()
+	commands := make([]*redis.SliceCmd, 0, (len(keys)+chunkSize-1)/chunkSize)
 	for start := 0; start < len(keys); start += chunkSize {
 		end := start + chunkSize
 		if end > len(keys) {
 			end = len(keys)
 		}
-		part, err := c.rdb.MGet(ctx, keys[start:end]...).Result()
+		commands = append(commands, pipe.MGet(ctx, keys[start:end]...))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	out := make([]any, 0, len(keys))
+	for _, command := range commands {
+		part, err := command.Result()
 		if err != nil {
 			return nil, err
 		}

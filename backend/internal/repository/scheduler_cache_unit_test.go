@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,29 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
+
+type schedulerCacheRoundTripHook struct {
+	process  atomic.Int64
+	pipeline atomic.Int64
+}
+
+func (h *schedulerCacheRoundTripHook) DialHook(next redis.DialHook) redis.DialHook {
+	return next
+}
+
+func (h *schedulerCacheRoundTripHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		h.process.Add(1)
+		return next(ctx, cmd)
+	}
+}
+
+func (h *schedulerCacheRoundTripHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		h.pipeline.Add(1)
+		return next(ctx, cmds)
+	}
+}
 
 func newSchedulerCacheUnit(t *testing.T) *schedulerCache {
 	cache, _ := newSchedulerCacheUnitWithRedis(t)
@@ -52,6 +76,35 @@ func TestSchedulerCacheWriteAccountIDsSkipsUnencodableTimes(t *testing.T) {
 	invalid, err := cache.GetAccount(ctx, 112)
 	require.NoError(t, err)
 	require.Nil(t, invalid)
+}
+
+func TestSchedulerCacheGetSnapshotPipelinesAccountReads(t *testing.T) {
+	ctx := context.Background()
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	hook := &schedulerCacheRoundTripHook{}
+	rdb.AddHook(hook)
+	t.Cleanup(func() { _ = rdb.Close() })
+	cache := newSchedulerCacheWithChunkSizes(rdb, defaultSchedulerSnapshotMGetChunkSize, defaultSchedulerSnapshotWriteChunkSize).(*schedulerCache)
+	bucket := service.SchedulerBucket{GroupID: 901, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	accounts := make([]service.Account, 129)
+	for i := range accounts {
+		accounts[i] = service.Account{ID: int64(i + 1), Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey}
+	}
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, accounts))
+	hook.process.Store(0)
+	hook.pipeline.Store(0)
+
+	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, snapshot, len(accounts))
+	// MGET(ready,active) + ZRANGE are single commands; metadata and last-used
+	// values are sent as one pipelined batch even when MGET must be chunked.
+	require.Equal(t, int64(2), hook.process.Load())
+	require.Equal(t, int64(1), hook.pipeline.Load())
 }
 
 func TestSchedulerCacheSetAccountClearsUnencodablePayload(t *testing.T) {
@@ -1010,6 +1063,50 @@ func BenchmarkSchedulerCacheAccountPayloadReuse(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkSchedulerCacheSnapshotMGetRoundTrips(b *testing.B) {
+	rdb := newBenchmarkRedisClient(b)
+	defer func() { _ = rdb.Close() }()
+	cache := newSchedulerCacheWithChunkSizes(rdb, defaultSchedulerSnapshotMGetChunkSize, defaultSchedulerSnapshotWriteChunkSize).(*schedulerCache)
+	ctx := context.Background()
+	keys := make([]string, 1000)
+	pipe := rdb.Pipeline()
+	for i := range keys {
+		keys[i] = fmt.Sprintf("bench:scheduler:%d", i)
+		pipe.Set(ctx, keys[i], "1", 0)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		b.Fatal(err)
+	}
+	legacy := func() error {
+		for start := 0; start < len(keys); start += cache.mgetChunkSize {
+			end := start + cache.mgetChunkSize
+			if end > len(keys) {
+				end = len(keys)
+			}
+			if _, err := rdb.MGet(ctx, keys[start:end]...).Result(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	b.Run("sequential_mget", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if err := legacy(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("pipelined_mget", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			if _, err := cache.mgetChunked(ctx, keys); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func benchmarkSchedulerLegacySnapshotPayload(accounts []service.Account) (int, error) {
