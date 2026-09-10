@@ -535,10 +535,20 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 	s.mu.RUnlock()
 
+	// Transport 构建可能包含代理/TLS 配置，属于相对昂贵的操作。
+	// 不要在全局 clients 写锁内执行，否则高并发下不同账号的首个请求会
+	// 被串行化。构建完成后再加锁并做一次 double-check；竞态下产生的
+	// 重复 Transport 会被立即关闭，不会进入缓存。
+	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile)
+	if err != nil {
+		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
+	}
+
 	// 写锁慢路径
 	s.mu.Lock()
 	if entry, ok := s.clients[cacheKey]; ok {
 		if s.shouldReuseEntry(entry, isolation, proxyKey, poolKey) {
+			transport.CloseIdleConnections()
 			atomic.StoreInt64(&entry.lastUsed, nowUnix)
 			if markInFlight {
 				atomic.AddInt64(&entry.inFlight, 1)
@@ -560,19 +570,15 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 		s.evictIdleLocked(now)
 		if len(s.clients) >= s.maxUpstreamClients() {
 			if !s.evictOldestIdleLocked() {
+				transport.CloseIdleConnections()
 				s.mu.Unlock()
 				return nil, errUpstreamClientLimitReached
 			}
 		}
 	}
 
-	// 创建带 TLS 指纹的 Transport
+	// Transport 已在锁外构建，避免阻塞其他缓存键的请求。
 	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
-	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
-	}
 
 	client := &http.Client{Transport: transport}
 	if s.shouldValidateResolvedIP() {
@@ -698,10 +704,18 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 	}
 	s.mu.RUnlock()
 
+	// Transport 构建可能包含代理/TLS 配置，不能放在全局写锁内；否则
+	// 不同账号的缓存 miss 会互相阻塞。构建后在锁内 double-check。
+	transport, err := buildUpstreamTransport(settings, parsedProxy, protocolMode)
+	if err != nil {
+		return nil, fmt.Errorf("build transport: %w", err)
+	}
+
 	// 写锁慢路径：创建或重建客户端
 	s.mu.Lock()
 	if entry, ok := s.clients[cacheKey]; ok {
 		if s.shouldReuseEntry(entry, isolation, proxyKey, poolKey) {
+			transport.CloseIdleConnections()
 			atomic.StoreInt64(&entry.lastUsed, nowUnix)
 			if markInFlight {
 				atomic.AddInt64(&entry.inFlight, 1)
@@ -717,18 +731,14 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 		s.evictIdleLocked(now)
 		if len(s.clients) >= s.maxUpstreamClients() {
 			if !s.evictOldestIdleLocked() {
+				transport.CloseIdleConnections()
 				s.mu.Unlock()
 				return nil, errUpstreamClientLimitReached
 			}
 		}
 	}
 
-	// 缓存未命中或需要重建，创建新客户端
-	transport, err := buildUpstreamTransport(settings, parsedProxy, protocolMode)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("build transport: %w", err)
-	}
+	// 缓存未命中或需要重建；Transport 已在锁外构建。
 	client := &http.Client{Transport: transport}
 	if s.shouldValidateResolvedIP() {
 		client.CheckRedirect = s.redirectChecker

@@ -12,6 +12,7 @@ import (
 
 	"github.com/dgraph-io/ristretto"
 	"github.com/th3ee9ine/qqq2api/internal/config"
+	ippkg "github.com/th3ee9ine/qqq2api/internal/pkg/ip"
 )
 
 const apiKeyAuthSnapshotVersion = 24 // v24: group model_allowlist field (renamed from models_list_config, enforcing semantics)
@@ -218,6 +219,22 @@ func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) 
 	if err != nil {
 		return nil, false
 	}
+	// L2 entries are JSON snapshots and therefore do not contain the process-local
+	// ACL accelerators. Copy the entry before filling them so a Redis client's
+	// shared decoded value is never mutated while another request reads it.
+	if entry != nil && entry.Snapshot != nil &&
+		(entry.Snapshot.CompiledIPWhitelist == nil || entry.Snapshot.CompiledIPBlacklist == nil) {
+		clonedEntry := *entry
+		clonedSnapshot := *entry.Snapshot
+		if clonedSnapshot.CompiledIPWhitelist == nil {
+			clonedSnapshot.CompiledIPWhitelist = ippkg.CompileIPRules(clonedSnapshot.IPWhitelist)
+		}
+		if clonedSnapshot.CompiledIPBlacklist == nil {
+			clonedSnapshot.CompiledIPBlacklist = ippkg.CompileIPRules(clonedSnapshot.IPBlacklist)
+		}
+		clonedEntry.Snapshot = &clonedSnapshot
+		entry = &clonedEntry
+	}
 	s.setAuthCacheL1(cacheKey, entry)
 	return entry, true
 }
@@ -285,6 +302,10 @@ func (s *APIKeyService) loadAuthCacheEntry(ctx context.Context, key, cacheKey st
 	if err := s.normalizeGlobalAPIKeyOwner(ctx, apiKey); err != nil {
 		return nil, fmt.Errorf("resolve global api key owner: %w", err)
 	}
+	// Build the ACL accelerator before creating the in-process snapshot. The
+	// snapshot keeps these immutable pointers for subsequent L1 hits; they are
+	// omitted from JSON when the same entry is written to L2 Redis.
+	s.compileAPIKeyIPRules(apiKey)
 	snapshot := s.snapshotFromAPIKey(ctx, apiKey)
 	if snapshot == nil {
 		return nil, fmt.Errorf("get api key: %w", ErrAPIKeyNotFound)
@@ -348,12 +369,16 @@ func (s *APIKeyService) snapshotFromAPIKey(ctx context.Context, apiKey *APIKey) 
 		Concurrency: apiKey.Concurrency,
 		IPWhitelist: apiKey.IPWhitelist,
 		IPBlacklist: apiKey.IPBlacklist,
-		Quota:       apiKey.Quota,
-		QuotaUsed:   apiKey.QuotaUsed,
-		ExpiresAt:   apiKey.ExpiresAt,
-		RateLimit5h: apiKey.RateLimit5h,
-		RateLimit1d: apiKey.RateLimit1d,
-		RateLimit7d: apiKey.RateLimit7d,
+		// Keep precompiled ACL rules on the in-process snapshot. These fields are
+		// json:"-" and therefore do not alter the L2 cache payload.
+		CompiledIPWhitelist: apiKey.CompiledIPWhitelist,
+		CompiledIPBlacklist: apiKey.CompiledIPBlacklist,
+		Quota:               apiKey.Quota,
+		QuotaUsed:           apiKey.QuotaUsed,
+		ExpiresAt:           apiKey.ExpiresAt,
+		RateLimit5h:         apiKey.RateLimit5h,
+		RateLimit1d:         apiKey.RateLimit1d,
+		RateLimit7d:         apiKey.RateLimit7d,
 		User: APIKeyAuthUserSnapshot{
 			ID:                         apiKey.User.ID,
 			Status:                     apiKey.User.Status,
@@ -538,6 +563,14 @@ func (s *APIKeyService) snapshotToAPIKey(key string, snapshot *APIKeyAuthSnapsho
 			ProfitSafetyBuffer:              snapshot.Group.ProfitSafetyBuffer,
 		}
 	}
-	s.compileAPIKeyIPRules(apiKey)
+	// L1 snapshots retain immutable compiled ACL rules. Redis/L2 snapshots do
+	// not (the fields are intentionally excluded from JSON), so compile only
+	// when materializing one of those entries.
+	if snapshot.CompiledIPWhitelist != nil && snapshot.CompiledIPBlacklist != nil {
+		apiKey.CompiledIPWhitelist = snapshot.CompiledIPWhitelist
+		apiKey.CompiledIPBlacklist = snapshot.CompiledIPBlacklist
+	} else {
+		s.compileAPIKeyIPRules(apiKey)
+	}
 	return apiKey
 }

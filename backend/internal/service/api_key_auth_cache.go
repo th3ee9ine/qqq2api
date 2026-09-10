@@ -1,6 +1,10 @@
 package service
 
-import "time"
+import (
+	"time"
+
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ip"
+)
 
 // APIKeyAuthSnapshot API Key 认证缓存快照（仅包含认证所需字段）
 type APIKeyAuthSnapshot struct {
@@ -27,6 +31,14 @@ type APIKeyAuthSnapshot struct {
 	RateLimit5h float64 `json:"rate_limit_5h"`
 	RateLimit1d float64 `json:"rate_limit_1d"`
 	RateLimit7d float64 `json:"rate_limit_7d"`
+
+	// Compiled IP rules are process-local accelerators. They are deliberately
+	// excluded from the JSON representation so L2 Redis entries stay portable;
+	// snapshots materialized from L2 fall back to compiling the source patterns.
+	// L1 hits can reuse these immutable structures and avoid ParseIP/ParseCIDR on
+	// every authenticated request.
+	CompiledIPWhitelist *ip.CompiledIPRules `json:"-"`
+	CompiledIPBlacklist *ip.CompiledIPRules `json:"-"`
 }
 
 // APIKeyAuthUserSnapshot 用户快照
