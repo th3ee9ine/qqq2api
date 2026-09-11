@@ -3078,6 +3078,17 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if updates.AutoAssignProxy && updates.ProxyID != nil {
 		return 0, service.ErrProxyAssignmentModeConflict
 	}
+	if updates.ExpectedProxyID != nil {
+		if updates.ProxyID == nil || *updates.ExpectedProxyID <= 0 || *updates.ProxyID < 0 || *updates.ProxyID == *updates.ExpectedProxyID {
+			return 0, service.ErrProxyBindingInputInvalid
+		}
+		for _, id := range ids {
+			if id <= 0 {
+				return 0, service.ErrProxyBindingInputInvalid
+			}
+		}
+		ids = uniquePositiveInt64s(ids)
+	}
 	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(updates.Extra)
 
 	setClauses := make([]string, 0, 8)
@@ -3223,6 +3234,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
 		args = append(args, pq.Array(ids))
 		idx++
+		if updates.ExpectedProxyID != nil {
+			whereClause += " AND proxy_id = $" + itoa(idx) + " AND parent_account_id IS NULL"
+			args = append(args, *updates.ExpectedProxyID)
+			idx++
+		}
 		if updates.ProbeEnabled != nil {
 			whereClause += " AND type = $" + itoa(idx)
 			args = append(args, service.AccountTypeAPIKey)
@@ -3246,6 +3262,19 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			defer func() { _ = tx.Rollback() }()
 			ctx = dbent.NewTxContext(ctx, tx)
 			exec = tx.Client()
+		}
+	}
+
+	if updates.ExpectedProxyID != nil {
+		// A partial match must roll back every matched row. Never perform a
+		// source-bound move through the nontransactional compatibility path.
+		if contextTx == nil && tx == nil {
+			return 0, errors.New("source-bound proxy updates require a transaction")
+		}
+		if *updates.ProxyID > 0 {
+			if err := lockAvailableProxyBindingTarget(ctx, exec, *updates.ProxyID); err != nil {
+				return 0, err
+			}
 		}
 	}
 
@@ -3279,6 +3308,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			return 0, err
 		}
 	}
+	if updates.ExpectedProxyID != nil && rows != int64(len(ids)) {
+		return 0, service.ErrProxyBindingChanged
+	}
 	if updates.ProbeEnabled != nil {
 		expectedRows := int64(0)
 		seenIDs := make(map[int64]struct{}, len(ids))
@@ -3294,6 +3326,13 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 	}
 	changedAccountIDs := uniquePositiveInt64s(ids)
+	if updates.ExpectedProxyID != nil {
+		shadowIDs, err := updateProxyBindingShadows(ctx, exec, ids, *updates.ProxyID)
+		if err != nil {
+			return 0, err
+		}
+		changedAccountIDs = uniquePositiveInt64s(append(changedAccountIDs, shadowIDs...))
+	}
 	if updates.AutoAssignProxy {
 		assignedRows, assignmentIDs, err := applyAutomaticProxyAssignments(ctx, exec, automaticAssignments)
 		if err != nil {
@@ -3316,7 +3355,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		}
 	}
 	if rows > 0 && contextTx == nil {
-		shouldSync := false
+		shouldSync := updates.ProxyID != nil
 		if updates.Status != nil && (*updates.Status == service.StatusError || *updates.Status == service.StatusDisabled) {
 			shouldSync = true
 		}
@@ -3324,10 +3363,66 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			shouldSync = true
 		}
 		if shouldSync {
-			r.syncSchedulerAccountSnapshots(baseCtx, ids)
+			r.syncSchedulerAccountSnapshots(baseCtx, changedAccountIDs)
 		}
 	}
 	return rows, nil
+}
+
+// Match ListShadowsByParent's spark-only scope. Parent moves, inherited proxy
+// changes, and their scheduler notification must commit as one operation; a
+// failure must leave the source binding intact so the same request can retry.
+func updateProxyBindingShadows(ctx context.Context, exec sqlExecutor, parentIDs []int64, proxyID int64) ([]int64, error) {
+	var targetProxyID any
+	if proxyID > 0 {
+		targetProxyID = proxyID
+	}
+	rows, err := exec.QueryContext(ctx, `
+		UPDATE accounts
+		SET proxy_id = $2,
+			extra = CASE WHEN proxy_id IS DISTINCT FROM $2::bigint
+				THEN COALESCE(extra, '{}'::jsonb) - 'upstream_billing_probe' - 'ollama_cloud_usage_snapshot'
+				ELSE extra END,
+			updated_at = NOW()
+		WHERE parent_account_id = ANY($1)
+		  AND quota_dimension = $3 AND deleted_at IS NULL
+		RETURNING id
+	`, pq.Array(parentIDs), targetProxyID, service.QuotaDimensionSpark)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var shadowIDs []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		shadowIDs = append(shadowIDs, id)
+	}
+	return shadowIDs, rows.Err()
+}
+
+// Hold the target proxy stable until the account move commits. Capacity remains
+// an automatic-assignment limit, so explicit moves only require a usable proxy.
+func lockAvailableProxyBindingTarget(ctx context.Context, exec sqlExecutor, proxyID int64) error {
+	rows, err := exec.QueryContext(ctx, `
+		SELECT id FROM proxies
+		WHERE id = $1 AND deleted_at IS NULL AND status = $2
+		  AND (expires_at IS NULL OR expires_at > NOW())
+		FOR SHARE
+	`, proxyID, service.StatusActive)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return service.ErrProxyBindingTargetUnavailable
+	}
+	return rows.Err()
 }
 
 // automaticProxyCapacity represents one active, non-expired proxy while its

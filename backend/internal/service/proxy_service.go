@@ -10,10 +10,13 @@ import (
 )
 
 var (
-	ErrProxyNotFound               = infraerrors.NotFound("PROXY_NOT_FOUND", "proxy not found")
-	ErrProxyInUse                  = infraerrors.Conflict("PROXY_IN_USE", "proxy is in use by accounts")
-	ErrProxyCapacityInsufficient   = infraerrors.BadRequest("PROXY_CAPACITY_INSUFFICIENT", "active proxy capacity is insufficient for the selected accounts")
-	ErrProxyAssignmentModeConflict = infraerrors.BadRequest("PROXY_ASSIGNMENT_MODE_CONFLICT", "auto_assign_proxy and proxy_id are mutually exclusive")
+	ErrProxyNotFound                 = infraerrors.NotFound("PROXY_NOT_FOUND", "proxy not found")
+	ErrProxyInUse                    = infraerrors.Conflict("PROXY_IN_USE", "proxy is in use by accounts")
+	ErrProxyCapacityInsufficient     = infraerrors.BadRequest("PROXY_CAPACITY_INSUFFICIENT", "active proxy capacity is insufficient for the selected accounts")
+	ErrProxyAssignmentModeConflict   = infraerrors.BadRequest("PROXY_ASSIGNMENT_MODE_CONFLICT", "auto_assign_proxy and proxy_id are mutually exclusive")
+	ErrProxyBindingChanged           = infraerrors.Conflict("PROXY_BINDING_CHANGED", "account proxy bindings changed; refresh the account list and try again")
+	ErrProxyBindingTargetUnavailable = infraerrors.BadRequest("PROXY_BINDING_TARGET_UNAVAILABLE", "target proxy is unavailable, inactive, or expired")
+	ErrProxyBindingInputInvalid      = infraerrors.BadRequest("PROXY_BINDING_INPUT_INVALID", "expected_proxy_id requires explicit account_ids and only a different proxy_id; source must be positive and target must be nonnegative")
 )
 
 type ProxyRepository interface {

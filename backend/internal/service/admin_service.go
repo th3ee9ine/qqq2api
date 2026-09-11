@@ -456,6 +456,7 @@ type BulkUpdateAccountsInput struct {
 	Filters         *BulkUpdateAccountFilters
 	Name            string
 	ProxyID         *int64
+	ExpectedProxyID *int64 // When present, only move accounts still bound to this proxy.
 	AutoAssignProxy bool
 	Concurrency     *int
 	Priority        *int

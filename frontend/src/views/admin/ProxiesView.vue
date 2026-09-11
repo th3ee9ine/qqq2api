@@ -1,104 +1,140 @@
 <template>
   <AppLayout>
-    <TablePageLayout>
+    <TablePageLayout class="admin-workspace proxy-workspace">
       <template #filters>
-        <div class="flex flex-wrap items-center gap-3">
-          <!-- Left: Search + Filters -->
-          <div class="relative w-full sm:w-64">
-            <Icon
-              name="search"
-              size="md"
-              class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500"
-            />
-            <input
-              v-model="searchQuery"
-              type="text"
-              :placeholder="t('admin.proxies.searchProxies')"
-              class="input pl-10"
-              @input="handleSearch"
-            />
-          </div>
+        <div class="space-y-5">
+          <AdminPageHeader
+            :eyebrow="t('admin.proxies.eyebrow')"
+            :title="t('admin.proxies.title')"
+            :description="t('admin.proxies.description')"
+          >
+            <template #actions>
+              <button @click="showImportData = true" class="btn btn-secondary gap-2">
+                <Icon name="upload" size="sm" />
+                {{ t('admin.proxies.dataImport') }}
+              </button>
+              <button @click="showExportDataDialog = true" class="btn btn-secondary gap-2">
+                <Icon name="download" size="sm" />
+                {{ selectedCount > 0 ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
+              </button>
+              <button @click="showCreateModal = true" class="btn btn-primary gap-2">
+                <Icon name="plus" size="md" />
+                {{ t('admin.proxies.createProxy') }}
+              </button>
+            </template>
+          </AdminPageHeader>
 
-          <div class="w-full sm:w-40">
-            <Select
-              v-model="filters.protocol"
-              :options="protocolOptions"
-              :placeholder="t('admin.proxies.allProtocols')"
-              @change="loadProxies"
-            />
-          </div>
-          <div class="w-full sm:w-36">
-            <Select
-              v-model="filters.status"
-              :options="statusOptions"
-              :placeholder="t('admin.proxies.allStatus')"
-              @change="loadProxies"
-            />
-          </div>
+          <AdminOverviewStrip :items="overviewItems" :loading="loading" />
 
-          <!-- Right: All action buttons -->
-          <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
+          <div class="admin-toolbar flex flex-wrap items-center gap-3">
+            <div class="relative min-w-0 flex-[1_1_220px] xl:max-w-sm">
+              <Icon
+                name="search"
+                size="md"
+                class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500"
+              />
+              <input
+                v-model="searchQuery"
+                type="text"
+                :placeholder="t('admin.proxies.searchProxies')"
+                :aria-label="t('admin.proxies.searchProxies')"
+                class="input pl-10"
+                @input="handleSearch"
+              />
+            </div>
+
+            <div class="min-w-0 flex-[1_1_120px] sm:max-w-40">
+              <Select
+                v-model="filters.protocol"
+                :options="protocolOptions"
+                :placeholder="t('admin.proxies.allProtocols')"
+                @change="loadProxies"
+              />
+            </div>
+            <div class="min-w-0 flex-[1_1_120px] sm:max-w-36">
+              <Select
+                v-model="filters.status"
+                :options="statusOptions"
+                :placeholder="t('admin.proxies.allStatus')"
+                @change="loadProxies"
+              />
+            </div>
+
             <button
-              @click="loadProxies"
-              :disabled="loading"
-              class="btn btn-secondary"
-              :title="t('common.refresh')"
+              v-if="hasActiveFilters"
+              @click="resetFilters"
+              class="text-xs font-medium text-primary-700 hover:text-primary-800 dark:text-primary-400"
             >
-              <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
+              {{ t('admin.proxies.resetFilters') }}
             </button>
-            <button
-              @click="handleBatchTest"
-              :disabled="batchTesting || loading"
-              class="btn btn-secondary"
-              :title="t('admin.proxies.testConnection')"
-            >
-              <Icon name="play" size="md" class="mr-2" />
-              {{ t('admin.proxies.testConnection') }}
-            </button>
-            <button
-              @click="handleBatchQualityCheck"
-              :disabled="batchQualityChecking || loading"
-              class="btn btn-secondary"
-              :title="t('admin.proxies.batchQualityCheck')"
-            >
-              <Icon name="shield" size="md" class="mr-2" :class="batchQualityChecking ? 'animate-pulse' : ''" />
-              {{ t('admin.proxies.batchQualityCheck') }}
-            </button>
-            <button
-              v-if="authStore.isAdmin"
-              @click="openBatchDelete"
-              :disabled="selectedCount === 0"
-              class="btn btn-danger"
-              :title="t('admin.proxies.batchDeleteAction')"
-            >
-              <Icon name="trash" size="md" class="mr-2" />
-              {{ t('admin.proxies.batchDeleteAction') }}
-            </button>
-            <button
-              @click="openBatchMaxAccounts"
-              :disabled="selectedCount === 0"
-              class="btn btn-secondary"
-              :title="t('admin.proxies.batchMaxAccounts')"
-            >
-              <Icon name="edit" size="md" class="mr-2" />
-              {{ t('admin.proxies.batchMaxAccounts') }}
-            </button>
-            <button @click="showImportData = true" class="btn btn-secondary">
-              {{ t('admin.proxies.dataImport') }}
-            </button>
-            <button @click="showExportDataDialog = true" class="btn btn-secondary">
-              {{ selectedCount > 0 ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
-            </button>
-            <button @click="showCreateModal = true" class="btn btn-primary">
-              <Icon name="plus" size="md" class="mr-2" />
-              {{ t('admin.proxies.createProxy') }}
-            </button>
+
+            <div class="ml-auto flex flex-wrap items-center gap-2">
+              <button
+                @click="loadProxies"
+                :disabled="loading"
+                class="admin-icon-button"
+                :title="t('common.refresh')"
+                :aria-label="t('common.refresh')"
+              >
+                <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
+              </button>
+              <button
+                @click="handleBatchTest"
+                :disabled="batchTesting || loading"
+                class="btn btn-secondary"
+                :title="selectedCount > 0 ? t('admin.proxies.probeSelected') : t('admin.proxies.probeFiltered')"
+              >
+                <Icon name="play" size="md" class="mr-2" />
+                {{ t('admin.proxies.testConnection') }}
+              </button>
+              <button
+                @click="handleBatchQualityCheck"
+                :disabled="batchQualityChecking || loading"
+                class="btn btn-secondary"
+                :title="selectedCount > 0 ? t('admin.proxies.probeSelected') : t('admin.proxies.probeFiltered')"
+              >
+                <Icon name="shield" size="md" class="mr-2" :class="batchQualityChecking ? 'animate-pulse' : ''" />
+                {{ t('admin.proxies.batchQualityCheck') }}
+              </button>
+            </div>
           </div>
         </div>
       </template>
 
       <template #table>
         <div ref="proxyTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div class="proxy-selection-bar" :class="{ 'proxy-selection-bar-active': selectedCount > 0 }">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h2 class="admin-section-heading">{{ t('admin.proxies.listTitle') }}</h2>
+            <span class="text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
+              {{ selectedCount > 0 ? t('admin.proxies.selectionCount', { count: selectedCount }) : t('admin.proxies.selectionHint') }}
+            </span>
+            <button v-if="selectedCount > 0" @click="clearSelectedProxies" class="text-xs font-medium text-primary-700 dark:text-primary-400">
+              {{ t('admin.proxies.clearSelection') }}
+            </button>
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              @click="openBatchMaxAccounts"
+              :disabled="selectedCount === 0"
+              class="proxy-batch-button"
+              :title="t('admin.proxies.batchMaxAccounts')"
+            >
+              <Icon name="edit" size="sm" />
+              {{ t('admin.proxies.batchMaxAccounts') }}
+            </button>
+            <button
+              v-if="authStore.isAdmin"
+              @click="openBatchDelete"
+              :disabled="selectedCount === 0"
+              class="proxy-batch-button proxy-batch-delete"
+              :title="t('admin.proxies.batchDeleteAction')"
+            >
+              <Icon name="trash" size="sm" />
+              {{ t('admin.proxies.batchDeleteAction') }}
+            </button>
+          </div>
+        </div>
         <DataTable
           :columns="columns"
           :data="proxies"
@@ -113,6 +149,7 @@
               type="checkbox"
               class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
               :checked="allVisibleSelected"
+              :aria-label="t('admin.proxies.selectPage')"
               @click.stop
               @change="toggleSelectAllVisible($event)"
             />
@@ -123,19 +160,28 @@
               type="checkbox"
               class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
               :checked="selectedProxyIds.has(row.id)"
+              :aria-label="t('admin.proxies.selectProxy', { name: row.name })"
               @click.stop
               @change="toggleSelectRow(row.id, $event)"
             />
           </template>
 
-          <template #cell-name="{ value }">
-            <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
+          <template #cell-name="{ row, value }">
+            <div class="flex items-center gap-3">
+              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-gray-500 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-400">
+                <Icon name="server" size="md" />
+              </span>
+              <div class="min-w-0">
+                <span class="block max-w-36 truncate font-semibold text-gray-900 dark:text-white" :title="value">{{ value }}</span>
+                <span class="mt-0.5 block font-mono text-[11px] text-gray-400 dark:text-gray-500">#{{ row.id }}</span>
+              </div>
+            </div>
           </template>
 
           <template #cell-protocol="{ value }">
             <span
               v-if="value"
-              :class="['badge', value.startsWith('socks5') ? 'badge-primary' : 'badge-gray']"
+              class="rounded-md border border-gray-200 bg-gray-50 px-2 py-1 font-mono text-[11px] font-medium text-gray-600 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-300"
             >
               {{ value.toUpperCase() }}
             </span>
@@ -143,13 +189,17 @@
           </template>
 
           <template #cell-address="{ row }">
-            <div class="flex items-center gap-1.5">
-              <code class="code text-xs">{{ row.host }}:{{ row.port }}</code>
+            <div class="flex items-center gap-2">
+              <div class="font-mono text-xs">
+                <span class="block max-w-60 truncate font-medium text-gray-800 dark:text-gray-200" :title="row.host">{{ row.host }}</span>
+                <span class="mt-1 block text-gray-400 dark:text-gray-500">{{ t('admin.proxies.port') }} {{ row.port }}</span>
+              </div>
               <div class="relative">
                 <button
                   type="button"
-                  class="rounded p-0.5 text-gray-400 hover:text-primary-600 dark:hover:text-primary-400"
+                  class="admin-icon-button"
                   :title="t('admin.proxies.copyProxyUrl')"
+                  :aria-label="t('admin.proxies.copyProxyUrl')"
                   @click.stop="copyProxyUrl(row)"
                   @contextmenu.prevent="toggleCopyMenu(row.id)"
                 >
@@ -184,7 +234,8 @@
               <button
                 v-if="row.password"
                 type="button"
-                class="ml-1 rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                class="admin-icon-button"
+                :aria-label="visiblePasswordIds.has(row.id) ? t('admin.proxies.hidePassword') : t('admin.proxies.showPassword')"
                 @click.stop="visiblePasswordIds.has(row.id) ? visiblePasswordIds.delete(row.id) : visiblePasswordIds.add(row.id)"
               >
                 <Icon :name="visiblePasswordIds.has(row.id) ? 'eyeOff' : 'eye'" size="sm" />
@@ -204,31 +255,34 @@
               <span v-if="formatLocation(row)" class="text-sm text-gray-700 dark:text-gray-200">
                 {{ formatLocation(row) }}
               </span>
-              <span v-else class="text-sm text-gray-400">-</span>
+              <span v-else class="text-xs text-gray-400">{{ t('admin.proxies.unknownLocation') }}</span>
             </div>
           </template>
 
-          <template #cell-account_count="{ row, value }">
-            <button
-              v-if="(value || 0) > 0"
-              type="button"
-              data-testid="proxy-account-capacity"
-              class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-primary-700 hover:bg-gray-200 dark:bg-dark-600 dark:text-primary-300 dark:hover:bg-dark-500"
-              @click="openAccountsModal(row)"
-            >
-              {{ proxyAccountCapacityLabel(row) }}
-            </button>
-            <span
-              v-else
-              data-testid="proxy-account-capacity"
-              class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-800 dark:bg-dark-600 dark:text-gray-300"
-            >
-              {{ proxyAccountCapacityLabel(row) }}
-            </span>
+          <template #cell-account_count="{ row }">
+            <div class="min-w-[100px] max-w-[140px]">
+              <button
+                type="button"
+                data-testid="proxy-account-capacity"
+                class="inline-flex items-center gap-1 rounded text-sm font-semibold tabular-nums text-primary-700 hover:text-primary-800 dark:text-primary-300 dark:hover:text-primary-200"
+                :title="t('admin.proxies.bindings.manage')"
+                :aria-label="t('admin.proxies.accountsTitle', { name: row.name })"
+                @click="openAccountsModal(row)"
+              >
+                {{ proxyAccountCapacityLabel(row) }}
+              </button>
+              <div v-if="row.max_accounts > 0" class="mt-2 h-1 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-dark-600" aria-hidden="true">
+                <div
+                  class="h-full rounded-full"
+                  :class="(row.account_count || 0) >= row.max_accounts ? 'bg-amber-400' : 'bg-primary-500'"
+                  :style="{ width: `${Math.min(100, Math.max(0, ((row.account_count || 0) / row.max_accounts) * 100))}%` }"
+                />
+              </div>
+            </div>
           </template>
 
           <template #cell-latency="{ row }">
-            <div class="flex flex-col gap-1">
+            <div class="flex flex-col items-start gap-1.5">
               <span
                 v-if="row.latency_status === 'failed'"
                 class="badge badge-danger"
@@ -238,14 +292,15 @@
               </span>
               <span
                 v-else-if="typeof row.latency_ms === 'number'"
-                :class="['badge', row.latency_ms < 200 ? 'badge-success' : 'badge-warning']"
+                class="inline-flex items-baseline gap-1 font-semibold tabular-nums"
+                :class="row.latency_ms < 200 ? 'text-primary-700 dark:text-primary-400' : 'text-amber-700 dark:text-amber-400'"
               >
-                {{ row.latency_ms }}ms
+                {{ row.latency_ms }}<span class="text-[11px] font-normal text-gray-400">ms</span>
               </span>
-              <span v-else class="text-sm text-gray-400">-</span>
+              <span v-else class="text-xs text-gray-400">{{ t('admin.proxies.notMeasured') }}</span>
               <div
                 v-if="typeof row.quality_checked === 'number'"
-                class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+                class="flex flex-wrap items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400"
                 :title="row.quality_summary || undefined"
               >
                 <span>{{ t('admin.proxies.qualityInline', { grade: row.quality_grade || '-', score: row.quality_score ?? '-' }) }}</span>
@@ -258,7 +313,7 @@
 
           <template #cell-expiry="{ row }">
             <span v-if="!row.expires_at" class="text-sm text-gray-400">{{ t('admin.proxies.neverExpires') }}</span>
-            <div v-else class="flex flex-col text-xs">
+            <div v-else class="flex flex-col items-start gap-1.5 text-xs">
               <span class="text-gray-700 dark:text-gray-200">{{ formatDateTime(row.expires_at) }}</span>
               <span :class="expiryBadgeClass(row)">{{ expiryLabel(row) }}</span>
             </div>
@@ -271,10 +326,11 @@
           <template #cell-status="{ value }">
             <span
               :class="[
-                'badge',
-                value === 'active' ? 'badge-success' : value === 'expired' ? 'badge-danger' : 'badge-danger'
+                'proxy-status',
+                value === 'active' ? 'proxy-status-active' : value === 'expired' ? 'proxy-status-expired' : 'proxy-status-inactive'
               ]"
             >
+              <span class="h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true" />
               {{ t('admin.accounts.status.' + value) }}
             </span>
           </template>
@@ -282,9 +338,21 @@
           <template #cell-actions="{ row }">
             <div class="flex items-center gap-1">
               <button
+                type="button"
+                class="admin-icon-button"
+                data-testid="manage-proxy-accounts"
+                :title="t('admin.proxies.bindings.manage')"
+                :aria-label="t('admin.proxies.accountsTitle', { name: row.name })"
+                @click="openAccountsModal(row)"
+              >
+                <Icon name="users" size="sm" />
+              </button>
+              <button
                 @click="handleTestConnection(row)"
                 :disabled="testingProxyIds.has(row.id)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-emerald-900/20 dark:hover:text-emerald-400"
+                class="admin-icon-button"
+                :title="t('admin.proxies.testConnection')"
+                :aria-label="t('admin.proxies.testConnection')"
               >
                 <svg
                   v-if="testingProxyIds.has(row.id)"
@@ -307,12 +375,14 @@
                   ></path>
                 </svg>
                 <Icon v-else name="checkCircle" size="sm" />
-                <span class="text-xs">{{ t('admin.proxies.testConnection') }}</span>
+                <span class="sr-only">{{ t('admin.proxies.testConnection') }}</span>
               </button>
               <button
                 @click="handleQualityCheck(row)"
                 :disabled="qualityCheckingProxyIds.has(row.id)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-blue-900/20 dark:hover:text-blue-400"
+                class="admin-icon-button"
+                :title="t('admin.proxies.qualityCheck')"
+                :aria-label="t('admin.proxies.qualityCheck')"
               >
                 <svg
                   v-if="qualityCheckingProxyIds.has(row.id)"
@@ -335,32 +405,37 @@
                   ></path>
                 </svg>
                 <Icon v-else name="shield" size="sm" />
-                <span class="text-xs">{{ t('admin.proxies.qualityCheck') }}</span>
+                <span class="sr-only">{{ t('admin.proxies.qualityCheck') }}</span>
               </button>
               <button
                 @click="handleEdit(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700 dark:hover:text-primary-400"
+                class="admin-icon-button"
+                :title="t('common.edit')"
+                :aria-label="t('common.edit')"
               >
                 <Icon name="edit" size="sm" />
-                <span class="text-xs">{{ t('common.edit') }}</span>
+                <span class="sr-only">{{ t('common.edit') }}</span>
               </button>
               <button
                 v-if="authStore.isAdmin"
                 @click="handleDelete(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20 dark:hover:text-red-400"
+                class="admin-icon-button proxy-row-delete"
+                :title="t('common.delete')"
+                :aria-label="t('common.delete')"
               >
                 <Icon name="trash" size="sm" />
-                <span class="text-xs">{{ t('common.delete') }}</span>
+                <span class="sr-only">{{ t('common.delete') }}</span>
               </button>
             </div>
           </template>
 
           <template #empty>
             <EmptyState
-              :title="t('admin.proxies.noProxiesYet')"
-              :description="t('admin.proxies.createFirstProxy')"
-              :action-text="t('admin.proxies.createProxy')"
-              @action="showCreateModal = true"
+              class="admin-empty-state"
+              :title="hasActiveFilters ? t('admin.proxies.noMatchingProxies') : t('admin.proxies.noProxiesYet')"
+              :description="hasActiveFilters ? t('admin.proxies.tryOtherFilters') : t('admin.proxies.createFirstProxy')"
+              :action-text="hasActiveFilters ? t('admin.proxies.resetFilters') : t('admin.proxies.createProxy')"
+              @action="hasActiveFilters ? resetFilters() : showCreateModal = true"
             />
           </template>
         </DataTable>
@@ -1031,50 +1106,12 @@
       </template>
     </BaseDialog>
 
-    <!-- Proxy Accounts Dialog -->
-    <BaseDialog
+    <ProxyAccountsModal
       :show="showAccountsModal"
-      :title="t('admin.proxies.accountsTitle', { name: accountsProxy?.name || '' })"
-      width="normal"
+      :proxy="accountsProxy"
       @close="closeAccountsModal"
-    >
-      <div v-if="accountsLoading" class="flex items-center justify-center py-8 text-sm text-gray-500">
-        <Icon name="refresh" size="md" class="mr-2 animate-spin" />
-        {{ t('common.loading') }}
-      </div>
-      <div v-else-if="proxyAccounts.length === 0" class="py-6 text-center text-sm text-gray-500">
-        {{ t('admin.proxies.accountsEmpty') }}
-      </div>
-      <div v-else class="max-h-80 overflow-auto">
-        <table class="min-w-full divide-y divide-gray-200 text-sm dark:divide-dark-700">
-          <thead class="bg-gray-50 text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-dark-400">
-            <tr>
-              <th class="px-4 py-2 text-left">{{ t('admin.proxies.accountName') }}</th>
-              <th class="px-4 py-2 text-left">{{ t('admin.accounts.columns.platformType') }}</th>
-              <th class="px-4 py-2 text-left">{{ t('admin.proxies.accountNotes') }}</th>
-            </tr>
-          </thead>
-          <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
-            <tr v-for="account in proxyAccounts" :key="account.id">
-              <td class="px-4 py-2 font-medium text-gray-900 dark:text-white">{{ account.name }}</td>
-              <td class="px-4 py-2">
-                <PlatformTypeBadge :platform="account.platform" :type="account.type" />
-              </td>
-              <td class="px-4 py-2 text-gray-600 dark:text-gray-300">
-                {{ account.notes || '-' }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <template #footer>
-        <div class="flex justify-end">
-          <button @click="closeAccountsModal" class="btn btn-secondary">
-            {{ t('common.close') }}
-          </button>
-        </div>
-      </template>
-    </BaseDialog>
+      @updated="loadProxies"
+    />
   </AppLayout>
 </template>
 
@@ -1084,10 +1121,12 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
-import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
+import type { Proxy, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
+import AdminPageHeader from '@/components/admin/AdminPageHeader.vue'
+import AdminOverviewStrip from '@/components/admin/AdminOverviewStrip.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -1097,7 +1136,7 @@ import ImportDataModal from '@/components/admin/proxy/ImportDataModal.vue'
 import Select from '@/components/common/Select.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
 import Icon from '@/components/icons/Icon.vue'
-import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
+import ProxyAccountsModal from '@/components/admin/proxy/ProxyAccountsModal.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { useSwipeSelect } from '@/composables/useSwipeSelect'
 import { useTableSelection } from '@/composables/useTableSelection'
@@ -1122,15 +1161,15 @@ const proxyExportStepUp = useStepUp()
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false },
   { key: 'name', label: t('admin.proxies.columns.name'), sortable: true },
-  { key: 'protocol', label: t('admin.proxies.columns.protocol'), sortable: true },
-  { key: 'address', label: t('admin.proxies.columns.address'), sortable: false },
-  { key: 'auth', label: t('admin.proxies.columns.auth'), sortable: false },
-  { key: 'location', label: t('admin.proxies.columns.location'), sortable: false },
+  { key: 'status', label: t('admin.proxies.columns.status'), sortable: true },
   { key: 'account_count', label: t('admin.proxies.columns.accounts'), sortable: true },
   { key: 'latency', label: t('admin.proxies.columns.latency'), sortable: false },
+  { key: 'address', label: t('admin.proxies.columns.address'), sortable: false },
+  { key: 'protocol', label: t('admin.proxies.columns.protocol'), sortable: true },
+  { key: 'location', label: t('admin.proxies.columns.location'), sortable: false },
+  { key: 'auth', label: t('admin.proxies.columns.auth'), sortable: false },
   { key: 'expiry', label: t('admin.proxies.columns.expiry'), sortable: true },
   { key: 'created_at', label: t('admin.proxies.columns.createdAt'), sortable: true },
-  { key: 'status', label: t('admin.proxies.columns.status'), sortable: true },
   { key: 'actions', label: t('admin.proxies.columns.actions'), sortable: false }
 ])
 
@@ -1182,6 +1221,40 @@ const sortState = reactive({
   sort_by: 'id',
   sort_order: 'desc' as 'asc' | 'desc'
 })
+const hasActiveFilters = computed(() => Boolean(searchQuery.value || filters.protocol || filters.status))
+const attentionCount = computed(() => {
+  const now = Date.now()
+  return proxies.value.filter(proxy => {
+    const expiresAt = proxy.expires_at ? new Date(proxy.expires_at).getTime() : NaN
+    return proxy.status === 'expired'
+      || proxy.latency_status === 'failed'
+      || (Number.isFinite(expiresAt) && expiresAt < now)
+  }).length
+})
+const overviewItems = computed(() => [
+  {
+    label: t('admin.proxies.overview.total'),
+    value: pagination.total,
+    hint: t(hasActiveFilters.value ? 'admin.proxies.overview.filteredHint' : 'admin.proxies.overview.totalHint')
+  },
+  {
+    label: t('admin.proxies.overview.active'),
+    value: proxies.value.filter(proxy => proxy.status === 'active').length,
+    hint: t('admin.proxies.overview.pageHint'),
+    tone: 'positive' as const
+  },
+  {
+    label: t('admin.proxies.overview.accounts'),
+    value: proxies.value.reduce((total, proxy) => total + (proxy.account_count || 0), 0),
+    hint: t('admin.proxies.overview.accountsHint')
+  },
+  {
+    label: t('admin.proxies.overview.attention'),
+    value: attentionCount.value,
+    hint: t('admin.proxies.overview.attentionHint'),
+    tone: attentionCount.value > 0 ? 'warning' as const : 'default' as const
+  }
+])
 
 const showCreateModal = ref(false)
 const createPasswordVisible = ref(false)
@@ -1223,8 +1296,6 @@ useSwipeSelect(proxyTableRef, {
   batchUpdate
 })
 const accountsProxy = ref<Proxy | null>(null)
-const proxyAccounts = ref<ProxyAccountSummary[]>([])
-const accountsLoading = ref(false)
 const editingProxy = ref<Proxy | null>(null)
 const deletingProxy = ref<Proxy | null>(null)
 const showQualityReportDialog = ref(false)
@@ -1362,6 +1433,15 @@ const handleSearch = () => {
     pagination.page = 1
     loadProxies()
   }, 300)
+}
+
+const resetFilters = () => {
+  clearTimeout(searchTimeout)
+  searchQuery.value = ''
+  filters.protocol = ''
+  filters.status = ''
+  pagination.page = 1
+  loadProxies()
 }
 
 const handlePageChange = (page: number) => {
@@ -2220,26 +2300,14 @@ const confirmBatchDelete = async () => {
   }
 }
 
-const openAccountsModal = async (proxy: Proxy) => {
+const openAccountsModal = (proxy: Proxy) => {
   accountsProxy.value = proxy
-  proxyAccounts.value = []
-  accountsLoading.value = true
   showAccountsModal.value = true
-
-  try {
-    proxyAccounts.value = await adminAPI.proxies.getProxyAccounts(proxy.id)
-  } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || t('admin.proxies.accountsFailed'))
-    console.error('Error loading proxy accounts:', error)
-  } finally {
-    accountsLoading.value = false
-  }
 }
 
 const closeAccountsModal = () => {
   showAccountsModal.value = false
   accountsProxy.value = null
-  proxyAccounts.value = []
 }
 
 // ── Proxy URL copy ──
@@ -2300,3 +2368,62 @@ onUnmounted(() => {
   document.removeEventListener('click', closeCopyMenu)
 })
 </script>
+
+<style scoped>
+.proxy-workspace.admin-workspace :deep(.table-scroll-container th),
+.proxy-workspace.admin-workspace :deep(.table-scroll-container td) {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+.proxy-selection-bar {
+  @apply flex flex-shrink-0 flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-3 dark:border-dark-700;
+}
+
+.proxy-selection-bar-active {
+  @apply bg-primary-50/50 dark:bg-primary-900/10;
+}
+
+.proxy-batch-button {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:border-primary-300 hover:text-primary-700 disabled:cursor-not-allowed disabled:opacity-40 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300 dark:hover:border-primary-700 dark:hover:text-primary-400;
+}
+
+.proxy-batch-delete:not(:disabled):hover,
+.proxy-row-delete:hover {
+  @apply border-red-200 bg-red-50 text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400;
+}
+
+.proxy-status {
+  @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-medium;
+}
+
+.proxy-status-active {
+  @apply border-primary-200 bg-primary-50 text-primary-700 dark:border-primary-800 dark:bg-primary-900/20 dark:text-primary-400;
+}
+
+.proxy-status-inactive {
+  @apply border-gray-200 bg-gray-50 text-gray-500 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-400;
+}
+
+.proxy-status-expired {
+  @apply border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-900/20 dark:text-red-400;
+}
+
+@media (max-width: 767px) {
+  .proxy-selection-bar {
+    @apply mb-3 rounded-xl border border-gray-200 bg-white px-4 dark:border-dark-700 dark:bg-dark-800;
+  }
+
+  .proxy-workspace :deep([data-field='name']) {
+    @apply mb-4 border-b border-gray-100 pb-3 dark:border-dark-700;
+  }
+
+  .proxy-workspace :deep([data-field='name'] > div) {
+    @apply text-left;
+  }
+
+  .proxy-workspace :deep([data-field='address'] .font-mono > span:first-child) {
+    max-width: min(14rem, 45vw);
+  }
+}
+</style>

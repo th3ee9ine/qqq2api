@@ -1087,6 +1087,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input.AutoAssignProxy && input.ProxyID != nil {
 		return nil, ErrProxyAssignmentModeConflict
 	}
+	if input.ExpectedProxyID != nil {
+		// A source-bound move is deliberately limited to this one operation, so
+		// stale selections cannot accidentally mutate unrelated account fields.
+		if len(input.AccountIDs) == 0 || input.Filters != nil || input.ProxyID == nil ||
+			*input.ExpectedProxyID <= 0 || *input.ProxyID < 0 || *input.ProxyID == *input.ExpectedProxyID ||
+			input.AutoAssignProxy || input.Name != "" || input.Concurrency != nil || input.Priority != nil ||
+			input.RateMultiplier != nil || input.LoadFactor != nil || input.Status != "" || input.Schedulable != nil ||
+			input.GroupIDs != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProbeEnabled != nil || input.SkipMixedChannelCheck {
+			return nil, ErrProxyBindingInputInvalid
+		}
+	}
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
@@ -1108,7 +1119,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 		input.AccountIDs = accountIDs
 	}
-	if input.AutoAssignProxy {
+	if input.AutoAssignProxy || input.ExpectedProxyID != nil {
 		seen := make(map[int64]struct{}, len(input.AccountIDs))
 		normalizedIDs := make([]int64, 0, len(input.AccountIDs))
 		for _, accountID := range input.AccountIDs {
@@ -1166,6 +1177,29 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	for _, account := range cachedTargets {
 		if account != nil {
 			targetsByID[account.ID] = account
+		}
+	}
+	if input.ExpectedProxyID != nil {
+		for _, accountID := range input.AccountIDs {
+			account, ok := targetsByID[accountID]
+			if !ok {
+				return nil, ErrAccountNotFound
+			}
+			if account.ProxyID == nil || *account.ProxyID != *input.ExpectedProxyID {
+				return nil, ErrProxyBindingChanged
+			}
+		}
+		if *input.ProxyID > 0 {
+			proxy, err := s.proxyRepo.GetByID(ctx, *input.ProxyID)
+			if err != nil {
+				if errors.Is(err, ErrProxyNotFound) {
+					return nil, ErrProxyBindingTargetUnavailable
+				}
+				return nil, err
+			}
+			if proxy == nil || proxy.Status != StatusActive || (proxy.ExpiresAt != nil && !proxy.ExpiresAt.After(time.Now())) {
+				return nil, ErrProxyBindingTargetUnavailable
+			}
 		}
 	}
 	if openAISettings.any() {
@@ -1270,6 +1304,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		ProbeEnabled:               input.ProbeEnabled,
 		EnsureCodexFingerprintSeed: ShouldEnsureCodexFingerprintSeedForExtraUpdates(input.Extra),
 		AutoAssignProxy:            input.AutoAssignProxy,
+		ExpectedProxyID:            input.ExpectedProxyID,
 	}
 	if input.ProbeEnabled != nil {
 		if repoUpdates.Extra == nil {
@@ -1324,8 +1359,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		return nil, err
 	}
 
-	// 将 proxy 变更传播到每个目标账号的 spark 影子账号
-	if repoUpdates.ProxyID != nil {
+	// Source-bound moves update parents and spark shadows in the repository's
+	// transaction. Keep the legacy propagation path for ordinary bulk edits.
+	if repoUpdates.ProxyID != nil && repoUpdates.ExpectedProxyID == nil {
 		var effectiveProxyID *int64
 		if *repoUpdates.ProxyID != 0 {
 			effectiveProxyID = repoUpdates.ProxyID

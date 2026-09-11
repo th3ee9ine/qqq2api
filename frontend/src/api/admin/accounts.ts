@@ -595,6 +595,8 @@ export interface BulkUpdateAccountFields extends Record<string, unknown> {
   auto_assign_proxy?: boolean
   /** Explicit proxy assignment; mutually exclusive with auto_assign_proxy. */
   proxy_id?: number
+  /** Only move explicit account IDs that are still bound to this source proxy. */
+  expected_proxy_id?: number
 }
 
 export async function bulkUpdate(

@@ -978,6 +978,7 @@ export interface ProxyAccountSummary {
   platform: AccountPlatform
   type: AccountType
   notes?: string | null
+  parent_account_id?: number | null
 }
 
 export interface ProxyQualityCheckItem {

@@ -174,6 +174,7 @@ type AdminAccountRepository interface {
 type AccountBulkUpdate struct {
 	Name            *string
 	ProxyID         *int64
+	ExpectedProxyID *int64
 	AutoAssignProxy bool
 	Concurrency     *int
 	Priority        *int

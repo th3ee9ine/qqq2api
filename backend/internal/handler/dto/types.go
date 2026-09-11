@@ -500,11 +500,12 @@ type AdminProxyWithAccountCount struct {
 }
 
 type ProxyAccountSummary struct {
-	ID       int64   `json:"id"`
-	Name     string  `json:"name"`
-	Platform string  `json:"platform"`
-	Type     string  `json:"type"`
-	Notes    *string `json:"notes,omitempty"`
+	ID              int64   `json:"id"`
+	Name            string  `json:"name"`
+	Platform        string  `json:"platform"`
+	Type            string  `json:"type"`
+	Notes           *string `json:"notes,omitempty"`
+	ParentAccountID *int64  `json:"parent_account_id,omitempty"`
 }
 
 type RedeemCode struct {

@@ -1,39 +1,19 @@
 <template>
   <AppLayout>
-    <TablePageLayout>
-      <template #filters>
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div class="flex flex-1 flex-wrap items-center gap-3">
-            <div class="relative w-full sm:w-72">
-              <Icon
-                name="search"
-                size="md"
-                class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              />
-              <input
-                v-model="filters.search"
-                type="search"
-                class="input pl-10"
-                :placeholder="t('admin.accountAdmins.searchPlaceholder')"
-                @keyup.enter="applyFilters"
-              />
-            </div>
-            <div class="w-full sm:w-36">
-              <Select
-                v-model="filters.status"
-                :options="statusFilterOptions"
-                :searchable="false"
-                @change="applyFilters"
-              />
-            </div>
-          </div>
-
-          <div class="flex items-center gap-2">
+    <TablePageLayout class="admin-workspace account-admins-page">
+      <template #actions>
+        <AdminPageHeader
+          :eyebrow="t('admin.accountAdmins.eyebrow')"
+          :title="t('admin.accountAdmins.title')"
+          :description="t('admin.accountAdmins.description')"
+        >
+          <template #actions>
             <button
               type="button"
-              class="btn btn-secondary px-3"
+              class="admin-icon-button"
               :disabled="loading"
               :title="t('common.refresh')"
+              :aria-label="t('common.refresh')"
               @click="loadAccountAdmins"
             >
               <Icon name="refresh" size="md" :class="{ 'animate-spin': loading }" />
@@ -42,25 +22,85 @@
               <Icon name="userPlus" size="md" class="mr-2" />
               {{ t('admin.accountAdmins.create') }}
             </button>
+          </template>
+        </AdminPageHeader>
+        <AdminOverviewStrip :items="overviewItems" :loading="loading" class="mt-5" />
+      </template>
+
+      <template #filters>
+        <div class="admin-toolbar account-admins-toolbar">
+          <div class="min-w-0">
+            <h2 class="admin-section-heading">{{ t('admin.accountAdmins.directory') }}</h2>
+            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-dark-400">
+              {{ t('admin.accountAdmins.directoryHint') }}
+            </p>
           </div>
+          <form class="flex w-full min-w-0 flex-wrap items-center gap-2 xl:w-auto" @submit.prevent="applyFilters">
+            <div class="relative min-w-0 flex-1 sm:w-64 sm:flex-none">
+              <Icon
+                name="search"
+                size="md"
+                class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+              />
+              <input
+                v-model="filters.search"
+                type="search"
+                class="input pl-10"
+                :aria-label="t('admin.accountAdmins.searchPlaceholder')"
+                :placeholder="t('admin.accountAdmins.searchPlaceholder')"
+              />
+            </div>
+            <button type="submit" class="btn btn-secondary" :disabled="loading">
+              {{ t('common.search') }}
+            </button>
+            <div class="w-full sm:w-36">
+              <Select
+                v-model="filters.status"
+                :options="statusFilterOptions"
+                :searchable="false"
+                :aria-label="t('admin.accountAdmins.statusFilter')"
+                @change="applyFilters"
+              />
+            </div>
+            <button
+              v-if="hasFilters"
+              type="button"
+              class="admin-row-action px-3"
+              @click="resetFilters"
+            >
+              {{ t('admin.accountAdmins.clearFilters') }}
+            </button>
+          </form>
         </div>
       </template>
 
       <template #table>
         <DataTable :columns="columns" :data="accountAdmins" :loading="loading" row-key="id">
           <template #cell-identity="{ row }">
-            <div class="min-w-0">
-              <div class="truncate font-medium text-gray-900 dark:text-white">
-                {{ row.username || row.email.split('@')[0] }}
+            <div class="flex min-w-0 items-center gap-3 text-left">
+              <div class="admin-avatar" aria-hidden="true">
+                {{ (row.username || row.email).slice(0, 2).toUpperCase() }}
               </div>
-              <div class="truncate text-xs text-gray-500 dark:text-dark-400">{{ row.email }}</div>
+              <div class="min-w-0 max-w-[15rem]">
+                <div class="truncate font-semibold text-gray-900 dark:text-white" :title="row.username || row.email.split('@')[0]">
+                  {{ row.username || row.email.split('@')[0] }}
+                </div>
+                <div class="mt-1 truncate text-xs text-gray-500 dark:text-dark-400" :title="row.email">{{ row.email }}</div>
+                <div v-if="row.notes" class="mt-1 truncate text-xs text-gray-400 dark:text-dark-500" :title="row.notes">
+                  {{ row.notes }}
+                </div>
+              </div>
             </div>
           </template>
 
           <template #cell-role>
-            <span class="badge badge-primary">
-              {{ t('admin.users.roles.account_admin') }}
-            </span>
+            <div>
+              <span class="inline-flex items-center gap-1.5 text-xs font-medium text-primary-700 dark:text-primary-300">
+                <Icon name="shield" size="sm" />
+                {{ t('admin.users.roles.account_admin') }}
+              </span>
+              <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accountAdmins.permissionScope') }}</p>
+            </div>
           </template>
 
           <template #cell-status="{ row }">
@@ -68,26 +108,28 @@
               class="badge"
               :class="row.status === 'active' ? 'badge-success' : 'badge-gray'"
             >
+              <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-current" aria-hidden="true"></span>
               {{ row.status === 'active' ? t('common.active') : t('common.disabled') }}
             </span>
           </template>
 
           <template #cell-last_active_at="{ value }">
-            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
+            <span class="text-xs tabular-nums text-gray-500 dark:text-dark-400">{{ value ? formatDateTime(value) : t('admin.accountAdmins.neverActive') }}</span>
           </template>
 
           <template #cell-created_at="{ value }">
-            <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
+            <span class="text-xs tabular-nums text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
           </template>
 
           <template #cell-actions="{ row }">
-            <div class="flex flex-wrap items-center justify-end gap-2">
-              <button type="button" class="btn btn-secondary btn-sm" @click="openEdit(row)">
+            <div class="flex flex-wrap items-center justify-end gap-1">
+              <button type="button" class="admin-row-action" @click="openEdit(row)">
+                <Icon name="edit" size="sm" />
                 {{ t('common.edit') }}
               </button>
               <button
                 type="button"
-                class="btn btn-secondary btn-sm"
+                class="admin-row-action"
                 :disabled="statusChangingId === row.id"
                 @click="toggleStatus(row)"
               >
@@ -97,23 +139,34 @@
               </button>
               <button
                 type="button"
-                class="btn btn-sm bg-red-600 text-white hover:bg-red-700"
+                class="admin-icon-button admin-delete-action"
+                :title="t('admin.accountAdmins.deleteFor', { email: row.email })"
+                :aria-label="t('admin.accountAdmins.deleteFor', { email: row.email })"
                 @click="deletingAccountAdmin = row"
               >
-                {{ t('common.delete') }}
+                <Icon name="trash" size="sm" />
               </button>
             </div>
           </template>
 
           <template #empty>
-            <div class="flex flex-col items-center py-8">
-              <Icon name="users" size="xl" class="mb-3 h-12 w-12 text-gray-300 dark:text-dark-600" />
-              <p class="font-medium text-gray-700 dark:text-gray-200">
-                {{ t('admin.accountAdmins.empty') }}
+            <div class="admin-empty-state">
+              <div class="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary-100 bg-primary-50 text-primary-600 dark:border-primary-900/60 dark:bg-primary-900/20 dark:text-primary-400">
+                <Icon :name="hasFilters ? 'search' : 'users'" size="xl" />
+              </div>
+              <p class="font-semibold text-gray-800 dark:text-gray-100">
+                {{ t(hasFilters ? 'admin.accountAdmins.noMatches' : 'admin.accountAdmins.empty') }}
               </p>
-              <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
-                {{ t('admin.accountAdmins.emptyHint') }}
+              <p class="mt-2 max-w-sm whitespace-normal text-sm leading-6 text-gray-500 dark:text-dark-400">
+                {{ t(hasFilters ? 'admin.accountAdmins.noMatchesHint' : 'admin.accountAdmins.emptyHint') }}
               </p>
+              <button v-if="hasFilters" type="button" class="btn btn-secondary mt-5" @click="resetFilters">
+                {{ t('admin.accountAdmins.clearFilters') }}
+              </button>
+              <button v-else type="button" class="btn btn-primary mt-5" @click="openCreate">
+                <Icon name="userPlus" size="md" class="mr-2" />
+                {{ t('admin.accountAdmins.create') }}
+              </button>
             </div>
           </template>
         </DataTable>
@@ -140,9 +193,17 @@
       @close="closeFormDialog"
     >
       <form id="account-admin-form" class="space-y-5" @submit.prevent="submitForm">
+        <div class="flex items-start gap-3 rounded-xl border border-primary-100 bg-primary-50/60 p-4 dark:border-primary-900/50 dark:bg-primary-900/15">
+          <Icon name="shield" size="md" class="mt-0.5 shrink-0 text-primary-600 dark:text-primary-400" />
+          <div>
+            <p class="text-sm font-medium text-primary-900 dark:text-primary-200">{{ t('admin.accountAdmins.permissionTitle') }}</p>
+            <p class="mt-1 text-xs leading-5 text-primary-700 dark:text-primary-300">{{ t('admin.accountAdmins.passwordHint') }}</p>
+          </div>
+        </div>
         <div>
-          <label class="input-label">{{ t('admin.accountAdmins.email') }}</label>
+          <label for="account-admin-email" class="input-label">{{ t('admin.accountAdmins.email') }} <span class="text-primary-600" aria-hidden="true">*</span></label>
           <input
+            id="account-admin-email"
             v-model.trim="form.email"
             type="email"
             required
@@ -152,8 +213,9 @@
           />
         </div>
         <div>
-          <label class="input-label">{{ t('admin.accountAdmins.username') }}</label>
+          <label for="account-admin-username" class="input-label">{{ t('admin.accountAdmins.username') }}</label>
           <input
+            id="account-admin-username"
             v-model.trim="form.username"
             type="text"
             maxlength="100"
@@ -162,36 +224,52 @@
           />
         </div>
         <div>
-          <label class="input-label">{{ t('admin.accountAdmins.password') }}</label>
+          <label for="account-admin-password" class="input-label">{{ t('admin.accountAdmins.password') }} <span v-if="!editingAccountAdmin" class="text-primary-600" aria-hidden="true">*</span></label>
           <div class="flex gap-2">
             <input
+              id="account-admin-password"
               v-model="form.password"
               :type="passwordVisible ? 'text' : 'password'"
               :required="!editingAccountAdmin"
               minlength="6"
               maxlength="72"
-              class="input flex-1"
+              class="input min-w-0 flex-1"
               autocomplete="new-password"
+              aria-describedby="account-admin-password-hint"
               :placeholder="editingAccountAdmin
                 ? t('admin.accountAdmins.passwordEditPlaceholder')
                 : t('admin.accountAdmins.passwordPlaceholder')"
             />
-            <button type="button" class="btn btn-secondary px-3" @click="passwordVisible = !passwordVisible">
+            <button
+              type="button"
+              class="admin-icon-button shrink-0"
+              :title="t(passwordVisible ? 'admin.accountAdmins.hidePassword' : 'admin.accountAdmins.showPassword')"
+              :aria-label="t(passwordVisible ? 'admin.accountAdmins.hidePassword' : 'admin.accountAdmins.showPassword')"
+              :aria-pressed="passwordVisible"
+              @click="passwordVisible = !passwordVisible"
+            >
               <Icon :name="passwordVisible ? 'eyeOff' : 'eye'" size="md" />
             </button>
-            <button type="button" class="btn btn-secondary px-3" @click="generatePassword">
+            <button
+              type="button"
+              class="admin-icon-button shrink-0"
+              :title="t('admin.accountAdmins.generatePassword')"
+              :aria-label="t('admin.accountAdmins.generatePassword')"
+              @click="generatePassword"
+            >
               <Icon name="refresh" size="md" />
             </button>
           </div>
-          <p class="input-hint">{{ t('admin.accountAdmins.passwordHint') }}</p>
+          <p id="account-admin-password-hint" class="input-hint">{{ t(editingAccountAdmin ? 'admin.accountAdmins.passwordEditPlaceholder' : 'admin.accountAdmins.passwordRequirement') }}</p>
         </div>
         <div v-if="editingAccountAdmin">
-          <label class="input-label">{{ t('common.status') }}</label>
-          <Select v-model="form.status" :options="statusOptions" :searchable="false" />
+          <label for="account-admin-status" class="input-label">{{ t('common.status') }}</label>
+          <Select id="account-admin-status" v-model="form.status" :options="statusOptions" :searchable="false" :aria-label="t('common.status')" />
         </div>
         <div>
-          <label class="input-label">{{ t('admin.accountAdmins.notes') }}</label>
+          <label for="account-admin-notes" class="input-label">{{ t('admin.accountAdmins.notes') }}</label>
           <textarea
+            id="account-admin-notes"
             v-model="form.notes"
             rows="3"
             class="input"
@@ -248,6 +326,8 @@ import {
 import { formatDateTime } from '@/utils/format'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
+import AdminPageHeader from '@/components/admin/AdminPageHeader.vue'
+import AdminOverviewStrip from '@/components/admin/AdminOverviewStrip.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -305,6 +385,31 @@ const statusFilterOptions = computed(() => [
 ])
 
 const statusOptions = computed(() => statusFilterOptions.value.slice(1))
+const hasFilters = computed(() => Boolean(filters.search || filters.status))
+const overviewItems = computed(() => [
+  {
+    label: t('admin.accountAdmins.matchingAdmins'),
+    value: pagination.total,
+    hint: t('admin.accountAdmins.matchingAdminsHint'),
+  },
+  {
+    label: t('admin.accountAdmins.activeOnPage'),
+    value: accountAdmins.value.filter(admin => admin.status === 'active').length,
+    hint: t('admin.accountAdmins.activeOnPageHint'),
+    tone: 'positive' as const,
+  },
+  {
+    label: t('admin.accountAdmins.disabledOnPage'),
+    value: accountAdmins.value.filter(admin => admin.status === 'disabled').length,
+    hint: t('admin.accountAdmins.disabledOnPageHint'),
+  },
+])
+
+function resetFilters(): void {
+  filters.search = ''
+  filters.status = ''
+  applyFilters()
+}
 
 function resetForm(): void {
   Object.assign(form, {
@@ -478,3 +583,31 @@ onMounted(() => {
   void loadAccountAdmins()
 })
 </script>
+
+<style scoped>
+.account-admins-toolbar {
+  @apply flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between;
+}
+
+.admin-avatar {
+  @apply flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-primary-100 bg-primary-50 text-xs font-semibold tracking-wide text-primary-700 dark:border-primary-900/60 dark:bg-primary-900/20 dark:text-primary-300;
+}
+
+.admin-row-action {
+  @apply inline-flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-dark-300 dark:hover:bg-dark-700 dark:hover:text-white;
+}
+
+.admin-delete-action {
+  @apply h-9 w-9 border-transparent bg-transparent text-gray-400 shadow-none hover:border-red-100 hover:bg-red-50 hover:text-red-600 dark:hover:border-red-900/50 dark:hover:bg-red-900/20 dark:hover:text-red-400;
+}
+
+@media (max-width: 640px) {
+  .account-admins-page :deep([data-field='identity']) {
+    @apply flex-col gap-2;
+  }
+
+  .account-admins-page :deep([data-field='identity'] > div) {
+    @apply w-full text-left;
+  }
+}
+</style>
