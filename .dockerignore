@@ -52,6 +52,11 @@ config.yaml
 config.local.yaml
 
 # Local runtime data and generated bundles (never send to the Docker daemon)
+/.dev/
+/backend/bin/
+/backend/internal/web/dist/
+/frontend/.env.local
+/frontend/.env.*.local
 /data/
 /browser-page-preload.js
 /core-*.js

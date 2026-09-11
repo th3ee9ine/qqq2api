@@ -58,6 +58,7 @@ type AccountHandler struct {
 	rateLimitService        *service.RateLimitService
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
+	debugWorkbench          *service.DebugWorkbenchService
 	concurrencyService      *service.ConcurrencyService
 	crsSyncService          *service.CRSSyncService
 	sessionLimitCache       service.SessionLimitCache
@@ -1350,7 +1351,11 @@ func (h *AccountHandler) GetOpenAITestDefaults(c *gin.Context) {
 			return
 		}
 	}
-	defaults := h.accountTestService.BuildOpenAITestDefaults(account, endpoint, c.Query("prompt"))
+	defaults, err := h.accountTestService.BuildOpenAITestDefaultsForAccount(c.Request.Context(), account, endpoint, c.Query("prompt"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	// A debug request may explicitly select a managed proxy independently of
 	// the account's persisted binding. Return credential-free metadata so the
 	// workbench can display the effective route while keeping proxy passwords
@@ -1358,8 +1363,14 @@ func (h *AccountHandler) GetOpenAITestDefaults(c *gin.Context) {
 	// account binding and is unaffected by this optional query parameter.
 	if proxyRaw := strings.TrimSpace(c.Query("proxy_id")); proxyRaw != "" {
 		proxyID, err := strconv.ParseInt(proxyRaw, 10, 64)
-		if err != nil || proxyID <= 0 {
+		if err != nil || proxyID < 0 {
 			response.BadRequest(c, "Invalid proxy_id")
+			return
+		}
+		if proxyID == 0 {
+			defaults.ProxyID, defaults.ProxyName, defaults.ProxyURL = nil, "", ""
+			defaults.Notes = append(defaults.Notes, "调试请求显式使用直连，不使用账号绑定代理")
+			response.Success(c, defaults)
 			return
 		}
 		if h.adminService == nil {

@@ -24,6 +24,30 @@ func ProvideOpenAIOAuthHandler(
 	return admin.NewOpenAIOAuthHandler(openaiOAuthService, adminService, quotaService, rateLimitService)
 }
 
+// ProvideDebugAccountHandler adds the full gateway debugger without changing the
+// existing admin account constructor used by integrations and focused tests.
+func ProvideDebugAccountHandler(
+	cfg *config.Config,
+	adminService service.AdminService,
+	oauthService *service.OAuthService,
+	openaiOAuthService *service.OpenAIOAuthService,
+	rateLimitService *service.RateLimitService,
+	accountUsageService *service.AccountUsageService,
+	accountTestService *service.AccountTestService,
+	concurrencyService *service.ConcurrencyService,
+	crsSyncService *service.CRSSyncService,
+	sessionLimitCache service.SessionLimitCache,
+	rpmCache service.RPMCache,
+	tokenCacheInvalidator service.TokenCacheInvalidator,
+	gateway *service.OpenAIGatewayService,
+) *admin.AccountHandler {
+	h := admin.ProvideAccountHandler(cfg, adminService, oauthService, openaiOAuthService,
+		rateLimitService, accountUsageService, accountTestService, concurrencyService,
+		crsSyncService, sessionLimitCache, rpmCache, tokenCacheInvalidator)
+	h.SetDebugWorkbenchService(service.NewDebugWorkbenchService(gateway, adminService))
+	return h
+}
+
 // ProvideAdminHandlers creates the AdminHandlers struct.  The optional cleanup
 // argument keeps the historical constructor source-compatible for integrations
 // that build handlers directly; the Wire provider below uses the explicit
@@ -327,7 +351,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewDashboardHandler,
 	admin.NewGroupHandlerWithConfig,
 	admin.NewModelPricingHandler,
-	admin.ProvideAccountHandler,
+	ProvideDebugAccountHandler,
 	admin.NewAccountAdminHandler,
 	admin.NewImageStorageHandler,
 	admin.NewOAuthHandler,

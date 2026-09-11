@@ -803,11 +803,6 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 
-	// Set common headers
-	req.Header.Set("Content-Type", "application/json")
-	if !isOAuth {
-		applyOpenAICodexProbeHeaders(req.Header)
-	}
 	if credentialAccount.IsOpenAIAgentIdentity() {
 		authHeaders, authErr := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount)
 		if authErr != nil {
@@ -822,28 +817,8 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
 
-	// Set OAuth-specific headers for ChatGPT internal API
-	if isOAuth {
-		req.Host = "chatgpt.com"
-		req.Header.Set("accept", "text/event-stream")
-		canonical := resolveCodexOutboundIdentity("")
-		req.Header.Set("Originator", canonical.originator)
-		if customUA := strings.TrimSpace(credentialAccount.GetOpenAICodexUserAgent()); customUA != "" {
-			req.Header.Set("User-Agent", customUA)
-		} else {
-			req.Header.Set("User-Agent", canonical.userAgent)
-		}
-		setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
-		// 与真实转发一致：账号级自定义 UA 同样作为管理员显式配置传入，否则测试用的身份
-		// 与该账号真实出站的身份不是同一个（issue #3901 的配对不变式由收口保证）。
-		enforceCodexIdentityHeadersWithAccount(req.Header, credentialAccount)
-	}
-
-	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
-	credentialAccount.ApplyHeaderOverrides(req.Header)
-	if isOAuth {
-		stripOpenAILegacyResponsesBeta(req.Header)
-	}
+	// Keep the live wire headers and the workbench's redacted defaults aligned.
+	applyOpenAIAccountTestHeaders(req, credentialAccount, "responses", payloadBytes)
 
 	// Get proxy URL
 	proxyURL := ""
@@ -2044,13 +2019,8 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 		return s.sendErrorAndEnd(c, "Failed to create Chat Completions request")
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+authToken)
-
-	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
-	account.ApplyHeaderOverrides(req.Header)
-	SanitizeOutboundGatewayIdentity(req.Header)
+	applyOpenAIAccountTestHeaders(req, account, "chat/completions", payloadBytes)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -2725,13 +2695,14 @@ func createOpenAIChatCompletionsTestPayload(modelID string, prompt string) map[s
 // connectivity tests so that the UI always starts with the currently deployed
 // API defaults rather than a second, stale copy.
 type OpenAITestDefaults struct {
-	Endpoint     string            `json:"endpoint"`
-	Source       string            `json:"source"`
-	AccountType  string            `json:"account_type"`
-	Body         map[string]any    `json:"body"`
-	UpstreamBody map[string]any    `json:"upstream_body,omitempty"`
-	Headers      map[string]string `json:"headers"`
-	URL          string            `json:"url,omitempty"`
+	Endpoint      string                   `json:"endpoint"`
+	Source        string                   `json:"source"`
+	AccountType   string                   `json:"account_type"`
+	Body          map[string]any           `json:"body"`
+	UpstreamBody  map[string]any           `json:"upstream_body,omitempty"`
+	Headers       map[string]string        `json:"headers"`
+	HeaderDetails []OpenAITestHeaderDetail `json:"header_details,omitempty"`
+	URL           string                   `json:"url,omitempty"`
 	// Proxy metadata is included when a managed proxy is selected for the
 	// debug workbench. ProxyURL is always credential-free (host/port only).
 	ProxyID   *int64   `json:"proxy_id,omitempty"`
@@ -2757,7 +2728,7 @@ func (s *AccountTestService) BuildOpenAITestDefaults(account *Account, endpoint,
 	if endpoint == "v1/images/generations" {
 		endpoint = "images/generations"
 	}
-	accountType := AccountTypeOAuth
+	accountType := AccountTypeAPIKey
 	if account != nil && account.Type != "" {
 		accountType = account.Type
 	}
@@ -2768,15 +2739,13 @@ func (s *AccountTestService) BuildOpenAITestDefaults(account *Account, endpoint,
 	if strings.TrimSpace(prompt) == "" {
 		prompt = "hi"
 	}
-	result := OpenAITestDefaults{Endpoint: endpoint, Source: "AccountTestService", AccountType: accountType, Headers: map[string]string{"Content-Type": "application/json"}}
+	result := OpenAITestDefaults{Endpoint: endpoint, Source: "AccountTestService", AccountType: accountType}
 	switch endpoint {
 	case "chat/completions":
 		result.Body = createOpenAIChatCompletionsTestPayload(model, prompt)
 		result.Body["stream"] = true
-		result.Headers["Accept"] = "text/event-stream"
-		result.Headers["Authorization"] = "Bearer ••••••••"
 		if account != nil && account.IsOAuth() {
-			result.UpstreamBody = createOpenAITestPayload(model, true)
+			result.UpstreamBody = createOpenAITestPayload(normalizeOpenAIModelForUpstream(account, model), true)
 			result.Notes = append(result.Notes, "OAuth 账号实际测试会转换为 Responses API")
 		}
 		if account != nil && account.IsOAuth() {
@@ -2794,7 +2763,6 @@ func (s *AccountTestService) BuildOpenAITestDefaults(account *Account, endpoint,
 			imageModel = account.GetMappedModel(imageModel)
 		}
 		result.Body = map[string]any{"model": imageModel, "prompt": defaultOpenAIImageTestPrompt, "n": 1, "response_format": "b64_json"}
-		result.Headers["Authorization"] = "Bearer ••••••••"
 		if account != nil && account.IsOAuth() {
 			if raw, err := buildOpenAIImagesResponsesRequest(&OpenAIImagesRequest{Endpoint: openAIImagesGenerationsEndpoint, Model: imageModel, Prompt: defaultOpenAIImageTestPrompt, N: 1}, imageModel); err == nil {
 				_ = json.Unmarshal(raw, &result.UpstreamBody)
@@ -2810,26 +2778,39 @@ func (s *AccountTestService) BuildOpenAITestDefaults(account *Account, endpoint,
 		}
 	default:
 		result.Endpoint = "responses"
+		if account != nil && account.IsOAuth() {
+			model = normalizeOpenAIModelForUpstream(account, model)
+		}
 		result.Body = createOpenAITestPayload(model, account != nil && account.IsOAuth())
-		result.Headers["Accept"] = "text/event-stream"
-		result.Headers["Authorization"] = "Bearer ••••••••"
 		if account != nil && account.IsOAuth() {
 			result.URL = chatgptCodexAPIURL
 		} else {
-			// API-key Responses probes use the same Codex identity headers as the
-			// live account test. Values are non-secret, with the per-request UUID
-			// represented as a placeholder in this static template.
-			identity := resolveCodexOutboundIdentity("")
-			result.Headers["User-Agent"] = identity.userAgent
-			result.Headers["Originator"] = identity.originator
-			result.Headers["Version"] = currentCodexResponsesVersion()
-			result.Headers["X-Codex-Window-ID"] = "<generated-per-request>"
 			base := "https://api.openai.com"
 			if account != nil && account.GetOpenAIBaseURL() != "" {
 				base = redactOpenAIBaseURL(account.GetOpenAIBaseURL())
 			}
 			result.URL = buildOpenAIResponsesURL(base)
 		}
+	}
+	upstreamBody := result.Body
+	if result.UpstreamBody != nil {
+		upstreamBody = result.UpstreamBody
+	}
+	result.Headers = buildOpenAIAccountTestHeaderDefaults(account, result.Endpoint, result.URL, upstreamBody)
+	result.HeaderDetails = buildOpenAITestHeaderDetails(result.Headers)
+	result.Notes = append(result.Notes,
+		"Headers 来源：项目 AccountTestService 实际上游测试请求，已应用账号身份配置、请求头覆写与最终过滤；认证及账号标识已脱敏。",
+		"Host 来自 http.Request.Host / URL；Content-Length、Accept-Encoding 等由 HTTP 传输层按请求体、代理和协议自动处理，不是固定默认头。",
+		"<generated-per-request> 由服务端在每次请求时生成；X-Client-Request-Id 用于单次请求排查，不与会话 ID 复用；默认模板不会触发上游请求或 Agent Identity 任务注册。",
+		"正式网关转发另按条件处理 Session_ID、Conversation_ID、X-Codex-Turn-State、X-Codex-Turn-Metadata、X-Codex-Window-ID 等客户端会话头，并执行账号隔离与指纹配置；没有对应输入时不伪造为默认必发头。",
+	)
+	if account != nil && account.IsOAuth() {
+		result.Notes = append(result.Notes,
+			"OAuth 测试与正式网关共用 Codex 能力及路由规则：未声明能力时补 X-Codex-Beta-Features: remote_compaction_v2；X-Codex-Routing-Hint 从最终上游 body 的 model / service_tier 派生，生图使用 Responses 承载模型而非图像工具模型。",
+		)
+	}
+	if account != nil && len(account.GetHeaderOverrides()) > 0 {
+		result.Notes = append(result.Notes, "已包含生效的账号 HeaderOverrides；自定义头可能承载私有凭据，配置值统一脱敏，真实请求仍使用账号保存值。")
 	}
 	// Surface the account's managed proxy binding as credential-free metadata so
 	// callers can show the effective route without exposing proxy credentials.
@@ -3093,12 +3074,8 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 		return s.sendErrorAndEnd(c, "Failed to create request")
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+authToken)
-
-	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
-	account.ApplyHeaderOverrides(req.Header)
-	SanitizeOutboundGatewayIdentity(req.Header)
+	applyOpenAIAccountTestHeaders(req, account, "images/generations", payloadBytes)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -3211,20 +3188,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	} else {
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	canonical := resolveCodexOutboundIdentity("")
-	req.Header.Set("originator", canonical.originator)
-	if customUA := strings.TrimSpace(credentialAccount.GetOpenAICodexUserAgent()); customUA != "" {
-		req.Header.Set("User-Agent", customUA)
-	} else {
-		req.Header.Set("User-Agent", canonical.userAgent)
-	}
-	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
-	// 与真实转发一致：账号级自定义 UA 同样作为管理员显式配置传入，否则测试用的身份
-	// 与该账号真实出站的身份不是同一个（issue #3901 的配对不变式由收口保证）。
-	enforceCodexIdentityHeadersWithAccount(req.Header, credentialAccount)
-	stripOpenAILegacyResponsesBeta(req.Header)
+	applyOpenAIAccountTestHeaders(req, credentialAccount, "responses", responsesBody)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

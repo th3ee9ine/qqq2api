@@ -31,12 +31,12 @@ func TestBuildOpenAITestDefaultsUsesAccountTestPayloads(t *testing.T) {
 
 func TestBuildOpenAITestDefaultsOAuthAndAPIKeyRouting(t *testing.T) {
 	svc := (*AccountTestService)(nil)
-	oauth := &Account{Type: AccountTypeOAuth, Credentials: map[string]any{"base_url": "https://ignored.example/?token=secret"}}
+	oauth := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"base_url": "https://ignored.example/?token=secret"}}
 	oauthDefaults := svc.BuildOpenAITestDefaults(oauth, "responses", "")
 	require.Equal(t, chatgptCodexAPIURL, oauthDefaults.URL)
 	require.NotContains(t, oauthDefaults.URL, "secret")
 
-	apiKey := &Account{Type: AccountTypeAPIKey, Credentials: map[string]any{"base_url": "https://upstream.example/v1?token=secret"}}
+	apiKey := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"base_url": "https://upstream.example/v1?token=secret"}}
 	apiDefaults := svc.BuildOpenAITestDefaults(apiKey, "responses", "")
 	require.Equal(t, "https://upstream.example/v1/responses", apiDefaults.URL)
 	require.NotContains(t, apiDefaults.URL, "secret")

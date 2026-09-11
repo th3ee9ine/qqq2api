@@ -406,7 +406,7 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 	if ctx == nil {
 		return context.Background(), func() {}
 	}
-	if !stream {
+	if !stream || DebugWorkbenchTraceFromContext(ctx) != nil {
 		return ctx, func() {}
 	}
 	return context.WithoutCancel(ctx), func() {}
@@ -415,6 +415,10 @@ func detachStreamUpstreamContext(ctx context.Context, stream bool) (context.Cont
 func detachUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		return context.Background(), func() {}
+	}
+	// Debug runs are explicitly bounded and must stop on cancellation.
+	if DebugWorkbenchTraceFromContext(ctx) != nil {
+		return ctx, func() {}
 	}
 	return context.WithoutCancel(ctx), func() {}
 }

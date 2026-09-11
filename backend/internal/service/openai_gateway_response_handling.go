@@ -1454,6 +1454,12 @@ func (s *OpenAIGatewayService) BindOpenAIHTTPResponseOwner(
 }
 
 func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *gin.Context, account *Account, responseID string) error {
+	// The admin debugger pins one selected account and owns a separate session
+	// store. Do not seed the public API's response-affinity cache with synthetic
+	// API-key identities or make later ordinary traffic depend on debug runs.
+	if DebugWorkbenchTraceFromContext(ctx) != nil {
+		return nil
+	}
 	if s == nil || account == nil || account.ID <= 0 {
 		return errors.New("invalid HTTP response affinity state")
 	}

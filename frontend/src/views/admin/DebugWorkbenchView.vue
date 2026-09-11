@@ -1,394 +1,500 @@
 <template>
   <AppLayout>
-    <div class="mx-auto max-w-[1600px] space-y-5">
-      <div class="flex flex-wrap items-start justify-between gap-4">
+    <div class="workbench">
+      <header class="workspace-header">
         <div>
-          <div class="flex items-center gap-2">
-            <Icon name="terminal" size="lg" class="text-primary-500" />
-            <h1 class="text-2xl font-bold text-gray-900 dark:text-white">上游接口调试工作台</h1>
-          </div>
-          <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">选择账号，实时查看入站、出站与上游请求的完整链路</p>
+          <div class="workspace-eyebrow"><span class="workspace-mark"><Icon name="terminal" size="sm" /></span> DEVELOPER WORKSPACE <span class="eyebrow-divider">/</span> PLAYGROUND</div>
+          <h1>上游调试工作台<span class="heading-period">.</span></h1>
+          <p class="workspace-description">构造请求，探索模型，在同一视图检查调试链路。</p>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
-            <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span> 调试服务在线
-          </span>
-          <button type="button" class="btn btn-secondary" @click="resetAll"><Icon name="refresh" size="sm" /> 重置</button>
+        <div class="header-actions">
+          <span class="session-badge" :class="`session-${sessionState.tone}`" role="status"><span class="status-dot"></span>{{ sessionState.label }}</span>
+          <button type="button" class="secondary-button" :disabled="running || defaultsLoading" @click="resetAll"><Icon name="refresh" size="sm" /> 重置参数</button>
         </div>
-      </div>
+      </header>
 
-      <section class="card p-4 md:p-5">
-        <div class="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr_1fr_1fr_1fr_auto] lg:items-end">
-          <label class="block"><span class="field-label">GPT 账号 <span class="font-normal text-gray-400">（{{ accounts.length }} 个）</span></span><select v-model="form.account" class="input mt-1.5" :disabled="accountsLoading || !accounts.length"><option v-if="accountsLoading" value="">正在加载账号…</option><option v-else-if="!accounts.length" value="">暂无可用 GPT 账号</option><option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.status === 'active' ? '●' : '○' }} {{ a.name }} · {{ a.typeLabel }} · {{ a.email }}</option></select><span v-if="selectedAccount" class="mt-1 block truncate text-[11px] text-gray-400">{{ selectedAccount.platform || 'openai' }} · ID {{ selectedAccount.id }}</span><span v-if="accountsLoading" class="mt-1 block text-[11px] text-gray-400">正在加载账号…</span><span v-else-if="accountsError" class="mt-1 block text-[11px] text-amber-600">{{ accountsError }}</span></label>
-          <label class="block"><span class="field-label">模型 <span class="font-normal text-gray-400">（{{ models.length }} 个，可自定义）</span></span><input v-model="form.model" list="debug-model-options" class="input mt-1.5" :disabled="modelsLoading" placeholder="输入模型 ID 或从列表选择" autocomplete="off" @change="commitCustomModel" @keydown.enter.prevent="commitCustomModel" /><datalist id="debug-model-options"><option v-for="m in models" :key="m.id" :value="m.id">{{ m.display_name || m.id }}</option></datalist><span v-if="selectedModel" class="mt-1 block truncate text-[11px] text-gray-400">模型 ID：{{ selectedModel.id }}<span v-if="selectedModel.type"> · {{ selectedModel.type }}</span></span><span v-else-if="form.model" class="mt-1 block truncate text-[11px] text-primary-500">自定义模型：{{ form.model }}</span><span v-if="modelsLoading" class="mt-1 block text-[11px] text-gray-400">正在同步该账号的模型…</span><span v-else-if="modelsError" class="mt-1 block text-[11px] text-amber-600">{{ modelsError }}</span></label>
-          <label class="block"><span class="field-label">请求方式</span><select v-model="form.endpoint" class="input mt-1.5"><option value="chat/completions">Chat Completions</option><option value="responses">Responses API</option><option value="images/generations">Images Generation</option></select></label>
-          <label class="block"><span class="field-label">代理 IP</span><ProxySelector v-model="form.proxyId" :proxies="proxies" :disabled="running" /></label>
-          <button type="button" class="btn btn-primary h-10 justify-center px-6" :disabled="running" @click="runRequest"><Icon :name="running ? 'refresh' : 'play'" size="sm" :class="running && 'animate-spin'" /> {{ running ? '请求中…' : '发送请求' }}</button>
+      <section class="connection-panel" aria-labelledby="connection-title">
+        <div class="panel-kicker"><h2 id="connection-title"><Icon name="server" size="sm" /> 连接配置</h2><span>01 <span class="kicker-divider">/</span> CONFIGURATION</span></div>
+        <div class="connection-grid">
+          <div class="connection-field">
+            <label for="debug-account" class="field-label"><span>GPT 账号</span><span class="count-badge">{{ accounts.length }}</span></label>
+            <div class="control-with-icon"><Icon name="userCircle" size="md" /><select id="debug-account" v-model="form.account" class="workbench-input" :disabled="running || accountsLoading || !accounts.length"><option v-if="accountsLoading" value="">正在加载账号…</option><option v-else-if="!accounts.length" value="">暂无可用 GPT 账号</option><option v-for="a in accounts" :key="a.id" :value="a.id">{{ a.name }} · {{ a.typeLabel }} · {{ a.email }}</option></select></div>
+            <p class="field-hint" :title="selectedAccount ? `${selectedAccount.email} · ${selectedAccount.platform} · ID ${selectedAccount.id}` : ''">{{ accountsLoading ? '正在加载账号…' : selectedAccount ? `${selectedAccount.typeLabel} · ${selectedAccount.email} · ID ${selectedAccount.id}` : '请选择调试账号' }}</p>
+            <p v-if="accountsError" class="field-warning">{{ accountsError }}</p>
+          </div>
+          <div class="connection-field">
+            <label for="debug-model" class="field-label"><span>模型</span><span class="field-label-note">支持自定义</span></label>
+            <div class="control-with-icon"><Icon name="cpu" size="md" /><input id="debug-model" v-model="form.model" list="debug-model-options" class="workbench-input model-input" :disabled="running || modelsLoading || defaultsLoading" placeholder="选择或输入模型 ID" autocomplete="off" @change="commitCustomModel" @keydown.enter.prevent="commitCustomModel" /></div>
+            <datalist id="debug-model-options"><option v-for="m in models" :key="m.id" :value="m.id">{{ m.display_name || m.id }}</option></datalist>
+            <p class="field-hint">{{ modelsLoading ? '正在同步该账号的模型…' : selectedModel?.type === 'custom' || (!selectedModel && form.model) ? '自定义模型 · 按 Enter 确认' : `${models.length} 个候选模型 · 可直接输入模型 ID` }}</p>
+            <p v-if="modelsError" class="field-warning">{{ modelsError }}</p>
+          </div>
+          <div class="connection-field">
+            <label for="debug-endpoint" class="field-label">请求方式</label>
+            <div class="control-with-icon"><Icon name="swap" size="md" /><select id="debug-endpoint" v-model="form.endpoint" class="workbench-input" :disabled="running"><option value="chat/completions">Chat Completions</option><option value="responses">Responses API</option><option value="images/generations">Images Generation</option></select></div>
+            <p class="field-hint">{{ form.endpoint === 'images/generations' ? '图像生成接口' : '文本与多模态接口' }}</p>
+          </div>
+          <div class="connection-field proxy-field">
+            <label for="debug-proxy" class="field-label">代理 IP</label>
+            <select id="debug-proxy" v-model="form.proxyId" class="workbench-input" :disabled="running"><option :value="null">跟随账号配置</option><option :value="0">直连 · 不使用代理</option><option v-for="proxy in proxies" :key="proxy.id" :value="proxy.id">{{ proxy.name }} · {{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }}</option></select>
+            <p class="field-hint">{{ selectedProxy ? `${selectedProxy.protocol} · ${selectedProxy.host}:${selectedProxy.port}` : form.proxyId === 0 ? '仅本次请求直连，不修改账号配置' : '使用所选账号的默认代理' }}</p>
+          </div>
         </div>
-        <div class="mt-4 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3 dark:border-dark-700">
-          <span class="text-xs text-gray-500 dark:text-dark-300">快捷场景</span>
-          <button v-for="preset in presets" :key="preset.label" type="button" class="rounded-md border border-gray-200 px-2.5 py-1 text-xs text-gray-600 hover:border-primary-400 hover:text-primary-600 dark:border-dark-600 dark:text-dark-200" @click="applyPreset(preset)">{{ preset.label }}</button>
-          <label class="ml-auto inline-flex cursor-pointer items-center gap-2 text-xs text-gray-500 dark:text-dark-300"><input v-model="form.stream" type="checkbox" class="rounded border-gray-300 text-primary-600" /> 流式响应</label>
+        <div class="debug-context">
+          <div class="context-topline"><div><span class="context-label">会话上下文</span><span class="transport-badge">HTTP / SSE</span></div><button type="button" class="preset-button" :disabled="running" @click="resetSession">新建会话</button></div>
+          <div class="context-controls"><label for="debug-turn-action">下一次请求</label><select id="debug-turn-action" v-model="sessionAction" class="workbench-input" :disabled="running || !debugSession"><option value="new_turn">新回合 · 保留会话 / 线程</option><option value="continue_turn">续接当前回合 · 复用上游状态</option></select><span class="context-state">{{ debugSession ? `第 ${debugSession.turn_index} 回合 · ${debugSession.turn_state_available ? '已有上游 Turn State' : '暂无上游 Turn State'}` : '首次发送时创建会话，动态 IDs 由服务端维护' }}</span></div>
+          <details v-if="debugSession" class="context-ids"><summary>查看会话标识</summary><dl><template v-for="(value, key) in sessionIdentifiers" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl></details>
+          <p class="context-note">{{ sessionAction === 'continue_turn' && debugSession ? '续接复用当前回合；服务端仅复用本账号、本会话收到的 Turn State。' : '新回合保留 Session / Thread / Window，生成新的 Turn ID，并清空上一回合状态。' }} 对话消息以完整 JSON 为准，不自动追加历史。</p>
         </div>
-        <div class="mt-3 flex items-center gap-2 text-[11px] text-gray-400"><span class="font-medium uppercase tracking-wide">上游 URL</span><code class="rounded bg-gray-50 px-2 py-1 text-gray-600 dark:bg-dark-800 dark:text-dark-300">{{ upstreamUrl }}</code><span class="ml-auto">默认参数来源：{{ defaultsSource }}</span></div>
+        <p v-if="isFixtureAccount && !accountsLoading" class="preview-only-note">当前仅预览参数模板。选择已配置的 GPT 账号后可发送真实请求；这里不会模拟成功响应。</p>
+        <div class="request-bar">
+          <div class="endpoint-address"><span class="method-badge">POST</span><code :title="upstreamUrl">{{ upstreamUrl }}</code></div>
+          <button type="button" class="send-button" :disabled="running || defaultsLoading || accountsLoading || modelsLoading || isFixtureAccount" @click="runRequest"><Icon :name="running ? 'refresh' : 'play'" size="sm" :class="running && 'animate-spin'" /><span>{{ running ? '正在发送…' : isFixtureAccount ? '等待选择账号' : '发送请求' }}</span><Icon name="arrowRight" size="sm" class="send-arrow" /></button>
+        </div>
       </section>
 
-      <div class="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <section class="card overflow-hidden">
-          <div class="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-dark-700"><h2 class="section-title"><Icon name="upload" size="sm" class="text-primary-500" /> 请求参数</h2><span class="badge-muted">JSON</span></div>
-          <div class="space-y-4 p-4">
-            <label class="block"><span class="field-label">系统提示词</span><textarea v-model="form.system" rows="2" class="input mt-1.5 resize-y" placeholder="You are a helpful assistant…"></textarea></label>
-            <label class="block"><span class="field-label">用户消息</span><textarea v-model="form.prompt" rows="4" class="input mt-1.5 resize-y" placeholder="输入要调试的内容…"></textarea></label>
-            <div class="grid grid-cols-2 gap-3"><label><span class="field-label">Temperature</span><input v-model.number="form.temperature" type="number" min="0" max="2" step="0.1" class="input mt-1.5" /></label><label><span class="field-label">最大 Tokens</span><input v-model.number="form.maxTokens" type="number" min="1" class="input mt-1.5" /></label></div>
-            <label class="block"><span class="field-label">自定义请求头</span><textarea v-model="form.headers" rows="3" class="input mt-1.5 font-mono text-xs" spellcheck="false"></textarea></label>
-            <label class="block"><span class="field-label">完整 API 参数 <span class="font-normal text-gray-400">（可直接编辑 JSON）</span></span><textarea v-model="form.apiParams" rows="10" class="input mt-1.5 resize-y font-mono text-xs leading-relaxed" spellcheck="false"></textarea></label>
+      <div class="workspace-columns">
+        <section class="editor-panel" aria-labelledby="editor-title">
+          <div class="section-heading"><div><span class="section-number">02</span><h2 id="editor-title">请求编辑器</h2></div><span class="section-caption">REQUEST</span></div>
+          <div class="editor-tabs" role="tablist" aria-label="请求编辑方式">
+            <button v-for="tab in editorTabs" :id="`editor-tab-${tab.key}`" :key="tab.key" type="button" role="tab" :aria-selected="editorTab === tab.key" :aria-controls="`editor-panel-${tab.key}`" :tabindex="editorTab === tab.key ? 0 : -1" :class="{ 'is-active': editorTab === tab.key }" @click="editorTab = tab.key" @keydown="navigateTabs($event, editorTabs, editorTab, selectEditorTab)"><Icon :name="tab.icon" size="sm" />{{ tab.label }}</button>
           </div>
+          <div v-if="responseStatus && !responseSuccessful" class="request-error" role="alert"><Icon name="exclamationCircle" size="sm" /><span>{{ responseError || '本次请求未成功，请在响应详情中检查错误信息。' }}</span></div>
+          <div v-show="editorTab === 'message'" id="editor-panel-message" role="tabpanel" aria-labelledby="editor-tab-message" class="editor-body">
+            <div class="preset-row"><span>快捷场景</span><button v-for="preset in presets" :key="preset.label" type="button" class="preset-button" :disabled="running || defaultsLoading" :class="{ 'is-selected': form.prompt === preset.prompt }" @click="applyPreset(preset)">{{ preset.label }}</button></div>
+            <label class="editor-field"><span class="field-label">系统提示词<span class="field-label-note">SYSTEM</span></span><textarea v-model="form.system" :disabled="running || defaultsLoading || form.endpoint === 'images/generations'" rows="3" class="workbench-input" placeholder="设定模型的角色与行为…"></textarea></label>
+            <label class="editor-field"><span class="field-label">用户消息<span class="field-label-note">USER</span></span><textarea v-model="form.prompt" :disabled="running || defaultsLoading" rows="6" class="workbench-input prompt-input" placeholder="输入要调试的内容…"></textarea></label>
+            <div class="parameter-grid"><label class="editor-field"><span class="field-label">Temperature</span><input v-model.number="form.temperature" :disabled="running || defaultsLoading || form.endpoint !== 'chat/completions'" type="number" min="0" max="2" step="0.1" class="workbench-input" /><span class="field-hint">{{ form.endpoint === 'chat/completions' ? '0 表示使用接口默认值' : '该接口请在 JSON 中配置支持的字段' }}</span></label><label class="editor-field"><span class="field-label">最大 Tokens</span><input v-model.number="form.maxTokens" :disabled="running || defaultsLoading || form.endpoint !== 'chat/completions'" type="number" min="0" class="workbench-input" /><span class="field-hint">{{ form.endpoint === 'chat/completions' ? '0 表示不指定上限' : '保留完整 JSON 中的参数' }}</span></label></div>
+          </div>
+          <div v-show="editorTab === 'json'" id="editor-panel-json" role="tabpanel" aria-labelledby="editor-tab-json" class="editor-body">
+            <div class="editor-description"><span>完整 API 参数</span><span class="format-tag">JSON</span></div>
+            <label class="sr-only" for="debug-api-params">完整 API 参数 JSON</label><textarea id="debug-api-params" v-model="form.apiParams" :disabled="running || defaultsLoading" rows="23" class="source-editor" spellcheck="false"></textarea>
+            <p class="editor-note">此 JSON 是发送时的完整请求体。便捷控件只更新对应字段；自定义字段原样提交，由正式网关按账号规则处理。</p>
+          </div>
+          <div v-show="editorTab === 'headers'" id="editor-panel-headers" role="tabpanel" aria-labelledby="editor-tab-headers" class="editor-body">
+            <div class="editor-description"><span>上游请求 Headers</span><span class="format-tag">{{ headerCount === null ? 'JSON 格式待修正' : `${headerCount} HEADERS` }}</span></div>
+            <div class="headers-source-row"><span>{{ defaultsLoading ? '正在同步项目上游默认头…' : headersFromBackend ? '来自项目实际请求构造 · 已脱敏' : '基础示例 · 待同步后端配置' }}</span><button type="button" class="preset-button" :disabled="running || defaultsLoading" @click="restoreDefaultHeaders">恢复默认</button></div>
+            <label class="sr-only" for="debug-headers">上游完整请求头 JSON</label><textarea id="debug-headers" v-model="form.headers" :disabled="running || defaultsLoading" rows="20" class="source-editor" spellcheck="false" aria-describedby="headers-default-notes"></textarea>
+            <div id="headers-default-notes" class="headers-default-notes"><p class="editor-note"><Icon name="lock" size="sm" /> 鉴权值已隐藏；动态请求头以占位符展示，实际值由后端生成。</p><p v-if="hasRoutingHintDetail" class="editor-note routing-hint-note">OAuth Codex 的 X-Codex-Routing-Hint 由正式网关按最终上游模型重新生成，JSON 中的静态值不会直接发送。执行后可检查实际保留、重写、生成与过滤结果。</p><details v-if="defaultsNotes.length"><summary>默认头来源与动态字段说明</summary><ul><li v-for="(note, index) in defaultsNotes" :key="index">{{ note }}</li></ul></details></div>
+            <DebugHeaderGuide :details="headerDetails" :headers="form.headers" :loading="defaultsLoading" />
+          </div>
+          <div v-show="editorTab === 'image'" id="editor-panel-image" role="tabpanel" aria-labelledby="editor-tab-image" class="editor-body">
+            <div class="image-mode-row"><div><h3>生图测试</h3><p>提示词、生成参数与图像预览</p></div><label class="switch-control"><input v-model="imageMode" type="checkbox" :disabled="form.endpoint !== 'responses' || running || defaultsLoading" /><span class="switch-track" aria-hidden="true"></span><span>{{ imageMode ? '已启用' : '启用' }}</span></label></div>
+            <p v-if="form.endpoint !== 'images/generations'" class="editor-note">{{ form.endpoint === 'responses' ? '启用后会在完整 JSON 中加入 image_generation 工具；工具参数请在 JSON 中编辑。' : '生图请切换到 Responses API 或 Images Generation。' }}</p><fieldset :disabled="!imageMode || running || defaultsLoading" class="image-fields"><legend class="sr-only">生图参数</legend><label class="editor-field"><span class="field-label">图像提示词</span><textarea v-model="imageForm.prompt" rows="4" class="workbench-input" placeholder="描述画面、光线、构图与风格…"></textarea></label><div class="parameter-grid"><label class="editor-field"><span class="field-label">生成数量</span><input :disabled="form.endpoint !== 'images/generations'" v-model.number="imageForm.n" type="number" min="1" max="10" class="workbench-input" /></label><label class="editor-field"><span class="field-label">响应格式</span><select :disabled="form.endpoint !== 'images/generations'" v-model="imageForm.responseFormat" class="workbench-input"><option value="b64_json">b64_json</option><option value="url">url</option></select></label></div></fieldset>
+            <div class="image-preview"><img v-if="imagePreviewUrl && !imagePreviewFailed" :src="imagePreviewUrl" alt="生成结果预览" @error="imagePreviewFailed = true" /><div v-else class="preview-placeholder"><span class="preview-icon"><Icon name="beaker" size="lg" /></span><strong>{{ imagePreviewFailed ? '图像加载失败' : '让想法成为画面' }}</strong><p>{{ imagePreviewFailed ? '请在上游响应中检查图像地址。' : isFixtureAccount ? '尚未选择真实账号，仅显示参数模板。' : '启用生图后，生成结果将在这里展示。' }}</p></div></div>
+          </div>
+          <footer class="editor-footer"><label class="switch-control"><input v-model="form.stream" type="checkbox" :disabled="running || defaultsLoading || form.endpoint === 'images/generations'" /><span class="switch-track" aria-hidden="true"></span><span>流式响应</span></label><span class="format-tag">{{ form.endpoint === 'images/generations' ? 'JSON' : form.stream ? 'STREAM' : 'JSON' }}</span></footer>
         </section>
 
-        <section class="card overflow-hidden">
-          <div class="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-dark-700"><h2 class="section-title"><Icon name="beaker" size="sm" class="text-fuchsia-500" /> 生图测试</h2><label class="inline-flex items-center gap-2 text-xs text-gray-500"><input v-model="imageMode" type="checkbox" :disabled="form.endpoint === 'images/generations'" class="rounded border-gray-300 text-fuchsia-600" /> 启用</label></div>
-          <div class="space-y-4 p-4" :class="!imageMode && 'opacity-50 pointer-events-none'"><label class="block"><span class="field-label">图像提示词</span><textarea v-model="imageForm.prompt" rows="3" class="input mt-1.5 resize-y" placeholder="描述你想生成的图像…"></textarea></label><div class="grid grid-cols-2 gap-3"><label><span class="field-label">数量 n</span><input v-model.number="imageForm.n" type="number" min="1" max="10" class="input mt-1.5" /></label><label><span class="field-label">响应格式</span><select v-model="imageForm.responseFormat" class="input mt-1.5"><option value="b64_json">b64_json</option><option value="url">url</option></select></label></div><div class="flex min-h-24 items-center justify-center overflow-hidden rounded-lg border border-dashed border-gray-300 bg-gray-50 text-xs text-gray-400 dark:border-dark-600 dark:bg-dark-800/50"><img v-if="imagePreviewUrl" :src="imagePreviewUrl" alt="生成结果预览" class="max-h-48 max-w-full rounded object-contain" /><span v-else>生成结果将在此处预览</span></div></div>
+        <section class="inspector-panel" aria-labelledby="inspector-title">
+          <div class="section-heading"><div><span class="section-number">03</span><h2 id="inspector-title">链路检查器</h2></div><span class="section-caption">INSPECTOR</span></div>
+          <div class="trace-tabs" role="tablist" aria-label="调试链路阶段"><button v-for="(tab, index) in tabs" :id="`trace-tab-${tab.key}`" :key="tab.key" type="button" role="tab" :aria-selected="activeTab === tab.key" :aria-label="tab.label" :title="tab.label" :aria-controls="`trace-panel-${tab.key}`" :tabindex="activeTab === tab.key ? 0 : -1" :class="{ 'is-active': activeTab === tab.key }" @click="activeTab = tab.key" @keydown="navigateTabs($event, tabs, activeTab, selectTraceTab)"><span class="trace-step">{{ String(index + 1).padStart(2, '0') }}</span><span>{{ tab.shortLabel }}</span><Icon v-if="index < 3" name="chevronRight" size="sm" class="trace-arrow" /></button></div>
+          <div v-if="result" class="attempt-toolbar"><label for="debug-attempt">上游尝试</label><select v-if="result.attempts.length" id="debug-attempt" v-model.number="selectedAttemptIndex" class="workbench-input"><option v-for="(attempt, index) in result.attempts" :key="attempt.index" :value="index">#{{ attempt.index }} · {{ attempt.response?.status_code || (attempt.error ? '错误' : '无响应') }} · {{ attempt.duration_ms }} ms</option></select><span v-else>本次未发出上游请求</span><span v-if="selectedAttempt?.ttft_ms != null" class="ttft-label" title="从上游调用开始，到首次读到响应 Body 字节；不等同于模型首个文本 Token">首字节 {{ selectedAttempt.ttft_ms }} ms</span></div>
+          <div v-if="result?.warnings?.length || selectedAttempt?.error" class="trace-warnings" role="status"><p v-for="(warning, index) in result?.warnings || []" :key="index">{{ warning }}</p><p v-if="selectedAttempt?.error">{{ selectedAttempt.error }}</p></div>
+          <div :id="`trace-panel-${activeTab}`" role="tabpanel" :aria-labelledby="`trace-tab-${activeTab}`" class="trace-content">
+            <div class="inspector-toolbar"><div><span class="file-dot"></span><span>{{ activeTab }}.json</span></div><button type="button" class="copy-button" @click="copyCurrent"><Icon :name="copyState === 'copied' ? 'check' : 'copy'" size="sm" />{{ copyState === 'copied' ? '已复制' : copyState === 'error' ? '复制失败，请重试' : '复制' }}</button><span class="sr-only" role="status">{{ copyState === 'copied' ? 'JSON 已复制' : copyState === 'error' ? '复制失败' : '' }}</span></div>
+            <div v-if="activeTab === 'upstream-response' && !responseStatus && !running" class="response-empty"><span class="response-empty-icon"><Icon name="terminal" size="xl" /></span><h3>等待第一条响应</h3><p>发送请求后，在这里检查实际响应头与 JSON / SSE 原文。</p><span class="empty-key">POST <span>/v1/{{ form.endpoint }}</span></span></div>
+            <div v-else-if="activeTab === 'upstream-response' && running" class="response-empty" role="status"><Icon name="refresh" size="xl" class="animate-spin" /><h3>请求处理中</h3><p>正在采集 HTTP / SSE 响应，结束后展示完整记录或明确的截断标记…</p></div>
+            <template v-else><div v-if="captureNotice" class="capture-notice" :class="{ 'capture-warning': captureNotice.warning }" role="status">{{ captureNotice.text }}</div><DebugJsonViewer :value="currentPayload" :label="tabDescription || 'JSON 详情'" /></template>
+            <div class="inspector-status"><span><span class="status-dot" :class="running ? 'dot-running' : responseStatus && !responseSuccessful ? 'dot-error' : ''"></span>{{ running ? '请求进行中' : responseStatus ? `${result ? '实际执行' : submitted ? '提交请求' : '参数校验'} · ${responseStatus}` : '参数模板 · 尚未执行' }}</span><span>{{ requestDuration === null ? '— ms' : `${requestDuration} ms` }}<span class="status-divider">/</span>{{ payloadSize }}</span></div>
+          </div>
+          <DebugHeaderChanges v-if="result" :changes="selectedAttempt?.header_changes || []" /><div class="trace-notes"><div><Icon name="infoCircle" size="sm" /><p>{{ result ? '当前展示最近一次执行的脱敏记录。上游请求采集自 HTTP 客户端实际提交，非网络抓包；传输层自动字段不伪造。' : submitted ? '请求已提交，正在等待服务端执行记录；若连接中断，上游结果仍需以服务端记录为准。' : '尚未执行：请求区仅为参数模板。发送时完整 Body 与 Headers 进入正式网关，响应区不使用连通性测试事件。' }} SSE 在请求结束后显示，非实时逐字展示；采集上限不改变真实转发内容。</p></div><div class="defaults-note"><span>参数来源</span><span>{{ defaultsLoading ? '同步默认参数…' : defaultsSource }}</span></div></div>
         </section>
       </div>
-
-      <section class="card overflow-hidden">
-        <div class="flex flex-wrap items-center gap-1 border-b border-gray-100 px-2 dark:border-dark-700"><button v-for="tab in tabs" :key="tab.key" type="button" class="tab-button" :class="activeTab === tab.key && 'tab-button-active'" @click="activeTab = tab.key">{{ tab.label }}<span v-if="tab.key === 'upstream-response' && responseStatus" class="ml-1.5 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-600">{{ responseStatus }}</span></button></div>
-        <div class="p-4"><div class="mb-3 flex items-center justify-between"><div class="flex items-center gap-2 text-xs text-gray-500 dark:text-dark-300"><span>{{ tabDescription }}</span><span class="rounded bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500 dark:bg-dark-800 dark:text-dark-300">{{ defaultsLoading ? '同步默认参数…' : defaultsSource }}</span></div><button type="button" class="btn btn-ghost px-2 py-1 text-xs" @click="copyCurrent"><Icon name="copy" size="sm" /> 复制 JSON</button></div><pre class="max-h-[380px] overflow-auto rounded-lg bg-gray-900 p-4 font-mono text-xs leading-relaxed text-gray-100">{{ currentPayload }}</pre></div>
-      </section>
+      <footer class="workspace-footer"><span><Icon name="terminal" size="sm" /> QQQ2API <span class="footer-slash">/</span> 开发者工作台</span><span>文本 · 图像 · 上游链路</span></footer>
     </div>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
-import Icon from '@/components/icons/Icon.vue'
-import { getUpstreamTestDefaults, runAccountConnectivityTest } from '@/api/admin/debugWorkbench'
+import Icon, { type IconName } from '@/components/icons/Icon.vue'
+import DebugJsonViewer from '@/components/debug/DebugJsonViewer.vue'
+import DebugHeaderGuide from '@/components/debug/DebugHeaderGuide.vue'
+import DebugHeaderChanges from '@/components/debug/DebugHeaderChanges.vue'
+import { getUpstreamTestDefaults, runDebugWorkbench, type DebugEndpoint, type DebugSessionAction, type DebugSession, type DebugWorkbenchResult, type DebugSnapshot, type UpstreamHeaderDetail } from '@/api/admin/debugWorkbench'
 import { getAvailableModels, list as listAccounts } from '@/api/admin/accounts'
 import { proxiesAPI } from '@/api/admin/proxies'
-import ProxySelector from '@/components/common/ProxySelector.vue'
 import type { Proxy } from '@/types'
 
-const proxies = ref<Proxy[]>([])
 type DebugAccount = { id: string; name: string; email: string; typeLabel: string; status: string; platform?: string }
 type DebugModel = { id: string; display_name?: string; type?: string; created_at?: string }
-const fallbackModels: DebugModel[] = [
-  { id: 'gpt-5.4', display_name: 'GPT-5.4' },
-  { id: 'gpt-4o', display_name: 'GPT-4o' },
-  { id: 'gpt-4.1', display_name: 'GPT-4.1' },
-  { id: 'o3-mini', display_name: 'o3-mini' },
-  { id: 'gpt-image-2', display_name: 'GPT Image 2' }
-]
-const accounts = ref<DebugAccount[]>([
-  { id: 'acc-01', name: 'GPT Team · 主账号', email: 'team@example.com', typeLabel: 'OAuth', status: 'active', platform: 'openai' },
-  { id: 'acc-02', name: 'GPT Plus · 备用', email: 'backup@example.com', typeLabel: 'API Key', status: 'active', platform: 'openai' }
-])
-const models = ref<DebugModel[]>(fallbackModels.map((model) => ({ ...model })))
-const defaultChatParams = {
-  model: 'gpt-5.4',
-  messages: [{ role: 'user', content: 'hi' }],
-  stream: true
-}
-const defaultResponsesParams = {
-  model: 'gpt-5.4',
-  instructions: 'You are Codex, based on GPT-5.',
-  input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
-  stream: true
-}
-const form = reactive({ account: 'acc-01', proxyId: null as number | null, model: 'gpt-5.4', endpoint: 'responses', system: defaultResponsesParams.instructions, prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: '{\n  "Content-Type": "application/json",\n  "Accept": "text/event-stream",\n  "Authorization": "Bearer ••••••••"\n}', apiParams: JSON.stringify(defaultResponsesParams, null, 2) })
+const fallbackModels: DebugModel[] = [{ id: 'gpt-5.4', display_name: 'GPT-5.4' }, { id: 'gpt-4o', display_name: 'GPT-4o' }, { id: 'gpt-4.1', display_name: 'GPT-4.1' }, { id: 'o3-mini', display_name: 'o3-mini' }, { id: 'gpt-image-2', display_name: 'GPT Image 2' }]
+const accounts = ref<DebugAccount[]>([])
+const models = ref<DebugModel[]>(fallbackModels.map(model => ({ ...model })))
+const proxies = ref<Proxy[]>([])
+const defaultResponsesParams = { model: 'gpt-5.4', instructions: 'You are Codex, based on GPT-5.', input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }], stream: true }
+const baseRequestHeaders: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream', Authorization: 'Bearer ••••••••' }
+const form = reactive({ account: '', proxyId: null as number | null, model: 'gpt-5.4', endpoint: 'responses' as DebugEndpoint, system: defaultResponsesParams.instructions, prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: JSON.stringify(baseRequestHeaders, null, 2), apiParams: JSON.stringify(defaultResponsesParams, null, 2) })
 const imageForm = reactive({ prompt: 'hi', n: 1, responseFormat: 'b64_json' })
-const imageMode = ref(false); const running = ref(false); const responseStatus = ref(''); const activeTab = ref('inbound')
-const defaultsSource = ref('本地样本默认值')
+const imageMode = ref(false)
+const running = ref(false)
+const responseStatus = ref('')
+const responseError = ref('')
+const submitted = ref(false)
+const activeTab = ref('inbound')
+const editorTab = ref('message')
+const editorTabs: { key: string; label: string; icon: IconName }[] = [{ key: 'message', label: '消息', icon: 'chatBubble' }, { key: 'json', label: 'JSON', icon: 'terminal' }, { key: 'headers', label: 'Headers', icon: 'document' }, { key: 'image', label: '生图', icon: 'beaker' }]
+const tabs = [{ key: 'inbound', label: '入站完整参数', shortLabel: '入站' }, { key: 'outbound', label: '出站完整参数', shortLabel: '出站' }, { key: 'upstream-request', label: '请求上游完整参数', shortLabel: '上游请求' }, { key: 'upstream-response', label: '上游完整响应参数', shortLabel: '上游响应' }]
+const presets = [{ label: '健康检查', prompt: '返回 OK' }, { label: '长文本', prompt: '请总结这段文本：' }, { label: 'JSON 输出', prompt: '仅输出合法 JSON，对象包含 message 字段。' }]
+const copyState = ref<'idle' | 'copied' | 'error'>('idle')
+const requestDuration = ref<number | null>(null)
+const imagePreviewFailed = ref(false)
+const defaultsSource = ref('本地参数模板')
 const defaultsLoading = ref(false)
 const accountsLoading = ref(false)
 const accountsError = ref('')
 const modelsLoading = ref(false)
 const modelsError = ref('')
-const upstreamHeaders = ref<Record<string, string>>({ Authorization: 'Bearer ••••••••', 'Content-Type': 'application/json' })
-const defaultUpstreamUrl = ref('https://api.openai.com/v1/chat/completions')
-const selectedAccount = computed(() => accounts.value.find((account) => account.id === form.account) || null)
-const selectedModel = computed(() => models.value.find((model) => model.id === form.model) || null)
+const upstreamHeaders = ref<Record<string, string>>({ ...baseRequestHeaders })
+const headersFromBackend = ref(false)
+const defaultsNotes = ref<string[]>([])
+const headerDetails = ref<UpstreamHeaderDetail[]>([])
+const defaultUpstreamUrl = ref('https://api.openai.com/v1/responses')
+const defaultUpstreamBody = ref<Record<string, unknown> | undefined>()
+const result = ref<DebugWorkbenchResult | null>(null)
+const selectedAttemptIndex = ref(0)
+const debugSession = ref<DebugSession | null>(null)
+const sessionAction = ref<Exclude<DebugSessionAction, 'new_session'>>('new_turn')
+const selectedAttempt = computed(() => result.value?.attempts[selectedAttemptIndex.value])
+const sessionIdentifiers = computed(() => debugSession.value ? { Session: debugSession.value.session_id, Thread: debugSession.value.thread_id, Turn: debugSession.value.turn_id, Window: debugSession.value.window_id } : {})
+const isFixtureAccount = computed(() => !/^[1-9]\d*$/.test(form.account))
+const selectedAccount = computed(() => accounts.value.find(account => account.id === form.account) || null)
+const selectedModel = computed(() => models.value.find(model => model.id === form.model) || null)
+const selectedProxy = computed(() => proxies.value.find(proxy => proxy.id === form.proxyId) || null)
+const responseSuccessful = computed(() => /^2\d\d$/.test(responseStatus.value) && Boolean(result.value?.success))
+const sessionState = computed(() => {
+  if (running.value) return { label: '请求中', tone: 'busy' }
+  if (accountsLoading.value || modelsLoading.value || defaultsLoading.value) return { label: '同步配置', tone: 'neutral' }
+  if (responseStatus.value && !responseSuccessful.value) return { label: '请求失败', tone: 'error' }
+  if (isFixtureAccount.value) return { label: '模板预览', tone: 'neutral' }
+  if (responseStatus.value) return { label: '实际请求已返回', tone: 'success' }
+  return { label: '准备就绪', tone: 'neutral' }
+})
+const hasRoutingHintDetail = computed(() => headerDetails.value.some(detail => detail.name.toLowerCase() === 'x-codex-routing-hint'))
+const headerCount = computed(() => {
+  try { return Object.keys(parseHeaders()).length } catch { return null }
+})
+const tabDescription = computed(() => tabs.find(tab => tab.key === activeTab.value)?.label)
+const upstreamUrl = computed(() => selectedAttempt.value?.request.url || defaultUpstreamUrl.value)
+const previewBody = computed(() => { try { return JSON.parse(form.apiParams) } catch { return { invalid_json: form.apiParams } } })
+const previewHeaders = computed(() => {
+  try {
+    const headers = parseHeaders()
+    return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, /authorization|cookie|token|secret|api[-_]key/i.test(key) ? '[redacted]' : value]))
+  } catch { return { error: '请求头 JSON 待修正' } }
+})
+const payloads = computed<Record<string, unknown>>(() => result.value ? {
+  inbound: result.value.inbound,
+  outbound: result.value.outbound,
+  'upstream-request': selectedAttempt.value?.request || { status: 'not_sent', message: '本次执行未记录到上游请求。' },
+  'upstream-response': selectedAttempt.value?.response || { status: 'no_response', error: selectedAttempt.value?.error || result.value.error || '上游尚未返回响应。' }
+} : {
+  inbound: { stage: submitted.value ? '已提交 · 尚未收到服务端执行记录' : '参数模板 · 尚未执行', method: 'POST', path: `/v1/${form.endpoint}`, headers: previewHeaders.value, body: previewBody.value },
+  outbound: { stage: submitted.value ? '未收到网关响应记录' : '尚未执行', message: submitted.value ? '提交已发起，实际执行状态以服务端记录为准。' : '发送后展示正式网关返回给调用方的真实状态、响应头与响应体。' },
+  'upstream-request': { stage: '默认上游模板 · 非实际请求', url: defaultUpstreamUrl.value, method: 'POST', headers: previewHeaders.value, body: defaultUpstreamBody.value || previewBody.value },
+  'upstream-response': submitted.value ? { stage: '未收到上游执行记录', error: responseError.value || undefined, message: '上游实际结果尚未确认；网络中断不表示请求没有执行。' } : { stage: '尚未执行', headers: {}, body: null }
+})
+const currentPayload = computed(() => JSON.stringify(payloads.value[activeTab.value], null, 2))
+const currentSnapshot = computed<DebugSnapshot | undefined>(() => !result.value ? undefined : activeTab.value === 'inbound' ? result.value.inbound : activeTab.value === 'outbound' ? result.value.outbound : activeTab.value === 'upstream-request' ? selectedAttempt.value?.request : selectedAttempt.value?.response)
+const captureNotice = computed(() => {
+  const snapshot = currentSnapshot.value
+  if (!snapshot) return null
+  const bytes = `${snapshot.captured_bytes ?? 0} / ${snapshot.body_bytes ?? 0} B`
+  if (snapshot.truncated) return { warning: true, text: `采集已截断 · ${bytes} · 仅展示已采集片段，真实转发内容未因此截断。` }
+  if (!snapshot.complete) return { warning: true, text: `采集未完成 · ${bytes} · 请求中断或响应尚未读完，以下不是完整响应。` }
+  return { warning: false, text: `应用层记录已采集 · ${bytes} · 敏感值已脱敏` }
+})
+const payloadSize = computed(() => { const bytes = new TextEncoder().encode(currentPayload.value).length; return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB` })
+const imagePreviewUrl = computed(() => {
+  // OAuth images can be synthesized by the gateway; inspect the true downstream response first.
+  if (!imageMode.value || !result.value) return ''
+  const downstream = result.value.outbound
+  let body = downstream.body as { data?: { b64_json?: string; url?: string }[]; output?: { type?: string; result?: string }[] } | undefined
+  if (!body && downstream.body_text && downstream.complete && !downstream.truncated) {
+    for (const chunk of downstream.body_text.split(/\n\s*\n/).reverse()) {
+      const data = chunk.match(/^data:\s*(.+)$/m)?.[1]
+      if (!data) continue
+      try { const event = JSON.parse(data); if (event?.type === 'response.completed') { body = event.response; break } } catch { /* Not every SSE frame contains JSON. */ }
+    }
+  }
+  const firstImage = body?.data?.[0]
+  const generatedImage = body?.output?.find(item => item.type === 'image_generation_call' && typeof item.result === 'string')?.result
+  if (generatedImage) return `data:image/png;base64,${generatedImage}`
+  if (typeof firstImage?.b64_json === 'string') return `data:image/png;base64,${firstImage.b64_json}`
+  return typeof firstImage?.url === 'string' && /^https?:\/\//i.test(firstImage.url) ? firstImage.url : ''
+})
+watch(imagePreviewUrl, () => { imagePreviewFailed.value = false })
+watch(currentPayload, () => { copyState.value = 'idle' })
 let defaultsRequestSeq = 0
 let modelsRequestSeq = 0
-watch(() => form.endpoint, async (endpoint) => {
-  if (endpoint === 'images/generations') {
-    imageMode.value = true
-    form.model = 'gpt-image-2'
-    form.apiParams = JSON.stringify({ model: 'gpt-image-2', prompt: imageForm.prompt, n: 1, response_format: 'b64_json' }, null, 2)
-  } else if (endpoint === 'responses') {
-    imageMode.value = false
-    form.model = 'gpt-5.4'
-    form.apiParams = JSON.stringify({ model: 'gpt-5.4', instructions: 'You are Codex, based on GPT-5.', input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }], stream: true }, null, 2)
+let runRequestSeq = 0
+let requestController: AbortController | null = null
+let syncingControls = false
+
+function editBody(update: (body: Record<string, any>) => void) {
+  if (syncingControls) return
+  try {
+    const body = JSON.parse(form.apiParams)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return
+    update(body)
+    form.apiParams = JSON.stringify(body, null, 2)
+  } catch { /* Preserve invalid JSON until the user repairs it. */ }
+}
+function updatePrompt(body: Record<string, any>, text: string) {
+  if (form.endpoint === 'images/generations') { body.prompt = text; return }
+  if (form.endpoint === 'chat/completions') {
+    if (!Array.isArray(body.messages)) body.messages = []
+    const user = [...body.messages].reverse().find(item => item?.role === 'user')
+    if (user) user.content = text
+    else body.messages.push({ role: 'user', content: text })
   } else {
-    imageMode.value = false
-    form.model = 'gpt-5.4'
-    form.apiParams = JSON.stringify(defaultChatParams, null, 2)
+    if (typeof body.input === 'string') { body.input = text; return }
+    if (!Array.isArray(body.input)) body.input = []
+    const user = [...body.input].reverse().find(item => item?.role === 'user')
+    if (user) {
+      if (typeof user.content === 'string') user.content = text
+      else {
+        if (!Array.isArray(user.content)) user.content = []
+        const part = user.content.find((item: any) => item?.type === 'input_text')
+        if (part) part.text = text
+        else user.content.push({ type: 'input_text', text })
+      }
+    } else body.input.push({ role: 'user', content: [{ type: 'input_text', text }] })
   }
+}
+watch(() => form.apiParams, (raw) => {
+  try {
+    const body = JSON.parse(raw)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return
+    syncingControls = true
+    if (typeof body.model === 'string') form.model = body.model
+    if (typeof body.stream === 'boolean') form.stream = body.stream
+    form.temperature = typeof body.temperature === 'number' ? body.temperature : 0
+    form.maxTokens = typeof body.max_tokens === 'number' ? body.max_tokens : 0
+    const messages = form.endpoint === 'chat/completions' ? body.messages : body.input
+    const user = Array.isArray(messages) ? [...messages].reverse().find(item => item?.role === 'user') : undefined
+    const text = typeof messages === 'string' ? messages : typeof user?.content === 'string' ? user.content : user?.content?.find?.((part: any) => part?.type === 'input_text')?.text
+    if (typeof text === 'string') { form.prompt = text; imageForm.prompt = text }
+    if (form.endpoint === 'responses') form.system = typeof body.instructions === 'string' ? body.instructions : ''
+    if (form.endpoint === 'chat/completions') { const system = body.messages?.find?.((item: any) => item?.role === 'system'); form.system = typeof system?.content === 'string' ? system.content : '' }
+    if (typeof body.prompt === 'string') imageForm.prompt = body.prompt
+    if (typeof body.n === 'number') imageForm.n = body.n
+    if (typeof body.response_format === 'string') imageForm.responseFormat = body.response_format
+    imageMode.value = form.endpoint === 'images/generations' || Boolean(body.tools?.some?.((tool: any) => tool?.type === 'image_generation'))
+  } catch { /* JSON stays the source of truth while being edited. */ } finally { syncingControls = false }
+}, { flush: 'sync' })
+watch(() => form.model, model => { if (model) editBody(body => { body.model = model }) }, { flush: 'sync' })
+watch(() => form.prompt, text => editBody(body => updatePrompt(body, text)), { flush: 'sync' })
+watch(() => form.system, value => editBody(body => {
+  if (form.endpoint === 'responses') { body.instructions = value; return }
+  if (form.endpoint !== 'chat/completions') return
+  if (!Array.isArray(body.messages)) body.messages = []
+  const index = body.messages.findIndex((item: any) => item?.role === 'system')
+  if (value.trim()) { if (index >= 0) body.messages[index].content = value; else body.messages.unshift({ role: 'system', content: value }) }
+  else if (index >= 0) body.messages.splice(index, 1)
+}), { flush: 'sync' })
+watch(() => form.stream, value => editBody(body => { if (form.endpoint !== 'images/generations') body.stream = value }), { flush: 'sync' })
+watch(() => form.temperature, value => editBody(body => { if (form.endpoint === 'chat/completions') { if (value > 0) body.temperature = value; else delete body.temperature } }), { flush: 'sync' })
+watch(() => form.maxTokens, value => editBody(body => { if (form.endpoint === 'chat/completions') { if (value > 0) body.max_tokens = value; else delete body.max_tokens } }), { flush: 'sync' })
+watch(() => imageForm.prompt, text => editBody(body => updatePrompt(body, text)), { flush: 'sync' })
+watch(() => imageForm.n, value => editBody(body => { if (form.endpoint === 'images/generations') body.n = value }), { flush: 'sync' })
+watch(() => imageForm.responseFormat, value => editBody(body => { if (form.endpoint === 'images/generations') body.response_format = value }), { flush: 'sync' })
+watch(imageMode, enabled => editBody(body => {
+  if (form.endpoint !== 'responses') return
+  const tools = Array.isArray(body.tools) ? body.tools.filter((tool: any) => tool?.type !== 'image_generation') : []
+  if (enabled) tools.push({ type: 'image_generation' })
+  body.tools = tools
+}), { flush: 'sync' })
+function clearExecution() {
+  ++runRequestSeq
+  requestController?.abort()
+  requestController = null
+  running.value = false
+  result.value = null
+  selectedAttemptIndex.value = 0
+  responseStatus.value = ''
+  responseError.value = ''
+  submitted.value = false
+  requestDuration.value = null
+}
+function resetSession() {
+  clearExecution()
+  debugSession.value = null
+  sessionAction.value = 'new_turn'
+}
+watch(() => form.endpoint, async endpoint => {
+  resetSession()
+  defaultUpstreamBody.value = undefined
+  defaultUpstreamUrl.value = `https://api.openai.com/v1/${endpoint}`
+  if (endpoint === 'images/generations') {
+    editorTab.value = 'image'
+    form.apiParams = JSON.stringify({ model: 'gpt-image-2', prompt: imageForm.prompt, n: 1, response_format: 'b64_json' }, null, 2)
+  } else form.apiParams = JSON.stringify(endpoint === 'responses' ? defaultResponsesParams : { model: 'gpt-5.4', messages: [{ role: 'user', content: 'hi' }], stream: true }, null, 2)
   await loadDefaults()
 })
-watch(() => form.account, async () => { await loadAccountModels(); await loadDefaults() })
-watch(() => form.model, (model) => {
-  if (!model) return
-  try {
-    const body = JSON.parse(form.apiParams)
-    if (body && typeof body === 'object' && body.model !== model) {
-      body.model = model
-      form.apiParams = JSON.stringify(body, null, 2)
-    }
-  } catch { /* the JSON editor will show the validation error on send */ }
-})
-watch(() => form.prompt, (value) => {
-  try {
-    const body = JSON.parse(form.apiParams)
-    if (form.endpoint === 'images/generations' || imageMode.value) body.prompt = value
-    else if (Array.isArray(body.messages)) {
-      const user = [...body.messages].reverse().find((item: any) => item?.role === 'user')
-      if (user) user.content = value
-    } else if (Array.isArray(body.input)) {
-      const item = [...body.input].reverse().find((entry: any) => entry?.role === 'user')
-      if (item?.content?.[0]) item.content[0].text = value
-    }
-    form.apiParams = JSON.stringify(body, null, 2)
-  } catch { /* keep invalid JSON visible for the send-time validation */ }
-})
-watch(() => form.system, (value) => {
-  if (form.endpoint !== 'chat/completions') return
-  try {
-    const body = JSON.parse(form.apiParams)
-    if (!Array.isArray(body.messages)) return
-    const index = body.messages.findIndex((item: any) => item?.role === 'system')
-    if (value.trim()) {
-      if (index >= 0) body.messages[index].content = value
-      else body.messages.unshift({ role: 'system', content: value })
-    } else if (index >= 0) body.messages.splice(index, 1)
-    form.apiParams = JSON.stringify(body, null, 2)
-  } catch { /* keep invalid JSON visible */ }
-})
-watch(() => form.stream, (value) => {
-  try { const body = JSON.parse(form.apiParams); if (body && typeof body === 'object') { body.stream = value; form.apiParams = JSON.stringify(body, null, 2) } } catch { /* validation on send */ }
-})
-watch(() => form.temperature, (value) => {
-  if (form.endpoint !== 'chat/completions') return
-  try { const body = JSON.parse(form.apiParams); if (value > 0) body.temperature = value; else delete body.temperature; form.apiParams = JSON.stringify(body, null, 2) } catch { /* validation on send */ }
-})
-watch(() => form.maxTokens, (value) => {
-  if (form.endpoint !== 'chat/completions') return
-  try { const body = JSON.parse(form.apiParams); if (value > 0) body.max_tokens = value; else delete body.max_tokens; form.apiParams = JSON.stringify(body, null, 2) } catch { /* validation on send */ }
-})
-const tabs = [{ key: 'inbound', label: '入站完整参数' }, { key: 'outbound', label: '出站完整参数' }, { key: 'upstream-request', label: '请求上游完整参数' }, { key: 'upstream-response', label: '上游完整响应参数' }]
-const presets = [{ label: '健康检查', prompt: '返回 OK' }, { label: '长文本', prompt: '请总结这段文本：' }, { label: 'JSON 输出', prompt: '仅输出合法 JSON，对象包含 message 字段。' }]
-const payloads = reactive<Record<string, unknown>>({ inbound: { method: 'POST', path: '/v1/responses', headers: { 'content-type': 'application/json', authorization: 'Bearer ••••••••' }, body: defaultResponsesParams }, outbound: { status: 'pending', transformed_model: form.model, route: 'account://acc-01', proxy: null, body: defaultResponsesParams }, 'upstream-request': { url: 'https://api.openai.com/v1/responses', method: 'POST', headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json' }, proxy: null, body: defaultResponsesParams }, 'upstream-response': { status: '—', headers: {}, body: null } })
-const selectedProxy = computed(() => form.proxyId == null ? null : proxies.value.find((p) => p.id === form.proxyId) || null)
-watch(() => form.proxyId, (proxyId) => {
-  const proxy = proxyId == null ? null : proxies.value.find((p) => p.id === proxyId)
-  const proxyInfo = proxy ? { id: proxy.id, name: proxy.name, protocol: proxy.protocol, host: proxy.host, port: proxy.port, ip_address: proxy.ip_address, country: proxy.country, country_code: proxy.country_code } : null
-  const outbound = payloads.outbound as Record<string, unknown>
-  if (outbound) outbound.proxy = proxyInfo
-  const upstream = payloads['upstream-request'] as Record<string, unknown>
-  if (upstream) { upstream.proxy = proxyInfo; upstream.proxy_url = proxy ? `${proxy.protocol}://${proxy.host}:${proxy.port}` : null }
-  void loadDefaults()
-})
-const currentPayload = computed(() => JSON.stringify(payloads[activeTab.value], null, 2)); const imagePreviewUrl = computed(() => { const body = (payloads['upstream-response'] as any)?.body; return imageMode.value && body?.data?.[0]?.url ? String(body.data[0].url) : '' }); const tabDescription = computed(() => tabs.find(t => t.key === activeTab.value)?.label)
-const upstreamUrl = computed(() => String((payloads['upstream-request'] as any)?.url || `https://api.openai.com/v1/${form.endpoint}`))
-async function loadAccountModels() {
-  const accountId = form.account
-  const requestSeq = ++modelsRequestSeq
-  modelsError.value = ''
-  if (!/^\d+$/.test(accountId)) {
-    models.value = fallbackModels.map((model) => ({ ...model }))
-    modelsLoading.value = false
-    return
-  }
-  modelsLoading.value = true
-  try {
-    const available = await getAvailableModels(Number(accountId))
-    const options = (available || [])
-      .map((m: any) => typeof m === 'string' ? { id: m, display_name: m } : { id: m?.id, display_name: m?.display_name || m?.id, type: m?.type, created_at: m?.created_at })
-      .filter((m: DebugModel): m is DebugModel => typeof m.id === 'string' && m.id.length > 0)
-      .filter((model, index, list) => list.findIndex((item) => item.id === model.id) === index)
-    if (requestSeq !== modelsRequestSeq) return
-    if (options.length) {
-      models.value = options
-      if (!models.value.some((model) => model.id === form.model)) form.model = options[0].id
-    } else {
-      models.value = fallbackModels.map((model) => ({ ...model }))
-      modelsError.value = '该账号暂无可用模型，当前显示内置模型'
-    }
-  } catch {
-    if (requestSeq === modelsRequestSeq) {
-      models.value = fallbackModels.map((model) => ({ ...model }))
-      modelsError.value = '该账号模型列表加载失败，当前显示内置模型'
-    }
-  } finally {
-    if (requestSeq === modelsRequestSeq) modelsLoading.value = false
-  }
-}
-
-async function loadDefaults() {
-  const requestSeq = ++defaultsRequestSeq
+watch(() => form.account, async () => {
+  resetSession()
+  ++defaultsRequestSeq
+  headerDetails.value = []
   defaultsLoading.value = true
-  try {
-    const defaults = await getUpstreamTestDefaults(form.endpoint, form.account, imageMode.value ? imageForm.prompt : undefined, form.proxyId)
-    if (requestSeq !== defaultsRequestSeq) return
-    form.apiParams = JSON.stringify(defaults.body, null, 2)
-    form.headers = JSON.stringify(defaults.headers, null, 2)
-    upstreamHeaders.value = { ...defaults.headers }
-    defaultUpstreamUrl.value = defaults.url || `https://api.openai.com/v1/${form.endpoint}`
-    if (typeof defaults.body.model === 'string' && defaults.body.model) {
-      if (!models.value.some((model) => model.id === defaults.body.model)) models.value.unshift({ id: defaults.body.model, display_name: defaults.body.model })
-      form.model = defaults.body.model
-    }
-    if (Array.isArray(defaults.body.messages)) {
-      const system = defaults.body.messages.find((item: any) => item?.role === 'system')
-      form.system = typeof system?.content === 'string' ? system.content : ''
-      const user = [...defaults.body.messages].reverse().find((item: any) => item?.role === 'user')
-      if (typeof user?.content === 'string') form.prompt = user.content
-    } else if (Array.isArray(defaults.body.input)) {
-      const user = [...defaults.body.input].reverse().find((item: any) => item?.role === 'user')
-      const text = user?.content?.find?.((part: any) => part?.type === 'input_text')?.text
-      if (typeof text === 'string') form.prompt = text
-    }
-    if (typeof defaults.body.instructions === 'string' && form.endpoint === 'responses') form.system = defaults.body.instructions
-    if (typeof defaults.body.prompt === 'string') imageForm.prompt = defaults.body.prompt
-    if (typeof defaults.body.n === 'number') imageForm.n = defaults.body.n
-    if (typeof defaults.body.response_format === 'string') imageForm.responseFormat = defaults.body.response_format
-    if (typeof defaults.body.stream === 'boolean') form.stream = defaults.body.stream
-    const body = JSON.parse(JSON.stringify(defaults.body))
-    payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: defaults.headers, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body }
-    payloads.outbound = { status: 'ready', transformed_model: defaults.body.model, route: `account://${form.account}`, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body: JSON.parse(JSON.stringify(defaults.body)) }
-    payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value }, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, proxy_url: selectedProxy.value ? `${selectedProxy.value.protocol}://${selectedProxy.value.host}:${selectedProxy.value.port}` : null, body: JSON.parse(JSON.stringify(defaults.upstream_body || defaults.body)) }
-    defaultsSource.value = `后端默认 · ${defaults.account_type}`
-  } catch {
-    if (requestSeq !== defaultsRequestSeq) return
-    defaultsSource.value = '本地样本默认值（后端未连接）'
-  } finally {
-    if (requestSeq === defaultsRequestSeq) defaultsLoading.value = false
-  }
-}
-onMounted(async () => {
-  accountsLoading.value = true
-  accountsError.value = ''
-  try {
-    const result = await listAccounts(1, 50, { platform: 'openai', status: 'active' })
-    const accountTypeLabel = (type: string) => {
-      const normalized = type.trim().toLowerCase()
-      return ({ oauth: 'OAuth', 'setup-token': 'Setup Token', apikey: 'API Key', 'api-key': 'API Key', upstream: 'Upstream' } as Record<string, string>)[normalized] || type || 'Account'
-    }
-    const items: DebugAccount[] = (result.items ?? []).map((item: any) => ({
-      id: String(item.id),
-      name: item.name || `GPT 账号 ${item.id}`,
-      email: item.email || item.account || '已配置账号',
-      status: item.status || 'active',
-      typeLabel: accountTypeLabel(String(item.type || 'oauth')),
-      platform: item.platform || 'openai'
-    }))
-    if (items.length) {
-      accounts.value = items
-      form.account = items[0].id
-    }
-  } catch {
-    accountsError.value = '账号列表加载失败，当前显示本地样本'
-  } finally { accountsLoading.value = false }
-  try {
-    const proxyItems = await proxiesAPI.getAll()
-    proxies.value = (proxyItems || []).filter((proxy) => proxy.status === 'active')
-  } catch {
-    proxies.value = []
-  }
   await loadAccountModels()
   await loadDefaults()
 })
-function commitCustomModel() {
-  const modelId = form.model.trim()
-  if (!modelId) return
-  form.model = modelId
-  if (!models.value.some((model) => model.id === modelId)) {
-    models.value.push({ id: modelId, display_name: modelId, type: 'custom' })
-  }
+// Proxy overrides are submitted with the next request without resetting the editor.
+function restoreDefaultHeaders() { form.headers = JSON.stringify(upstreamHeaders.value, null, 2) }
+function selectEditorTab(key: string) { editorTab.value = key }
+function selectTraceTab(key: string) { activeTab.value = key }
+async function navigateTabs(event: KeyboardEvent, options: { key: string }[], current: string, select: (key: string) => void) {
+  if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return
+  event.preventDefault()
+  const index = options.findIndex(option => option.key === current)
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length
+  const tablist = (event.currentTarget as HTMLElement).parentElement
+  select(options[next].key)
+  await nextTick()
+  tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus()
 }
-function applyPreset(p: { prompt: string }) {
-  form.prompt = p.prompt
+async function loadAccountModels() {
+  const accountId = form.account
+  const seq = ++modelsRequestSeq
+  modelsError.value = ''
+  if (!/^[1-9]\d*$/.test(accountId)) { models.value = fallbackModels.map(model => ({ ...model })); modelsLoading.value = false; return }
+  modelsLoading.value = true
   try {
-    const body = JSON.parse(form.apiParams)
-    if (form.endpoint === 'images/generations' || imageMode.value) body.prompt = p.prompt
-    else if (Array.isArray(body.messages)) {
-      const user = [...body.messages].reverse().find((item: any) => item?.role === 'user')
-      if (user) user.content = p.prompt
-      else body.messages.push({ role: 'user', content: p.prompt })
-    } else if (Array.isArray(body.input)) {
-      const item = [...body.input].reverse().find((entry: any) => entry?.role === 'user')
-      if (item?.content?.[0]) item.content[0].text = p.prompt
-    }
-    form.apiParams = JSON.stringify(body, null, 2)
-  } catch { /* validation is reported when the request is sent */ }
+    const available = await getAvailableModels(Number(accountId))
+    if (seq !== modelsRequestSeq) return
+    const options = (available || []).map((model: any) => typeof model === 'string' ? { id: model, display_name: model } : { id: model?.id, display_name: model?.display_name || model?.id, type: model?.type })
+      .filter((model: DebugModel) => typeof model.id === 'string' && model.id.length > 0)
+      .filter((model, index, all) => all.findIndex(item => item.id === model.id) === index)
+    models.value = options.length ? options : fallbackModels.map(model => ({ ...model }))
+    if (!options.length) modelsError.value = '该账号暂无可用模型，当前显示内置模型'
+  } catch {
+    if (seq === modelsRequestSeq) { models.value = fallbackModels.map(model => ({ ...model })); modelsError.value = '该账号模型列表加载失败，当前显示内置模型' }
+  } finally { if (seq === modelsRequestSeq) modelsLoading.value = false }
 }
-async function resetAll() {
-  responseStatus.value = ''
-  payloads['upstream-response'] = { status: '—', headers: {}, body: null }
-  await loadDefaults()
+async function loadDefaults() {
+  const seq = ++defaultsRequestSeq
+  defaultsLoading.value = true
+  headerDetails.value = []
+  try {
+    const defaults = await getUpstreamTestDefaults(form.endpoint, form.account, imageMode.value ? imageForm.prompt : undefined, form.proxyId)
+    if (seq !== defaultsRequestSeq) return
+    form.apiParams = JSON.stringify(defaults.body, null, 2)
+    form.headers = JSON.stringify(defaults.headers, null, 2)
+    upstreamHeaders.value = { ...defaults.headers }
+    headersFromBackend.value = true
+    defaultsNotes.value = (defaults.notes || []).filter((note): note is string => typeof note === 'string')
+    headerDetails.value = defaults.header_details || []
+    defaultUpstreamUrl.value = defaults.url || `https://api.openai.com/v1/${form.endpoint}`
+    defaultUpstreamBody.value = defaults.upstream_body
+    if (typeof defaults.body.model === 'string' && !models.value.some(model => model.id === defaults.body.model)) models.value.unshift({ id: defaults.body.model, display_name: defaults.body.model })
+    defaultsSource.value = `后端默认 · ${defaults.account_type}`
+  } catch {
+    if (seq !== defaultsRequestSeq) return
+    defaultsSource.value = '本地参数模板（默认配置同步失败）'
+    headersFromBackend.value = false
+    headerDetails.value = []
+    defaultUpstreamBody.value = undefined
+    defaultUpstreamUrl.value = `https://api.openai.com/v1/${form.endpoint}`
+    defaultsNotes.value = ['默认配置同步失败，当前仅展示基础示例头；切换账号或重置后将重新同步。']
+    const fallbackHeaders = { ...baseRequestHeaders }
+    if (form.endpoint === 'images/generations') delete fallbackHeaders.Accept
+    upstreamHeaders.value = fallbackHeaders
+    restoreDefaultHeaders()
+  } finally { if (seq === defaultsRequestSeq) defaultsLoading.value = false }
+}
+onMounted(async () => {
+  accountsLoading.value = true
+  try {
+    const response = await listAccounts(1, 50, { platform: 'openai', status: 'active' })
+    const labels: Record<string, string> = { oauth: 'OAuth', 'setup-token': 'Setup Token', apikey: 'API Key', 'api-key': 'API Key', upstream: 'Upstream' }
+    accounts.value = (response.items ?? []).map((item: any) => ({ id: String(item.id), name: item.name || `GPT 账号 ${item.id}`, email: item.email || item.account || '已配置账号', status: item.status || 'active', typeLabel: labels[String(item.type || 'oauth').trim().toLowerCase()] || item.type || 'Account', platform: item.platform || 'openai' }))
+    if (accounts.value.length) form.account = accounts.value[0].id
+  } catch { accountsError.value = '账号列表加载失败；当前仅预览模板，未连接上游。' } finally { accountsLoading.value = false }
+  try { proxies.value = ((await proxiesAPI.getAll()) || []).filter(proxy => proxy.status === 'active') } catch { proxies.value = [] }
+  if (!form.account) { await loadAccountModels(); await loadDefaults() }
+})
+onUnmounted(() => { ++defaultsRequestSeq; ++modelsRequestSeq; ++runRequestSeq; requestController?.abort() })
+function commitCustomModel() {
+  const id = form.model.trim()
+  if (!id) return
+  form.model = id
+  if (!models.value.some(model => model.id === id)) models.value.push({ id, display_name: id, type: 'custom' })
+}
+function applyPreset(preset: { prompt: string }) { editBody(body => updatePrompt(body, preset.prompt)) }
+async function resetAll() { resetSession(); copyState.value = 'idle'; await loadDefaults() }
+function parseHeaders(): Record<string, string> {
+  const headers = JSON.parse(form.headers || '{}')
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) throw new Error('请求头必须是 JSON 对象')
+  const names = new Set<string>()
+  for (const [name, value] of Object.entries(headers)) {
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || names.has(name.toLowerCase()) || typeof value !== 'string' || /[\r\n\0]/.test(value)) throw new Error('请求头名称需有效且不重复，值需为不含换行的字符串')
+    names.add(name.toLowerCase())
+  }
+  return headers
 }
 async function runRequest() {
-  commitCustomModel()
-  running.value = true; responseStatus.value = ''
-  let customHeaders: Record<string, string> = {}
-  try {
-    const parsedHeaders = JSON.parse(form.headers || '{}')
-    if (!parsedHeaders || typeof parsedHeaders !== 'object' || Array.isArray(parsedHeaders)) throw new Error('请求头必须是 JSON 对象')
-    for (const [key, value] of Object.entries(parsedHeaders)) {
-      if (typeof value !== 'string') throw new Error('请求头值必须是字符串')
-      customHeaders[key] = value
-    }
-  } catch {
-    running.value = false
+  if (running.value || isFixtureAccount.value) return
+  result.value = null
+  submitted.value = false
+  requestDuration.value = null
+  responseStatus.value = ''
+  responseError.value = ''
+  let headers: Record<string, string>
+  let body: Record<string, unknown>
+  try { headers = parseHeaders() } catch {
     responseStatus.value = '请求头错误'
+    responseError.value = '请求头格式有误：请输入字符串键值 JSON 对象，名称不得重复，值不得包含换行。'
     return
   }
-  let apiBody: Record<string, unknown>
   try {
-    const parsed = JSON.parse(form.apiParams)
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('参数必须是 JSON 对象')
-    apiBody = parsed as Record<string, unknown>
+    body = JSON.parse(form.apiParams)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('参数必须是 JSON 对象')
   } catch {
-    running.value = false
     responseStatus.value = '参数错误'
+    responseError.value = '请求参数格式有误，请检查完整 JSON 对象。'
     return
   }
-  // The JSON editor is the source of truth; controls below only provide a quick way to update it.
-  if (typeof apiBody.model === 'string' && apiBody.model.trim()) form.model = apiBody.model
-  else apiBody.model = form.model
-  if (imageMode.value) Object.assign(apiBody, { model: form.model, prompt: imageForm.prompt, n: imageForm.n, response_format: imageForm.responseFormat })
-  const requestBody = JSON.parse(JSON.stringify(apiBody)) as Record<string, unknown>
-  payloads.inbound = { method: 'POST', path: `/v1/${form.endpoint}`, headers: { authorization: 'Bearer ••••••••', 'content-type': 'application/json', ...customHeaders }, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body: requestBody }
-  const upstreamBody = JSON.parse(JSON.stringify(requestBody)) as Record<string, unknown>
-  payloads.outbound = { status: 'routing', transformed_model: form.model, route: `account://${form.account}`, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, body: upstreamBody }
-  payloads['upstream-request'] = { url: defaultUpstreamUrl.value, method: 'POST', headers: { ...upstreamHeaders.value, ...customHeaders }, proxy: selectedProxy.value ? { id: selectedProxy.value.id, name: selectedProxy.value.name, protocol: selectedProxy.value.protocol, host: selectedProxy.value.host, port: selectedProxy.value.port, ip_address: selectedProxy.value.ip_address, country: selectedProxy.value.country, country_code: selectedProxy.value.country_code } : null, proxy_url: selectedProxy.value ? `${selectedProxy.value.protocol}://${selectedProxy.value.host}:${selectedProxy.value.port}` : null, body: upstreamBody }
-  // Use the real SSE connectivity test when a persisted account is selected;
-  // fixture accounts continue to use the local preview response.
-  if (/^\d+$/.test(form.account)) {
-    try {
-      const raw = await runAccountConnectivityTest(form.account, { model_id: String(apiBody.model || form.model), prompt: imageMode.value ? imageForm.prompt : form.prompt, mode: form.endpoint === 'images/generations' ? 'image' : '', ...(form.proxyId != null ? { proxy_id: form.proxyId } : {}) })
-      const events = raw.split(/\n\s*\n/).map((chunk) => chunk.match(/^data:\s*(.+)$/m)?.[1]).filter(Boolean).map((data) => { try { return JSON.parse(data as string) } catch { return { raw: data } } })
-      const completed = [...events].reverse().find((event: any) => event?.type === 'test_complete')
-      responseStatus.value = completed?.success === false ? '500' : '200'
-      payloads['upstream-response'] = { status: Number(responseStatus.value), headers: { 'content-type': 'text/event-stream' }, body: { events } }
-    } catch (error: any) {
-      responseStatus.value = 'error'
-      payloads['upstream-response'] = { status: 502, headers: {}, body: { error: error?.message || '上游请求失败' } }
-    } finally {
+  const accountId = form.account
+  const seq = ++runRequestSeq
+  const started = performance.now()
+  const controller = new AbortController()
+  requestController = controller
+  result.value = null
+  requestDuration.value = null
+  submitted.value = true
+  running.value = true
+  activeTab.value = 'upstream-response'
+  try {
+    const response = await runDebugWorkbench(accountId, {
+      endpoint: form.endpoint, headers, body,
+      ...(form.proxyId != null ? { proxy_id: form.proxyId } : {}),
+      session: debugSession.value ? { id: debugSession.value.id, action: sessionAction.value } : { action: 'new_session' }
+    }, controller.signal)
+    if (seq !== runRequestSeq || accountId !== form.account) return
+    result.value = response
+    debugSession.value = response.session?.id ? response.session : null
+    selectedAttemptIndex.value = Math.max(0, response.attempts.length - 1)
+    responseStatus.value = String(response.outbound.status_code || (response.success ? 200 : 502))
+    responseError.value = response.error || (response.success ? '' : '上游或网关返回错误，请检查实际链路记录。')
+    requestDuration.value = response.duration_ms
+  } catch (error: any) {
+    if (seq !== runRequestSeq || accountId !== form.account) return
+    responseStatus.value = '请求失败'
+    responseError.value = error?.message || '调试请求失败；尚未收到执行记录，请检查后端连接。'
+  } finally {
+    if (seq === runRequestSeq) {
       running.value = false
+      requestController = null
+      if (requestDuration.value === null) requestDuration.value = Math.round(performance.now() - started)
     }
-    return
   }
-  await new Promise(r => setTimeout(r, 700)); responseStatus.value = '200'; payloads.outbound = { ...(payloads.outbound as Record<string, unknown>), status: 'completed' }
-  payloads['upstream-response'] = imageMode.value ? { status: 200, headers: { 'content-type': 'application/json' }, body: { created: Math.floor(Date.now() / 1000), data: [{ url: 'https://images.example.com/debug-preview.png', revised_prompt: imageForm.prompt }] } } : { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'dbg_' + Date.now() }, body: { id: 'chatcmpl_debug', model: form.model, choices: [{ index: 0, message: { role: 'assistant', content: '调试请求已成功返回。' }, finish_reason: 'stop' }], usage: { prompt_tokens: 24, completion_tokens: 8, total_tokens: 32 } } }; running.value = false
 }
-function copyCurrent() { navigator.clipboard?.writeText(currentPayload.value) }
+async function copyCurrent() {
+  try { if (!navigator.clipboard) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(currentPayload.value); copyState.value = 'copied' } catch { copyState.value = 'error' }
+}
 </script>
 
-<style scoped>
-.field-label { @apply text-xs font-medium text-gray-600 dark:text-dark-200; }
-.section-title { @apply flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-white; }
-.badge-muted { @apply rounded bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-dark-700 dark:text-dark-300; }
-.tab-button { @apply -mb-px border-b-2 border-transparent px-3 py-3 text-xs font-medium text-gray-500 transition-colors hover:text-gray-800 dark:text-dark-300 dark:hover:text-white; }
-.tab-button-active { @apply border-primary-500 text-primary-600 dark:text-primary-400; }
-</style>
+<style scoped src="./debug-workbench.css"></style>
