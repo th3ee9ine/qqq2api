@@ -591,816 +591,6 @@
             </div>
           </div>
 
-          <!-- Request Rectifier Settings -->
-          <div class="card">
-            <div
-              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
-            >
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.rectifier.title") }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.rectifier.description") }}
-              </p>
-            </div>
-            <div class="space-y-5 p-6">
-              <!-- Loading State -->
-              <div
-                v-if="rectifierLoading"
-                class="flex items-center gap-2 text-gray-500"
-              >
-                <div
-                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
-                ></div>
-                {{ t("common.loading") }}
-              </div>
-
-              <template v-else>
-                <!-- Master Toggle -->
-                <div class="flex items-center justify-between">
-                  <div>
-                    <label class="font-medium text-gray-900 dark:text-white">{{
-                      t("admin.settings.rectifier.enabled")
-                    }}</label>
-                    <p class="text-sm text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.rectifier.enabledHint") }}
-                    </p>
-                  </div>
-                  <Toggle v-model="rectifierForm.enabled" />
-                </div>
-
-                <!-- Sub-toggles (only show when master is enabled) -->
-                <div
-                  v-if="rectifierForm.enabled"
-                  class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700"
-                >
-                  <!-- Thinking Signature Rectifier -->
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <label
-                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                        >{{
-                          t("admin.settings.rectifier.thinkingSignature")
-                        }}</label
-                      >
-                      <p class="text-xs text-gray-500 dark:text-gray-400">
-                        {{
-                          t("admin.settings.rectifier.thinkingSignatureHint")
-                        }}
-                      </p>
-                    </div>
-                    <Toggle
-                      v-model="rectifierForm.thinking_signature_enabled"
-                    />
-                  </div>
-
-                  <!-- Thinking Budget Rectifier -->
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <label
-                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                        >{{
-                          t("admin.settings.rectifier.thinkingBudget")
-                        }}</label
-                      >
-                      <p class="text-xs text-gray-500 dark:text-gray-400">
-                        {{ t("admin.settings.rectifier.thinkingBudgetHint") }}
-                      </p>
-                    </div>
-                    <Toggle v-model="rectifierForm.thinking_budget_enabled" />
-                  </div>
-
-                  <!-- API Key Signature Rectifier -->
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <label
-                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                        >{{
-                          t("admin.settings.rectifier.apikeySignature")
-                        }}</label
-                      >
-                      <p class="text-xs text-gray-500 dark:text-gray-400">
-                        {{ t("admin.settings.rectifier.apikeySignatureHint") }}
-                      </p>
-                    </div>
-                    <Toggle v-model="rectifierForm.apikey_signature_enabled" />
-                  </div>
-
-                  <!-- Custom Patterns (only when apikey_signature_enabled) -->
-                  <div
-                    v-if="rectifierForm.apikey_signature_enabled"
-                    class="ml-4 space-y-3 border-l-2 border-gray-200 pl-4 dark:border-dark-600"
-                  >
-                    <div>
-                      <label
-                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                        >{{
-                          t("admin.settings.rectifier.apikeyPatterns")
-                        }}</label
-                      >
-                      <p class="text-xs text-gray-500 dark:text-gray-400">
-                        {{ t("admin.settings.rectifier.apikeyPatternsHint") }}
-                      </p>
-                    </div>
-                    <div
-                      v-for="(
-                        _, index
-                      ) in rectifierForm.apikey_signature_patterns"
-                      :key="index"
-                      class="flex items-center gap-2"
-                    >
-                      <input
-                        v-model="rectifierForm.apikey_signature_patterns[index]"
-                        type="text"
-                        class="input input-sm flex-1"
-                        :placeholder="
-                          t('admin.settings.rectifier.apikeyPatternPlaceholder')
-                        "
-                      />
-                      <button
-                        type="button"
-                        @click="
-                          rectifierForm.apikey_signature_patterns.splice(
-                            index,
-                            1,
-                          )
-                        "
-                        class="btn btn-ghost btn-xs text-red-500 hover:text-red-700"
-                      >
-                        <svg
-                          class="h-4 w-4"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                    <button
-                      type="button"
-                      @click="rectifierForm.apikey_signature_patterns.push('')"
-                      class="btn btn-ghost btn-xs text-primary-600 dark:text-primary-400"
-                    >
-                      + {{ t("admin.settings.rectifier.addPattern") }}
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Save Button -->
-                <div
-                  class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700"
-                >
-                  <button
-                    type="button"
-                    @click="saveRectifierSettings"
-                    :disabled="rectifierSaving"
-                    class="btn btn-primary btn-sm"
-                  >
-                    <svg
-                      v-if="rectifierSaving"
-                      class="mr-1 h-4 w-4 animate-spin"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        class="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        stroke-width="4"
-                      ></circle>
-                      <path
-                        class="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      ></path>
-                    </svg>
-                    {{
-                      rectifierSaving ? t("common.saving") : t("common.save")
-                    }}
-                  </button>
-                </div>
-              </template>
-            </div>
-          </div>
-          <!-- Beta Policy Settings -->
-          <div class="card">
-            <div
-              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
-            >
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.betaPolicy.title") }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.betaPolicy.description") }}
-              </p>
-            </div>
-            <div class="space-y-5 p-6">
-              <!-- Loading State -->
-              <div
-                v-if="betaPolicyLoading"
-                class="flex items-center gap-2 text-gray-500"
-              >
-                <div
-                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
-                ></div>
-                {{ t("common.loading") }}
-              </div>
-
-              <template v-else>
-                <!-- Rule Cards -->
-                <div
-                  v-for="rule in betaPolicyForm.rules"
-                  :key="rule.beta_token"
-                  class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"
-                >
-                  <div class="mb-3 flex items-center gap-2">
-                    <span
-                      class="text-sm font-medium text-gray-900 dark:text-white"
-                    >
-                      {{ getBetaDisplayName(rule.beta_token) }}
-                    </span>
-                    <span
-                      class="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-dark-700 dark:text-gray-400"
-                    >
-                      {{ rule.beta_token }}
-                    </span>
-                  </div>
-
-                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <!-- Action -->
-                    <div>
-                      <label
-                        class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                      >
-                        {{ t("admin.settings.betaPolicy.action") }}
-                      </label>
-                      <Select
-                        :modelValue="rule.action"
-                        @update:modelValue="rule.action = $event as any"
-                        :options="betaPolicyActionOptions"
-                      />
-                    </div>
-
-                    <!-- Scope -->
-                    <div>
-                      <label
-                        class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                      >
-                        {{ t("admin.settings.betaPolicy.scope") }}
-                      </label>
-                      <Select
-                        :modelValue="rule.scope"
-                        @update:modelValue="rule.scope = $event as any"
-                        :options="betaPolicyScopeOptions"
-                      />
-                    </div>
-                  </div>
-
-                  <!-- Error Message (only when action=block) -->
-                  <div v-if="rule.action === 'block'" class="mt-3">
-                    <label
-                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                    >
-                      {{ t("admin.settings.betaPolicy.errorMessage") }}
-                    </label>
-                    <input
-                      v-model="rule.error_message"
-                      type="text"
-                      class="input"
-                      :placeholder="
-                        t('admin.settings.betaPolicy.errorMessagePlaceholder')
-                      "
-                    />
-                    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                      {{ t("admin.settings.betaPolicy.errorMessageHint") }}
-                    </p>
-                  </div>
-
-                  <!-- Quick Presets (only for tokens with presets) -->
-                  <div v-if="betaPresets[rule.beta_token]?.length" class="mt-3">
-                    <label
-                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                    >
-                      {{ t("admin.settings.betaPolicy.quickPresets") }}
-                    </label>
-                    <div class="flex flex-wrap gap-2">
-                      <button
-                        v-for="preset in betaPresets[rule.beta_token]"
-                        :key="preset.label"
-                        type="button"
-                        class="inline-flex items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700 transition-colors hover:bg-primary-100 dark:border-primary-800 dark:bg-primary-900/30 dark:text-primary-300 dark:hover:bg-primary-900/50"
-                        @click="applyBetaPreset(rule, preset)"
-                        :title="preset.description"
-                      >
-                        {{ preset.label }}
-                      </button>
-                    </div>
-                  </div>
-
-                  <!-- Model Whitelist -->
-                  <div class="mt-3">
-                    <label
-                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                    >
-                      {{ t("admin.settings.betaPolicy.modelWhitelist") }}
-                    </label>
-                    <p class="mb-2 text-xs text-gray-400 dark:text-gray-500">
-                      {{ t("admin.settings.betaPolicy.modelWhitelistHint") }}
-                    </p>
-                    <!-- Existing patterns -->
-                    <div
-                      v-for="(_, index) in rule.model_whitelist || []"
-                      :key="index"
-                      class="mb-1.5 flex items-center gap-2"
-                    >
-                      <input
-                        v-model="rule.model_whitelist![index]"
-                        type="text"
-                        class="input input-sm flex-1"
-                        :placeholder="
-                          t('admin.settings.betaPolicy.modelPatternPlaceholder')
-                        "
-                      />
-                      <button
-                        type="button"
-                        @click="rule.model_whitelist!.splice(index, 1)"
-                        class="shrink-0 rounded p-1 text-red-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
-                      >
-                        <svg
-                          class="h-4 w-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          stroke-width="2"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            d="M6 18L18 6M6 6l12 12"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                    <!-- Add pattern button -->
-                    <button
-                      type="button"
-                      @click="
-                        if (!rule.model_whitelist) rule.model_whitelist = [];
-                        rule.model_whitelist.push('');
-                      "
-                      class="mb-2 inline-flex items-center gap-1 text-xs text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
-                    >
-                      <svg
-                        class="h-3.5 w-3.5"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          d="M12 4v16m8-8H4"
-                        />
-                      </svg>
-                      {{ t("admin.settings.betaPolicy.addModelPattern") }}
-                    </button>
-                    <!-- Common pattern chips -->
-                    <div class="flex flex-wrap items-center gap-1.5">
-                      <span class="text-xs text-gray-400 dark:text-gray-500"
-                        >{{
-                          t("admin.settings.betaPolicy.commonPatterns")
-                        }}:</span
-                      >
-                      <button
-                        v-for="pattern in commonModelPatterns"
-                        :key="pattern"
-                        type="button"
-                        class="rounded border border-gray-200 px-2 py-0.5 text-xs text-gray-600 transition-colors hover:border-primary-300 hover:bg-primary-50 hover:text-primary-700 dark:border-dark-600 dark:text-gray-400 dark:hover:border-primary-700 dark:hover:bg-primary-900/30 dark:hover:text-primary-300"
-                        @click="addQuickPattern(rule, pattern)"
-                      >
-                        {{ pattern }}
-                      </button>
-                    </div>
-                  </div>
-
-                  <!-- Fallback Action (only when model_whitelist is non-empty) -->
-                  <div
-                    v-if="
-                      rule.model_whitelist && rule.model_whitelist.length > 0
-                    "
-                    class="mt-3"
-                  >
-                    <label
-                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                    >
-                      {{ t("admin.settings.betaPolicy.fallbackAction") }}
-                    </label>
-                    <Select
-                      :modelValue="rule.fallback_action || 'pass'"
-                      @update:modelValue="rule.fallback_action = $event as any"
-                      :options="betaPolicyActionOptions"
-                    />
-                    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                      {{ t("admin.settings.betaPolicy.fallbackActionHint") }}
-                    </p>
-                    <!-- Fallback Error Message (only when fallback_action=block) -->
-                    <div v-if="rule.fallback_action === 'block'" class="mt-2">
-                      <input
-                        v-model="rule.fallback_error_message"
-                        type="text"
-                        class="input"
-                        :placeholder="
-                          t(
-                            'admin.settings.betaPolicy.fallbackErrorMessagePlaceholder',
-                          )
-                        "
-                      />
-                      <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                        {{ t("admin.settings.betaPolicy.errorMessageHint") }}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Save Button -->
-                <div
-                  class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700"
-                >
-                  <button
-                    type="button"
-                    @click="saveBetaPolicySettings"
-                    :disabled="betaPolicySaving"
-                    class="btn btn-primary btn-sm"
-                  >
-                    <svg
-                      v-if="betaPolicySaving"
-                      class="mr-1 h-4 w-4 animate-spin"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        class="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        stroke-width="4"
-                      ></circle>
-                      <path
-                        class="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      ></path>
-                    </svg>
-                    {{
-                      betaPolicySaving ? t("common.saving") : t("common.save")
-                    }}
-                  </button>
-                </div>
-              </template>
-            </div>
-          </div>
-          <!-- OpenAI Fast/Flex Policy Settings -->
-          <div class="card">
-            <div
-              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
-            >
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.openaiFastPolicy.title") }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.openaiFastPolicy.description") }}
-              </p>
-            </div>
-            <div class="space-y-5 p-6">
-              <!-- Empty state -->
-              <div
-                v-if="openaiFastPolicyForm.rules.length === 0"
-                class="rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400"
-              >
-                {{ t("admin.settings.openaiFastPolicy.empty") }}
-              </div>
-
-              <!-- Rule Cards -->
-              <div
-                v-for="(rule, ruleIndex) in openaiFastPolicyForm.rules"
-                :key="ruleIndex"
-                class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"
-              >
-                <div class="mb-3 flex items-center justify-between">
-                  <span
-                    class="text-sm font-medium text-gray-900 dark:text-white"
-                  >
-                    {{
-                      t("admin.settings.openaiFastPolicy.ruleHeader", {
-                        index: ruleIndex + 1,
-                      })
-                    }}
-                  </span>
-                  <button
-                    type="button"
-                    @click="removeOpenAIFastPolicyRule(ruleIndex)"
-                    class="rounded p-1 text-red-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
-                    :title="t('admin.settings.openaiFastPolicy.removeRule')"
-                  >
-                    <svg
-                      class="h-4 w-4"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </div>
-
-                <div
-                  class="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400"
-                  :data-testid="`openai-fast-policy-summary-${ruleIndex}`"
-                >
-                  <span class="font-medium text-gray-700 dark:text-gray-300">
-                    {{
-                      t(
-                        hasOpenAIFastPolicyTargetModels(rule)
-                          ? "admin.settings.openaiFastPolicy.summaryTargetModels"
-                          : "admin.settings.openaiFastPolicy.summaryAllModels",
-                      )
-                    }}
-                  </span>
-                  <span aria-hidden="true">→</span>
-                  <span
-                    class="inline-flex items-center rounded bg-primary-50 px-2 py-0.5 font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
-                  >
-                    {{ openaiFastPolicyActionSummary(rule.action) }}
-                  </span>
-                  <template v-if="hasOpenAIFastPolicyTargetModels(rule)">
-                    <span aria-hidden="true">·</span>
-                    <span class="font-medium text-gray-700 dark:text-gray-300">
-                      {{
-                        t(
-                          "admin.settings.openaiFastPolicy.summaryOtherModels",
-                        )
-                      }}
-                    </span>
-                    <span aria-hidden="true">→</span>
-                    <span
-                      class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 font-medium text-gray-700 dark:bg-dark-600 dark:text-gray-300"
-                    >
-                      {{
-                        openaiFastPolicyActionSummary(
-                          rule.fallback_action || "pass",
-                        )
-                      }}
-                    </span>
-                  </template>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
-                  <!-- Service Tier -->
-                  <div>
-                    <label
-                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                    >
-                      {{ t("admin.settings.openaiFastPolicy.serviceTier") }}
-                    </label>
-                    <Select
-                      :modelValue="rule.service_tier"
-                      @update:modelValue="
-                        rule.service_tier = $event as
-                          | 'all'
-                          | 'priority'
-                          | 'flex'
-                      "
-                      :options="openaiFastPolicyTierOptions"
-                    />
-                  </div>
-
-                  <!-- Action -->
-                  <div>
-                    <label
-                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                    >
-                      {{ t("admin.settings.openaiFastPolicy.action") }}
-                    </label>
-                    <Select
-                      :modelValue="rule.action"
-                      @update:modelValue="
-                        rule.action = $event as
-                          | 'pass'
-                          | 'filter'
-                          | 'block'
-                          | 'force_priority'
-                      "
-                      :options="openaiFastPolicyActionOptions"
-                    />
-                  </div>
-
-                  <!-- Scope -->
-                  <div>
-                    <label
-                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                    >
-                      {{ t("admin.settings.openaiFastPolicy.scope") }}
-                    </label>
-                    <Select
-                      :modelValue="rule.scope"
-                      @update:modelValue="
-                        rule.scope = $event as
-                          | 'all'
-                          | 'oauth'
-                          | 'apikey'
-                          | 'bedrock'
-                      "
-                      :options="openaiFastPolicyScopeOptions"
-                    />
-                  </div>
-                </div>
-
-                <!-- Error Message (only when action=block) -->
-                <div v-if="rule.action === 'block'" class="mt-3">
-                  <label
-                    class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                  >
-                    {{ t("admin.settings.openaiFastPolicy.errorMessage") }}
-                  </label>
-                  <input
-                    v-model="rule.error_message"
-                    type="text"
-                    class="input"
-                    :placeholder="
-                      t(
-                        'admin.settings.openaiFastPolicy.errorMessagePlaceholder',
-                      )
-                    "
-                  />
-                  <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                    {{ t("admin.settings.openaiFastPolicy.errorMessageHint") }}
-                  </p>
-                </div>
-
-                <!-- Target Models -->
-                <div
-                  class="mt-3"
-                  role="group"
-                  :aria-labelledby="`openai-fast-policy-models-label-${ruleIndex}`"
-                  :aria-describedby="`openai-fast-policy-models-hint-${ruleIndex}`"
-                >
-                  <label
-                    :id="`openai-fast-policy-models-label-${ruleIndex}`"
-                    class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                  >
-                    {{ t("admin.settings.openaiFastPolicy.modelWhitelist") }}
-                  </label>
-                  <p
-                    :id="`openai-fast-policy-models-hint-${ruleIndex}`"
-                    class="mb-2 text-xs text-gray-400 dark:text-gray-500"
-                  >
-                    {{
-                      t("admin.settings.openaiFastPolicy.modelWhitelistHint")
-                    }}
-                  </p>
-                  <div
-                    v-for="(_, patternIdx) in rule.model_whitelist || []"
-                    :key="patternIdx"
-                    class="mb-1.5 flex items-center gap-2"
-                  >
-                    <input
-                      v-model="rule.model_whitelist![patternIdx]"
-                      type="text"
-                      class="input input-sm flex-1"
-                      :placeholder="
-                        t(
-                          'admin.settings.openaiFastPolicy.modelPatternPlaceholder',
-                        )
-                      "
-                    />
-                    <button
-                      type="button"
-                      @click="
-                        removeOpenAIFastPolicyModelPattern(rule, patternIdx)
-                      "
-                      class="shrink-0 rounded p-1 text-red-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
-                    >
-                      <svg
-                        class="h-4 w-4"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          d="M6 18L18 6M6 6l12 12"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    @click="addOpenAIFastPolicyModelPattern(rule)"
-                    class="mb-2 inline-flex items-center gap-1 text-xs text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
-                  >
-                    <svg
-                      class="h-3.5 w-3.5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      stroke-width="2"
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M12 4v16m8-8H4"
-                      />
-                    </svg>
-                    {{ t("admin.settings.openaiFastPolicy.addModelPattern") }}
-                  </button>
-                </div>
-
-                <!-- Other Models Action (only when target models are non-empty) -->
-                <div
-                  v-if="hasOpenAIFastPolicyTargetModels(rule)"
-                  class="mt-3"
-                >
-                  <label
-                    class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
-                  >
-                    {{ t("admin.settings.openaiFastPolicy.fallbackAction") }}
-                  </label>
-                  <Select
-                    :modelValue="rule.fallback_action || 'pass'"
-                    @update:modelValue="
-                      rule.fallback_action = $event as
-                        | 'pass'
-                        | 'filter'
-                        | 'block'
-                        | 'force_priority'
-                    "
-                    :options="openaiFastPolicyActionOptions"
-                  />
-                  <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
-                    {{
-                      t("admin.settings.openaiFastPolicy.fallbackActionHint")
-                    }}
-                  </p>
-                  <div v-if="rule.fallback_action === 'block'" class="mt-2">
-                    <input
-                      v-model="rule.fallback_error_message"
-                      type="text"
-                      class="input"
-                      :placeholder="
-                        t(
-                          'admin.settings.openaiFastPolicy.fallbackErrorMessagePlaceholder',
-                        )
-                      "
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <!-- Add Rule Button -->
-              <div>
-                <button
-                  type="button"
-                  @click="addOpenAIFastPolicyRule"
-                  class="btn btn-secondary btn-sm inline-flex items-center gap-1"
-                >
-                  <svg
-                    class="h-4 w-4"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <path
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M12 4v16m8-8H4"
-                    />
-                  </svg>
-                  {{ t("admin.settings.openaiFastPolicy.addRule") }}
-                </button>
-                <p class="mt-2 text-xs text-gray-400 dark:text-gray-500">
-                  {{ t("admin.settings.openaiFastPolicy.saveHint") }}
-                </p>
-              </div>
-            </div>
-          </div>
         </div>
         <!-- /Tab: Gateway -->
 
@@ -4434,308 +3624,8 @@
         </div>
         <!-- /Tab: Users -->
 
-        <!-- Tab: Gateway — Claude Code, Scheduling -->
+        <!-- Tab: Gateway — Scheduling and Services -->
         <div v-show="activeTab === 'gateway'" class="space-y-6">
-          <!-- Claude Code Settings -->
-          <div class="card">
-            <div
-              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
-            >
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.claudeCode.title") }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.claudeCode.description") }}
-              </p>
-            </div>
-            <div class="p-6">
-              <div>
-                <label
-                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  {{ t("admin.settings.claudeCode.minVersion") }}
-                </label>
-                <input
-                  v-model="form.min_claude_code_version"
-                  type="text"
-                  class="input max-w-xs font-mono text-sm"
-                  :placeholder="
-                    t('admin.settings.claudeCode.minVersionPlaceholder')
-                  "
-                />
-                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t("admin.settings.claudeCode.minVersionHint") }}
-                </p>
-              </div>
-              <div class="mt-4">
-                <label
-                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  {{ t("admin.settings.claudeCode.maxVersion") }}
-                </label>
-                <input
-                  v-model="form.max_claude_code_version"
-                  type="text"
-                  class="input max-w-xs font-mono text-sm"
-                  :placeholder="
-                    t('admin.settings.claudeCode.maxVersionPlaceholder')
-                  "
-                />
-                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{ t("admin.settings.claudeCode.maxVersionHint") }}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <!-- Codex Settings -->
-          <div class="card">
-            <div
-              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
-            >
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.gatewayForwarding.codexHardeningTitle") }}
-              </h2>
-            </div>
-            <div class="p-6 space-y-4">
-                <div>
-                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-                    {{ t("admin.settings.gatewayForwarding.codexClientRestrictionTitle") }}
-                  </h3>
-                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.codexHardeningDesc") }}
-                  </p>
-                </div>
-                <div class="grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label
-                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                    >
-                      {{ t("admin.settings.gatewayForwarding.minCodexVersion") }}
-                    </label>
-                    <input
-                      v-model="form.min_codex_version"
-                      type="text"
-                      class="input w-full font-mono text-sm"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.minCodexVersionPlaceholder',
-                        )
-                      "
-                    />
-                  </div>
-                  <div>
-                    <label
-                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                    >
-                      {{ t("admin.settings.gatewayForwarding.maxCodexVersion") }}
-                    </label>
-                    <input
-                      v-model="form.max_codex_version"
-                      type="text"
-                      class="input w-full font-mono text-sm"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.maxCodexVersionPlaceholder',
-                        )
-                      "
-                    />
-                  </div>
-                </div>
-                <p class="text-xs text-gray-500 dark:text-gray-400">
-                  {{ t("admin.settings.gatewayForwarding.codexVersionHint") }}
-                </p>
-
-                <div>
-                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t("admin.settings.gatewayForwarding.codexFingerprintSignals") }}
-                  </label>
-                  <p class="mb-2 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.codexFingerprintSignalsDesc") }}
-                  </p>
-                  <div
-                    v-for="(row, i) in codexFingerprintRows"
-                    :key="`codex-fp-${i}`"
-                    class="mb-2 flex items-center gap-2"
-                  >
-                    <select v-model="row.type" class="input w-32 text-sm">
-                      <option value="header_exact">{{ t("admin.settings.gatewayForwarding.codexFpTypeHeaderExact") }}</option>
-                      <option value="header_prefix">{{ t("admin.settings.gatewayForwarding.codexFpTypeHeaderPrefix") }}</option>
-                      <option value="body_path">{{ t("admin.settings.gatewayForwarding.codexFpTypeBodyPath") }}</option>
-                    </select>
-                    <input
-                      v-model="row.match"
-                      type="text"
-                      class="input flex-1 font-mono text-sm"
-                      :placeholder="t('admin.settings.gatewayForwarding.codexFpMatchPlaceholder')"
-                    />
-                    <label class="flex shrink-0 items-center gap-1 text-xs text-gray-600 dark:text-gray-400">
-                      <input v-model="row.required" type="checkbox" />
-                      {{ t("admin.settings.gatewayForwarding.codexFpRequired") }}
-                    </label>
-                    <button
-                      type="button"
-                      class="btn btn-secondary btn-sm shrink-0 text-red-600 hover:text-red-700 dark:text-red-400"
-                      @click="removeCodexFingerprintRow(i)"
-                    >
-                      {{ t("admin.settings.gatewayForwarding.codexRemoveRow") }}
-                    </button>
-                  </div>
-                  <button type="button" class="btn btn-secondary btn-sm" @click="addCodexFingerprintRow">
-                    {{ t("admin.settings.gatewayForwarding.codexAddRow") }}
-                  </button>
-                  <p
-                    v-if="codexFingerprintNoRequired"
-                    class="mt-2 text-xs text-amber-600 dark:text-amber-500"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.codexFingerprintNoRequiredWarn") }}
-                  </p>
-                </div>
-
-                <div class="flex items-center justify-between">
-                  <div class="pr-4">
-                    <label
-                      class="block text-sm font-medium text-gray-700 dark:text-gray-300"
-                    >
-                      {{
-                        t("admin.settings.gatewayForwarding.codexAllowAppServer")
-                      }}
-                    </label>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.codexAllowAppServerDesc",
-                        )
-                      }}
-                    </p>
-                  </div>
-                  <Toggle
-                    v-model="form.codex_cli_only_allow_app_server_clients"
-                  />
-                </div>
-
-                <div>
-                  <label
-                    class="block text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.codexBlacklist") }}
-                  </label>
-                  <p class="mb-2 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.codexBlacklistDesc") }}
-                  </p>
-                  <div
-                    v-for="(row, i) in codexBlacklistRows"
-                    :key="`codex-bl-${i}`"
-                    class="mb-2 flex gap-2"
-                  >
-                    <input
-                      v-model="row.originator"
-                      type="text"
-                      class="input w-1/3 font-mono text-sm"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.codexOriginatorPlaceholder',
-                        )
-                      "
-                    />
-                    <input
-                      v-model="row.uaContains"
-                      type="text"
-                      class="input flex-1 font-mono text-sm"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.codexUaContainsPlaceholder',
-                        )
-                      "
-                    />
-                    <button
-                      type="button"
-                      class="btn btn-secondary btn-sm shrink-0 text-red-600 hover:text-red-700 dark:text-red-400"
-                      @click="removeCodexBlacklistRow(i)"
-                    >
-                      {{ t("admin.settings.gatewayForwarding.codexRemoveRow") }}
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    class="btn btn-secondary btn-sm"
-                    @click="addCodexBlacklistRow"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.codexAddRow") }}
-                  </button>
-                </div>
-
-                <div>
-                  <label
-                    class="block text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.codexWhitelist") }}
-                  </label>
-                  <p class="mb-2 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.gatewayForwarding.codexWhitelistDesc") }}
-                  </p>
-                  <div
-                    v-for="(row, i) in codexWhitelistRows"
-                    :key="`codex-wl-${i}`"
-                    class="mb-2 flex gap-2"
-                  >
-                    <input
-                      v-model="row.originator"
-                      type="text"
-                      class="input w-1/3 font-mono text-sm"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.codexOriginatorPlaceholder',
-                        )
-                      "
-                    />
-                    <input
-                      v-model="row.uaContains"
-                      type="text"
-                      class="input flex-1 font-mono text-sm"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.codexUaContainsPlaceholder',
-                        )
-                      "
-                    />
-                    <label
-                      class="flex shrink-0 items-center gap-1 text-xs text-gray-600 dark:text-gray-400"
-                      :title="
-                        t(
-                          'admin.settings.gatewayForwarding.codexWhitelistSkipFingerprintTooltip',
-                        )
-                      "
-                    >
-                      <input
-                        v-model="row.skipEngineFingerprint"
-                        type="checkbox"
-                      />
-                      {{
-                        t(
-                          'admin.settings.gatewayForwarding.codexWhitelistSkipFingerprint',
-                        )
-                      }}
-                    </label>
-                    <button
-                      type="button"
-                      class="btn btn-secondary btn-sm shrink-0 text-red-600 hover:text-red-700 dark:text-red-400"
-                      @click="removeCodexWhitelistRow(i)"
-                    >
-                      {{ t("admin.settings.gatewayForwarding.codexRemoveRow") }}
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    class="btn btn-secondary btn-sm"
-                    @click="addCodexWhitelistRow"
-                  >
-                    {{ t("admin.settings.gatewayForwarding.codexAddRow") }}
-                  </button>
-                </div>
-            </div>
-          </div>
-
           <!-- Upstream Billing Probe Settings -->
           <div class="card" data-testid="upstream-billing-probe-settings">
             <div
@@ -5005,9 +3895,554 @@
                 </div>
               </div>
 
+            </div>
+          </div>
+
+          <!-- Async image task object storage (independent from data backup). -->
+          <div class="card" data-testid="image-storage-settings">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.imageStorage.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.imageStorage.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div
+                v-if="imageStorageLoading"
+                class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400"
+              >
+                <div
+                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
+                ></div>
+                {{ t("common.loading") }}
+              </div>
+              <div
+                v-else-if="imageStorageLoadError"
+                class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+              >
+                {{ imageStorageLoadError }}
+              </div>
+              <template v-else>
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.imageStorage.enabled") }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.imageStorage.enabledHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="imageStorageForm.enabled"
+                    data-testid="image-storage-enabled"
+                  />
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="input-label" for="image-storage-endpoint">
+                      {{ t("admin.settings.imageStorage.endpoint") }}
+                    </label>
+                    <input
+                      id="image-storage-endpoint"
+                      v-model="imageStorageForm.endpoint"
+                      class="input w-full font-mono text-sm"
+                      placeholder="https://<account_id>.r2.cloudflarestorage.com"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-region">
+                      {{ t("admin.settings.imageStorage.region") }}
+                    </label>
+                    <input
+                      id="image-storage-region"
+                      v-model="imageStorageForm.region"
+                      class="input w-full font-mono text-sm"
+                      placeholder="auto"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-bucket">
+                      {{ t("admin.settings.imageStorage.bucket") }}
+                    </label>
+                    <input
+                      id="image-storage-bucket"
+                      v-model="imageStorageForm.bucket"
+                      class="input w-full font-mono text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-prefix">
+                      {{ t("admin.settings.imageStorage.prefix") }}
+                    </label>
+                    <input
+                      id="image-storage-prefix"
+                      v-model="imageStorageForm.prefix"
+                      class="input w-full font-mono text-sm"
+                      placeholder="images/"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-access-key">
+                      {{ t("admin.settings.imageStorage.accessKeyId") }}
+                    </label>
+                    <input
+                      id="image-storage-access-key"
+                      v-model="imageStorageForm.access_key_id"
+                      class="input w-full font-mono text-sm"
+                      autocomplete="off"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-secret-key">
+                      {{ t("admin.settings.imageStorage.secretAccessKey") }}
+                    </label>
+                    <input
+                      id="image-storage-secret-key"
+                      v-model="imageStorageForm.secret_access_key"
+                      type="password"
+                      class="input w-full font-mono text-sm"
+                      autocomplete="new-password"
+                      :placeholder="
+                        imageStorageSecretConfigured
+                          ? t('admin.settings.imageStorage.secretConfigured')
+                          : ''
+                      "
+                    />
+                  </div>
+                  <div class="md:col-span-2">
+                    <label class="input-label" for="image-storage-public-url">
+                      {{ t("admin.settings.imageStorage.publicBaseUrl") }}
+                    </label>
+                    <input
+                      id="image-storage-public-url"
+                      v-model="imageStorageForm.public_base_url"
+                      type="url"
+                      class="input w-full font-mono text-sm"
+                      :placeholder="
+                        t('admin.settings.imageStorage.publicBaseUrlPlaceholder')
+                      "
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-presign-expiry">
+                      {{ t("admin.settings.imageStorage.presignExpiryHours") }}
+                    </label>
+                    <input
+                      id="image-storage-presign-expiry"
+                      v-model.number="imageStorageForm.presign_expiry_hours"
+                      type="number"
+                      min="1"
+                      step="1"
+                      class="input w-full"
+                    />
+                  </div>
+                  <div>
+                    <label class="input-label" for="image-storage-max-download">
+                      {{ t("admin.settings.imageStorage.maxDownloadBytes") }}
+                    </label>
+                    <input
+                      id="image-storage-max-download"
+                      v-model.number="imageStorageForm.max_download_bytes"
+                      type="number"
+                      min="1"
+                      step="1"
+                      class="input w-full"
+                    />
+                    <p class="input-hint">
+                      {{ t("admin.settings.imageStorage.maxDownloadBytesHint") }}
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  class="flex items-center justify-between gap-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">
+                      {{ t("admin.settings.imageStorage.forcePathStyle") }}
+                    </label>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.imageStorage.forcePathStyleHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="imageStorageForm.force_path_style"
+                    data-testid="image-storage-force-path-style"
+                  />
+                </div>
+
+                <div class="flex flex-wrap justify-end gap-2 border-t border-gray-100 pt-4 dark:border-dark-700">
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    :disabled="imageStorageTesting || imageStorageSaving"
+                    data-testid="image-storage-test"
+                    @click="testImageStorageConnection"
+                  >
+                    <svg
+                      v-if="imageStorageTesting"
+                      class="mr-1 h-4 w-4 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                      ></circle>
+                      <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    {{
+                      imageStorageTesting
+                        ? t("admin.settings.imageStorage.testing")
+                        : t("admin.settings.imageStorage.testConnection")
+                    }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="imageStorageSaving || imageStorageTesting"
+                    data-testid="image-storage-save"
+                    @click="saveImageStorageConfig"
+                  >
+                    <svg
+                      v-if="imageStorageSaving"
+                      class="mr-1 h-4 w-4 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                      ></circle>
+                      <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    {{
+                      imageStorageSaving
+                        ? t("common.saving")
+                        : t("common.save")
+                    }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Legacy per-user usage visibility setting is no longer exposed. -->
+          <div v-if="false" class="card" aria-hidden="true">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t('admin.settings.usageRecords.title') }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t('admin.settings.usageRecords.description') }}
+              </p>
+            </div>
+            <div class="space-y-4 p-6">
+              <!-- User error requests visibility -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('admin.settings.user_error_view.label') }}
+                  </label>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.user_error_view.description') }}
+                  </p>
+                </div>
+                <label class="toggle">
+                  <input v-model="form.allow_user_view_error_requests" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- /Tab: Gateway — Scheduling and Services -->
+
+        <!-- Tab: GPT -->
+        <div v-show="activeTab === 'gpt'" class="space-y-6" data-testid="gpt-settings">
+          <!-- Codex Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.gatewayForwarding.codexHardeningTitle") }}
+              </h2>
+            </div>
+            <div class="p-6 space-y-4">
+                <div>
+                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+                    {{ t("admin.settings.gatewayForwarding.codexClientRestrictionTitle") }}
+                  </h3>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.gatewayForwarding.codexHardeningDesc") }}
+                  </p>
+                </div>
+                <div class="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.gatewayForwarding.minCodexVersion") }}
+                    </label>
+                    <input
+                      v-model="form.min_codex_version"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.minCodexVersionPlaceholder',
+                        )
+                      "
+                    />
+                  </div>
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.gatewayForwarding.maxCodexVersion") }}
+                    </label>
+                    <input
+                      v-model="form.max_codex_version"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.maxCodexVersionPlaceholder',
+                        )
+                      "
+                    />
+                  </div>
+                </div>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.gatewayForwarding.codexVersionHint") }}
+                </p>
+
+                <div>
+                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.gatewayForwarding.codexFingerprintSignals") }}
+                  </label>
+                  <p class="mb-2 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.gatewayForwarding.codexFingerprintSignalsDesc") }}
+                  </p>
+                  <div
+                    v-for="(row, i) in codexFingerprintRows"
+                    :key="`codex-fp-${i}`"
+                    class="mb-2 flex items-center gap-2"
+                  >
+                    <select v-model="row.type" class="input w-32 text-sm">
+                      <option value="header_exact">{{ t("admin.settings.gatewayForwarding.codexFpTypeHeaderExact") }}</option>
+                      <option value="header_prefix">{{ t("admin.settings.gatewayForwarding.codexFpTypeHeaderPrefix") }}</option>
+                      <option value="body_path">{{ t("admin.settings.gatewayForwarding.codexFpTypeBodyPath") }}</option>
+                    </select>
+                    <input
+                      v-model="row.match"
+                      type="text"
+                      class="input flex-1 font-mono text-sm"
+                      :placeholder="t('admin.settings.gatewayForwarding.codexFpMatchPlaceholder')"
+                    />
+                    <label class="flex shrink-0 items-center gap-1 text-xs text-gray-600 dark:text-gray-400">
+                      <input v-model="row.required" type="checkbox" />
+                      {{ t("admin.settings.gatewayForwarding.codexFpRequired") }}
+                    </label>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm shrink-0 text-red-600 hover:text-red-700 dark:text-red-400"
+                      @click="removeCodexFingerprintRow(i)"
+                    >
+                      {{ t("admin.settings.gatewayForwarding.codexRemoveRow") }}
+                    </button>
+                  </div>
+                  <button type="button" class="btn btn-secondary btn-sm" @click="addCodexFingerprintRow">
+                    {{ t("admin.settings.gatewayForwarding.codexAddRow") }}
+                  </button>
+                  <p
+                    v-if="codexFingerprintNoRequired"
+                    class="mt-2 text-xs text-amber-600 dark:text-amber-500"
+                  >
+                    {{ t("admin.settings.gatewayForwarding.codexFingerprintNoRequiredWarn") }}
+                  </p>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div class="pr-4">
+                    <label
+                      class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t("admin.settings.gatewayForwarding.codexAllowAppServer")
+                      }}
+                    </label>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.codexAllowAppServerDesc",
+                        )
+                      }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="form.codex_cli_only_allow_app_server_clients"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.gatewayForwarding.codexBlacklist") }}
+                  </label>
+                  <p class="mb-2 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.gatewayForwarding.codexBlacklistDesc") }}
+                  </p>
+                  <div
+                    v-for="(row, i) in codexBlacklistRows"
+                    :key="`codex-bl-${i}`"
+                    class="mb-2 flex gap-2"
+                  >
+                    <input
+                      v-model="row.originator"
+                      type="text"
+                      class="input w-1/3 font-mono text-sm"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.codexOriginatorPlaceholder',
+                        )
+                      "
+                    />
+                    <input
+                      v-model="row.uaContains"
+                      type="text"
+                      class="input flex-1 font-mono text-sm"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.codexUaContainsPlaceholder',
+                        )
+                      "
+                    />
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm shrink-0 text-red-600 hover:text-red-700 dark:text-red-400"
+                      @click="removeCodexBlacklistRow(i)"
+                    >
+                      {{ t("admin.settings.gatewayForwarding.codexRemoveRow") }}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    @click="addCodexBlacklistRow"
+                  >
+                    {{ t("admin.settings.gatewayForwarding.codexAddRow") }}
+                  </button>
+                </div>
+
+                <div>
+                  <label
+                    class="block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.gatewayForwarding.codexWhitelist") }}
+                  </label>
+                  <p class="mb-2 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.gatewayForwarding.codexWhitelistDesc") }}
+                  </p>
+                  <div
+                    v-for="(row, i) in codexWhitelistRows"
+                    :key="`codex-wl-${i}`"
+                    class="mb-2 flex gap-2"
+                  >
+                    <input
+                      v-model="row.originator"
+                      type="text"
+                      class="input w-1/3 font-mono text-sm"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.codexOriginatorPlaceholder',
+                        )
+                      "
+                    />
+                    <input
+                      v-model="row.uaContains"
+                      type="text"
+                      class="input flex-1 font-mono text-sm"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.codexUaContainsPlaceholder',
+                        )
+                      "
+                    />
+                    <label
+                      class="flex shrink-0 items-center gap-1 text-xs text-gray-600 dark:text-gray-400"
+                      :title="
+                        t(
+                          'admin.settings.gatewayForwarding.codexWhitelistSkipFingerprintTooltip',
+                        )
+                      "
+                    >
+                      <input
+                        v-model="row.skipEngineFingerprint"
+                        type="checkbox"
+                      />
+                      {{
+                        t(
+                          'admin.settings.gatewayForwarding.codexWhitelistSkipFingerprint',
+                        )
+                      }}
+                    </label>
+                    <button
+                      type="button"
+                      class="btn btn-secondary btn-sm shrink-0 text-red-600 hover:text-red-700 dark:text-red-400"
+                      @click="removeCodexWhitelistRow(i)"
+                    >
+                      {{ t("admin.settings.gatewayForwarding.codexRemoveRow") }}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    @click="addCodexWhitelistRow"
+                  >
+                    {{ t("admin.settings.gatewayForwarding.codexAddRow") }}
+                  </button>
+                </div>
+            </div>
+          </div>
+
+          <!-- GPT Scheduling Settings -->
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.scheduling.gptTitle") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.scheduling.gptDescription") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
               <div
                 v-if="!form.openai_advanced_scheduler_enabled"
-                class="flex items-center justify-between border-t border-gray-100 pt-5 dark:border-dark-700"
+                class="flex items-center justify-between"
               >
                 <div>
                   <label
@@ -5187,16 +4622,14 @@
             </div>
           </div>
 
-          <!-- Gateway Forwarding Behavior -->
+          <!-- GPT Forwarding Behavior -->
           <div class="card">
-            <div
-              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
-            >
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.gatewayForwarding.title") }}
+                {{ t("admin.settings.gatewayForwarding.gptTitle") }}
               </h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.gatewayForwarding.description") }}
+                {{ t("admin.settings.gatewayForwarding.gptDescription") }}
               </p>
             </div>
             <div class="space-y-5 p-6">
@@ -5225,6 +4658,716 @@
                   {{ t("admin.settings.gatewayForwarding.openaiTTFTModeHint") }}
                 </p>
               </div>
+
+              <!-- OpenAI Codex account-local device session identity -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.accountLocalDeviceIdentity",
+                      )
+                    }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.accountLocalDeviceIdentityHint",
+                      )
+                    }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.enable_openai_account_local_device_identity"
+                  data-testid="account-local-device-identity-toggle"
+                />
+              </div>
+
+              <!-- GPT/Codex upstream identity headers -->
+              <div
+                class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/60"
+                data-testid="openai-codex-upstream-identity-settings"
+              >
+                <div>
+                  <h3
+                    class="text-sm font-semibold text-gray-900 dark:text-white"
+                  >
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.openaiCodexIdentityTitle",
+                      )
+                    }}
+                  </h3>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.openaiCodexIdentityHint",
+                      )
+                    }}
+                  </p>
+                </div>
+
+                <div class="mt-4 space-y-4">
+                  <!-- Originator -->
+                  <div>
+                    <label
+                      for="openai-codex-originator"
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexOriginator",
+                        )
+                      }}
+                    </label>
+                    <Select
+                      :model-value="form.openai_codex_originator"
+                      :options="codexOriginatorOptions"
+                      searchable
+                      class="mb-2"
+                      data-testid="openai-codex-originator-presets"
+                      :aria-label="t('admin.settings.gatewayForwarding.openaiCodexOriginatorPresets')"
+                      :placeholder="t('admin.settings.gatewayForwarding.openaiCodexOriginatorPresets')"
+                      @update:model-value="applyCodexOriginatorPreset"
+                    />
+                    <input
+                      id="openai-codex-originator"
+                      v-model="form.openai_codex_originator"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      data-testid="openai-codex-originator"
+                      maxlength="64"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.openaiCodexOriginatorPlaceholder',
+                        )
+                      "
+                    />
+                    <p
+                      v-if="form.openai_codex_originator_default"
+                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
+                      data-testid="openai-codex-originator-default"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
+                          {
+                            value: form.openai_codex_originator_default,
+                          },
+                        )
+                      }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexOriginatorHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+
+                  <!-- User-Agent -->
+                  <div>
+                    <label
+                      for="openai-codex-user-agent"
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexUserAgent",
+                        )
+                      }}
+                    </label>
+                    <Select
+                      :model-value="form.openai_codex_user_agent"
+                      :options="codexUserAgentOptions"
+                      searchable
+                      class="mb-2"
+                      data-testid="openai-codex-user-agent-presets"
+                      :aria-label="t('admin.settings.gatewayForwarding.openaiCodexUserAgentPresets')"
+                      :placeholder="t('admin.settings.gatewayForwarding.openaiCodexUserAgentPresets')"
+                      @update:model-value="applyCodexUserAgentPreset"
+                    />
+                    <input
+                      id="openai-codex-user-agent"
+                      v-model="form.openai_codex_user_agent"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      data-testid="openai-codex-user-agent"
+                      maxlength="512"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.openaiCodexUserAgentPlaceholder',
+                        )
+                      "
+                    />
+                    <p
+                      v-if="form.openai_codex_user_agent_default"
+                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
+                      data-testid="openai-codex-user-agent-default"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
+                          {
+                            value: form.openai_codex_user_agent_default,
+                          },
+                        )
+                      }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexUserAgentHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+
+                  <!-- Version -->
+                  <div>
+                    <label
+                      for="openai-codex-version"
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexClientVersion",
+                        )
+                      }}
+                    </label>
+                    <div class="mb-2 grid gap-2 sm:grid-cols-2">
+                      <Select
+                        :model-value="form.openai_codex_client_version_mode"
+                        :options="codexVersionModeOptions"
+                        data-testid="openai-codex-version-mode"
+                        :aria-label="t('admin.settings.gatewayForwarding.openaiCodexVersionMode')"
+                        @update:model-value="setCodexVersionMode"
+                      />
+                      <Select
+                        :model-value="form.openai_codex_client_version"
+                        :options="codexVersionOptions"
+                        :loading="codexVersionsLoading"
+                        searchable
+                        data-testid="openai-codex-version-history"
+                        :aria-label="t('admin.settings.gatewayForwarding.openaiCodexVersionHistory')"
+                        :placeholder="t('admin.settings.gatewayForwarding.openaiCodexVersionHistory')"
+                        @update:model-value="selectCodexVersion"
+                      />
+                    </div>
+                    <input
+                      id="openai-codex-version"
+                      v-model="form.openai_codex_client_version"
+                      @input="onCodexVersionInput"
+                      type="text"
+                      class="input w-full font-mono text-sm"
+                      data-testid="openai-codex-version"
+                      maxlength="64"
+                      :placeholder="
+                        t(
+                          'admin.settings.gatewayForwarding.openaiCodexClientVersionPlaceholder',
+                        )
+                      "
+                    />
+                    <div class="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="btn btn-secondary text-xs"
+                        :disabled="codexSyncLoading || saving"
+                        data-testid="openai-codex-sync"
+                        @click="syncCodexVersion"
+                      >
+                        {{ t(codexSyncLoading ? 'admin.settings.gatewayForwarding.openaiCodexVersionSyncing' : 'admin.settings.gatewayForwarding.openaiCodexVersionSyncNow') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-secondary text-xs"
+                        :disabled="codexVersionsLoading || codexSyncLoading"
+                        data-testid="openai-codex-versions-refresh"
+                        @click="loadCodexVersions()"
+                      >
+                        {{ t(codexVersionsLoading ? 'common.loading' : 'admin.settings.gatewayForwarding.openaiCodexVersionRefresh') }}
+                      </button>
+                      <button
+                        v-if="codexVersionsNextPage !== null"
+                        type="button"
+                        class="btn btn-secondary text-xs"
+                        :disabled="codexVersionsLoading || codexSyncLoading"
+                        data-testid="openai-codex-versions-more"
+                        @click="loadCodexVersions(codexVersionsNextPage)"
+                      >
+                        {{ t('admin.settings.gatewayForwarding.openaiCodexVersionLoadMore') }}
+                      </button>
+                    </div>
+                    <p
+                      v-if="codexVersionsError"
+                      role="alert"
+                      class="mt-2 text-xs text-red-600 dark:text-red-400"
+                      data-testid="openai-codex-versions-error"
+                    >{{ codexVersionsError }}</p>
+                    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('admin.settings.gatewayForwarding.openaiCodexVersionSource') }}
+                      <a class="text-primary-600 hover:underline" href="https://github.com/openai/codex/releases" target="_blank" rel="noopener noreferrer">openai/codex</a>
+                      <span v-if="codexLatestVersion"> · {{ t('admin.settings.gatewayForwarding.openaiCodexVersionLatest', { version: codexLatestVersion }) }}</span>
+                    </p>
+                    <p
+                      v-if="form.openai_codex_client_version_default"
+                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
+                      data-testid="openai-codex-version-default"
+                    >
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
+                          {
+                            value: form.openai_codex_client_version_default,
+                          },
+                        )
+                      }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.gatewayForwarding.openaiCodexClientVersionHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Codex 版本号自动同步 -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.openaiCodexVersionAutoSync",
+                      )
+                    }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.openaiCodexVersionAutoSyncHint",
+                      )
+                    }}
+                  </p>
+                  <p
+                    v-if="codexSyncedVersionLabel"
+                    class="mt-0.5 text-xs text-gray-500 dark:text-gray-400"
+                  >
+                    {{ codexSyncedVersionLabel }}
+                  </p>
+                </div>
+                <Toggle v-model="form.openai_codex_version_auto_sync_enabled" />
+              </div>
+            </div>
+          </div>
+
+          <!-- OpenAI Fast/Flex Policy Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.openaiFastPolicy.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.openaiFastPolicy.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <!-- Empty state -->
+              <div
+                v-if="openaiFastPolicyForm.rules.length === 0"
+                class="rounded-lg border border-dashed border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400"
+              >
+                {{ t("admin.settings.openaiFastPolicy.empty") }}
+              </div>
+
+              <!-- Rule Cards -->
+              <div
+                v-for="(rule, ruleIndex) in openaiFastPolicyForm.rules"
+                :key="ruleIndex"
+                class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"
+              >
+                <div class="mb-3 flex items-center justify-between">
+                  <span
+                    class="text-sm font-medium text-gray-900 dark:text-white"
+                  >
+                    {{
+                      t("admin.settings.openaiFastPolicy.ruleHeader", {
+                        index: ruleIndex + 1,
+                      })
+                    }}
+                  </span>
+                  <button
+                    type="button"
+                    @click="removeOpenAIFastPolicyRule(ruleIndex)"
+                    class="rounded p-1 text-red-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                    :title="t('admin.settings.openaiFastPolicy.removeRule')"
+                  >
+                    <svg
+                      class="h-4 w-4"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                <div
+                  class="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-500 dark:text-gray-400"
+                  :data-testid="`openai-fast-policy-summary-${ruleIndex}`"
+                >
+                  <span class="font-medium text-gray-700 dark:text-gray-300">
+                    {{
+                      t(
+                        hasOpenAIFastPolicyTargetModels(rule)
+                          ? "admin.settings.openaiFastPolicy.summaryTargetModels"
+                          : "admin.settings.openaiFastPolicy.summaryAllModels",
+                      )
+                    }}
+                  </span>
+                  <span aria-hidden="true">→</span>
+                  <span
+                    class="inline-flex items-center rounded bg-primary-50 px-2 py-0.5 font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
+                  >
+                    {{ openaiFastPolicyActionSummary(rule.action) }}
+                  </span>
+                  <template v-if="hasOpenAIFastPolicyTargetModels(rule)">
+                    <span aria-hidden="true">·</span>
+                    <span class="font-medium text-gray-700 dark:text-gray-300">
+                      {{
+                        t(
+                          "admin.settings.openaiFastPolicy.summaryOtherModels",
+                        )
+                      }}
+                    </span>
+                    <span aria-hidden="true">→</span>
+                    <span
+                      class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 font-medium text-gray-700 dark:bg-dark-600 dark:text-gray-300"
+                    >
+                      {{
+                        openaiFastPolicyActionSummary(
+                          rule.fallback_action || "pass",
+                        )
+                      }}
+                    </span>
+                  </template>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <!-- Service Tier -->
+                  <div>
+                    <label
+                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >
+                      {{ t("admin.settings.openaiFastPolicy.serviceTier") }}
+                    </label>
+                    <Select
+                      :modelValue="rule.service_tier"
+                      @update:modelValue="
+                        rule.service_tier = $event as
+                          | 'all'
+                          | 'priority'
+                          | 'flex'
+                      "
+                      :options="openaiFastPolicyTierOptions"
+                    />
+                  </div>
+
+                  <!-- Action -->
+                  <div>
+                    <label
+                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >
+                      {{ t("admin.settings.openaiFastPolicy.action") }}
+                    </label>
+                    <Select
+                      :modelValue="rule.action"
+                      @update:modelValue="
+                        rule.action = $event as
+                          | 'pass'
+                          | 'filter'
+                          | 'block'
+                          | 'force_priority'
+                      "
+                      :options="openaiFastPolicyActionOptions"
+                    />
+                  </div>
+
+                  <!-- Scope -->
+                  <div>
+                    <label
+                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >
+                      {{ t("admin.settings.openaiFastPolicy.scope") }}
+                    </label>
+                    <Select
+                      :modelValue="rule.scope"
+                      @update:modelValue="
+                        rule.scope = $event as
+                          | 'all'
+                          | 'oauth'
+                          | 'apikey'
+                          | 'bedrock'
+                      "
+                      :options="openaiFastPolicyScopeOptions"
+                    />
+                  </div>
+                </div>
+
+                <!-- Error Message (only when action=block) -->
+                <div v-if="rule.action === 'block'" class="mt-3">
+                  <label
+                    class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                  >
+                    {{ t("admin.settings.openaiFastPolicy.errorMessage") }}
+                  </label>
+                  <input
+                    v-model="rule.error_message"
+                    type="text"
+                    class="input"
+                    :placeholder="
+                      t(
+                        'admin.settings.openaiFastPolicy.errorMessagePlaceholder',
+                      )
+                    "
+                  />
+                  <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                    {{ t("admin.settings.openaiFastPolicy.errorMessageHint") }}
+                  </p>
+                </div>
+
+                <!-- Target Models -->
+                <div
+                  class="mt-3"
+                  role="group"
+                  :aria-labelledby="`openai-fast-policy-models-label-${ruleIndex}`"
+                  :aria-describedby="`openai-fast-policy-models-hint-${ruleIndex}`"
+                >
+                  <label
+                    :id="`openai-fast-policy-models-label-${ruleIndex}`"
+                    class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                  >
+                    {{ t("admin.settings.openaiFastPolicy.modelWhitelist") }}
+                  </label>
+                  <p
+                    :id="`openai-fast-policy-models-hint-${ruleIndex}`"
+                    class="mb-2 text-xs text-gray-400 dark:text-gray-500"
+                  >
+                    {{
+                      t("admin.settings.openaiFastPolicy.modelWhitelistHint")
+                    }}
+                  </p>
+                  <div
+                    v-for="(_, patternIdx) in rule.model_whitelist || []"
+                    :key="patternIdx"
+                    class="mb-1.5 flex items-center gap-2"
+                  >
+                    <input
+                      v-model="rule.model_whitelist![patternIdx]"
+                      type="text"
+                      class="input input-sm flex-1"
+                      :placeholder="
+                        t(
+                          'admin.settings.openaiFastPolicy.modelPatternPlaceholder',
+                        )
+                      "
+                    />
+                    <button
+                      type="button"
+                      @click="
+                        removeOpenAIFastPolicyModelPattern(rule, patternIdx)
+                      "
+                      class="shrink-0 rounded p-1 text-red-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                    >
+                      <svg
+                        class="h-4 w-4"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    @click="addOpenAIFastPolicyModelPattern(rule)"
+                    class="mb-2 inline-flex items-center gap-1 text-xs text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                  >
+                    <svg
+                      class="h-3.5 w-3.5"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      stroke-width="2"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                    {{ t("admin.settings.openaiFastPolicy.addModelPattern") }}
+                  </button>
+                </div>
+
+                <!-- Other Models Action (only when target models are non-empty) -->
+                <div
+                  v-if="hasOpenAIFastPolicyTargetModels(rule)"
+                  class="mt-3"
+                >
+                  <label
+                    class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                  >
+                    {{ t("admin.settings.openaiFastPolicy.fallbackAction") }}
+                  </label>
+                  <Select
+                    :modelValue="rule.fallback_action || 'pass'"
+                    @update:modelValue="
+                      rule.fallback_action = $event as
+                        | 'pass'
+                        | 'filter'
+                        | 'block'
+                        | 'force_priority'
+                    "
+                    :options="openaiFastPolicyActionOptions"
+                  />
+                  <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                    {{
+                      t("admin.settings.openaiFastPolicy.fallbackActionHint")
+                    }}
+                  </p>
+                  <div v-if="rule.fallback_action === 'block'" class="mt-2">
+                    <input
+                      v-model="rule.fallback_error_message"
+                      type="text"
+                      class="input"
+                      :placeholder="
+                        t(
+                          'admin.settings.openaiFastPolicy.fallbackErrorMessagePlaceholder',
+                        )
+                      "
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <!-- Add Rule Button -->
+              <div>
+                <button
+                  type="button"
+                  @click="addOpenAIFastPolicyRule"
+                  class="btn btn-secondary btn-sm inline-flex items-center gap-1"
+                >
+                  <svg
+                    class="h-4 w-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      d="M12 4v16m8-8H4"
+                    />
+                  </svg>
+                  {{ t("admin.settings.openaiFastPolicy.addRule") }}
+                </button>
+                <p class="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                  {{ t("admin.settings.openaiFastPolicy.saveHint") }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- /Tab: GPT -->
+
+        <!-- Tab: Claude -->
+        <div v-show="activeTab === 'claude'" class="space-y-6" data-testid="claude-settings">
+          <!-- Claude Code Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.claudeCode.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.claudeCode.description") }}
+              </p>
+            </div>
+            <div class="p-6">
+              <div>
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.claudeCode.minVersion") }}
+                </label>
+                <input
+                  v-model="form.min_claude_code_version"
+                  type="text"
+                  class="input max-w-xs font-mono text-sm"
+                  :placeholder="
+                    t('admin.settings.claudeCode.minVersionPlaceholder')
+                  "
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.claudeCode.minVersionHint") }}
+                </p>
+              </div>
+              <div class="mt-4">
+                <label
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{ t("admin.settings.claudeCode.maxVersion") }}
+                </label>
+                <input
+                  v-model="form.max_claude_code_version"
+                  type="text"
+                  class="input max-w-xs font-mono text-sm"
+                  :placeholder="
+                    t('admin.settings.claudeCode.maxVersionPlaceholder')
+                  "
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.claudeCode.maxVersionHint") }}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Claude Forwarding Behavior -->
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.gatewayForwarding.claudeTitle") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.gatewayForwarding.claudeDescription") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
               <!-- Fingerprint Unification -->
               <div class="flex items-center justify-between">
                 <div>
@@ -5587,314 +5730,485 @@
                   v-model="form.enable_client_dateline_normalization"
                 />
               </div>
+            </div>
+          </div>
 
-              <!-- OpenAI Codex account-local device session identity -->
-              <div class="flex items-center justify-between">
-                <div>
-                  <label
-                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{
-                      t(
-                        "admin.settings.gatewayForwarding.accountLocalDeviceIdentity",
-                      )
-                    }}
-                  </label>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    {{
-                      t(
-                        "admin.settings.gatewayForwarding.accountLocalDeviceIdentityHint",
-                      )
-                    }}
-                  </p>
-                </div>
-                <Toggle
-                  v-model="form.enable_openai_account_local_device_identity"
-                  data-testid="account-local-device-identity-toggle"
-                />
-              </div>
-
-              <!-- GPT/Codex upstream identity headers -->
+          <!-- Request Rectifier Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.rectifier.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.rectifier.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <!-- Loading State -->
               <div
-                class="rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/60"
-                data-testid="openai-codex-upstream-identity-settings"
+                v-if="rectifierLoading"
+                class="flex items-center gap-2 text-gray-500"
               >
-                <div>
-                  <h3
-                    class="text-sm font-semibold text-gray-900 dark:text-white"
-                  >
-                    {{
-                      t(
-                        "admin.settings.gatewayForwarding.openaiCodexIdentityTitle",
-                      )
-                    }}
-                  </h3>
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{
-                      t(
-                        "admin.settings.gatewayForwarding.openaiCodexIdentityHint",
-                      )
-                    }}
-                  </p>
-                </div>
-
-                <div class="mt-4 space-y-4">
-                  <!-- Originator -->
-                  <div>
-                    <label
-                      for="openai-codex-originator"
-                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                    >
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexOriginator",
-                        )
-                      }}
-                    </label>
-                    <Select
-                      :model-value="form.openai_codex_originator"
-                      :options="codexOriginatorOptions"
-                      searchable
-                      class="mb-2"
-                      data-testid="openai-codex-originator-presets"
-                      :aria-label="t('admin.settings.gatewayForwarding.openaiCodexOriginatorPresets')"
-                      :placeholder="t('admin.settings.gatewayForwarding.openaiCodexOriginatorPresets')"
-                      @update:model-value="applyCodexOriginatorPreset"
-                    />
-                    <input
-                      id="openai-codex-originator"
-                      v-model="form.openai_codex_originator"
-                      type="text"
-                      class="input w-full font-mono text-sm"
-                      data-testid="openai-codex-originator"
-                      maxlength="64"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.openaiCodexOriginatorPlaceholder',
-                        )
-                      "
-                    />
-                    <p
-                      v-if="form.openai_codex_originator_default"
-                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
-                      data-testid="openai-codex-originator-default"
-                    >
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
-                          {
-                            value: form.openai_codex_originator_default,
-                          },
-                        )
-                      }}
-                    </p>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexOriginatorHint",
-                        )
-                      }}
-                    </p>
-                  </div>
-
-                  <!-- User-Agent -->
-                  <div>
-                    <label
-                      for="openai-codex-user-agent"
-                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                    >
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexUserAgent",
-                        )
-                      }}
-                    </label>
-                    <Select
-                      :model-value="form.openai_codex_user_agent"
-                      :options="codexUserAgentOptions"
-                      searchable
-                      class="mb-2"
-                      data-testid="openai-codex-user-agent-presets"
-                      :aria-label="t('admin.settings.gatewayForwarding.openaiCodexUserAgentPresets')"
-                      :placeholder="t('admin.settings.gatewayForwarding.openaiCodexUserAgentPresets')"
-                      @update:model-value="applyCodexUserAgentPreset"
-                    />
-                    <input
-                      id="openai-codex-user-agent"
-                      v-model="form.openai_codex_user_agent"
-                      type="text"
-                      class="input w-full font-mono text-sm"
-                      data-testid="openai-codex-user-agent"
-                      maxlength="512"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.openaiCodexUserAgentPlaceholder',
-                        )
-                      "
-                    />
-                    <p
-                      v-if="form.openai_codex_user_agent_default"
-                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
-                      data-testid="openai-codex-user-agent-default"
-                    >
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
-                          {
-                            value: form.openai_codex_user_agent_default,
-                          },
-                        )
-                      }}
-                    </p>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexUserAgentHint",
-                        )
-                      }}
-                    </p>
-                  </div>
-
-                  <!-- Version -->
-                  <div>
-                    <label
-                      for="openai-codex-version"
-                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                    >
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexClientVersion",
-                        )
-                      }}
-                    </label>
-                    <div class="mb-2 grid gap-2 sm:grid-cols-2">
-                      <Select
-                        :model-value="form.openai_codex_client_version_mode"
-                        :options="codexVersionModeOptions"
-                        data-testid="openai-codex-version-mode"
-                        :aria-label="t('admin.settings.gatewayForwarding.openaiCodexVersionMode')"
-                        @update:model-value="setCodexVersionMode"
-                      />
-                      <Select
-                        :model-value="form.openai_codex_client_version"
-                        :options="codexVersionOptions"
-                        :loading="codexVersionsLoading"
-                        searchable
-                        data-testid="openai-codex-version-history"
-                        :aria-label="t('admin.settings.gatewayForwarding.openaiCodexVersionHistory')"
-                        :placeholder="t('admin.settings.gatewayForwarding.openaiCodexVersionHistory')"
-                        @update:model-value="selectCodexVersion"
-                      />
-                    </div>
-                    <input
-                      id="openai-codex-version"
-                      v-model="form.openai_codex_client_version"
-                      @input="onCodexVersionInput"
-                      type="text"
-                      class="input w-full font-mono text-sm"
-                      data-testid="openai-codex-version"
-                      maxlength="64"
-                      :placeholder="
-                        t(
-                          'admin.settings.gatewayForwarding.openaiCodexClientVersionPlaceholder',
-                        )
-                      "
-                    />
-                    <div class="mt-2 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        class="btn btn-secondary text-xs"
-                        :disabled="codexSyncLoading || saving"
-                        data-testid="openai-codex-sync"
-                        @click="syncCodexVersion"
-                      >
-                        {{ t(codexSyncLoading ? 'admin.settings.gatewayForwarding.openaiCodexVersionSyncing' : 'admin.settings.gatewayForwarding.openaiCodexVersionSyncNow') }}
-                      </button>
-                      <button
-                        type="button"
-                        class="btn btn-secondary text-xs"
-                        :disabled="codexVersionsLoading || codexSyncLoading"
-                        data-testid="openai-codex-versions-refresh"
-                        @click="loadCodexVersions()"
-                      >
-                        {{ t(codexVersionsLoading ? 'common.loading' : 'admin.settings.gatewayForwarding.openaiCodexVersionRefresh') }}
-                      </button>
-                      <button
-                        v-if="codexVersionsNextPage !== null"
-                        type="button"
-                        class="btn btn-secondary text-xs"
-                        :disabled="codexVersionsLoading || codexSyncLoading"
-                        data-testid="openai-codex-versions-more"
-                        @click="loadCodexVersions(codexVersionsNextPage)"
-                      >
-                        {{ t('admin.settings.gatewayForwarding.openaiCodexVersionLoadMore') }}
-                      </button>
-                    </div>
-                    <p
-                      v-if="codexVersionsError"
-                      role="alert"
-                      class="mt-2 text-xs text-red-600 dark:text-red-400"
-                      data-testid="openai-codex-versions-error"
-                    >{{ codexVersionsError }}</p>
-                    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                      {{ t('admin.settings.gatewayForwarding.openaiCodexVersionSource') }}
-                      <a class="text-primary-600 hover:underline" href="https://github.com/openai/codex/releases" target="_blank" rel="noopener noreferrer">openai/codex</a>
-                      <span v-if="codexLatestVersion"> · {{ t('admin.settings.gatewayForwarding.openaiCodexVersionLatest', { version: codexLatestVersion }) }}</span>
-                    </p>
-                    <p
-                      v-if="form.openai_codex_client_version_default"
-                      class="mt-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400"
-                      data-testid="openai-codex-version-default"
-                    >
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexDefaultValue",
-                          {
-                            value: form.openai_codex_client_version_default,
-                          },
-                        )
-                      }}
-                    </p>
-                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      {{
-                        t(
-                          "admin.settings.gatewayForwarding.openaiCodexClientVersionHint",
-                        )
-                      }}
-                    </p>
-                  </div>
-                </div>
+                <div
+                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
+                ></div>
+                {{ t("common.loading") }}
               </div>
 
-              <!-- Codex 版本号自动同步 -->
-              <div class="flex items-center justify-between">
-                <div>
-                  <label
-                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{
-                      t(
-                        "admin.settings.gatewayForwarding.openaiCodexVersionAutoSync",
-                      )
-                    }}
-                  </label>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    {{
-                      t(
-                        "admin.settings.gatewayForwarding.openaiCodexVersionAutoSyncHint",
-                      )
-                    }}
-                  </p>
-                  <p
-                    v-if="codexSyncedVersionLabel"
-                    class="mt-0.5 text-xs text-gray-500 dark:text-gray-400"
-                  >
-                    {{ codexSyncedVersionLabel }}
-                  </p>
+              <template v-else>
+                <!-- Master Toggle -->
+                <div class="flex items-center justify-between">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">{{
+                      t("admin.settings.rectifier.enabled")
+                    }}</label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.rectifier.enabledHint") }}
+                    </p>
+                  </div>
+                  <Toggle v-model="rectifierForm.enabled" />
                 </div>
-                <Toggle v-model="form.openai_codex_version_auto_sync_enabled" />
+
+                <!-- Sub-toggles (only show when master is enabled) -->
+                <div
+                  v-if="rectifierForm.enabled"
+                  class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <!-- Thinking Signature Rectifier -->
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <label
+                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                        >{{
+                          t("admin.settings.rectifier.thinkingSignature")
+                        }}</label
+                      >
+                      <p class="text-xs text-gray-500 dark:text-gray-400">
+                        {{
+                          t("admin.settings.rectifier.thinkingSignatureHint")
+                        }}
+                      </p>
+                    </div>
+                    <Toggle
+                      v-model="rectifierForm.thinking_signature_enabled"
+                    />
+                  </div>
+
+                  <!-- Thinking Budget Rectifier -->
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <label
+                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                        >{{
+                          t("admin.settings.rectifier.thinkingBudget")
+                        }}</label
+                      >
+                      <p class="text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.rectifier.thinkingBudgetHint") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="rectifierForm.thinking_budget_enabled" />
+                  </div>
+
+                  <!-- API Key Signature Rectifier -->
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <label
+                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                        >{{
+                          t("admin.settings.rectifier.apikeySignature")
+                        }}</label
+                      >
+                      <p class="text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.rectifier.apikeySignatureHint") }}
+                      </p>
+                    </div>
+                    <Toggle v-model="rectifierForm.apikey_signature_enabled" />
+                  </div>
+
+                  <!-- Custom Patterns (only when apikey_signature_enabled) -->
+                  <div
+                    v-if="rectifierForm.apikey_signature_enabled"
+                    class="ml-4 space-y-3 border-l-2 border-gray-200 pl-4 dark:border-dark-600"
+                  >
+                    <div>
+                      <label
+                        class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                        >{{
+                          t("admin.settings.rectifier.apikeyPatterns")
+                        }}</label
+                      >
+                      <p class="text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.rectifier.apikeyPatternsHint") }}
+                      </p>
+                    </div>
+                    <div
+                      v-for="(
+                        _, index
+                      ) in rectifierForm.apikey_signature_patterns"
+                      :key="index"
+                      class="flex items-center gap-2"
+                    >
+                      <input
+                        v-model="rectifierForm.apikey_signature_patterns[index]"
+                        type="text"
+                        class="input input-sm flex-1"
+                        :placeholder="
+                          t('admin.settings.rectifier.apikeyPatternPlaceholder')
+                        "
+                      />
+                      <button
+                        type="button"
+                        @click="
+                          rectifierForm.apikey_signature_patterns.splice(
+                            index,
+                            1,
+                          )
+                        "
+                        class="btn btn-ghost btn-xs text-red-500 hover:text-red-700"
+                      >
+                        <svg
+                          class="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      @click="rectifierForm.apikey_signature_patterns.push('')"
+                      class="btn btn-ghost btn-xs text-primary-600 dark:text-primary-400"
+                    >
+                      + {{ t("admin.settings.rectifier.addPattern") }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Save Button -->
+                <div
+                  class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <button
+                    type="button"
+                    @click="saveRectifierSettings"
+                    :disabled="rectifierSaving"
+                    class="btn btn-primary btn-sm"
+                  >
+                    <svg
+                      v-if="rectifierSaving"
+                      class="mr-1 h-4 w-4 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                      ></circle>
+                      <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    {{
+                      rectifierSaving ? t("common.saving") : t("common.save")
+                    }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+          <!-- Beta Policy Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.betaPolicy.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.betaPolicy.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <!-- Loading State -->
+              <div
+                v-if="betaPolicyLoading"
+                class="flex items-center gap-2 text-gray-500"
+              >
+                <div
+                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
+                ></div>
+                {{ t("common.loading") }}
               </div>
 
+              <template v-else>
+                <!-- Rule Cards -->
+                <div
+                  v-for="rule in betaPolicyForm.rules"
+                  :key="rule.beta_token"
+                  class="rounded-lg border border-gray-200 p-4 dark:border-dark-600"
+                >
+                  <div class="mb-3 flex items-center gap-2">
+                    <span
+                      class="text-sm font-medium text-gray-900 dark:text-white"
+                    >
+                      {{ getBetaDisplayName(rule.beta_token) }}
+                    </span>
+                    <span
+                      class="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-dark-700 dark:text-gray-400"
+                    >
+                      {{ rule.beta_token }}
+                    </span>
+                  </div>
+
+                  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <!-- Action -->
+                    <div>
+                      <label
+                        class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                      >
+                        {{ t("admin.settings.betaPolicy.action") }}
+                      </label>
+                      <Select
+                        :modelValue="rule.action"
+                        @update:modelValue="rule.action = $event as any"
+                        :options="betaPolicyActionOptions"
+                      />
+                    </div>
+
+                    <!-- Scope -->
+                    <div>
+                      <label
+                        class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                      >
+                        {{ t("admin.settings.betaPolicy.scope") }}
+                      </label>
+                      <Select
+                        :modelValue="rule.scope"
+                        @update:modelValue="rule.scope = $event as any"
+                        :options="betaPolicyScopeOptions"
+                      />
+                    </div>
+                  </div>
+
+                  <!-- Error Message (only when action=block) -->
+                  <div v-if="rule.action === 'block'" class="mt-3">
+                    <label
+                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >
+                      {{ t("admin.settings.betaPolicy.errorMessage") }}
+                    </label>
+                    <input
+                      v-model="rule.error_message"
+                      type="text"
+                      class="input"
+                      :placeholder="
+                        t('admin.settings.betaPolicy.errorMessagePlaceholder')
+                      "
+                    />
+                    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                      {{ t("admin.settings.betaPolicy.errorMessageHint") }}
+                    </p>
+                  </div>
+
+                  <!-- Quick Presets (only for tokens with presets) -->
+                  <div v-if="betaPresets[rule.beta_token]?.length" class="mt-3">
+                    <label
+                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >
+                      {{ t("admin.settings.betaPolicy.quickPresets") }}
+                    </label>
+                    <div class="flex flex-wrap gap-2">
+                      <button
+                        v-for="preset in betaPresets[rule.beta_token]"
+                        :key="preset.label"
+                        type="button"
+                        class="inline-flex items-center gap-1 rounded-md border border-primary-200 bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700 transition-colors hover:bg-primary-100 dark:border-primary-800 dark:bg-primary-900/30 dark:text-primary-300 dark:hover:bg-primary-900/50"
+                        @click="applyBetaPreset(rule, preset)"
+                        :title="preset.description"
+                      >
+                        {{ preset.label }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Model Whitelist -->
+                  <div class="mt-3">
+                    <label
+                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >
+                      {{ t("admin.settings.betaPolicy.modelWhitelist") }}
+                    </label>
+                    <p class="mb-2 text-xs text-gray-400 dark:text-gray-500">
+                      {{ t("admin.settings.betaPolicy.modelWhitelistHint") }}
+                    </p>
+                    <!-- Existing patterns -->
+                    <div
+                      v-for="(_, index) in rule.model_whitelist || []"
+                      :key="index"
+                      class="mb-1.5 flex items-center gap-2"
+                    >
+                      <input
+                        v-model="rule.model_whitelist![index]"
+                        type="text"
+                        class="input input-sm flex-1"
+                        :placeholder="
+                          t('admin.settings.betaPolicy.modelPatternPlaceholder')
+                        "
+                      />
+                      <button
+                        type="button"
+                        @click="rule.model_whitelist!.splice(index, 1)"
+                        class="shrink-0 rounded p-1 text-red-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+                      >
+                        <svg
+                          class="h-4 w-4"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                          stroke-width="2"
+                        >
+                          <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M6 18L18 6M6 6l12 12"
+                          />
+                        </svg>
+                      </button>
+                    </div>
+                    <!-- Add pattern button -->
+                    <button
+                      type="button"
+                      @click="
+                        if (!rule.model_whitelist) rule.model_whitelist = [];
+                        rule.model_whitelist.push('');
+                      "
+                      class="mb-2 inline-flex items-center gap-1 text-xs text-primary-600 transition-colors hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                    >
+                      <svg
+                        class="h-3.5 w-3.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M12 4v16m8-8H4"
+                        />
+                      </svg>
+                      {{ t("admin.settings.betaPolicy.addModelPattern") }}
+                    </button>
+                    <!-- Common pattern chips -->
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <span class="text-xs text-gray-400 dark:text-gray-500"
+                        >{{
+                          t("admin.settings.betaPolicy.commonPatterns")
+                        }}:</span
+                      >
+                      <button
+                        v-for="pattern in commonModelPatterns"
+                        :key="pattern"
+                        type="button"
+                        class="rounded border border-gray-200 px-2 py-0.5 text-xs text-gray-600 transition-colors hover:border-primary-300 hover:bg-primary-50 hover:text-primary-700 dark:border-dark-600 dark:text-gray-400 dark:hover:border-primary-700 dark:hover:bg-primary-900/30 dark:hover:text-primary-300"
+                        @click="addQuickPattern(rule, pattern)"
+                      >
+                        {{ pattern }}
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Fallback Action (only when model_whitelist is non-empty) -->
+                  <div
+                    v-if="
+                      rule.model_whitelist && rule.model_whitelist.length > 0
+                    "
+                    class="mt-3"
+                  >
+                    <label
+                      class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400"
+                    >
+                      {{ t("admin.settings.betaPolicy.fallbackAction") }}
+                    </label>
+                    <Select
+                      :modelValue="rule.fallback_action || 'pass'"
+                      @update:modelValue="rule.fallback_action = $event as any"
+                      :options="betaPolicyActionOptions"
+                    />
+                    <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                      {{ t("admin.settings.betaPolicy.fallbackActionHint") }}
+                    </p>
+                    <!-- Fallback Error Message (only when fallback_action=block) -->
+                    <div v-if="rule.fallback_action === 'block'" class="mt-2">
+                      <input
+                        v-model="rule.fallback_error_message"
+                        type="text"
+                        class="input"
+                        :placeholder="
+                          t(
+                            'admin.settings.betaPolicy.fallbackErrorMessagePlaceholder',
+                          )
+                        "
+                      />
+                      <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                        {{ t("admin.settings.betaPolicy.errorMessageHint") }}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Save Button -->
+                <div
+                  class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <button
+                    type="button"
+                    @click="saveBetaPolicySettings"
+                    :disabled="betaPolicySaving"
+                    class="btn btn-primary btn-sm"
+                  >
+                    <svg
+                      v-if="betaPolicySaving"
+                      class="mr-1 h-4 w-4 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                      ></circle>
+                      <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    {{
+                      betaPolicySaving ? t("common.saving") : t("common.save")
+                    }}
+                  </button>
+                </div>
+              </template>
             </div>
           </div>
 
@@ -6333,287 +6647,8 @@
               </div>
             </div>
           </div>
-
-          <!-- Async image task object storage (independent from data backup). -->
-          <div class="card" data-testid="image-storage-settings">
-            <div
-              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
-            >
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.imageStorage.title") }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.imageStorage.description") }}
-              </p>
-            </div>
-            <div class="space-y-5 p-6">
-              <div
-                v-if="imageStorageLoading"
-                class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400"
-              >
-                <div
-                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
-                ></div>
-                {{ t("common.loading") }}
-              </div>
-              <div
-                v-else-if="imageStorageLoadError"
-                class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
-              >
-                {{ imageStorageLoadError }}
-              </div>
-              <template v-else>
-                <div class="flex items-center justify-between gap-4">
-                  <div>
-                    <label class="font-medium text-gray-900 dark:text-white">
-                      {{ t("admin.settings.imageStorage.enabled") }}
-                    </label>
-                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.imageStorage.enabledHint") }}
-                    </p>
-                  </div>
-                  <Toggle
-                    v-model="imageStorageForm.enabled"
-                    data-testid="image-storage-enabled"
-                  />
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div>
-                    <label class="input-label" for="image-storage-endpoint">
-                      {{ t("admin.settings.imageStorage.endpoint") }}
-                    </label>
-                    <input
-                      id="image-storage-endpoint"
-                      v-model="imageStorageForm.endpoint"
-                      class="input w-full font-mono text-sm"
-                      placeholder="https://<account_id>.r2.cloudflarestorage.com"
-                    />
-                  </div>
-                  <div>
-                    <label class="input-label" for="image-storage-region">
-                      {{ t("admin.settings.imageStorage.region") }}
-                    </label>
-                    <input
-                      id="image-storage-region"
-                      v-model="imageStorageForm.region"
-                      class="input w-full font-mono text-sm"
-                      placeholder="auto"
-                    />
-                  </div>
-                  <div>
-                    <label class="input-label" for="image-storage-bucket">
-                      {{ t("admin.settings.imageStorage.bucket") }}
-                    </label>
-                    <input
-                      id="image-storage-bucket"
-                      v-model="imageStorageForm.bucket"
-                      class="input w-full font-mono text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label class="input-label" for="image-storage-prefix">
-                      {{ t("admin.settings.imageStorage.prefix") }}
-                    </label>
-                    <input
-                      id="image-storage-prefix"
-                      v-model="imageStorageForm.prefix"
-                      class="input w-full font-mono text-sm"
-                      placeholder="images/"
-                    />
-                  </div>
-                  <div>
-                    <label class="input-label" for="image-storage-access-key">
-                      {{ t("admin.settings.imageStorage.accessKeyId") }}
-                    </label>
-                    <input
-                      id="image-storage-access-key"
-                      v-model="imageStorageForm.access_key_id"
-                      class="input w-full font-mono text-sm"
-                      autocomplete="off"
-                    />
-                  </div>
-                  <div>
-                    <label class="input-label" for="image-storage-secret-key">
-                      {{ t("admin.settings.imageStorage.secretAccessKey") }}
-                    </label>
-                    <input
-                      id="image-storage-secret-key"
-                      v-model="imageStorageForm.secret_access_key"
-                      type="password"
-                      class="input w-full font-mono text-sm"
-                      autocomplete="new-password"
-                      :placeholder="
-                        imageStorageSecretConfigured
-                          ? t('admin.settings.imageStorage.secretConfigured')
-                          : ''
-                      "
-                    />
-                  </div>
-                  <div class="md:col-span-2">
-                    <label class="input-label" for="image-storage-public-url">
-                      {{ t("admin.settings.imageStorage.publicBaseUrl") }}
-                    </label>
-                    <input
-                      id="image-storage-public-url"
-                      v-model="imageStorageForm.public_base_url"
-                      type="url"
-                      class="input w-full font-mono text-sm"
-                      :placeholder="
-                        t('admin.settings.imageStorage.publicBaseUrlPlaceholder')
-                      "
-                    />
-                  </div>
-                  <div>
-                    <label class="input-label" for="image-storage-presign-expiry">
-                      {{ t("admin.settings.imageStorage.presignExpiryHours") }}
-                    </label>
-                    <input
-                      id="image-storage-presign-expiry"
-                      v-model.number="imageStorageForm.presign_expiry_hours"
-                      type="number"
-                      min="1"
-                      step="1"
-                      class="input w-full"
-                    />
-                  </div>
-                  <div>
-                    <label class="input-label" for="image-storage-max-download">
-                      {{ t("admin.settings.imageStorage.maxDownloadBytes") }}
-                    </label>
-                    <input
-                      id="image-storage-max-download"
-                      v-model.number="imageStorageForm.max_download_bytes"
-                      type="number"
-                      min="1"
-                      step="1"
-                      class="input w-full"
-                    />
-                    <p class="input-hint">
-                      {{ t("admin.settings.imageStorage.maxDownloadBytesHint") }}
-                    </p>
-                  </div>
-                </div>
-
-                <div
-                  class="flex items-center justify-between gap-4 border-t border-gray-100 pt-4 dark:border-dark-700"
-                >
-                  <div>
-                    <label class="font-medium text-gray-900 dark:text-white">
-                      {{ t("admin.settings.imageStorage.forcePathStyle") }}
-                    </label>
-                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.imageStorage.forcePathStyleHint") }}
-                    </p>
-                  </div>
-                  <Toggle
-                    v-model="imageStorageForm.force_path_style"
-                    data-testid="image-storage-force-path-style"
-                  />
-                </div>
-
-                <div class="flex flex-wrap justify-end gap-2 border-t border-gray-100 pt-4 dark:border-dark-700">
-                  <button
-                    type="button"
-                    class="btn btn-secondary btn-sm"
-                    :disabled="imageStorageTesting || imageStorageSaving"
-                    data-testid="image-storage-test"
-                    @click="testImageStorageConnection"
-                  >
-                    <svg
-                      v-if="imageStorageTesting"
-                      class="mr-1 h-4 w-4 animate-spin"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        class="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        stroke-width="4"
-                      ></circle>
-                      <path
-                        class="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      ></path>
-                    </svg>
-                    {{
-                      imageStorageTesting
-                        ? t("admin.settings.imageStorage.testing")
-                        : t("admin.settings.imageStorage.testConnection")
-                    }}
-                  </button>
-                  <button
-                    type="button"
-                    class="btn btn-primary btn-sm"
-                    :disabled="imageStorageSaving || imageStorageTesting"
-                    data-testid="image-storage-save"
-                    @click="saveImageStorageConfig"
-                  >
-                    <svg
-                      v-if="imageStorageSaving"
-                      class="mr-1 h-4 w-4 animate-spin"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        class="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        stroke-width="4"
-                      ></circle>
-                      <path
-                        class="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      ></path>
-                    </svg>
-                    {{
-                      imageStorageSaving
-                        ? t("common.saving")
-                        : t("common.save")
-                    }}
-                  </button>
-                </div>
-              </template>
-            </div>
-          </div>
-
-          <!-- Legacy per-user usage visibility setting is no longer exposed. -->
-          <div v-if="false" class="card" aria-hidden="true">
-            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t('admin.settings.usageRecords.title') }}
-              </h2>
-              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t('admin.settings.usageRecords.description') }}
-              </p>
-            </div>
-            <div class="space-y-4 p-6">
-              <!-- User error requests visibility -->
-              <div class="flex items-center justify-between">
-                <div>
-                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    {{ t('admin.settings.user_error_view.label') }}
-                  </label>
-                  <p class="text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('admin.settings.user_error_view.description') }}
-                  </p>
-                </div>
-                <label class="toggle">
-                  <input v-model="form.allow_user_view_error_requests" type="checkbox" />
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-            </div>
-          </div>
         </div>
-        <!-- /Tab: Gateway — Claude Code, Scheduling -->
+        <!-- /Tab: Claude -->
 
         <!-- Tab: General -->
         <div v-show="activeTab === 'general'" class="space-y-6">
@@ -9199,13 +9234,17 @@ type SettingsTab =
   | "general"
   | "features"
   | "security"
-  | "gateway";
+  | "gateway"
+  | "gpt"
+  | "claude";
 const activeTab = ref<SettingsTab>("general");
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
   { key: "features" as SettingsTab, icon: "bolt" as const },
   { key: "security" as SettingsTab, icon: "shield" as const },
   { key: "gateway" as SettingsTab, icon: "server" as const },
+  { key: "gpt" as SettingsTab, icon: "terminal" as const },
+  { key: "claude" as SettingsTab, icon: "sparkles" as const },
 ];
 
 const settingsTabKeyboardActions = {
@@ -11211,7 +11250,7 @@ async function syncCodexVersion(): Promise<void> {
 }
 
 watch(activeTab, (tab) => {
-  if (tab === "gateway" && !codexVersionsLoaded.value) void loadCodexVersions();
+  if (tab === "gpt" && !codexVersionsLoaded.value) void loadCodexVersions();
 });
 
 const codexSyncedVersionLabel = computed(() => {
@@ -13185,7 +13224,7 @@ watch(
   }
 
   .settings-tab {
-    @apply min-w-0 flex-1 basis-0 overflow-hidden px-2 text-[13px];
+    @apply min-w-max flex-1 px-2 text-[13px];
   }
 
   .settings-tab-icon {

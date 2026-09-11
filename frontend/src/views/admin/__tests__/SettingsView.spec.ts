@@ -624,6 +624,16 @@ async function openGatewayTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
+async function openGPTTab(wrapper: ReturnType<typeof mountView>) {
+  await wrapper.get("#settings-tab-gpt").trigger("click");
+  await flushPromises();
+}
+
+async function openClaudeTab(wrapper: ReturnType<typeof mountView>) {
+  await wrapper.get("#settings-tab-claude").trigger("click");
+  await flushPromises();
+}
+
 describe("admin SettingsView", () => {
   beforeEach(() => {
     getOpenAICodexVersions.mockReset();
@@ -786,8 +796,9 @@ describe("admin SettingsView", () => {
     expect(updateSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("backend_mode_enabled");
   });
 
-  it("keeps the retained settings tabs in their original visual order", async () => {
+  it("keeps the retained settings tabs in order and separates GPT and Claude controls", async () => {
     const wrapper = mountView();
+    document.body.appendChild(wrapper.element);
     await flushPromises();
 
     const tabs = wrapper.findAll('[role="tab"]');
@@ -796,12 +807,16 @@ describe("admin SettingsView", () => {
       "admin.settings.tabs.features",
       "admin.settings.tabs.security",
       "admin.settings.tabs.gateway",
+      "admin.settings.tabs.gpt",
+      "admin.settings.tabs.claude",
     ]);
     expect(tabs.map((tab) => tab.get("icon-stub").attributes("name"))).toEqual([
       "home",
       "bolt",
       "shield",
       "server",
+      "terminal",
+      "sparkles",
     ]);
     expect(tabs[0]?.classes()).toContain("settings-tab-active");
     expect(wrapper.get(".settings-tabs-shell").classes()).toContain("settings-tabs-shell");
@@ -809,6 +824,49 @@ describe("admin SettingsView", () => {
     await tabs[3]?.trigger("click");
     expect(tabs[0]?.classes()).not.toContain("settings-tab-active");
     expect(tabs[3]?.classes()).toContain("settings-tab-active");
+
+    const gptPanel = wrapper.get('[data-testid="gpt-settings"]');
+    const claudePanel = wrapper.get('[data-testid="claude-settings"]');
+    const commonThreshold = wrapper.get('[data-testid="account-scheduling-threshold-openai"]');
+    expect(commonThreshold.isVisible()).toBe(true);
+    expect(gptPanel.isVisible()).toBe(false);
+    expect(claudePanel.isVisible()).toBe(false);
+
+    await openGPTTab(wrapper);
+    expect(gptPanel.isVisible()).toBe(true);
+    expect(claudePanel.isVisible()).toBe(false);
+    expect(commonThreshold.isVisible()).toBe(false);
+    expect(gptPanel.get('[data-testid="openai-ttft-mode"]').isVisible()).toBe(true);
+    expect(gptPanel.get('[data-testid="openai-advanced-scheduler-toggle"]').isVisible()).toBe(true);
+    expect(gptPanel.text()).toContain("admin.settings.openaiFastPolicy.title");
+    expect(gptPanel.text()).not.toContain("admin.settings.claudeCode.title");
+    expect(gptPanel.text()).not.toContain("admin.settings.betaPolicy.title");
+    await gptPanel.get('[data-testid="openai-codex-originator"]').setValue("custom-client");
+
+    await openClaudeTab(wrapper);
+    expect(claudePanel.isVisible()).toBe(true);
+    expect(gptPanel.isVisible()).toBe(false);
+    expect(commonThreshold.isVisible()).toBe(false);
+    expect(claudePanel.text()).toContain("admin.settings.claudeCode.title");
+    expect(claudePanel.text()).toContain("admin.settings.rectifier.title");
+    expect(claudePanel.text()).toContain("admin.settings.betaPolicy.title");
+    expect(claudePanel.text()).toContain("admin.settings.webSearchEmulation.title");
+    expect(claudePanel.find('[data-testid="openai-ttft-mode"]').exists()).toBe(false);
+    expect(claudePanel.find('[data-testid="openai-codex-originator"]').exists()).toBe(false);
+    const minClaudeVersion = claudePanel.get('input[placeholder="admin.settings.claudeCode.minVersionPlaceholder"]');
+    await minClaudeVersion.setValue("2.1.0");
+
+    await openGPTTab(wrapper);
+    expect((gptPanel.get('[data-testid="openai-codex-originator"]').element as HTMLInputElement).value).toBe("custom-client");
+    await openClaudeTab(wrapper);
+    expect((minClaudeVersion.element as HTMLInputElement).value).toBe("2.1.0");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      openai_codex_originator: "custom-client",
+      min_claude_code_version: "2.1.0",
+    }));
+    wrapper.unmount();
   });
 
   it("submits account quota notification recipients and removes blank rows", async () => {
@@ -1037,7 +1095,7 @@ describe("admin SettingsView", () => {
     );
   });
 
-  it("submits Anthropic cache TTL injection gateway setting", async () => {
+  it("submits Anthropic cache TTL injection Claude setting", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       enable_anthropic_cache_ttl_1h_injection: true,
@@ -1046,6 +1104,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
+    await openClaudeTab(wrapper);
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
 
@@ -1057,7 +1116,7 @@ describe("admin SettingsView", () => {
     );
   });
 
-  it("submits message cache_control rewrite gateway setting", async () => {
+  it("submits message cache_control rewrite Claude setting", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       rewrite_message_cache_control: true,
@@ -1066,6 +1125,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
+    await openClaudeTab(wrapper);
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
 
@@ -1077,7 +1137,7 @@ describe("admin SettingsView", () => {
     );
   });
 
-  it("submits Claude OAuth system prompt injection gateway settings", async () => {
+  it("submits Claude OAuth system prompt injection Claude settings", async () => {
     const blocks = `[{"type":"text","text":"custom block","cache_control":true}]`;
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
@@ -1088,6 +1148,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
+    await openClaudeTab(wrapper);
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
 
@@ -1117,6 +1178,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
+    await openGPTTab(wrapper);
 
     expect(wrapper.text()).toContain("OpenAI 实验调度策略");
     expect(wrapper.text()).toContain(
@@ -1143,7 +1205,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
 
     const summary = wrapper.get('[data-testid="openai-fast-policy-summary-0"]');
     expect(summary.text()).toContain("目标模型");
@@ -1202,7 +1264,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
 
     const modeSelect = wrapper.get('[data-testid="openai-ttft-mode"]');
     expect((modeSelect.element as HTMLSelectElement).value).toBe("visible");
@@ -1223,7 +1285,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
 
     const toggle = wrapper.get('[data-testid="account-local-device-identity-toggle"]');
     expect((toggle.element as HTMLInputElement).checked).toBe(true);
@@ -1253,7 +1315,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
 
     const card = wrapper.get(
       '[data-testid="openai-codex-upstream-identity-settings"]',
@@ -1332,7 +1394,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
 
     expect(
       (
@@ -1364,7 +1426,12 @@ describe("admin SettingsView", () => {
     await flushPromises();
     expect(getOpenAICodexVersions).not.toHaveBeenCalled();
     await openGatewayTab(wrapper);
+    expect(getOpenAICodexVersions).not.toHaveBeenCalled();
+    await openClaudeTab(wrapper);
+    expect(getOpenAICodexVersions).not.toHaveBeenCalled();
+    await openGPTTab(wrapper);
     await flushPromises();
+    expect(getOpenAICodexVersions).toHaveBeenCalledOnce();
     expect(getOpenAICodexVersions).toHaveBeenCalledWith(1);
     const origins = wrapper.get('[data-testid="openai-codex-originator-presets"]');
     expect(origins.findAll("option").map((option) => option.text())).toEqual([
@@ -1385,12 +1452,16 @@ describe("admin SettingsView", () => {
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
       openai_codex_originator: "custom-client", openai_codex_user_agent: "custom-client/0.150.1 (custom OS)",
     }));
+    await openClaudeTab(wrapper);
+    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
+    expect(getOpenAICodexVersions).toHaveBeenCalledOnce();
   });
 
   it("pins historical versions below the default, updates only the UA engine, and clears back to auto", async () => {
     const wrapper = mountView();
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
     await flushPromises();
     await wrapper.get('[data-testid="openai-codex-originator-presets"]').setValue("Codex Desktop");
     await wrapper.get('[data-testid="openai-codex-version-history"]').setValue("0.149.0");
@@ -1419,7 +1490,7 @@ describe("admin SettingsView", () => {
   it("loads older releases with the server cursor, deduplicates versions, and preserves history on refresh failure", async () => {
     const wrapper = mountView();
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
     await flushPromises();
     getOpenAICodexVersions.mockResolvedValueOnce({
       versions: [
@@ -1449,7 +1520,7 @@ describe("admin SettingsView", () => {
     });
     const wrapper = mountView();
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
     await flushPromises();
     await wrapper.get('[data-testid="openai-codex-originator"]').setValue("custom-client");
     await wrapper.get('[data-testid="openai-codex-user-agent"]').setValue("custom-client/0.140.0 (custom OS)");
@@ -1476,7 +1547,7 @@ describe("admin SettingsView", () => {
     syncOpenAICodexVersion.mockReturnValueOnce(new Promise((_, reject) => { rejectSync = reject; }));
     const wrapper = mountView();
     await flushPromises();
-    await openGatewayTab(wrapper);
+    await openGPTTab(wrapper);
     await flushPromises();
     const button = wrapper.get('[data-testid="openai-codex-sync"]');
     await button.trigger("click");
@@ -1522,6 +1593,7 @@ describe("admin SettingsView", () => {
     const wrapper = mountView();
 
     await flushPromises();
+    await openGPTTab(wrapper);
     expect(
       wrapper.find('[data-testid="openai-oauth-scheduling-rate-multiplier"]').exists(),
     ).toBe(false);

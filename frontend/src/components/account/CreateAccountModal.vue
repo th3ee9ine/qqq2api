@@ -53,7 +53,6 @@
           required
           class="input"
           :placeholder="t('admin.accounts.enterAccountName')"
-          data-tour="account-form-name"
         />
       </div>
       <div>
@@ -70,7 +69,7 @@
       <!-- Platform Selection - Segmented Control Style -->
       <div>
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
-        <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700" data-tour="account-form-platform">
+        <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700" data-testid="account-form-platform">
           <button
             type="button"
             data-testid="create-platform-anthropic"
@@ -117,7 +116,7 @@
       <!-- Account Type Selection (Anthropic) -->
       <div v-if="form.platform === 'anthropic'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
-        <div class="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4" data-tour="account-form-type">
+        <div class="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="account-form-type">
           <button
             type="button"
             data-testid="create-account-type-oauth"
@@ -251,7 +250,7 @@
       <!-- Account Type Selection (OpenAI) -->
       <div v-if="form.platform === 'openai'">
         <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
-        <div class="mt-2 grid grid-cols-2 gap-3" data-tour="account-form-type">
+        <div class="mt-2 grid grid-cols-2 gap-3" data-testid="account-form-type">
           <button
             type="button"
             data-testid="create-openai-account-type-oauth"
@@ -1984,7 +1983,6 @@
             type="number"
             min="1"
             class="input"
-            data-tour="account-form-priority"
           />
           <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
@@ -1997,6 +1995,14 @@
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
         <input v-model="expiresAtInput" type="datetime-local" class="input" />
+        <div class="mt-2 flex flex-wrap gap-2">
+          <button type="button" class="btn btn-secondary btn-sm" @click="expiresAt = getAccountExpiryTimestamp(1)">
+            {{ t('payment.oneMonth') }}
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" @click="expiresAt = getAccountExpiryTimestamp(12)">
+            {{ t('payment.oneYear') }}
+          </button>
+        </div>
         <p class="input-hint">{{ t('admin.accounts.expiresAtHint') }}</p>
       </div>
 
@@ -2572,7 +2578,6 @@
           v-model="form.group_ids"
           :groups="groups"
           :platform="form.platform"
-          data-tour="account-form-groups"
         />
       </div>
 
@@ -2621,7 +2626,6 @@
           form="create-account-form"
           :disabled="submitting"
           class="btn btn-primary"
-          data-tour="account-form-submit"
         >
           <svg
             v-if="submitting"
@@ -2709,6 +2713,7 @@ import {
   getPresetMappingsByPlatform
 } from '@/composables/useModelWhitelist'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
+import { getAccountExpiryTimestamp } from './accountExpiry'
 import { allSelectedGroupsEnableLongContextPricing } from './longContextBilling'
 import {
   applyHeaderOverride,

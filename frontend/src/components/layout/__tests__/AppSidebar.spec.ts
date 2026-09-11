@@ -67,7 +67,6 @@ describe('AppSidebar administrator navigation', () => {
     expect(componentSource).toContain('name="chevronDoubleLeft"')
     expect(componentSource).toContain('name="chevronDoubleRight"')
     expect(componentSource).toContain(':aria-hidden="sidebarCollapsed ? \'true\' : \'false\'"')
-    expect(componentSource).toContain(":data-tour=\"item.path === '/keys' ? 'sidebar-my-keys' : undefined\"")
 
     const usageIndex = componentSource.indexOf("path: '/admin/usage'")
     const keysIndex = componentSource.indexOf("path: '/keys'")

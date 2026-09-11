@@ -7,6 +7,8 @@ export default {
         features: '功能开关',
         security: '安全与认证',
         gateway: '网关服务',
+        gpt: 'GPT 配置',
+        claude: 'Claude 配置',
       },
       features: {
         channelMonitor: {
@@ -413,6 +415,8 @@ export default {
       scheduling: {
         title: '网关调度设置',
         description: '控制 API Key 的调度行为',
+        gptTitle: 'GPT 账号调度',
+        gptDescription: '配置 OpenAI 账号的调度优先级、参考倍率和实验调度策略',
         allowUngroupedKey: '允许未分组 Key 调度',
         allowUngroupedKeyHint: '关闭后，未分配到任何分组的 API Key 将无法发起请求（返回 403）。建议保持关闭以确保所有 Key 都归属明确的分组。',
         accountSchedulingThresholdsTitle: '平台账号自动停调阈值',
@@ -446,6 +450,10 @@ export default {
       gatewayForwarding: {
         title: '请求转发行为',
         description: '控制请求转发到上游 OAuth 账号时的行为',
+        gptTitle: 'GPT 请求转发',
+        gptDescription: '配置 OpenAI Responses 首 token 统计口径、Codex 上游身份和版本同步',
+        claudeTitle: 'Claude 请求转发',
+        claudeDescription: '配置 Anthropic 请求的客户端指纹、签名、提示词注入和缓存行为',
         grokDefaultTextModel: '默认 Grok 文本模型',
         grokDefaultTextModelHint: '用于空模型值；仅在右侧开关开启时也用于其他客户端模型命名空间。允许填写自定义 Grok 模型 ID。',
         grokCrossClientMap: '映射其他客户端模型到 Grok',

@@ -219,20 +219,20 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   it('renders the retained pre-simplification platform and account-type layout', async () => {
     const wrapper = mountModal()
-    const platformSelector = wrapper.get('[data-tour="account-form-platform"]')
+    const platformSelector = wrapper.get('[data-testid="account-form-platform"]')
     expect(platformSelector.classes()).toContain('flex-wrap')
     expect(platformSelector.findAll('button')).toHaveLength(2)
     expect(platformSelector.text()).toContain('Anthropic')
     expect(platformSelector.text()).toContain('OpenAI')
 
-    const anthropicTypes = wrapper.get('[data-tour="account-form-type"]')
+    const anthropicTypes = wrapper.get('[data-testid="account-form-type"]')
     expect(anthropicTypes.classes()).toContain('sm:grid-cols-4')
     expect(anthropicTypes.findAll('button')).toHaveLength(4)
     expect(wrapper.find('[data-testid="account-advanced-settings"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="create-account-step-indicator"]').exists()).toBe(true)
 
     await wrapper.get('[data-testid="create-platform-openai"]').trigger('click')
-    const openAITypes = wrapper.get('[data-tour="account-form-type"]')
+    const openAITypes = wrapper.get('[data-testid="account-form-type"]')
     expect(openAITypes.findAll('button')).toHaveLength(2)
   })
 

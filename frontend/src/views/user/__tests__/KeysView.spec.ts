@@ -14,8 +14,6 @@ const {
   showError,
   showSuccess,
   copyToClipboard,
-  isCurrentStep,
-  nextStep,
 } = vi.hoisted(() => ({
   listKeys: vi.fn(),
   getPublicSettings: vi.fn(),
@@ -25,8 +23,6 @@ const {
   showError: vi.fn(),
   showSuccess: vi.fn(),
   copyToClipboard: vi.fn(),
-  isCurrentStep: vi.fn(),
-  nextStep: vi.fn(),
 }))
 
 const messages: Record<string, string> = {
@@ -80,13 +76,6 @@ vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError,
     showSuccess,
-  }),
-}))
-
-vi.mock('@/stores/onboarding', () => ({
-  useOnboardingStore: () => ({
-    isCurrentStep,
-    nextStep,
   }),
 }))
 
@@ -269,8 +258,6 @@ describe('user KeysView column settings', () => {
     showError.mockReset()
     showSuccess.mockReset()
     copyToClipboard.mockReset()
-    isCurrentStep.mockReset()
-    nextStep.mockReset()
 
     listKeys.mockResolvedValue({
       items: [createApiKey()],
@@ -283,7 +270,6 @@ describe('user KeysView column settings', () => {
     getDashboardApiKeysUsage.mockResolvedValue({ stats: {} })
     getAvailableGroups.mockResolvedValue([])
     updateKey.mockResolvedValue(createApiKey())
-    isCurrentStep.mockReturnValue(false)
   })
 
   it('uses the default API key columns with low-frequency columns hidden', async () => {

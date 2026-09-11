@@ -13,7 +13,7 @@
     >
       <div>
         <label class="input-label">{{ t('common.name') }}</label>
-        <input v-model="name" type="text" required class="input" data-tour="edit-account-form-name" />
+        <input v-model="name" type="text" required class="input" />
       </div>
       <div>
         <label class="input-label">{{ t('admin.accounts.notes') }}</label>
@@ -1285,7 +1285,6 @@
             type="number"
             min="1"
             class="input"
-            data-tour="account-form-priority"
           />
           <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
@@ -1333,6 +1332,14 @@
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.expiresAt') }}</label>
         <input v-model="expiresAtInput" type="datetime-local" class="input" />
+        <div class="mt-2 flex flex-wrap gap-2">
+          <button type="button" class="btn btn-secondary btn-sm" @click="expiresAt = getAccountExpiryTimestamp(1)">
+            {{ t('payment.oneMonth') }}
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" @click="expiresAt = getAccountExpiryTimestamp(12)">
+            {{ t('payment.oneYear') }}
+          </button>
+        </div>
         <p class="input-hint">{{ t('admin.accounts.expiresAtHint') }}</p>
       </div>
       <!-- OpenAI 自动透传开关（OAuth/API Key） -->
@@ -2499,9 +2506,9 @@
       <!-- Group Selection - 仅标准模式显示 -->
       <GroupSelector
         v-model="groupIds"
-        :groups="groups"
+        :groups="selectableGroups"
         :platform="account?.platform"
-        data-tour="account-form-groups"
+        data-testid="account-form-groups"
       />
 
     </form>
@@ -2516,7 +2523,6 @@
           form="edit-account-form"
           :disabled="submitting"
           class="btn btn-primary"
-          data-tour="account-form-submit"
         >
           <svg
             v-if="submitting"
@@ -2558,6 +2564,7 @@ import {
   type ModelMappingEntry
 } from '@/composables/useModelWhitelist'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
+import { getAccountExpiryTimestamp } from './accountExpiry'
 import { allSelectedGroupsEnableLongContextPricing } from './longContextBilling'
 import {
   applyHeaderOverride,
@@ -2573,6 +2580,7 @@ import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import type {
   Account,
   AdminGroup,
+  Group,
   OpenAICompactMode,
   OpenAIEndpointCapability,
   OpenAIResponsesMode,
@@ -2675,6 +2683,17 @@ const rateMultiplier = ref(1)
 const proxyId = ref<number | null>(null)
 const autoAssignProxy = ref(false)
 const groupIds = ref<number[]>([])
+const selectableGroups = computed(() => {
+  const groupsById = new Map<number, Group>(props.groups.map(group => [group.id, group]))
+  // Keep originally assigned groups available after deselection so it can be undone.
+  const assignedGroupIds = new Set(props.account?.group_ids ?? [])
+  for (const group of props.account?.groups ?? []) {
+    if (assignedGroupIds.has(group.id) && !groupsById.has(group.id)) {
+      groupsById.set(group.id, group)
+    }
+  }
+  return Array.from(groupsById.values())
+})
 const allowedModels = ref<string[]>([])
 const preservedModelMappings = ref<ModelMappingEntry[]>([])
 const compactModelMapping = ref<Record<string, unknown> | null>(null)

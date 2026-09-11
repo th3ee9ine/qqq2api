@@ -7,6 +7,8 @@ export default {
         features: 'Feature Switches',
         security: 'Security',
         gateway: 'Gateway',
+        gpt: 'GPT Settings',
+        claude: 'Claude Settings',
       },
       features: {
         channelMonitor: {
@@ -418,6 +420,8 @@ export default {
           'Reject Claude Code clients above this version (semver format). Leave empty to allow any version.'
       },
       scheduling: {
+        gptTitle: 'GPT Account Scheduling',
+        gptDescription: 'Configure OpenAI account priorities, reference rates, and experimental scheduling policies',
         title: 'Gateway Scheduling Settings',
         description: 'Control API Key scheduling behavior',
         allowUngroupedKey: 'Allow Ungrouped Key Scheduling',
@@ -451,6 +455,10 @@ export default {
         saveFailed: 'Failed to save Ollama Cloud usage refresh settings'
       },
       gatewayForwarding: {
+        gptTitle: 'GPT Request Forwarding',
+        gptDescription: 'Configure OpenAI Responses time-to-first-token metrics, Codex upstream identity, and version synchronization',
+        claudeTitle: 'Claude Request Forwarding',
+        claudeDescription: 'Configure client fingerprints, signing, prompt injection, and caching for Anthropic requests',
         title: 'Request Forwarding',
         description: 'Control how requests are forwarded to upstream OAuth accounts',
         grokDefaultTextModel: 'Default Grok text model',

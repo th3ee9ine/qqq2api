@@ -73,7 +73,7 @@
               </button>
             </div>
           </div>
-          <button @click="showCreateModal = true" class="btn btn-primary" data-tour="keys-create-btn">
+          <button @click="showCreateModal = true" class="btn btn-primary">
             <Icon name="plus" size="md" class="mr-2" />
             {{ t('keys.createKey') }}
           </button>
@@ -459,7 +459,6 @@
             required
             class="input"
             :placeholder="t('keys.namePlaceholder')"
-            data-tour="key-form-name"
           />
         </div>
 
@@ -471,7 +470,6 @@
             :placeholder="t('keys.selectGroup')"
             :searchable="true"
             :search-placeholder="t('keys.searchGroup')"
-            data-tour="key-form-group"
           >
             <template #selected="{ option }">
               <GroupBadge
@@ -927,7 +925,6 @@
             type="submit"
             :disabled="submitting"
             class="btn btn-primary"
-            data-tour="key-form-submit"
           >
             <svg
               v-if="submitting"
@@ -1080,7 +1077,6 @@
 	import { ref, reactive, computed, onMounted, onUnmounted, type ComponentPublicInstance } from 'vue'
 	import { useI18n } from 'vue-i18n'
 	import { useAppStore } from '@/stores/app'
-	import { useOnboardingStore } from '@/stores/onboarding'
 	import { useClipboard } from '@/composables/useClipboard'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 
@@ -1127,7 +1123,6 @@ interface GroupOption {
 }
 
 const appStore = useAppStore()
-const onboardingStore = useOnboardingStore()
 const { copyToClipboard: clipboardCopy } = useClipboard()
 
 const allColumns = computed<Column[]>(() => [
@@ -1706,17 +1701,12 @@ const handleSubmit = async () => {
         concurrency
       )
       appStore.showSuccess(t('keys.keyCreatedSuccess'))
-      // Only advance tour if active, on submit step, and creation succeeded
-      if (onboardingStore.isCurrentStep('[data-tour="key-form-submit"]')) {
-        onboardingStore.nextStep(500)
-      }
     }
     closeModals()
     loadApiKeys()
   } catch (error: any) {
     const errorMsg = error.response?.data?.detail || t('keys.failedToSave')
     appStore.showError(errorMsg)
-    // Don't advance tour on error
   } finally {
     submitting.value = false
   }
