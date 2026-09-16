@@ -18,7 +18,12 @@ import (
 type sparkShadowUsageTestRepo struct {
 	AccountRepository
 	accounts      map[int64]*Account
-	updateExtraCh chan map[string]any
+	updateExtraCh chan sparkShadowExtraUpdate
+}
+
+type sparkShadowExtraUpdate struct {
+	accountID int64
+	updates   map[string]any
 }
 
 func (r *sparkShadowUsageTestRepo) GetByID(_ context.Context, id int64) (*Account, error) {
@@ -28,13 +33,13 @@ func (r *sparkShadowUsageTestRepo) GetByID(_ context.Context, id int64) (*Accoun
 	return nil, fmt.Errorf("account %d not found", id)
 }
 
-func (r *sparkShadowUsageTestRepo) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
+func (r *sparkShadowUsageTestRepo) UpdateExtra(_ context.Context, accountID int64, updates map[string]any) error {
 	if r.updateExtraCh != nil {
 		copied := make(map[string]any, len(updates))
 		for k, v := range updates {
 			copied[k] = v
 		}
-		r.updateExtraCh <- copied
+		r.updateExtraCh <- sparkShadowExtraUpdate{accountID: accountID, updates: copied}
 	}
 	return nil
 }
@@ -74,7 +79,7 @@ func TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(t *test
 
 	// Repo shared by both the OpenAIQuotaService (needs shadow+parent for resolve)
 	// and the AccountUsageService (needs UpdateExtra for persist).
-	updateExtraCh := make(chan map[string]any, 1)
+	updateExtraCh := make(chan sparkShadowExtraUpdate, 4)
 	repo := &sparkShadowUsageTestRepo{
 		accounts:      map[int64]*Account{200: shadow, 100: parent},
 		updateExtraCh: updateExtraCh,
@@ -130,15 +135,28 @@ func TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(t *test
 	require.Equal(t, "org-spark-parent", capturedAccountID,
 		"QueryUsage must use parent's chatgpt-account-id for spark shadow accounts")
 
-	// Assertion A-2: shadow Extra was persisted with codex_5h_used_percent.
-	select {
-	case updates := <-updateExtraCh:
-		require.Contains(t, updates, "codex_5h_used_percent",
-			"persisted extra must contain codex_5h_used_percent")
-		require.InDelta(t, 42.5, updates["codex_5h_used_percent"], 0.01,
-			"codex_5h_used_percent must match the upstream value")
-	case <-time.After(2 * time.Second):
-		t.Fatal("UpdateExtra was not called within timeout — spark shadow persist did not happen")
+	// Paid credits and quota windows are separate writes. Wait for the window
+	// snapshot and verify it belongs to the shadow, regardless of write order.
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+waitForWindows:
+	for {
+		select {
+		case update := <-updateExtraCh:
+			updates := update.updates
+			if _, ok := updates["codex_5h_used_percent"]; !ok {
+				continue
+			}
+			require.Equal(t, shadow.ID, update.accountID, "Spark windows must be persisted on the shadow account")
+			require.Contains(t, updates, "codex_5h_used_percent",
+				"persisted extra must contain codex_5h_used_percent")
+			require.InDelta(t, 42.5, updates["codex_5h_used_percent"], 0.01,
+				"codex_5h_used_percent must match the upstream value")
+			require.InDelta(t, 10.0, updates["codex_7d_used_percent"], 0.01)
+			break waitForWindows
+		case <-timer.C:
+			t.Fatal("UpdateExtra was not called within timeout — spark shadow persist did not happen")
+		}
 	}
 
 	// Assertion B (P1-b regression guard): returned UsageInfo must have
@@ -148,4 +166,6 @@ func TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows(t *test
 		"returned UsageInfo.FiveHour must be non-nil (rebuild from merged Extra must happen)")
 	require.NotNil(t, usage.SevenDay,
 		"returned UsageInfo.SevenDay must be non-nil (rebuild from merged Extra must happen)")
+	require.InDelta(t, 42.5, usage.FiveHour.Utilization, 0.01)
+	require.InDelta(t, 10.0, usage.SevenDay.Utilization, 0.01)
 }

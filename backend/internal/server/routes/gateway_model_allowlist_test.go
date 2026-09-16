@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/th3ee9ine/qqq2api/internal/handler"
 	servermiddleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"github.com/th3ee9ine/qqq2api/internal/service"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
 )
 
 func newGatewayRoutesTestRouterWithGroup(group *service.Group) *gin.Engine {
@@ -80,9 +80,6 @@ func TestGatewayRoutesGroupModelAllowlistMountedOnEveryGatewayRoute(t *testing.T
 		composite string
 	}{
 		{group: "gateway", auth: "gin.HandlerFunc(apiKeyAuth)", marker: "gateway.Use(groupModelAllowlist)", composite: "gateway.Use(compositeTarget)"},
-		{group: "gemini", auth: "middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg)", marker: "gemini.Use(groupModelAllowlist)", composite: "gemini.Use(compositeGeminiTarget)"},
-		{group: "antigravityV1", auth: "gin.HandlerFunc(apiKeyAuth)", marker: "antigravityV1.Use(groupModelAllowlist)", composite: "antigravityV1.Use(requireGroupAnthropic)"},
-		{group: "antigravityV1Beta", auth: "middleware.APIKeyAuthWithSubscriptionGoogle(apiKeyService, subscriptionService, cfg)", marker: "antigravityV1Beta.Use(groupModelAllowlist)", composite: "antigravityV1Beta.Use(requireGroupGoogle)"},
 	}
 	for _, chain := range chains {
 		re := regexp.MustCompile(
@@ -98,7 +95,7 @@ func TestGatewayRoutesGroupModelAllowlistMountedOnEveryGatewayRoute(t *testing.T
 	require.Regexp(t, codexDirect, source, "codexDirect chain must mount the allowlist after auth and before compositeTarget")
 
 	// 所有带 apiKeyAuth 的根路径路由必须收敛到 rootRoute，避免漏挂。
-	stray := regexp.MustCompile(`\br\.(GET|POST|PUT|PATCH|DELETE)\("[^"]+",[^(]*apiKeyAuth`)
+	stray := regexp.MustCompile(`\br\.(GET|POST|PUT|PATCH|DELETE)\("[^"]+",[^\n]*apiKeyAuth`)
 	require.NotRegexp(t, stray, source,
 		"root alias routes must use rootRoute so the allowlist cannot be forgotten")
 }
@@ -144,36 +141,61 @@ func TestGatewayRoutesGroupModelAllowlistCoversRootAliasRoutes(t *testing.T) {
 		{http.MethodPost, "/embeddings", `{"model":"gpt-4.1","input":"hi"}`},
 		{http.MethodPost, "/images/generations", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/images/edits", `{"model":"gpt-4.1"}`},
-		{http.MethodPost, "/videos/generations", `{"model":"gpt-4.1"}`},
+		{http.MethodPost, "/images/generations/async", `{"model":"gpt-4.1"}`},
+		{http.MethodPost, "/images/edits/async", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/messages/count_tokens", `{"model":"gpt-4.1","messages":[]}`},
-		{http.MethodPost, "/tts", `{"model":"gpt-4.1"}`},
-		{http.MethodPost, "/stt", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/alpha/search", `{"model":"gpt-4.1"}`},
-		{http.MethodGet, "/realtime?model=gpt-4.1", ""},
+		{http.MethodGet, "/models/gpt-4.1", ""},
 		{http.MethodPost, "/v1/responses", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/v1/messages", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/v1/messages/count_tokens", `{"model":"gpt-4.1","messages":[]}`},
 		{http.MethodPost, "/v1/chat/completions", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/v1/embeddings", `{"model":"gpt-4.1","input":"hi"}`},
 		{http.MethodPost, "/v1/images/generations", `{"model":"gpt-4.1"}`},
-		{http.MethodPost, "/v1/videos/generations", `{"model":"gpt-4.1"}`},
+		{http.MethodPost, "/v1/images/edits", `{"model":"gpt-4.1"}`},
+		{http.MethodPost, "/v1/images/generations/async", `{"model":"gpt-4.1"}`},
+		{http.MethodPost, "/v1/images/edits/async", `{"model":"gpt-4.1"}`},
+		{http.MethodGet, "/v1/models/gpt-4.1", ""},
 		{http.MethodPost, "/v1/live", `{"session":{"model":"gpt-4.1"},"sdp":"v=0"}`},
 		{http.MethodPost, "/backend-api/codex/responses", `{"model":"gpt-4.1"}`},
 		{http.MethodPost, "/backend-api/codex/realtime/calls", `{"session":{"model":"gpt-4.1"},"sdp":"v=0"}`},
-		{http.MethodPost, "/antigravity/v1/messages", `{"model":"gemini-2.5-pro","messages":[]}`},
 	}
 
 	for _, tc := range paths {
-		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
-		if tc.body != "" {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
 
-		require.Equal(t, http.StatusNotFound, w.Code, "%s %s should be denied by the allowlist, got body: %s", tc.method, tc.path, w.Body.String())
-		require.Contains(t, w.Body.String(), "not available for this group", "%s %s", tc.method, tc.path)
+			require.Equal(t, http.StatusNotFound, w.Code, "%s %s should be denied by the allowlist, got body: %s", tc.method, tc.path, w.Body.String())
+			require.Contains(t, w.Body.String(), "not available for this group", "%s %s", tc.method, tc.path)
+		})
 	}
+}
+
+func TestGatewayRoutesGroupModelAllowlistDoesNotRestoreRetiredRoutes(t *testing.T) {
+	router := newGatewayRoutesTestRouterWithGroup(allowlistGroup(service.PlatformOpenAI, true, "gpt-5.4"))
+	for _, path := range []string{
+		"/videos/generations", "/v1/videos/generations", "/tts", "/stt",
+		"/antigravity/v1/messages", "/antigravity/v1beta/models/gemini-2.5-pro:generateContent",
+		"/v1beta/models/gemini-2.5-pro:generateContent",
+	} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-4.1"}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			require.Equal(t, http.StatusNotFound, w.Code)
+			require.NotContains(t, w.Body.String(), "not available for this group", "retired routes must remain unregistered")
+		})
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/realtime?model=gpt-4.1", nil))
+	require.Equal(t, http.StatusNotFound, w.Code)
+	require.NotContains(t, w.Body.String(), "not available for this group")
 }
 
 func TestGatewayRoutesGroupModelAllowlistSkipsWebSocketUpgrade(t *testing.T) {
