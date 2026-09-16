@@ -385,7 +385,7 @@ func accountIDs(accounts []service.Account) []int64 {
 }
 
 // 平台白名单放开后，官方 ollama.com key 挂在国产 OpenAI 兼容平台下同样进用量
-// 窗口：组写入跨 kimi/zhipu/deepseek 共享，白名单外平台（gemini）不得被卷入；
+// 窗口：组写入跨 kimi/zhipu/minimax 共享，白名单外平台（gemini）不得被卷入；
 // 组身份守卫（lockAndMerge）与 due 列表也必须识别 CN 平台的行。
 func TestOllamaCloudUsageEligibilityExtendsToCNOpenAICompatPlatforms(t *testing.T) {
 	ctx := context.Background()
@@ -403,11 +403,11 @@ func TestOllamaCloudUsageEligibilityExtendsToCNOpenAICompatPlatforms(t *testing.
 	}
 	kimi := create("ollama-cn-kimi", service.PlatformKimi, "https://ollama.com")
 	zhipu := create("ollama-cn-zhipu", service.PlatformZhipu, "HTTPS://WWW.OLLAMA.COM:443/v1")
-	deepseek := create("ollama-cn-deepseek", service.PlatformDeepseek, "https://ollama.com/v1")
+	minimax := create("ollama-cn-minimax", service.PlatformMiniMax, "https://ollama.com/v1")
 	gemini := create("ollama-cn-gemini", service.PlatformGemini, "https://ollama.com")
 
 	require.NoError(t, repo.SaveOllamaCloudUsageSession(ctx, kimi, "cipher:cn-shared", true))
-	for _, id := range []int64{kimi.ID, zhipu.ID, deepseek.ID} {
+	for _, id := range []int64{kimi.ID, zhipu.ID, minimax.ID} {
 		account, err := repo.GetByID(ctx, id)
 		require.NoError(t, err)
 		require.Equal(t, "cipher:cn-shared", account.Extra[service.OllamaCloudUsageSessionExtraKey], account.Name)
@@ -429,9 +429,9 @@ func TestOllamaCloudUsageEligibilityExtendsToCNOpenAICompatPlatforms(t *testing.
 	// due 列表识别 CN 行：给同 key 组挂上过期快照（fetched 2h 前、活动更新），
 	// 每个 api_key 只返回一行，且必须来自 CN 组员。
 	staleFetched := now.Add(-2 * time.Hour)
-	deepseekLoaded, err := repo.GetByID(ctx, deepseek.ID)
+	minimaxLoaded, err := repo.GetByID(ctx, minimax.ID)
 	require.NoError(t, err)
-	require.NoError(t, repo.UpdateOllamaCloudUsageSnapshot(ctx, deepseekLoaded, &service.OllamaCloudUsageSnapshot{
+	require.NoError(t, repo.UpdateOllamaCloudUsageSnapshot(ctx, minimaxLoaded, &service.OllamaCloudUsageSnapshot{
 		Status:        service.OllamaCloudUsageStatusOK,
 		FetchedAt:     &staleFetched,
 		LastAttemptAt: staleFetched,
@@ -441,7 +441,7 @@ func TestOllamaCloudUsageEligibilityExtendsToCNOpenAICompatPlatforms(t *testing.
 
 	require.NoError(t, err)
 	require.Len(t, due, 1, "同 key 跨 CN 平台组按组去重后只应有一行 due")
-	require.Contains(t, []int64{kimi.ID, zhipu.ID, deepseek.ID}, due[0].ID,
+	require.Contains(t, []int64{kimi.ID, zhipu.ID, minimax.ID}, due[0].ID,
 		"due 行必须来自 CN 平台的 ollama 组员")
 	require.NotNil(t, due[0].LastUsedAt)
 }

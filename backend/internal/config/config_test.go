@@ -827,7 +827,7 @@ func TestLoadDefaultSecurityToggles(t *testing.T) {
 		"api.moonshot.ai",
 		"api.moonshot.cn",
 		"open.bigmodel.cn",
-		"api.deepseek.com",
+		"compatible.example.test",
 		"generativelanguage.googleapis.com",
 		"cloudcode-pa.googleapis.com",
 	}

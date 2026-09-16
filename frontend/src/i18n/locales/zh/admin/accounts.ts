@@ -316,7 +316,6 @@ export default {
         grok: 'Grok',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
-        deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
       },
@@ -377,7 +376,7 @@ export default {
         protocolRules: {
           title: '模型协议分流',
           hint: '自适应模式下按模型匹配上游协议。支持精确 ID 或末尾 * 通配（如 grok-*、qwen*）；自上而下第一条命中生效；未命中走 Chat Completions。',
-          patternPlaceholder: 'grok-* 或 deepseek-v4-flash',
+          patternPlaceholder: 'grok-* 或 glm-5.2',
           add: '添加规则',
           remove: '删除规则',
           restoreDefaults: '恢复默认',

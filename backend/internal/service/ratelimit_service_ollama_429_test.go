@@ -248,7 +248,7 @@ func ollama429Fixture(t *testing.T, repo *ollama429Repo, scheduler *ollama429Sch
 }
 
 func TestHandle429_OllamaEarlyBranchAcrossPlatforms(t *testing.T) {
-	platforms := []string{PlatformOpenAI, PlatformAnthropic, PlatformKimi, PlatformZhipu, PlatformDeepseek}
+	platforms := []string{PlatformOpenAI, PlatformAnthropic, PlatformKimi, PlatformZhipu}
 	for _, platform := range platforms {
 		t.Run(platform, func(t *testing.T) {
 			acct := ollama429Account(101, platform)

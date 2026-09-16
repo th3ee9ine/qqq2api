@@ -910,7 +910,7 @@ func groupMediaPricingLooksIncomplete(group *Group) bool {
 		group.VideoPrice480P == nil && group.VideoPrice720P == nil && group.VideoPrice1080P == nil
 }
 
-// filterCNProviderBillingModelCandidates 过滤国产供应商（kimi/zhipu/deepseek）
+// filterCNProviderBillingModelCandidates 过滤国产供应商（kimi/zhipu）
 // 账号的计费候选模型名：claude-* 候选仅在运营者显式配置了分组/渠道定价时保留。
 //
 // 背景：候选链的兜底候选含客户端请求的原始模型名。CN 上游的 Anthropic 兼容端点

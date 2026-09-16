@@ -72,7 +72,7 @@ func TestDefaultModelIDsForCompositeIncludesOnlyActivePlatformDefaults(t *testin
 		service.PlatformGrok,
 		service.PlatformKimi,
 		service.PlatformZhipu,
-		service.PlatformDeepseek,
+		service.PlatformKimi,
 	} {
 		require.Empty(t, defaultModelIDsForPlatform(platform), "platform=%s", platform)
 	}
@@ -88,7 +88,7 @@ func TestGatewayModels_RetiredPlatformGroupsAreNotExposed(t *testing.T) {
 		service.PlatformGrok,
 		service.PlatformKimi,
 		service.PlatformZhipu,
-		service.PlatformDeepseek,
+		service.PlatformKimi,
 	} {
 		t.Run(platform, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -251,9 +251,9 @@ func TestGatewayModels_CompositeCustomModelsListFiltersOutRetiredPlatforms(t *te
 					},
 					{
 						ID:       6,
-						Platform: service.PlatformDeepseek,
+						Platform: service.PlatformKimi,
 						Credentials: map[string]any{
-							"model_mapping": map[string]any{"deepseek-custom": "deepseek-upstream"},
+							"model_mapping": map[string]any{"glm-custom": "glm-upstream"},
 						},
 					},
 					{
@@ -277,7 +277,7 @@ func TestGatewayModels_CompositeCustomModelsListFiltersOutRetiredPlatforms(t *te
 			Platform: service.PlatformComposite,
 			ModelAllowlist: service.GroupModelAllowlist{
 				Enabled: true,
-				Models:  []string{"gemini-2.5-flash", "missing-model", "ag-custom-model", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom", "minimax-custom"},
+				Models:  []string{"gemini-2.5-flash", "missing-model", "ag-custom-model", "gpt-5.5", "kimi-custom", "glm-custom", "glm-custom", "minimax-custom"},
 			},
 		},
 	})
@@ -340,7 +340,6 @@ func TestGatewayModels_CompositeUnmappedCNAccountsContributeNoDefaults(t *testin
 					{ID: 1, Platform: service.PlatformOpenAI},
 					{ID: 2, Platform: service.PlatformKimi},
 					{ID: 3, Platform: service.PlatformZhipu},
-					{ID: 4, Platform: service.PlatformDeepseek},
 					{ID: 5, Platform: service.PlatformMiniMax},
 				},
 			},
@@ -367,7 +366,7 @@ func TestGatewayModels_CompositeUnmappedCNAccountsContributeNoDefaults(t *testin
 }
 
 func TestDefaultModelIDsForPlatform_RetiredProvidersHaveNoDefaults(t *testing.T) {
-	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek} {
+	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu} {
 		require.Empty(t, defaultModelIDsForPlatform(platform), "platform=%s", platform)
 	}
 }
@@ -417,7 +416,7 @@ func TestGatewayModels_CustomModelsListKeepsConcreteModelAllowedByWildcardMappin
 	require.Equal(t, []string{"claude-sonnet-4-6"}, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeAndMappedDeepSeek(t *testing.T) {
+func TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeAndMappedCompatible(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(28)
@@ -436,7 +435,7 @@ func TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeAndMappedDeep
 						Type:     service.AccountTypeAPIKey,
 						Credentials: map[string]any{
 							"model_mapping": map[string]any{
-								"deepseek-v4-pro": "deepseek-v4-pro",
+								"glm-v4-pro": "glm-v4-pro",
 							},
 						},
 					},
@@ -454,7 +453,7 @@ func TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeAndMappedDeep
 			Platform: service.PlatformAnthropic,
 			ModelAllowlist: service.GroupModelAllowlist{
 				Enabled: true,
-				Models:  []string{"claude-fable-5", "claude-opus-4-8", "deepseek-v4-pro"},
+				Models:  []string{"claude-fable-5", "claude-opus-4-8", "glm-v4-pro"},
 			},
 		},
 	})
@@ -465,7 +464,7 @@ func TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeAndMappedDeep
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"claude-fable-5", "claude-opus-4-8", "deepseek-v4-pro"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"claude-fable-5", "claude-opus-4-8", "glm-v4-pro"}, modelIDsForTest(got.Data))
 }
 
 func TestGatewayModels_AnthropicCustomModelsListDisabledKeepsMappedModelList(t *testing.T) {
@@ -487,7 +486,7 @@ func TestGatewayModels_AnthropicCustomModelsListDisabledKeepsMappedModelList(t *
 						Type:     service.AccountTypeAPIKey,
 						Credentials: map[string]any{
 							"model_mapping": map[string]any{
-								"deepseek-v4-pro": "deepseek-v4-pro",
+								"glm-v4-pro": "glm-v4-pro",
 							},
 						},
 					},
@@ -505,7 +504,7 @@ func TestGatewayModels_AnthropicCustomModelsListDisabledKeepsMappedModelList(t *
 			Platform: service.PlatformAnthropic,
 			ModelAllowlist: service.GroupModelAllowlist{
 				Enabled: false,
-				Models:  []string{"claude-fable-5", "deepseek-v4-pro"},
+				Models:  []string{"claude-fable-5", "glm-v4-pro"},
 			},
 		},
 	})
@@ -516,7 +515,7 @@ func TestGatewayModels_AnthropicCustomModelsListDisabledKeepsMappedModelList(t *
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"deepseek-v4-pro"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"glm-v4-pro"}, modelIDsForTest(got.Data))
 }
 
 func TestGatewayModels_AnthropicCustomModelsListIncludesOAuthClaudeWithoutMappings(t *testing.T) {

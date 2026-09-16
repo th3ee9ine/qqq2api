@@ -45,7 +45,7 @@ const (
 	monitorChallengeMin = 1
 	monitorChallengeMax = 50
 
-	// providerOpenAIPath OpenAI Chat Completions 路径（Kimi / DeepSeek 同为 OpenAI 兼容）。
+	// providerOpenAIPath OpenAI Chat Completions 路径（Kimi 同为 OpenAI 兼容）。
 	providerOpenAIPath = "/v1/chat/completions"
 	// providerGrokPath Grok OpenAI-compatible Chat Completions 路径。
 	providerGrokPath = "/v1/chat/completions"
@@ -59,8 +59,8 @@ const (
 	providerGeminiPathTemplate = "/v1beta/models/%s:generateContent"
 
 	// MonitorProviderOpenAI 等 provider 字符串常量（也是 ent enum 的实际值）。
-	// 后 4 个 provider（antigravity/kimi/zhipu/deepseek）为配额模式引入：
-	// antigravity 无探活 adapter（仅配额），其余 3 个复用 OpenAI 兼容探活。
+	// antigravity/kimi/zhipu为配额模式引入：
+	// antigravity 无探活 adapter（仅配额），后两者复用 OpenAI 兼容探活。
 	MonitorProviderOpenAI      = "openai"
 	MonitorProviderAnthropic   = "anthropic"
 	MonitorProviderGemini      = "gemini"
@@ -68,7 +68,6 @@ const (
 	MonitorProviderAntigravity = "antigravity"
 	MonitorProviderKimi        = "kimi"
 	MonitorProviderZhipu       = "zhipu"
-	MonitorProviderDeepseek    = "deepseek"
 	MonitorProviderMiniMax     = "minimax"
 
 	// MonitorCheckMode 检测模式（channel_monitors.check_mode）。
@@ -152,7 +151,7 @@ var (
 		"CHANNEL_MONITOR_NOT_FOUND", "channel monitor not found",
 	)
 	ErrChannelMonitorInvalidProvider = infraerrors.BadRequest(
-		"CHANNEL_MONITOR_INVALID_PROVIDER", "provider must be one of openai/anthropic/gemini/grok/antigravity/kimi/zhipu/deepseek/minimax",
+		"CHANNEL_MONITOR_INVALID_PROVIDER", "provider must be one of openai/anthropic/gemini/grok/antigravity/kimi/zhipu/minimax",
 	)
 	ErrChannelMonitorInvalidCheckMode = infraerrors.BadRequest(
 		"CHANNEL_MONITOR_INVALID_CHECK_MODE", "check_mode must be one of probe/quota/quota_probe; antigravity only supports quota",
@@ -164,7 +163,7 @@ var (
 		"CHANNEL_MONITOR_PROVIDER_INCOMPATIBLE", "monitor provider must match the linked account platform",
 	)
 	ErrChannelMonitorAccountNotSupportable = infraerrors.BadRequest(
-		"CHANNEL_MONITOR_ACCOUNT_NOT_SUPPORTABLE", "linked account cannot serve as a quota data source (cn coding plan must be kimi/zhipu/minimax, cn payg must be kimi/deepseek, openai requires an oauth account, anthropic requires oauth or setup-token)",
+		"CHANNEL_MONITOR_ACCOUNT_NOT_SUPPORTABLE", "linked account cannot serve as a quota data source (cn coding plan must be kimi/zhipu/minimax, cn payg must be kimi, openai requires an oauth account, anthropic requires oauth or setup-token)",
 	)
 	ErrChannelMonitorInvalidAPIMode = infraerrors.BadRequest(
 		"CHANNEL_MONITOR_INVALID_API_MODE", "api_mode must be chat_completions or responses; responses is only supported for openai",

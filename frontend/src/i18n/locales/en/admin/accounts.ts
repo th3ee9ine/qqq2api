@@ -108,7 +108,6 @@ export default {
         grok: 'Grok',
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
-        deepseek: 'DeepSeek',
         minimax: 'MiniMax',
         opencode_go: 'OpenCode',
       },
@@ -169,7 +168,7 @@ export default {
         protocolRules: {
           title: 'Model protocol routing',
           hint: 'In adaptive mode, each model is sent to a native upstream protocol. Use an exact ID or a trailing * glob (e.g. grok-*, qwen*). The first matching rule wins; unmatched models use Chat Completions.',
-          patternPlaceholder: 'grok-* or deepseek-v4-flash',
+          patternPlaceholder: 'grok-* or glm-5.2',
           add: 'Add rule',
           remove: 'Remove rule',
           restoreDefaults: 'Restore defaults',

@@ -36,7 +36,7 @@ func TestResponsesToChatCompletionsRequest_CustomToolBecomesFunctionTool(t *test
 
 func TestResponsesChatBridge_MixedCustomAndNamespaceToolNames(t *testing.T) {
 	req := &ResponsesRequest{
-		Model: "deepseek-test",
+		Model: "glm-test",
 		Input: json.RawMessage(`"run pwd"`),
 		Tools: []ResponsesTool{
 			{Type: "custom", Name: "exec", Description: "Runs a command"},
@@ -78,7 +78,7 @@ func TestChatCompletionsResponseToResponses_ExplicitFunctionOwnsCustomAliasColli
 		ID: "call_function", Function: ChatFunctionCall{Name: "functions__exec", Arguments: `{"path":"/tmp"}`},
 	}}}}}}
 
-	out := ChatCompletionsResponseToResponses(resp, "deepseek-test",
+	out := ChatCompletionsResponseToResponses(resp, "glm-test",
 		map[string]bool{"exec": true}, map[string]bool{"functions__exec": true}, false,
 		map[string]NamespacedToolName{"functions__wait": {Namespace: "functions", Name: "wait"}})
 
@@ -319,7 +319,7 @@ func TestChatCompletionsChunkToResponsesEvents_CustomToolCallStream(t *testing.T
 }
 
 func TestChatCompletionsChunkToResponsesEvents_MixedCustomNamespaceAliasStream(t *testing.T) {
-	state := NewChatCompletionsToResponsesStreamState("deepseek-test")
+	state := NewChatCompletionsToResponsesStreamState("glm-test")
 	state.CustomTools = map[string]bool{"exec": true}
 	state.NamespaceTools = map[string]NamespacedToolName{
 		"functions__wait": {Namespace: "functions", Name: "wait"},
@@ -355,7 +355,7 @@ func TestChatCompletionsChunkToResponsesEvents_MixedCustomNamespaceAliasStream(t
 }
 
 func TestChatCompletionsChunkToResponsesEvents_ExplicitFunctionOwnsCustomAliasCollision(t *testing.T) {
-	state := NewChatCompletionsToResponsesStreamState("deepseek-test")
+	state := NewChatCompletionsToResponsesStreamState("glm-test")
 	state.CustomTools = map[string]bool{"exec": true}
 	state.FunctionTools = map[string]bool{"functions__exec": true}
 	state.NamespaceTools = map[string]NamespacedToolName{

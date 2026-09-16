@@ -26,7 +26,7 @@ func cnProbeAllowlistConfig(hosts ...string) *config.Config {
 }
 
 func TestCNValidateProbeURL_AllowlistPolicy(t *testing.T) {
-	cfg := cnProbeAllowlistConfig("api.moonshot.cn", "api.deepseek.com")
+	cfg := cnProbeAllowlistConfig("api.moonshot.cn", "compatible.example.test")
 
 	// 白名单内主机放行（保留完整路径）。
 	ok, err := cnValidateProbeURL(cfg, "https://api.moonshot.cn/v1/users/me/balance")
@@ -92,10 +92,10 @@ func TestCNProviderQuotaService_RejectsURLBlockedByPolicy(t *testing.T) {
 	require.Zero(t, upstream.calls, "probe must not issue any upstream request when URL policy rejects the target")
 }
 
-// deepseek payg 账号自定义 base_url → 余额端点落在中转主机上，必须先过策略。
+// Kimi 固定余额端点也必须经过出站主机白名单校验。
 func TestCNProviderBalanceService_RejectsURLBlockedByPolicy(t *testing.T) {
 	repo := &fakeCNProbeAccountRepo{account: &Account{
-		ID: 2, Platform: PlatformDeepseek, Type: AccountTypeAPIKey, Status: StatusActive,
+		ID: 2, Platform: PlatformKimi, Type: AccountTypeAPIKey, Status: StatusActive,
 		Credentials: map[string]any{
 			"account_mode": "payg",
 			"api_key":      "sk-test",
@@ -103,7 +103,7 @@ func TestCNProviderBalanceService_RejectsURLBlockedByPolicy(t *testing.T) {
 		},
 	}}
 	upstream := &recordingHTTPUpstream{}
-	svc := NewCNProviderBalanceService(repo, nil, upstream, cnProbeAllowlistConfig("api.deepseek.com"))
+	svc := NewCNProviderBalanceService(repo, nil, upstream, cnProbeAllowlistConfig("compatible.example.test"))
 
 	_, err := svc.QueryBalance(context.Background(), 2)
 	require.Error(t, err)
@@ -115,14 +115,14 @@ func TestCNProviderBalanceService_RejectsURLBlockedByPolicy(t *testing.T) {
 // httpUpstream 层即视为通过校验，不发真实网络）。
 func TestCNProviderBalanceService_OfficialHostPassesValidation(t *testing.T) {
 	repo := &fakeCNProbeAccountRepo{account: &Account{
-		ID: 3, Platform: PlatformDeepseek, Type: AccountTypeAPIKey, Status: StatusActive,
+		ID: 3, Platform: PlatformKimi, Type: AccountTypeAPIKey, Status: StatusActive,
 		Credentials: map[string]any{
 			"account_mode": "payg",
 			"api_key":      "sk-test",
 		},
 	}}
 	upstream := &recordingHTTPUpstream{}
-	svc := NewCNProviderBalanceService(repo, nil, upstream, cnProbeAllowlistConfig("api.deepseek.com"))
+	svc := NewCNProviderBalanceService(repo, nil, upstream, cnProbeAllowlistConfig("api.moonshot.cn"))
 
 	_, _ = svc.QueryBalance(context.Background(), 3)
 	require.Equal(t, 1, upstream.calls, "official host must pass URL policy and reach the upstream layer")

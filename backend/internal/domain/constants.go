@@ -29,10 +29,9 @@ const (
 	PlatformAntigravity = "antigravity"
 	PlatformGrok        = "grok"
 	// 国产 OpenAI 兼容供应商（经 OpenAI 网关转发，按 Chat Completions 协议）。
-	PlatformKimi     = "kimi"     // Kimi (月之暗面 / Moonshot)
-	PlatformZhipu    = "zhipu"    // 智谱 GLM (bigmodel)
-	PlatformDeepseek = "deepseek" // DeepSeek
-	PlatformMiniMax  = "minimax"  // MiniMax (M 系列)
+	PlatformKimi    = "kimi"    // Kimi (月之暗面 / Moonshot)
+	PlatformZhipu   = "zhipu"   // 智谱 GLM (bigmodel)
+	PlatformMiniMax = "minimax" // MiniMax (M 系列)
 	// PlatformOpenCodeGo 是 OpenCode 平台（账号类型 Zen 按量 / Go 订阅）。
 	// 值保持 opencode_go 以兼容已落库的分组、配额与 Composite 路由 CHECK。
 	PlatformOpenCodeGo = "opencode_go"
@@ -46,7 +45,7 @@ const (
 func IsRetiredPlatform(platform string) bool {
 	switch platform {
 	case PlatformGemini, PlatformAntigravity, PlatformGrok,
-		PlatformKimi, PlatformZhipu, PlatformDeepseek, "glm":
+		PlatformKimi, PlatformZhipu, "deepseek", "glm":
 		return true
 	default:
 		return false
@@ -81,7 +80,7 @@ const (
 const (
 	APIProtocolChatCompletions = "chat_completions" // OpenAI Chat Completions（默认）
 	APIProtocolAnthropic       = "anthropic"        // 原生 Anthropic /v1/messages（适配 Claude Code）
-	APIProtocolResponses       = "responses"        // OpenAI Responses（deepseek / kimi / minimax 原生端点，适配 Codex）
+	APIProtocolResponses       = "responses"        // OpenAI Responses（kimi / minimax 原生端点，适配 Codex）
 	APIProtocolAdaptive        = "adaptive"         // 按入站协议优先选择供应商原生端点
 )
 

@@ -10,7 +10,7 @@ import (
 
 func collectStreamEvents(t *testing.T, chunks []string) []ResponsesStreamEvent {
 	t.Helper()
-	state := NewChatCompletionsToResponsesStreamState("deepseek-v4-pro")
+	state := NewChatCompletionsToResponsesStreamState("glm-v4-pro")
 	var events []ResponsesStreamEvent
 	for _, payload := range chunks {
 		var chunk ChatCompletionsChunk
@@ -216,7 +216,7 @@ func TestStream_ToolCallArgumentsInFirstChunkNotDoubled(t *testing.T) {
 
 func TestStream_InvalidToolArgumentsAreRejectedBeforeFinalize(t *testing.T) {
 	idx := 0
-	state := NewChatCompletionsToResponsesStreamState("deepseek-v4-flash")
+	state := NewChatCompletionsToResponsesStreamState("glm-v4-flash")
 	chunk := &ChatCompletionsChunk{
 		Choices: []ChatChunkChoice{
 			{
@@ -245,7 +245,7 @@ func TestStream_InvalidToolArgumentsAreRejectedBeforeFinalize(t *testing.T) {
 
 func TestStream_ValidToolCallAtOutputLimitKeepsIncompleteResponse(t *testing.T) {
 	idx := 0
-	state := NewChatCompletionsToResponsesStreamState("deepseek-v4-flash")
+	state := NewChatCompletionsToResponsesStreamState("glm-v4-flash")
 	chunk := &ChatCompletionsChunk{
 		Choices: []ChatChunkChoice{
 			{

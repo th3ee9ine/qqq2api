@@ -1096,7 +1096,7 @@ type GatewayConfig struct {
 	// Grok: Grok/xAI gateway scheduling and free-tier soft-gate settings.
 	Grok GatewayGrokConfig `mapstructure:"grok"`
 
-	// CNProviders: 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
+	// CNProviders: 国产 OpenAI 兼容供应商（kimi/zhipu）的余额检测配置。
 	// 仅作用于 payg（按量付费）账号：周期探测余额，低于阈值则临时停调。
 	CNProviders GatewayCNProvidersConfig `mapstructure:"cn_providers"`
 }
@@ -1131,9 +1131,9 @@ type GatewayGrokConfig struct {
 	FreeQuotaStatsCacheSeconds int `mapstructure:"free_quota_stats_cache_seconds"`
 }
 
-// GatewayCNProvidersConfig 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）的余额检测配置。
+// GatewayCNProvidersConfig 国产 OpenAI 兼容供应商（kimi/zhipu）的余额检测配置。
 //
-// 仅作用于 payg（按量付费）账号（kimi/deepseek 有公开余额端点；zhipu 无，仅靠响应式 429/402）。
+// 仅作用于 payg（按量付费）账号（kimi 有公开余额端点；zhipu 无，仅靠响应式 429/402）。
 //   - balance_check_enabled: 是否启用周期余额检测（默认 true）
 //   - balance_threshold: 余额低于此值（账户货币单位，默认 0.5）触发临时停调
 //   - balance_check_interval_minutes: 余额检测周期（分钟，默认 10）

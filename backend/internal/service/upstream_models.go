@@ -796,7 +796,7 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 	case account.IsGrok():
 		return s.buildGrokUpstreamModelsRequest(ctx, account)
 	case account.IsOpenAI() || account.IsCNProvider() || account.IsOpenCodeGo():
-		// 国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go
+		// 国产 OpenAI 兼容供应商（kimi/zhipu）与 OpenCode Go
 		// 复用 OpenAI /v1/models 探测。
 		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
 	case account.IsGemini():

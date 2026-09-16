@@ -52,7 +52,7 @@ func cnProtocolIngressCases() []cnProtocolIngressCase {
 		{
 			name: "chat completions",
 			path: "/v1/chat/completions",
-			body: []byte(`{"model":"deepseek-chat","messages":[{"role":"user","content":"hello"}],"stream":false}`),
+			body: []byte(`{"model":"glm-chat","messages":[{"role":"user","content":"hello"}],"stream":false}`),
 			forward: func(svc *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) error {
 				_, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 				return err
@@ -61,7 +61,7 @@ func cnProtocolIngressCases() []cnProtocolIngressCase {
 		{
 			name: "messages",
 			path: "/v1/messages",
-			body: []byte(`{"model":"deepseek-chat","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`),
+			body: []byte(`{"model":"glm-chat","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`),
 			forward: func(svc *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) error {
 				_, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 				return err
@@ -70,7 +70,7 @@ func cnProtocolIngressCases() []cnProtocolIngressCase {
 		{
 			name: "responses",
 			path: "/v1/responses",
-			body: []byte(`{"model":"deepseek-chat","input":"hello","stream":false}`),
+			body: []byte(`{"model":"glm-chat","input":"hello","stream":false}`),
 			forward: func(svc *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) error {
 				_, err := svc.Forward(context.Background(), c, account, body)
 				return err
@@ -98,10 +98,10 @@ func TestAdaptiveProtocolRoutesChatCompletionsToNativeChat(t *testing.T) {
 
 func TestAdaptiveProtocolRoutesResponsesShapedChatToNativeResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"deepseek-v4","input":"hello","max_output_tokens":32,"stream":false}`)
+	body := []byte(`{"model":"glm-v4","input":"hello","max_output_tokens":32,"stream":false}`)
 	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
 	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
-	account := adaptiveProtocolTestAccount(PlatformDeepseek, map[string]any{
+	account := adaptiveProtocolTestAccount(PlatformKimi, map[string]any{
 		APIProtocolChatCompletions: "http://chat.example",
 		APIProtocolAnthropic:       "http://anthropic.example",
 		APIProtocolResponses:       "http://responses.example",
@@ -109,7 +109,7 @@ func TestAdaptiveProtocolRoutesResponsesShapedChatToNativeResponses(t *testing.T
 
 	_, err := svc.ForwardAsChatCompletions(context.Background(), adaptiveProtocolTestContext("/v1/chat/completions", body), account, body, "", "")
 	require.Error(t, err)
-	require.Equal(t, "http://responses.example/responses", upstream.lastReq.URL.String())
+	require.Equal(t, "http://responses.example/v1/responses", upstream.lastReq.URL.String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
 }
@@ -203,33 +203,13 @@ func TestAdaptiveProtocolRoutesKimiCodingResponsesToNativeResponses(t *testing.T
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 }
 
-func TestAdaptiveProtocolRoutesDeepSeekResponsesToNativeResponses(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"deepseek-v4","input":"hello","max_output_tokens":32,"store":true,"previous_response_id":"resp_old","stream":false}`)
-	upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
-	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
-	account := adaptiveProtocolTestAccount(PlatformDeepseek, map[string]any{
-		APIProtocolChatCompletions: "http://chat.example",
-		APIProtocolAnthropic:       "http://anthropic.example",
-		APIProtocolResponses:       "http://responses.example",
-	})
-
-	_, err := svc.Forward(context.Background(), adaptiveProtocolTestContext("/v1/responses", body), account, body)
-	require.Error(t, err)
-	require.Equal(t, "http://responses.example/responses", upstream.lastReq.URL.String())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "previous_response_id").Exists())
-	require.Equal(t, int64(32), gjson.GetBytes(upstream.lastBody, "max_output_tokens").Int())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
-}
-
 func TestFixedCNChatProtocolOverridesStaleResponsesMode(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, tc := range cnProtocolIngressCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
 			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
-			account := adaptiveProtocolTestAccount(PlatformDeepseek, nil)
+			account := adaptiveProtocolTestAccount(PlatformKimi, nil)
 			account.Credentials["api_protocol"] = APIProtocolChatCompletions
 			account.Credentials["base_url"] = "http://chat.example"
 			account.Extra = map[string]any{
@@ -250,7 +230,7 @@ func TestFixedCNResponsesProtocolOverridesStaleChatMode(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			upstream := &httpUpstreamRecorder{err: errors.New("stop after capture")}
 			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
-			account := adaptiveProtocolTestAccount(PlatformDeepseek, nil)
+			account := adaptiveProtocolTestAccount(PlatformKimi, nil)
 			account.Credentials["api_protocol"] = APIProtocolResponses
 			account.Credentials["base_url"] = "http://responses.example"
 			account.Extra = map[string]any{
@@ -260,7 +240,7 @@ func TestFixedCNResponsesProtocolOverridesStaleChatMode(t *testing.T) {
 			err := tc.forward(svc, adaptiveProtocolTestContext(tc.path, tc.body), account, tc.body)
 
 			require.Error(t, err)
-			require.Equal(t, "http://responses.example/responses", upstream.lastReq.URL.String())
+			require.Equal(t, "http://responses.example/v1/responses", upstream.lastReq.URL.String())
 		})
 	}
 }

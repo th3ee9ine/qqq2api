@@ -18,8 +18,8 @@ func TestResolveThinkingProtocol(t *testing.T) {
 		{"upper case Claude", "Claude-Sonnet-4-5", ThinkingProtocolAnthropicStrict},
 
 		// 第三方兼容上游
-		{"deepseek-v4-pro", "deepseek-v4-pro", ThinkingProtocolPassbackRequired},
-		{"deepseek-r2-thinking", "deepseek-r2-thinking", ThinkingProtocolPassbackRequired},
+		{"glm-v4-pro", "glm-v4-pro", ThinkingProtocolPassbackRequired},
+		{"glm-r2-thinking", "glm-r2-thinking", ThinkingProtocolPassbackRequired},
 		{"kimi-coding", "kimi-coding-v2", ThinkingProtocolPassbackRequired},
 		{"kimi-k2-thinking", "kimi-k2-thinking", ThinkingProtocolPassbackRequired},
 		{"kimi-k3 platform", "kimi-k3", ThinkingProtocolPassbackRequired},
@@ -30,7 +30,7 @@ func TestResolveThinkingProtocol(t *testing.T) {
 		{"qwen-2 thinking variant", "qwen-2-72b-thinking", ThinkingProtocolPassbackRequired},
 		{"qwen3 thinking (real Alibaba naming)", "qwen3-235b-a22b-thinking-2507", ThinkingProtocolPassbackRequired},
 		{"qwen3-next thinking", "qwen3-next-80b-a3b-thinking", ThinkingProtocolPassbackRequired},
-		{"upper case Deepseek", "DeepSeek-V4-Pro", ThinkingProtocolPassbackRequired},
+		{"upper case GLM", "GLM-5.2", ThinkingProtocolPassbackRequired},
 
 		// MiniMax M 系列（Anthropic 兼容端点要求 thinking round-trip）
 		{"MiniMax-M2 (case-sensitive original)", "MiniMax-M2", ThinkingProtocolPassbackRequired},
@@ -75,7 +75,7 @@ func TestShouldPreFilterThinkingBlocks(t *testing.T) {
 		want    bool
 	}{
 		{"claude-sonnet-4-5", true},
-		{"deepseek-v4-pro", false},
+		{"glm-v4-pro", false},
 		{"kimi-coding", false},
 		{"glm-5.1", false},
 		{"gpt-5.1", false},
@@ -94,7 +94,7 @@ func TestShouldRectifyThinkingSignatureError(t *testing.T) {
 	if !ShouldRectifyThinkingSignatureError("claude-sonnet-4-5") {
 		t.Error("anthropic-strict should rectify signature error")
 	}
-	if ShouldRectifyThinkingSignatureError("deepseek-v4-pro") {
+	if ShouldRectifyThinkingSignatureError("glm-v4-pro") {
 		t.Error("passback-required must NOT rectify (would break protocol contract)")
 	}
 	if ShouldRectifyThinkingSignatureError("gpt-5.1") {
@@ -110,7 +110,7 @@ func TestShouldRectifyThinkingSignatureError(t *testing.T) {
 func TestShouldApplyRetryFiltersMirrorsPreFilter(t *testing.T) {
 	models := []string{
 		"claude-sonnet-4-5", "claude-opus-4-5-20251101", "haiku-4-5",
-		"deepseek-v4-pro", "kimi-coding", "glm-5.1",
+		"glm-v4-pro", "kimi-coding", "glm-5.1",
 		"qwen3-235b-a22b-thinking-2507", "qwen3-32b",
 		"gpt-5.1", "gemini-3-pro-preview", "yi-large", "",
 	}

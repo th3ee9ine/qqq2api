@@ -918,9 +918,9 @@ func TestExtractOpenAIReasoningEffortFromBody(t *testing.T) {
 			wantValue: "xhigh",
 		},
 		{
-			name:      "DeepSeek V4 保留 max",
+			name:      "Compatible V4 保留 max",
 			body:      []byte(`{"reasoning_effort":"max"}`),
-			model:     "deepseek-v4-pro",
+			model:     "glm-v4-pro",
 			wantNil:   false,
 			wantValue: "max",
 		},

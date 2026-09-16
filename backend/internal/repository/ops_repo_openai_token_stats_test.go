@@ -22,7 +22,7 @@ func TestOpsRepositoryGetOpenAITokenStats_PlatformScope(t *testing.T) {
 		groupID  *int64
 		models   []string
 	}{
-		{name: "all platforms", models: []string{"claude-sonnet-4", "deepseek-chat", "gemini-2.5-pro", "gpt-4o", "o3"}},
+		{name: "all platforms", models: []string{"claude-sonnet-4", "glm-chat", "gemini-2.5-pro", "gpt-4o", "o3"}},
 		{name: "anthropic group", platform: "anthropic", groupID: &groupID, models: []string{"claude-sonnet-4"}},
 		{name: "gemini", platform: "gemini", models: []string{"gemini-2.5-pro"}},
 		{name: "openai reasoning model", platform: "openai", models: []string{"o3"}},

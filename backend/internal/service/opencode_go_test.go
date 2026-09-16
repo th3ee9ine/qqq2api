@@ -20,7 +20,7 @@ func TestOpenCodeGoModelProtocol(t *testing.T) {
 		{"qwen3.7-plus", APIProtocolAnthropic},
 		{"glm-5.3", APIProtocolChatCompletions},
 		{"kimi-k3", APIProtocolChatCompletions},
-		{"deepseek-v4-pro", APIProtocolChatCompletions},
+		{"glm-v4-pro", APIProtocolChatCompletions},
 		{"mimo-v2.5-pro", APIProtocolChatCompletions},
 		{"hy4-preview", APIProtocolChatCompletions},
 		{"omen-alpha", APIProtocolChatCompletions},
@@ -63,13 +63,13 @@ func TestResolveOpenCodeGoUpstreamProtocolUsesAccountRules(t *testing.T) {
 			"api_protocol": APIProtocolAdaptive,
 			openCodeGoProtocolRulesKey: []any{
 				map[string]any{"pattern": "grok-*", "protocol": APIProtocolChatCompletions},
-				map[string]any{"pattern": "deepseek-v4-flash", "protocol": APIProtocolResponses},
+				map[string]any{"pattern": "glm-v4-flash", "protocol": APIProtocolResponses},
 				map[string]any{"pattern": "qwen*", "protocol": APIProtocolAnthropic},
 			},
 		},
 	}
 	require.Equal(t, APIProtocolChatCompletions, account.ResolveOpenCodeGoUpstreamProtocol("grok-4.6"))
-	require.Equal(t, APIProtocolResponses, account.ResolveOpenCodeGoUpstreamProtocol("deepseek-v4-flash"))
+	require.Equal(t, APIProtocolResponses, account.ResolveOpenCodeGoUpstreamProtocol("glm-v4-flash"))
 	require.Equal(t, APIProtocolAnthropic, account.ResolveOpenCodeGoUpstreamProtocol("qwen3.8-max"))
 	require.Equal(t, APIProtocolChatCompletions, account.ResolveOpenCodeGoUpstreamProtocol("glm-5.3"))
 	require.Equal(t, APIProtocolChatCompletions, account.ResolveOpenCodeGoUpstreamProtocol("minimax-m3"))
@@ -115,7 +115,7 @@ func TestOpenCodeGoNativeProtocolUnmatchedFallsBackToChatCompletions(t *testing.
 			},
 		},
 	}
-	require.Equal(t, APIProtocolChatCompletions, openCodeGoNativeProtocol(withRules, "deepseek-v4-flash"))
+	require.Equal(t, APIProtocolChatCompletions, openCodeGoNativeProtocol(withRules, "glm-v4-flash"))
 	require.Equal(t, APIProtocolChatCompletions, openCodeGoNativeProtocol(withRules, "glm-5.3"))
 	require.Equal(t, APIProtocolChatCompletions, openCodeGoNativeProtocol(withRules, "omen-alpha"))
 	require.Equal(t, APIProtocolChatCompletions, openCodeGoNativeProtocol(withRules, "kimi-k3"))
@@ -124,7 +124,7 @@ func TestOpenCodeGoNativeProtocolUnmatchedFallsBackToChatCompletions(t *testing.
 	require.Equal(t, APIProtocolAnthropic, openCodeGoNativeProtocol(withRules, "qwen3.8-flash"))
 
 	defaults := &Account{Platform: PlatformOpenCodeGo}
-	require.Equal(t, APIProtocolChatCompletions, openCodeGoNativeProtocol(defaults, "deepseek-v4-flash"))
+	require.Equal(t, APIProtocolChatCompletions, openCodeGoNativeProtocol(defaults, "glm-v4-flash"))
 	require.Equal(t, APIProtocolChatCompletions, openCodeGoNativeProtocol(nil, "grok-4.6"))
 }
 

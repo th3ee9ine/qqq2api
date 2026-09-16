@@ -36,7 +36,7 @@ func TestDispatchCodexModelsGatewayKeepsOnlyOpenAIOnLiveManifestHandler(t *testi
 		{platform: service.PlatformOpenAI, wantOpenAI: true},
 		{platform: service.PlatformComposite},
 		{platform: service.PlatformGrok},
-		{platform: service.PlatformDeepseek},
+		{platform: "deepseek"},
 	}
 
 	for _, tt := range tests {

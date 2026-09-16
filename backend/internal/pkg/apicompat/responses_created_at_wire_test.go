@@ -52,23 +52,23 @@ func TestChatCompletionsResponseToResponses_CarriesCreatedAt(t *testing.T) {
 		out := ChatCompletionsResponseToResponses(&ChatCompletionsResponse{
 			ID:      "chatcmpl_1",
 			Created: 1700000000,
-			Model:   "deepseek-v4-flash",
+			Model:   "glm-v4-flash",
 			Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant", Content: json.RawMessage(`"hi"`)}}},
-		}, "deepseek-v4-flash", nil, nil, false, nil)
+		}, "glm-v4-flash", nil, nil, false, nil)
 		require.EqualValues(t, 1700000000, out.CreatedAt, "上游给了 created 就照搬，不要另起时间")
 	})
 
 	t.Run("stamps_now_when_upstream_omits_created", func(t *testing.T) {
 		out := ChatCompletionsResponseToResponses(&ChatCompletionsResponse{
 			ID:      "chatcmpl_2",
-			Model:   "deepseek-v4-flash",
+			Model:   "glm-v4-flash",
 			Choices: []ChatChoice{{Message: ChatMessage{Role: "assistant", Content: json.RawMessage(`"hi"`)}}},
-		}, "deepseek-v4-flash", nil, nil, false, nil)
+		}, "glm-v4-flash", nil, nil, false, nil)
 		require.Greater(t, out.CreatedAt, int64(0))
 	})
 
 	t.Run("nil_upstream_response_still_stamps", func(t *testing.T) {
-		out := ChatCompletionsResponseToResponses(nil, "deepseek-v4-flash", nil, nil, false, nil)
+		out := ChatCompletionsResponseToResponses(nil, "glm-v4-flash", nil, nil, false, nil)
 		require.Greater(t, out.CreatedAt, int64(0), "空上游响应也必须产出可解析的对象")
 	})
 }
@@ -76,7 +76,7 @@ func TestChatCompletionsResponseToResponses_CarriesCreatedAt(t *testing.T) {
 // 同一条流里 response.created 与终止事件必须报同一个 created_at
 // （官方语义：created_at 是这次 response 的创建时刻，不随事件变化）。
 func TestChatCompletionsToResponsesStream_CreatedAtStableAcrossEvents(t *testing.T) {
-	state := NewChatCompletionsToResponsesStreamState("deepseek-v4-flash")
+	state := NewChatCompletionsToResponsesStreamState("glm-v4-flash")
 	require.Greater(t, state.Created, int64(0), "前提：state 早就采集了时间戳")
 
 	var chunk ChatCompletionsChunk

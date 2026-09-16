@@ -48,7 +48,7 @@ type MonitorQuotaSnapshot struct {
 	Success   bool               `json:"success"`
 	Tiers     []MonitorQuotaTier `json:"tiers,omitempty"`
 	Balance   *float64           `json:"balance,omitempty"`    // cn_balance 主余额
-	Balances  []MonitorBalance   `json:"balances,omitempty"`   // 多币种余额（如 DeepSeek CNY+USD）
+	Balances  []MonitorBalance   `json:"balances,omitempty"`   // 多币种余额
 	Currency  string             `json:"currency,omitempty"`   // 主余额币种
 	PlanLevel string             `json:"plan_level,omitempty"` // 套餐等级（如智谱 level）
 	// BalanceLow 余额低于阈值或账号被上游标记不可用（仅 cn_balance 来源）。

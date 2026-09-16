@@ -64,13 +64,13 @@ WS 的 OAuth/API Key 连接上限系数默认值由 1.0 调整为 5.0，并继�
 
 首次同步时 Go 默认完整测试：按顶层测试统计，6,404 通过、11 跳过、8 失败，失败集合与基线完全一致。11 个跳过项涉及外部 PostgreSQL/Redis 和插件运行时集成环境；不将它们计为通过。以下 8 个失败已在后续修复中处理，原因和处理方式见下一节。
 
-以下 8 个失败在同步前基线均可复现：
+以下 8 个失败在同步前基线均可复现（账号成本用例列出当前通用化后的名称）：
 
 - `TestOpenAIResponsesWebSocket_SessionUpdateToAllowedModelStillWorks`
 - `TestGatewayRoutesGroupModelAllowlistMountedOnEveryGatewayRoute`
 - `TestGatewayRoutesGroupModelAllowlistCoversRootAliasRoutes`
 - `TestAPIKeyAuthSnapshotProfitControlRoundtrip`
-- `TestOpenAIGatewayServiceRecordUsage_DeepSeekAccountStatsUsesRequestPricingAtAndUpstreamModel`
+- `TestOpenAIGatewayServiceRecordUsage_AccountStatsUsesUpstreamModel`
 - `TestCanonicalOpenAIAccountSchedulingModelMatchesForwardSemantics`
 - `TestQueryUsageResetCreditDetails401NonFatal`
 - `TestGetOpenAIUsage_SparkShadow_WritesExtraAndReturnsNonEmptyWindows`
@@ -82,7 +82,7 @@ WS 的 OAuth/API Key 连接上限系数默认值由 1.0 调整为 5.0，并继�
 | 路由挂载与根路径覆盖两项 | 根路径图片生成、编辑和异步接口未经过分组模型白名单。统一接入 `rootRoute` 中间件链，补上异步图片及单模型检索的行为断言；已退役的 Gemini、Antigravity、视频、语音路由改为断言仍不可用。 |
 | WebSocket 会话更新 | 测试桩将 `session.update` 错误回复为 `response.completed`，把控制帧当成第三次计费调用。改为 `session.updated`，分别统计控制帧与实际请求，并验证切换到另一个白名单模型后仅有两笔正确的用量记录。 |
 | API Key 认证快照 | 测试硬编码旧版 v23，实际模型白名单快照已是 v24。按当前版本和最低兼容版本校验，并补充白名单 JSON 往返保真断言。 |
-| DeepSeek 账号成本 | 旧测试仍要求扣用户钱包，与定制全局 API Key 行为不符。保留历史定价、上游模型和账号成本断言，并验证记录费用但不扣钱包。 |
+| 上游账号成本 | 旧测试仍要求扣用户钱包，与定制全局 API Key 行为不符。保留上游模型和账号成本断言，并验证记录费用但不扣钱包。 |
 | 调度模型规范化 | 测试依赖进程中残留的 Grok 跨客户端映射开关。显式设置并恢复运行时配置，同时覆盖关闭和开启两种状态。 |
 | 重置积分详情返回 401 | 配额查询会独立保存付费积分缓存，旧断言错误要求完全没有写入。改为验证不覆盖重置积分快照，且缓存不完整详情时不会额外写库。 |
 | Spark 影子账号用量 | 旧测试假设首个 Extra 更新就是配额窗口，实际付费积分快照先写入。按更新内容等待窗口持久化，并校验写入影子账号及返回的 5 小时、7 天利用率。 |
@@ -109,6 +109,22 @@ GOMAXPROCS=4 GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go test -p 4 ./...
 GOMAXPROCS=4 GOSUMDB=sum.golang.org GOTOOLCHAIN=auto go vet -p 4 ./internal/service ./internal/repository ./internal/handler/... ./internal/server/... ./internal/setup ./internal/pkg/...
 GOMAXPROCS=4 GOSUMDB=sum.golang.org GOTOOLCHAIN=auto CGO_ENABLED=0 go build -p 4 -tags embed -ldflags '-X main.Version=3.0.5' -o /tmp/qqq2api-v025-server ./cmd/server
 ```
+
+## 后续定制清理：移除 DeepSeek 专用支持
+
+移除平台常量、默认 API 地址、余额解析、监控供应商注册、数据库实体枚举，以及专用模型识别、原生 Responses 适配、Codex 模型描述和 Ollama 模型特例。删除 4 条内置价卡、官方价格强制覆盖、峰谷倍率和 Pro 转 Flash 的日期切换逻辑。
+
+前端同步清除平台类型、颜色、图标、中英文接入说明和模型示例。通用的 OpenAI/Anthropic 协议转换、reasoning_content 回传、工具调用和模型映射继续保留，并用通用模型测试数据验证。
+
+历史 SQL 迁移及对应校验测试保持不变，避免已安装实例升级时发生 checksum mismatch。生产代码中仅保留旧平台拒绝标识与 OpenAI OAuth 外部模型过滤前缀；相关拒绝、隐藏和无内置能力的回归测试保留，以防历史账号重新进入调度。没有删除数据库中的历史账号或用量数据。
+
+本轮补充验证：
+
+- 默认标签完整后端回归 `go test -json ./...` 通过：6,408 个顶层测试通过、0 失败、11 跳过；此前修复的 8 项回归再次全部通过。
+- 前端 `typecheck`、lint、生产构建通过；完整测试为 1,514 通过、29 失败，失败集合与同步后基线完全一致。移除一个专用平台参数化用例，因此通过数比此前少 1。
+- 带 `unit` 标签的受影响文件补充测试使用前述临时 overlay：484 个顶层测试通过，仅 `TestGatewayServiceRecordUsage_GeminiFlashThinkingTierUsesCatalogPrice` 失败（两个 Gemini 模型子用例）。该失败已用修改前 HEAD 的源文件 overlay 独立复现；没有新增失败。原始 `-tags=unit ./...` 仍有上节记录的历史编译问题。
+- `go vet ./...`、Ent 实体重新生成、带 `embed` 的服务端构建通过；集成测试源码可编译，未连接真实数据库运行。
+- 前端构建产物与内置价卡没有该供应商条目，历史迁移目录没有改动。生成的服务端二进制版本检查为 `3.0.5`。
 
 ## 发布状态
 

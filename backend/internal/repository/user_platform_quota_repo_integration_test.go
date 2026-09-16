@@ -111,7 +111,7 @@ func TestUserPlatformQuotaRepository_BulkInsertInitial_GrokAllowed(t *testing.T)
 }
 
 // TestUserPlatformQuotaRepository_BulkInsertInitial_CNProvidersAllowed 回归迁移 224：
-// kimi/zhipu/deepseek 平台必须能写入 user_platform_quotas（CHECK 约束已含国产供应商）。
+// kimi/zhipu/minimax 平台必须能写入 user_platform_quotas（CHECK 约束已含国产供应商）。
 // 历史 bug：三个平台不在约束内 → 注册预填充 8 平台默认配额时整条多行 INSERT 中止 →
 // fail-open 吞错 → 新用户拿到零条配额记录（缺失配额行 = 无限额）。
 func TestUserPlatformQuotaRepository_BulkInsertInitial_CNProvidersAllowed(t *testing.T) {
@@ -127,13 +127,12 @@ func TestUserPlatformQuotaRepository_BulkInsertInitial_CNProvidersAllowed(t *tes
 	records := []UserPlatformQuotaRecord{
 		{UserID: userID, Platform: "kimi", DailyLimitUSD: &daily},
 		{UserID: userID, Platform: "zhipu", DailyLimitUSD: &daily},
-		{UserID: userID, Platform: "deepseek", DailyLimitUSD: &daily},
 		{UserID: userID, Platform: "minimax", DailyLimitUSD: &daily},
 	}
 	require.NoError(t, repo.BulkInsertInitial(txCtx, records),
-		"kimi/zhipu/deepseek/minimax 平台应可写入（CHECK 约束已含国产供应商）")
+		"kimi/zhipu/minimax 平台应可写入（CHECK 约束已含国产供应商）")
 
-	for _, platform := range []string{"kimi", "zhipu", "deepseek", "minimax"} {
+	for _, platform := range []string{"kimi", "zhipu", "minimax"} {
 		rec, err := repo.GetByUserPlatform(txCtx, userID, platform)
 		require.NoError(t, err)
 		require.NotNil(t, rec, "%s 配额行应已写入", platform)

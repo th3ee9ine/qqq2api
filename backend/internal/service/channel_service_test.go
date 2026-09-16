@@ -2098,7 +2098,6 @@ func TestIsPlatformPricingMatch(t *testing.T) {
 		{"composite rejects grok pricing", PlatformComposite, PlatformGrok, false},
 		{"composite rejects kimi pricing", PlatformComposite, PlatformKimi, false},
 		{"composite rejects zhipu pricing", PlatformComposite, PlatformZhipu, false},
-		{"composite rejects deepseek pricing", PlatformComposite, PlatformDeepseek, false},
 		{"empty string matches nothing", "", PlatformAnthropic, false},
 		{"empty string matches empty", "", "", true},
 	}
@@ -2127,7 +2126,6 @@ func TestMatchingPlatforms(t *testing.T) {
 		{"retired grok returns none", PlatformGrok, nil},
 		{"retired kimi returns none", PlatformKimi, nil},
 		{"retired zhipu returns none", PlatformZhipu, nil},
-		{"retired deepseek returns none", PlatformDeepseek, nil},
 		{"composite returns active concrete platforms", PlatformComposite, []string{PlatformAnthropic, PlatformOpenAI}},
 	}
 

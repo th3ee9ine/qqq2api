@@ -67,7 +67,7 @@ func TestValidateAndNormalizeAccountSchedulingThresholds_FillsMissingPlatforms(t
 }
 
 func TestValidateAndNormalizeAccountSchedulingThresholds_RejectsUnsupportedPlatforms(t *testing.T) {
-	for _, platform := range []string{PlatformGemini, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformGemini, PlatformGrok, PlatformKimi, PlatformZhipu} {
 		_, err := validateAndNormalizeAccountSchedulingThresholds(map[string]int{platform: 85})
 		require.Error(t, err, "platform=%s", platform)
 	}

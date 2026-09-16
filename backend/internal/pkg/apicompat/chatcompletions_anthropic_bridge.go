@@ -300,7 +300,7 @@ func anthropicAssistantToChatMessages(raw json.RawMessage) ([]ChatMessage, error
 // chatMessageToAnthropicBlocks emits the upstream's reasoning_content as a
 // thinking block on the way out, so a multi-turn client echoes it back on the
 // next request; dropping it here made the bridge lose exactly what it had just
-// produced. DeepSeek's thinking mode requires the reasoning_content that
+// produced. Strict reasoning mode requires the reasoning_content that
 // produced a tool call to be replayed on that assistant message and answers
 // 400 otherwise, which is why buildChatMessagesFromItems already carries
 // pendingReasoning onto assistant tool-call messages in the Responses→Chat
@@ -464,7 +464,7 @@ func chatMessageToAnthropicBlocks(message ChatMessage) []AnthropicContentBlock {
 	}
 
 	text := chatMessageContentText(message.Content)
-	// DeepSeek reasoning-only fallback: when there is no text and no tool calls,
+	// Reasoning-only fallback: when there is no text and no tool calls,
 	// surface the reasoning content as visible text so the turn isn't empty.
 	if text == "" && strings.TrimSpace(reasoning) != "" && len(message.ToolCalls) == 0 {
 		text = reasoning
@@ -578,7 +578,7 @@ type ChatCompletionsToAnthropicStreamState struct {
 	pendingToolCallID map[int]string
 	pendingToolArgs   map[int]string
 
-	// Reasoning (DeepSeek-style): reasoning_content streamed before content.
+	// Reasoning (OpenAI-compatible): reasoning_content streamed before content.
 	// No separate reasoning block index — it uses ContentBlockIndex like the
 	// Responses bridge's ReasoningIndex, but since blocks are sequential we
 	// reuse the single ContentBlockIndex counter.

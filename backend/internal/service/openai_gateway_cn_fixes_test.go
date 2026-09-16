@@ -24,7 +24,7 @@ import (
 )
 
 func TestResolveMessagesDispatchModel_CNProvidersNoDispatchMapping(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformOpenCodeGo} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformMiniMax, PlatformOpenCodeGo} {
 		g := &Group{Platform: platform}
 		require.Empty(t, g.ResolveMessagesDispatchModel("claude-sonnet-4-5"),
 			"CN 分组(%s)不得返回调度级映射模型（openai 默认值会发给 CN 上游）", platform)
@@ -110,7 +110,7 @@ func TestResponsesStreamingFromNativeAnthropic_ClientDisconnectDrainsUsage(t *te
 }
 
 func TestHandle403_CNProviderHTMLBodySkipsAccountPenalty(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformMiniMax} {
 		repo := &rateLimitAccountRepoStub{}
 		service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
 		account := &Account{ID: 401, Platform: platform, Type: AccountTypeAPIKey}

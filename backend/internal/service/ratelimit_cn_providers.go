@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// 国产供应商（kimi/zhipu/deepseek）的响应式冷却辅助。
+// 国产供应商（kimi/zhipu）的响应式冷却辅助。
 //
 // 与 openai/anthropic 不同：
 //   - 余额不足是「可恢复」状态（充值/检测恢复后自动重新调度），不能走 handleAuthError

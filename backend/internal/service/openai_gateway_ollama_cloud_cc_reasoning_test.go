@@ -20,7 +20,7 @@ import (
 func ollamaCloudRawChatCompletionsTestAccount() *Account {
 	return &Account{
 		ID:       143,
-		Name:     "DeepSeek Ollama",
+		Name:     "Compatible Ollama",
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
 		Credentials: map[string]any{
@@ -52,11 +52,11 @@ func TestIsOllamaCloudRawChatCompletionsAccount(t *testing.T) {
 		require.True(t, isOllamaCloudRawChatCompletionsAccount(account))
 	})
 
-	t.Run("official DeepSeek", func(t *testing.T) {
+	t.Run("official Compatible", func(t *testing.T) {
 		t.Parallel()
 		account := rawChatCompletionsTestAccount()
-		account.Name = "DeepSeek"
-		account.Credentials["base_url"] = "https://api.deepseek.com"
+		account.Name = "Compatible"
+		account.Credentials["base_url"] = "https://compatible.example.test"
 		account.Extra = map[string]any{
 			openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceChatCompletions),
 		}
@@ -160,8 +160,8 @@ func TestApplyOllamaCloudRawChatCompletionsLeavesForeignAccountsUnchanged(t *tes
 	sseLine := `data: {"choices":[{"delta":{"reasoning":"abc"}}]}`
 
 	official := rawChatCompletionsTestAccount()
-	official.Name = "DeepSeek"
-	official.Credentials["base_url"] = "https://api.deepseek.com"
+	official.Name = "Compatible"
+	official.Credentials["base_url"] = "https://compatible.example.test"
 	official.Extra = map[string]any{
 		openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceChatCompletions),
 	}
@@ -195,20 +195,20 @@ func TestNormalizeOllamaCloudChatCompletionsSSELine(t *testing.T) {
 func TestForwardAsRawChatCompletions_OllamaCloudReasoningAliasStreaming(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
+	body := []byte(`{"model":"glm-v4-pro","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	upstreamBody := strings.Join([]string{
-		`data: {"id":"chatcmpl_ollama","object":"chat.completion.chunk","model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_ollama","object":"chat.completion.chunk","model":"glm-v4-pro","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
 		"",
-		`data: {"id":"chatcmpl_ollama","object":"chat.completion.chunk","model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"reasoning":"abc"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_ollama","object":"chat.completion.chunk","model":"glm-v4-pro","choices":[{"index":0,"delta":{"reasoning":"abc"},"finish_reason":null}]}`,
 		"",
-		`data: {"id":"chatcmpl_ollama","object":"chat.completion.chunk","model":"deepseek-v4-pro","choices":[{"index":0,"delta":{"content":"final answer"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_ollama","object":"chat.completion.chunk","model":"glm-v4-pro","choices":[{"index":0,"delta":{"content":"final answer"},"finish_reason":null}]}`,
 		"",
-		`data: {"id":"chatcmpl_ollama","object":"chat.completion.chunk","model":"deepseek-v4-pro","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8,"completion_tokens_details":{"reasoning_tokens":4}}}`,
+		`data: {"id":"chatcmpl_ollama","object":"chat.completion.chunk","model":"glm-v4-pro","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8,"completion_tokens_details":{"reasoning_tokens":4}}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -239,13 +239,13 @@ func TestForwardAsRawChatCompletions_OllamaCloudReasoningAliasStreaming(t *testi
 func TestForwardAsRawChatCompletions_OllamaCloudThinkingAliasNonStreaming(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	body := []byte(`{"model":"deepseek-v4-pro","messages":[{"role":"user","content":"hello"},{"role":"assistant","reasoning_content":"prev","content":""}],"stream":false}`)
+	body := []byte(`{"model":"glm-v4-pro","messages":[{"role":"user","content":"hello"},{"role":"assistant","reasoning_content":"prev","content":""}],"stream":false}`)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	upstreamJSON := `{"id":"chatcmpl_ollama","object":"chat.completion","model":"deepseek-v4-pro","choices":[{"index":0,"message":{"role":"assistant","thinking":"abc","content":"final answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8,"completion_tokens_details":{"reasoning_tokens":4}}}`
+	upstreamJSON := `{"id":"chatcmpl_ollama","object":"chat.completion","model":"glm-v4-pro","choices":[{"index":0,"message":{"role":"assistant","thinking":"abc","content":"final answer"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":5,"total_tokens":8,"completion_tokens_details":{"reasoning_tokens":4}}}`
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_ollama_thinking_json"}},

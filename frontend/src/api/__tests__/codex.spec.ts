@@ -29,7 +29,7 @@ describe('Codex models API', () => {
           model_messages: { instructions_template: 'Use the routed model.' }
         },
         {
-          slug: 'deepseek-v4-pro',
+          slug: 'custom-reasoning-model',
           default_reasoning_level: 'high',
           supported_reasoning_levels: [
             { effort: 'low', description: 'Fast responses' },

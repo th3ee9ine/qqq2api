@@ -571,21 +571,21 @@ func TestOpenAIGatewayServiceRecordUsage_TimePricingUsesExplicitPricingAt(t *tes
 	require.InDelta(t, 0.8, usageRepo.lastLog.RateMultiplier, 1e-12)
 }
 
-func TestOpenAIGatewayServiceRecordUsage_DeepSeekAccountStatsUsesRequestPricingAtAndUpstreamModel(t *testing.T) {
+func TestOpenAIGatewayServiceRecordUsage_AccountStatsUsesUpstreamModel(t *testing.T) {
 	for _, model := range []struct {
 		name        string
-		offPeakCost float64
+		catalogCost float64
 	}{
-		{"deepseek-v4-flash", 1000*1.5e-7 + 500*6e-7 + 1000*3e-9},
-		{"deepseek-v4-pro", 1000*6.6e-7 + 500*1.98e-6 + 1000*2.2e-8},
+		{"gpt-5.4-mini", 1000*7.5e-7 + 500*4.5e-6 + 1000*7.5e-8},
+		{"gpt-5.4", 1000*2.5e-6 + 500*15e-6 + 1000*2.5e-7},
 	} {
 		for _, slot := range []struct {
 			name       string
 			pricingAt  time.Time
 			multiplier float64
 		}{
-			{"peak", time.Date(2026, time.August, 24, 2, 0, 0, 0, time.UTC), 2},
-			{"off_peak", time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC), 1},
+			{"morning", time.Date(2026, time.August, 24, 2, 0, 0, 0, time.UTC), 1},
+			{"evening", time.Date(2026, time.August, 24, 12, 0, 0, 0, time.UTC), 1},
 		} {
 			t.Run(model.name+"/"+slot.name, func(t *testing.T) {
 				usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
@@ -594,14 +594,14 @@ func TestOpenAIGatewayServiceRecordUsage_DeepSeekAccountStatsUsesRequestPricingA
 				groupID := int64(18)
 				cache := newEmptyChannelCache()
 				cache.channelByGroupID[groupID] = &Channel{ID: 1, Status: StatusActive}
-				cache.groupPlatform[groupID] = PlatformDeepseek
+				cache.groupPlatform[groupID] = PlatformOpenAI
 				cache.loadedAt = time.Now()
 				svc.channelService = &ChannelService{}
 				svc.channelService.cache.Store(cache)
 				svc.resolver = NewModelPricingResolver(svc.channelService, svc.billingService)
 				alias := "customer-chat"
 				inputPrice, outputPrice, cachePrice := 1e-6, 2e-6, 1e-7
-				group := &Group{ID: groupID, Platform: PlatformDeepseek, RateMultiplier: 0.8,
+				group := &Group{ID: groupID, Platform: PlatformOpenAI, RateMultiplier: 0.8,
 					ModelPricing: []ChannelModelPricing{{
 						Models: []string{alias}, BillingMode: BillingModeToken,
 						InputPrice: &inputPrice, OutputPrice: &outputPrice, CacheReadPrice: &cachePrice,
@@ -609,12 +609,12 @@ func TestOpenAIGatewayServiceRecordUsage_DeepSeekAccountStatsUsesRequestPricingA
 				}
 				err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 					Result: &OpenAIForwardResult{
-						RequestID: "openai_deepseek_account_stats_" + model.name + "_" + slot.name,
+						RequestID: "openai_compatible_account_stats_" + model.name + "_" + slot.name,
 						Model:     alias, BillingModel: alias, UpstreamModel: model.name,
 						Usage: OpenAIUsage{InputTokens: 2000, OutputTokens: 500, CacheReadInputTokens: 1000},
 					},
 					APIKey: &APIKey{ID: 1008, GroupID: &groupID, Group: group},
-					User:   &User{ID: 2008}, Account: &Account{ID: 3008, Platform: PlatformDeepseek},
+					User:   &User{ID: 2008}, Account: &Account{ID: 3008, Platform: PlatformOpenAI},
 					PricingAt:          slot.pricingAt,
 					ChannelUsageFields: ChannelUsageFields{OriginalModel: alias, BillingModelSource: BillingModelSourceRequested},
 				})
@@ -632,8 +632,8 @@ func TestOpenAIGatewayServiceRecordUsage_DeepSeekAccountStatsUsesRequestPricingA
 				require.Zero(t, userRepo.deductCalls, "全局 API Key 记录费用但不扣用户钱包")
 				require.Zero(t, userRepo.lastAmount)
 				require.NotNil(t, log.AccountStatsCost)
-				require.InDelta(t, model.offPeakCost*slot.multiplier, *log.AccountStatsCost, 1e-12,
-					"account cost must use the upstream model and historical PricingAt")
+				require.InDelta(t, model.catalogCost*slot.multiplier, *log.AccountStatsCost, 1e-12,
+					"account cost must use the upstream model")
 			})
 		}
 	}

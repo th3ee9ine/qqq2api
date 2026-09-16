@@ -573,7 +573,7 @@ func StripEmptyTextBlocks(body []byte) []byte {
 // mappedModel 是「实际发给上游的模型 ID」(after account model mapping)，用于按
 // 协议族分流。仅 anthropic-strict 走原过滤逻辑；passback-required 与 unknown
 // 一律保留全部 thinking block，避免误伤第三方兼容上游
-// (DeepSeek `/anthropic`、Kimi `/coding`、GLM、Moonshot 等)，详见
+// (Kimi `/coding`、GLM、Moonshot 等)，详见
 // .pensieve/short-term/knowledge/thinking-block-filter-third-party-upstream-inversion/。
 //
 // 策略 (anthropic-strict only)：
@@ -603,7 +603,7 @@ func FilterThinkingBlocks(body []byte, mappedModel string) []byte {
 //   - Ensure no message ends up with empty content.
 //
 // mappedModel 用于按协议族分流：仅 anthropic-strict 执行上述变形；
-// passback-required (DeepSeek/Kimi/GLM 等) 与 unknown 一律返回原 body，
+// passback-required (Kimi/GLM 等) 与 unknown 一律返回原 body，
 // 因为这类上游的契约就是「thinking block 原样回传」（或我们不了解），
 // retry 任何变形都不会修好 400，反而破坏契约。详见 thinking_protocol.go。
 func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
@@ -1443,27 +1443,17 @@ func NormalizeClaudeOutputEffort(raw string) *string {
 //   - MiniMax (minimax-m*)
 //   - Qwen thinking 变体 (qwen[1-4]?-*-thinking)
 //
-// **排除 DeepSeek**：DeepSeek 原生支持 reasoning_effort: high/max，客户端可显式指定，
-// 网关不应注入默认值覆盖客户端意图（即便客户端没发，DeepSeek 上游自己会用 high default
-// ——但那是上游行为，不是我们的语义注入）。
-//
 // 适用场景由调用方守卫：仅当 (1) ResolveThinkingProtocol == PassbackRequired
 // (2) 已确认 thinking 启用（Anthropic: parsed.ThinkingEnabled；OpenAI: 见
 // OpenAIBodyHasThinkingEnabled) (3) 已有 effort 解析返回 nil 三者同时成立时调用。
 //
 // 返回值固定指向 "high"。理由：Kimi/GLM/MiniMax 启用 thinking 都是"深度推理模式"，
 // 等同 Claude/OpenAI 的 high 档位语义；用 high 比 medium/normal 更贴近实际行为，
-// 也与 DeepSeek thinking-enabled 的默认 effort 一致。
 //
-// 未来兼容性：如果这些厂商后续加入真实 effort 档位（如 Kimi 跟进 DeepSeek 的
-// reasoning_effort: high/max），客户端开始显式发 effort 值时，调用方的守卫条件 (3)
+// 未来兼容性：如果这些厂商后续加入真实 effort 档位（如 reasoning_effort: high/max），客户端开始显式发 effort 值时，调用方的守卫条件 (3)
 // 会因 extractor 返回非 nil 而不触发本函数，自动让出。
 func DefaultEffortForThinkingEnabled(mappedModel string) *string {
 	if ResolveThinkingProtocol(mappedModel) != ThinkingProtocolPassbackRequired {
-		return nil
-	}
-	// DeepSeek 在 PassbackRequired 集合里但有原生 effort 支持，排除。
-	if strings.HasPrefix(strings.ToLower(mappedModel), "deepseek-") {
 		return nil
 	}
 	effort := "high"
@@ -1687,7 +1677,7 @@ func RectifyThinkingBudget(body []byte) ([]byte, bool) {
 //     and may be rejected/ignored. Pi-ai and other Anthropic-SDK clients default to
 //     "enabled" (Anthropic-original) and never auto-rewrite for non-Anthropic models.
 //
-// Non-MiniMax models (Kimi/GLM/DeepSeek) currently accept "enabled" as-is, so this
+// Non-MiniMax models (Kimi/GLM) currently accept "enabled" as-is, so this
 // function is intentionally a no-op for them. New Chinese LLM quirks should be
 // added here as separate case branches.
 //

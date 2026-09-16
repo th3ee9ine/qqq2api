@@ -51,8 +51,8 @@ func TestJoinMonitorURL_DoesNotMatchHostOrEncodedSlash(t *testing.T) {
 }
 
 func TestNormalizeMonitorEndpoint_PreservesBasePath(t *testing.T) {
-	require.Equal(t, "https://api.deepseek.com/anthropic",
-		normalizeEndpoint("  https://api.deepseek.com/anthropic/  "))
+	require.Equal(t, "https://compatible.example.test/anthropic",
+		normalizeEndpoint("  https://compatible.example.test/anthropic/  "))
 	require.Equal(t, "https://relay.example/tenant%2Fone/anthropic/v1",
 		normalizeEndpoint("https://relay.example/tenant%2Fone/anthropic/v1/"))
 }

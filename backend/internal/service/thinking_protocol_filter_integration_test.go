@@ -7,13 +7,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 第三方 Claude 兼容上游 (DeepSeek/Kimi/GLM 等) 要求历史 thinking block 原样回传，
+// 第三方 Claude 兼容上游 (Compatible/Kimi/GLM 等) 要求历史 thinking block 原样回传，
 // 任何过滤都会破坏「thinking 必须 round-trip」契约。这些测试锁住「mappedModel 命中
 // passback-required 时，3 个过滤函数都返回原 body」的行为，避免回归。
 // 详见 .pensieve/short-term/knowledge/thinking-block-filter-third-party-upstream-inversion/
 
 const passbackThinkingBody = `{
-	"model":"deepseek-v4-pro",
+	"model":"glm-v4-pro",
 	"thinking":{"type":"enabled","budget_tokens":1024},
 	"messages":[
 		{"role":"user","content":[{"type":"text","text":"Hi"}]},
@@ -26,7 +26,7 @@ const passbackThinkingBody = `{
 
 func TestFilterThinkingBlocks_SkipsForPassbackRequired(t *testing.T) {
 	in := []byte(passbackThinkingBody)
-	out := FilterThinkingBlocks(in, "deepseek-v4-pro")
+	out := FilterThinkingBlocks(in, "glm-v4-pro")
 	// passback-required: 原样回传 body（byte-for-byte 不变）
 	require.True(t, bytes.Equal(in, out), "passback-required 上游不应过滤 thinking block")
 }

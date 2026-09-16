@@ -207,7 +207,7 @@ func TestApplyOpenCodeSessionHeaderUsesRememberedInboundBodyAfterConversion(t *t
 	c := newOpenCodeSessionTestContext(t, "")
 	rememberOpenCodeInboundBody(c, []byte(`{"model":"gpt-5","prompt_cache_key":"inbound-responses-session","input":"hello"}`))
 	headers := make(http.Header)
-	convertedCC := []byte(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hello"}]}`)
+	convertedCC := []byte(`{"model":"glm-v4-flash","messages":[{"role":"user","content":"hello"}]}`)
 	applyOpenCodeSessionHeader(c, account, "https://opencode.ai/zen/go/v1/chat/completions", headers, convertedCC)
 	require.Equal(t, "inbound-responses-session", headers.Get(openCodeSessionHeader))
 

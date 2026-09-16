@@ -40,9 +40,9 @@ func TestResolveCompositeModelOwnershipKeepsProviderAccountsIsolated(t *testing.
 	}
 	svc := &GatewayService{accountRepo: repo}
 
-	deepSeekOwnership, err := svc.resolveCompositeModelOwnership(context.Background(), groupID, "reasoning-alias")
+	compatibleOwnership, err := svc.resolveCompositeModelOwnership(context.Background(), groupID, "reasoning-alias")
 	require.NoError(t, err)
-	require.Equal(t, CompositeModelOwnership{TargetPlatform: PlatformAnthropic, Matched: true}, deepSeekOwnership)
+	require.Equal(t, CompositeModelOwnership{TargetPlatform: PlatformAnthropic, Matched: true}, compatibleOwnership)
 
 	openAIOwnership, err := svc.resolveCompositeModelOwnership(context.Background(), groupID, "gpt-public")
 	require.NoError(t, err)
@@ -109,7 +109,7 @@ func TestNewGatewayServiceWiresCompositeModelOwnershipResolver(t *testing.T) {
 		accounts: []Account{{
 			ID:          1,
 			Platform:    PlatformAnthropic,
-			Credentials: map[string]any{"model_mapping": map[string]any{"reasoning-alias": "deepseek-v4-pro"}},
+			Credentials: map[string]any{"model_mapping": map[string]any{"reasoning-alias": "glm-v4-pro"}},
 		}},
 	}
 	resolver := NewCompositeRouteResolver(nil)
@@ -175,7 +175,6 @@ func TestDetectModelPlatform(t *testing.T) {
 		{name: "kimi code provider prefix", model: "kimi-code/k3", platform: PlatformKimi, ok: true},
 		{name: "moonshot prefix", model: "moonshot/moonshot-v1-32k", platform: PlatformKimi, ok: true},
 		{name: "zhipu", model: "glm-5.2", platform: PlatformZhipu, ok: true},
-		{name: "deepseek", model: "deepseek-v4-pro", platform: PlatformDeepseek, ok: true},
 		{name: "minimax", model: "MiniMax-M3", platform: PlatformMiniMax, ok: true},
 		{name: "minimax prefix", model: "minimax/MiniMax-M2.5", platform: PlatformMiniMax, ok: true},
 		{name: "abab legacy", model: "abab6.5-chat", platform: PlatformMiniMax, ok: true},
@@ -222,7 +221,7 @@ func TestCompositeGroupSchedulerHasOnlyActivePlatformBuckets(t *testing.T) {
 }
 
 func TestCompositeConcretePlatformsExcludeRetiredProviders(t *testing.T) {
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu} {
 		require.False(t, isConcreteRequestPlatform(platform))
 		require.False(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
 	}

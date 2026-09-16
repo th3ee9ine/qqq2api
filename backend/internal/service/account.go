@@ -285,7 +285,7 @@ func (a *Account) IsGrokOAuth() bool {
 	return a.IsGrok() && a.Type == AccountTypeOAuth
 }
 
-// IsKimi / IsZhipu / IsDeepseek 标识国产 OpenAI 兼容供应商账号。
+// IsKimi / IsZhipu 标识国产 OpenAI 兼容供应商账号。
 func (a *Account) IsKimi() bool {
 	return a.Platform == PlatformKimi
 }
@@ -294,15 +294,11 @@ func (a *Account) IsZhipu() bool {
 	return a.Platform == PlatformZhipu
 }
 
-func (a *Account) IsDeepseek() bool {
-	return a.Platform == PlatformDeepseek
-}
-
 func (a *Account) IsMiniMax() bool {
 	return a.Platform == PlatformMiniMax
 }
 
-// IsCNProvider 报告是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek/minimax）。
+// IsCNProvider 报告是否为国产 OpenAI 兼容供应商（kimi/zhipu/minimax）。
 func (a *Account) IsCNProvider() bool {
 	return a != nil && IsCNProvider(a.Platform)
 }
@@ -857,14 +853,10 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 // 如果未配置 mapping，返回 true（允许所有模型）。
 //
 // 例外：OpenAI OAuth 账号（Codex 上游）的空映射会排除明确属于其他厂商
-// 家族的模型（deepseek-*/glm-* 等）——转发阶段 normalizeOpenAIModelForUpstream
+// 家族的模型（glm-* 等）——转发阶段 normalizeOpenAIModelForUpstream
 // 会把未知模型原样透传，Codex 上游对这类模型必然返回不可重试的 400，导致
 // 请求卡死在该账号上、无法 failover 到真正支持该模型的 API Key 账号（#3662）。
 // 未知/自定义别名仍保持允许（兼容渠道级映射），见 isOpenAIOAuthServableModel。
-//
-// 例外：DeepSeek 平台的空映射不再是「允许所有」，改按官方模型白名单判定
-// （isDeepseekServableModel）——未知模型名透传上游只会得到 404/400，并误触发
-// per-(账号,模型) 30 分钟冷却；带 [1m] 上下文后缀的写法先归一化再比对。
 func (a *Account) IsModelSupported(requestedModel string) bool {
 	// 透传模式仅替换认证、模型语义完全交由上游决定，因此放行所有模型。
 	// 该短路必须在 model_mapping 判定之前：账号从"白名单模式"切换到透传后，
@@ -877,9 +869,6 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 	if len(mapping) == 0 {
 		if a.IsOpenAIOAuth() {
 			return isOpenAIOAuthServableModel(requestedModel)
-		}
-		if a.Platform == PlatformDeepseek {
-			return isDeepseekServableModel(requestedModel)
 		}
 		return true // 无映射 = 允许所有
 	}
@@ -1363,7 +1352,7 @@ func (a *Account) IsOpenAIApiKey() bool {
 }
 
 // GetOpenAIBaseURL 解析 OpenAI 协议族账号的上游 base_url。
-// 适用 openai、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go；
+// 适用 openai、国产 OpenAI 兼容供应商（kimi/zhipu）与 OpenCode Go；
 // grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
 	if !a.IsOpenAI() && !a.IsCNProvider() && !a.IsOpenCodeGo() {
@@ -1393,8 +1382,6 @@ func (a *Account) GetOpenAIBaseURL() string {
 			return DefaultZhipuCodingBaseURL
 		}
 		return DefaultZhipuPayGBaseURL
-	case PlatformDeepseek:
-		return DefaultDeepseekBaseURL
 	case PlatformMiniMax:
 		return DefaultMiniMaxBaseURL
 	case PlatformOpenCodeGo:
@@ -1424,7 +1411,7 @@ func (a *Account) IsCodingPlan() bool {
 
 // GetAPIProtocol 返回国产供应商账号的上游 API 协议。存储于
 // credentials["api_protocol"]；缺失或与平台不匹配时回退 chat_completions
-// （与既有行为完全一致）。responses 协议仅 deepseek / kimi / minimax 支持（官方原生
+// （与既有行为完全一致）。responses 协议仅 kimi / minimax 支持（官方原生
 // Responses 端点，适配 Codex）；zhipu 无此端点。
 func (a *Account) GetAPIProtocol() string {
 	if a == nil || !a.IsMultiProtocolAPIKey() {
@@ -1449,14 +1436,14 @@ func (a *Account) GetAPIProtocol() string {
 }
 
 // SupportsNativeCNResponses 报告该国产供应商是否提供原生 Responses 端点。
-// DeepSeek 官方为 /responses（无 /v1）；Kimi 按量付费与 Coding Plan 均为
+// Kimi 按量付费与 Coding Plan 均为
 // /v1/responses（moonshot.cn / kimi.com/coding）；MiniMax 为 /v1/responses。
 func (a *Account) SupportsNativeCNResponses() bool {
 	if a == nil {
 		return false
 	}
 	switch a.Platform {
-	case PlatformDeepseek, PlatformKimi, PlatformMiniMax, PlatformOpenCodeGo:
+	case PlatformKimi, PlatformMiniMax, PlatformOpenCodeGo:
 		return true
 	default:
 		return false
@@ -1515,8 +1502,6 @@ func (a *Account) defaultCNProtocolBaseURL(protocol string) string {
 			return DefaultKimiPayGAnthropicBaseURL
 		case PlatformZhipu:
 			return DefaultZhipuAnthropicBaseURL
-		case PlatformDeepseek:
-			return DefaultDeepseekAnthropicBaseURL
 		case PlatformMiniMax:
 			return DefaultMiniMaxAnthropicBaseURL
 		case PlatformOpenCodeGo:
@@ -1534,8 +1519,6 @@ func (a *Account) defaultCNProtocolBaseURL(protocol string) string {
 				return DefaultZhipuCodingBaseURL
 			}
 			return DefaultZhipuPayGBaseURL
-		case PlatformDeepseek:
-			return DefaultDeepseekBaseURL
 		case PlatformMiniMax:
 			return DefaultMiniMaxBaseURL
 		case PlatformOpenCodeGo:
@@ -1574,8 +1557,6 @@ func (a *Account) GetAnthropicProtocolBaseURL() string {
 		return DefaultKimiPayGAnthropicBaseURL
 	case PlatformZhipu:
 		return DefaultZhipuAnthropicBaseURL
-	case PlatformDeepseek:
-		return DefaultDeepseekAnthropicBaseURL
 	case PlatformMiniMax:
 		return DefaultMiniMaxAnthropicBaseURL
 	case PlatformOpenCodeGo:
@@ -1605,8 +1586,6 @@ func (a *Account) GetOpenAIFormatBaseURL() string {
 			return DefaultZhipuCodingBaseURL
 		}
 		return DefaultZhipuPayGBaseURL
-	case PlatformDeepseek:
-		return DefaultDeepseekBaseURL
 	case PlatformMiniMax:
 		return DefaultMiniMaxBaseURL
 	case PlatformOpenCodeGo:
@@ -1616,7 +1595,7 @@ func (a *Account) GetOpenAIFormatBaseURL() string {
 	}
 }
 
-// GetCNAPIKey 返回国产 OpenAI 兼容供应商账号的 api_key 凭据（kimi/zhipu/deepseek）。
+// GetCNAPIKey 返回国产 OpenAI 兼容供应商账号的 api_key 凭据（kimi/zhipu）。
 // 与 openai 的 GetOpenAIApiKey 区分：后者仅对 openai 平台返回。
 func (a *Account) GetCNAPIKey() string {
 	if a == nil || !a.IsMultiProtocolAPIKey() {
@@ -1764,7 +1743,7 @@ func (a *Account) GetOpenAIApiKey() string {
 }
 
 // GetOpenAIProtocolAPIKey 返回 OpenAI 协议族 APIKey 账号的密钥。
-// 覆盖 openai 原生账号、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）
+// 覆盖 openai 原生账号、国产 OpenAI 兼容供应商（kimi/zhipu）
 // 以及 OpenCode Go 账号，供转发鉴权、模型列表同步等协议族共用路径使用。
 // 注意 IsOpenAIApiKey 语义上仅指 openai 平台账号，调度倍率/WS 能力门控
 // 继续以其为准，不受本方法影响。

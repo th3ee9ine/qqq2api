@@ -10,7 +10,7 @@ describe('custom API key provider filters', () => {
     expect(KEY_GROUP_PROVIDER_ICONS.other).toEqual(['anthropic', 'openai'])
   })
 
-  it.each(['gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'deepseek', 'minimax', 'opencode_go'] as const)(
+  it.each(['gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'minimax', 'opencode_go'] as const)(
     'keeps legacy %s groups out of the provider selector',
     (platform) => expect(getKeyGroupProvider(platform)).toBeNull()
   )
