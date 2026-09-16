@@ -340,8 +340,8 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 						Protocol:       proxy.Protocol,
 						Host:           proxy.Host,
 						Port:           proxy.Port,
-						Username:       proxy.Username,
-						Password:       proxy.Password,
+						Username:       &proxy.Username,
+						Password:       &proxy.Password,
 					}); updateErr != nil {
 						result.Errors = append(result.Errors, DataImportError{
 							Kind:     "proxy",
@@ -428,8 +428,8 @@ func (h *AccountHandler) importData(ctx context.Context, req DataImportRequest) 
 				Protocol:       created.Protocol,
 				Host:           created.Host,
 				Port:           created.Port,
-				Username:       created.Username,
-				Password:       created.Password,
+				Username:       &created.Username,
+				Password:       &created.Password,
 			}); updateErr != nil {
 				result.Errors = append(result.Errors, DataImportError{
 					Kind:     "proxy",

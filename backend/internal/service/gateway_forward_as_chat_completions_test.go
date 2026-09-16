@@ -75,8 +75,8 @@ func TestExtractCCReasoningEffortFromBody(t *testing.T) {
 		require.Equal(t, "xhigh", *got)
 	})
 
-	t.Run("DeepSeek max", func(t *testing.T) {
-		got := extractCCReasoningEffortFromBody([]byte(`{"model":"deepseek-v4-flash","reasoning_effort":"Max"}`))
+	t.Run("Compatible max", func(t *testing.T) {
+		got := extractCCReasoningEffortFromBody([]byte(`{"model":"glm-v4-flash","reasoning_effort":"Max"}`))
 		require.NotNil(t, got)
 		require.Equal(t, "max", *got)
 	})

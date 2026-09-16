@@ -19,7 +19,7 @@ func TestUpstreamBillingProbeIdentityCoversActiveAPIKeyPlatformsOnly(t *testing.
 		require.True(t, isUpstreamBillingProbeAccount(&Account{Platform: platform, Type: AccountTypeAPIKey}), platform)
 	}
 	for _, platform := range []string{
-		PlatformGrok, PlatformGemini, PlatformAntigravity, PlatformKimi, PlatformZhipu, PlatformDeepseek,
+		PlatformGrok, PlatformGemini, PlatformAntigravity, PlatformKimi, PlatformZhipu,
 	} {
 		require.False(t, IsUpstreamBillingProbeIdentity(platform, AccountTypeAPIKey), platform)
 		require.False(t, isUpstreamBillingProbeAccount(&Account{Platform: platform, Type: AccountTypeAPIKey}), platform)
@@ -166,7 +166,7 @@ func TestUpstreamBillingProbeOfficialAPIBaseURLIsUnsupportedWithoutRequest(t *te
 		{PlatformAnthropic, "https://api.moonshot.cn/v1"},
 		{PlatformAnthropic, "https://api.kimi.com/coding"},
 		{PlatformAnthropic, "https://open.bigmodel.cn/api/anthropic"},
-		{PlatformAnthropic, "https://api.deepseek.com/anthropic"},
+		{PlatformAnthropic, "https://api.moonshot.cn/anthropic"},
 	}
 	for i, tc := range cases {
 		account := &Account{
@@ -208,7 +208,9 @@ func TestUpstreamBillingProbeOfficialAPIHostMatchingIsNormalized(t *testing.T) {
 	require.True(t, upstreamBillingProbeTargetIsOfficialAPI("https://api.moonshot.cn/v1"))
 	require.True(t, upstreamBillingProbeTargetIsOfficialAPI("https://api.kimi.com/coding/v1"))
 	require.True(t, upstreamBillingProbeTargetIsOfficialAPI("https://open.bigmodel.cn/api/anthropic"))
-	require.True(t, upstreamBillingProbeTargetIsOfficialAPI("https://api.deepseek.com/anthropic"))
+	require.True(t, upstreamBillingProbeTargetIsOfficialAPI("https://api.moonshot.cn/anthropic"))
+	require.True(t, upstreamBillingProbeTargetIsOfficialAPI("https://opencode.ai/zen/go/v1"))
+	require.True(t, upstreamBillingProbeTargetIsOfficialAPI("https://opencode.ai/zen/go"))
 	// 相似但不同的注册域不拦：中转完全可能叫 *-x.ai 之外的任何名字。
 	require.False(t, upstreamBillingProbeTargetIsOfficialAPI("https://relay.example/v1"))
 	require.False(t, upstreamBillingProbeTargetIsOfficialAPI("https://notx.ai"))
@@ -221,7 +223,7 @@ func TestUpstreamBillingProbeOfficialAPIHostMatchingIsNormalized(t *testing.T) {
 	require.False(t, upstreamBillingProbeTargetIsOfficialAPI("https://moonshot.cn.evil.example/v1"))
 	require.False(t, upstreamBillingProbeTargetIsOfficialAPI("https://kimi.example/v1"))
 	require.False(t, upstreamBillingProbeTargetIsOfficialAPI("https://notbigmodel.cn"))
-	require.False(t, upstreamBillingProbeTargetIsOfficialAPI("https://deepseek.example.com"))
+	require.False(t, upstreamBillingProbeTargetIsOfficialAPI("https://compatible.example.com"))
 }
 
 // OpenAI 无自定义 base 时同样不请求官方域的不存在端点。

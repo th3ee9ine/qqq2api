@@ -35,7 +35,7 @@ func TestOpenAICompatibleTextTargetAllowsOnlyActiveOpenAI(t *testing.T) {
 		require.True(t, ok, "path=%s", path)
 		require.Equal(t, service.PlatformOpenAI, platform, "path=%s", path)
 
-		for _, model := range []string{"grok-4.3", "kimi-k2-thinking", "glm-5.2", "deepseek-v3.2", "gemini-2.5-flash"} {
+		for _, model := range []string{"grok-4.3", "kimi-k2-thinking", "glm-5.2", "glm-v3.2", "gemini-2.5-flash"} {
 			retiredCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			retiredCtx.Request = httptest.NewRequest("POST", path, nil)
 			require.False(t, openAICompatibleTextTargetAllowed(retiredCtx, apiKey, model), "path=%s model=%s", path, model)
@@ -46,7 +46,7 @@ func TestOpenAICompatibleTextTargetAllowsOnlyActiveOpenAI(t *testing.T) {
 func TestResponsesWebSocketCompositePlatformGuardKeepsOnlyOpenAI(t *testing.T) {
 	require.True(t, isResponsesWebSocketCompositePlatform(service.PlatformOpenAI))
 	for _, platform := range []string{
-		service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek,
+		service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu,
 		service.PlatformAnthropic, service.PlatformGemini,
 	} {
 		require.False(t, isResponsesWebSocketCompositePlatform(platform), "platform=%s", platform)

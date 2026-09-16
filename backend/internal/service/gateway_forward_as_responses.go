@@ -282,7 +282,7 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 	// Some Anthropic-compatible providers retain OpenAI-style prompt/cache
 	// fields. Prefer those authoritative totals or hit/miss buckets over the
 	// overloaded input_tokens field. This covers Kimi's changing stream
-	// semantics as well as GLM/DeepSeek cache aliases.
+	// semantics as well as GLM cache aliases.
 	if src.PromptTokens > 0 || src.PromptCacheHitTokens != nil || src.PromptCacheMissTokens != nil {
 		cacheReadTokens := src.CacheReadInputTokens
 		if cacheReadTokens == 0 && src.CachedTokens > 0 {

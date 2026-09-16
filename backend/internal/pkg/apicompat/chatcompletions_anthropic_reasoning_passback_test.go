@@ -8,14 +8,14 @@ import (
 )
 
 // issue #5528：/v1/messages 客户端(Claude Code 等)打到只会 Chat Completions 的
-// OpenAI 兼容上游时，历史 assistant 消息里的 thinking 块被整块丢弃。DeepSeek 的
+// OpenAI 兼容上游时，历史 assistant 消息里的 thinking 块被整块丢弃。Compatible 的
 // thinking mode 要求产生工具调用的 reasoning_content 随该 assistant 消息回传，
 // 于是「单轮正常、一进多轮工具对话必现 400」。
 
 func anthropicAssistantMsg(t *testing.T, blocks string) *AnthropicRequest {
 	t.Helper()
 	return &AnthropicRequest{
-		Model:     "deepseek-v4-flash",
+		Model:     "glm-v4-flash",
 		MaxTokens: 256,
 		Messages: []AnthropicMessage{
 			{Role: "user", Content: json.RawMessage(`"what's the weather?"`)},
@@ -44,7 +44,7 @@ func TestAnthropicToChatCompletionsRequest_ThinkingBecomesReasoningContentOnTool
 	}
 	require.NotNil(t, assistant, "assistant message must survive the bridge")
 	require.Equal(t, "user wants weather, call the tool", assistant.ReasoningContent,
-		"产生工具调用的 thinking 必须作为 reasoning_content 回传，否则 DeepSeek 400")
+		"产生工具调用的 thinking 必须作为 reasoning_content 回传，否则 Compatible 400")
 	require.Len(t, assistant.ToolCalls, 1)
 	require.Equal(t, `"checking"`, string(assistant.Content), "text/tool_use 处理保持不变")
 }
@@ -95,7 +95,7 @@ func TestAnthropicChatBridge_ReasoningSurvivesOutboundInboundRoundTrip(t *testin
 // 早就把 reasoning 挂到带 tool_calls 的 assistant 消息上了。等价历史下两条桥必须一致。
 func TestAnthropicChatBridge_MatchesResponsesChatBridgeReasoningPlacement(t *testing.T) {
 	responsesReq := &ResponsesRequest{
-		Model: "deepseek-v4-flash",
+		Model: "glm-v4-flash",
 		Input: json.RawMessage(`[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"what's the weather?"}]},
 			{"type":"reasoning","summary":[{"type":"summary_text","text":"call the tool"}]},
@@ -131,7 +131,7 @@ func TestAnthropicChatBridge_MatchesResponsesChatBridgeReasoningPlacement(t *tes
 // 工具调用回传)，避免把 reasoning_content 撒到不需要它的上游请求上。
 func TestAnthropicToChatCompletionsRequest_ThinkingWithoutToolCallsStaysDropped(t *testing.T) {
 	req := &AnthropicRequest{
-		Model:     "deepseek-v4-flash",
+		Model:     "glm-v4-flash",
 		MaxTokens: 100,
 		Messages: []AnthropicMessage{
 			{Role: "assistant", Content: json.RawMessage(

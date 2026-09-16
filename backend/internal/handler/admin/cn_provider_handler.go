@@ -8,10 +8,10 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
-// CNProviderHandler 暴露国产供应商（kimi/zhipu/deepseek）的额度与余额查询端点。
+// CNProviderHandler 暴露国产供应商（kimi/zhipu）的额度与余额查询端点。
 //
 //   - GET /admin/cn-providers/accounts/:id/quota   Coding Plan 滚动窗口用量（kimi/zhipu）
-//   - GET /admin/cn-providers/accounts/:id/balance  payg 账号余额（kimi/deepseek）
+//   - GET /admin/cn-providers/accounts/:id/balance  payg 账号余额（kimi）
 //
 // 智谱（zhipu）无余额端点，故同一账号仅 quota 或 balance 其一可用：服务端按账号
 // platform + account_mode 校验并返回明确错误（见 CNProvider*Service 的 load*Account）。

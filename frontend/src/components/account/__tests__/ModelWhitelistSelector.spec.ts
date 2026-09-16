@@ -219,4 +219,21 @@ describe('ModelWhitelistSelector', () => {
     expect(wrapper.emitted('upstream-synced')).toEqual([[]])
     expect(wrapper.emitted('update:modelValue')).toEqual([[['x-preview-f-free']]])
   })
+
+  it('does not expose upstream sync for retired OpenCode Go create-account credentials', () => {
+    const wrapper = mountSelector({
+      platform: 'opencode_go',
+      syncCredentials: {
+        platform: 'opencode_go',
+        type: 'apikey',
+        base_url: 'https://opencode.ai/zen/go/v1',
+        api_key: 'sk-test',
+      },
+    })
+    const syncButton = wrapper
+      .findAll('button')
+      .find(button => button.text() === 'admin.accounts.syncUpstreamModels')
+
+    expect(syncButton).toBeUndefined()
+  })
 })

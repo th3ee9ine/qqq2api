@@ -209,14 +209,14 @@ func TestToModelPlazaGroupDTO_TimePricing(t *testing.T) {
 	g := service.PlazaGroup{
 		ID: 4, Name: "cn", Platform: "deepseek", SubscriptionType: "standard", RateMultiplier: 1,
 		Models: []service.PlazaModel{{
-			Name:     "deepseek-chat",
+			Name:     "glm-chat",
 			Platform: "deepseek",
 			Pricing:  &service.ChannelModelPricing{BillingMode: service.BillingModeToken, InputPrice: testPtr(0.28e-6)},
 			TimePricing: &service.TimePricingSchedule{Timezone: "Asia/Shanghai", Periods: []service.TimePricingPeriod{
 				{StartTime: "00:30", EndTime: "08:30", Multiplier: 0.5},
 			}},
 		}, {
-			Name:     "deepseek-reasoner",
+			Name:     "glm-reasoner",
 			Platform: "deepseek",
 			Pricing:  &service.ChannelModelPricing{BillingMode: service.BillingModeToken, InputPrice: testPtr(0.56e-6)},
 			TimePricing: &service.TimePricingSchedule{Timezone: "Asia/Shanghai", WeekdaysOnly: true, Periods: []service.TimePricingPeriod{

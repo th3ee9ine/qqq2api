@@ -19,7 +19,7 @@ const accountTestSuppressCompletionContextKey = "account_test_suppress_completio
 
 // testCNProviderAdaptiveConnection verifies every native endpoint used by an
 // adaptive CN-provider account. Zhipu uses Chat Completions plus Anthropic;
-// DeepSeek and Kimi additionally use their native Responses endpoints.
+// Kimi additionally use their native Responses endpoints.
 func (s *AccountTestService) testCNProviderAdaptiveConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
 	testModelID := strings.TrimSpace(modelID)
 	if testModelID == "" {
@@ -85,6 +85,7 @@ func (s *AccountTestService) testCNProviderAdaptiveAnthropicConnection(c *gin.Co
 	// base_url 强制 Bearer，其余保持 extra/default 行为。
 	setAnthropicAPIKeyAuthHeader(req.Header, account, authToken, account.GetCNProtocolBaseURL(APIProtocolAnthropic))
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	resp, err := s.doCNProviderAdaptiveRequest(req, account)
 	if err != nil {
@@ -158,14 +159,14 @@ func (s *AccountTestService) testCNProviderAdaptiveResponsesConnection(c *gin.Co
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid adaptive Responses base URL: %s", err.Error()))
 	}
-	apiURL := buildOpenAIResponsesURLForPlatform(account.Platform, baseURL)
+	apiURL := buildOpenAIResponsesURL(baseURL)
 
 	payload := createOpenAITestPayload(testModelID, false)
-	// DeepSeek / Kimi native Responses endpoints are stateless and do not need
+	// Kimi native Responses endpoints are stateless and do not need
 	// the OpenAI probe's synthetic instructions.
 	delete(payload, "instructions")
 	payloadBytes, _ := json.Marshal(payload)
-	payloadBytes = normalizeDeepSeekResponsesRequestBody(account, payloadBytes)
+	payloadBytes = normalizeNativeCNResponsesRequestBody(account, payloadBytes)
 
 	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过原生 /responses 测试自适应 Responses 端点"})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
@@ -178,6 +179,7 @@ func (s *AccountTestService) testCNProviderAdaptiveResponsesConnection(c *gin.Co
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	applyOpenAICodexProbeHeaders(req.Header)
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	resp, err := s.doCNProviderAdaptiveRequest(req, account)
 	if err != nil {
@@ -266,6 +268,7 @@ func (s *AccountTestService) testCNProviderAnthropicConnection(c *gin.Context, a
 	// extra/default 行为。
 	setAnthropicAPIKeyAuthHeader(req.Header, account, authToken, account.GetAnthropicProtocolBaseURL())
 	account.ApplyHeaderOverrides(req.Header)
+	applyOpenCodeSessionHeader(c, account, apiURL, req.Header, payloadBytes)
 
 	resp, err := s.doCNProviderAdaptiveRequest(req, account)
 	if err != nil {

@@ -43,7 +43,7 @@ var cursorResponsesUnsupportedFields = []string{
 //
 // 历史背景：该函数原本对所有 OpenAI 账号无差别走 CC→Responses 转换 + /v1/responses
 // 端点——这在 OAuth（ChatGPT 内部 API 仅支持 Responses）和官方 APIKey 账号上是
-// 正确的，但 sub2api 接入 DeepSeek/Kimi/GLM 等第三方 OpenAI 兼容上游后假设破裂：
+// 正确的，但 sub2api 接入 Kimi/GLM 等第三方 OpenAI 兼容上游后假设破裂：
 // 这些上游普遍只支持 /v1/chat/completions，无 /v1/responses 端点。
 //
 // 当前路由策略：
@@ -71,6 +71,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defaultMappedModel string,
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
+	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -113,10 +114,44 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// accounts never forward the body unchanged to a Chat Completions endpoint.
 	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
 
+	// OpenCode Go：按模型原生协议分流（与 inbound 协议正交）。
+	// 规则未命中一律兜底 Chat Completions，只有显式 Responses 才走下方转换链。
+	if account.IsOpenCodeGo() {
+		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)
+		proto := openCodeGoNativeProtocol(account, mapped)
+		if proto != APIProtocolResponses {
+			if isResponsesShape {
+				if proto == APIProtocolAnthropic {
+					return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "")
+				}
+				var responsesReq apicompat.ResponsesRequest
+				if err := json.Unmarshal(body, &responsesReq); err != nil {
+					return nil, fmt.Errorf("parse responses-shaped chat completions request: %w", err)
+				}
+				chatReq, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(
+					&responsesReq,
+					&apicompat.ResponsesToChatOptions{ReasoningContentByID: s.reasoningContentByID},
+				)
+				if err != nil {
+					return nil, fmt.Errorf("convert responses-shaped chat completions request: %w", err)
+				}
+				chatBody, err := json.Marshal(chatReq)
+				if err != nil {
+					return nil, fmt.Errorf("marshal converted chat completions request: %w", err)
+				}
+				return s.forwardAsRawChatCompletions(ctx, c, account, chatBody, defaultMappedModel)
+			}
+			if proto == APIProtocolAnthropic {
+				return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel)
+			}
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+	}
+
 	// 自适应账号的标准 Chat Completions 入站使用供应商原生 CC 端点。
-	// Responses 形状下，DeepSeek / Kimi 继续走下方原生 Responses 链；GLM
+	// Responses 形状下，Kimi 继续走下方原生 Responses 链；GLM
 	// 没有 Responses 端点，先转换成 Chat Completions 再直转。
-	if account.IsAdaptiveAPIProtocol() {
+	if account.IsAdaptiveAPIProtocol() && !account.IsOpenCodeGo() {
 		if !isResponsesShape {
 			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 		}
@@ -138,7 +173,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			}
 			return s.forwardAsRawChatCompletions(ctx, c, account, chatBody, defaultMappedModel)
 		}
-		// DeepSeek / Kimi 原生 Responses 请求继续走下方 Responses→Chat 回程转换。
+		// Kimi 原生 Responses 请求继续走下方 Responses→Chat 回程转换。
 	}
 
 	// 入口分流（国产供应商 Anthropic 协议）：上游为供应商原生 Anthropic 端点，
@@ -154,6 +189,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
+	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 
 	startTime := time.Now()
 
@@ -376,6 +412,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			return s.forwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel, compatPromptCacheTenantIsolated)
 		}
 		if account.Type == AccountTypeAPIKey &&
+			!account.IsOpenCodeGo() &&
 			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
 			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {
 			logger.L().Info("openai chat_completions: /responses unsupported, falling back to raw chat completions",
@@ -399,6 +436,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	} else {
 		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
 	}
+	stampOpenAIResponsesUpstreamEndpoint(c, result)
 
 	// cyber_policy：标记已设、error 已按 Chat Completions 格式发给客户端。丢弃 result、
 	// 返回哨兵，使 handler 落入 tokens=0 免费用量行（对齐 /v1/responses），不计费、不 failover。

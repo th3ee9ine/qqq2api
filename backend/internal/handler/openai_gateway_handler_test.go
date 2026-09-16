@@ -2052,8 +2052,8 @@ func newOpenAIWSHandlerTestServer(t *testing.T, h *OpenAIGatewayHandler, subject
 
 type openAIResponsesWSUsageLogCase struct {
 	firstPayload string
-	// midPayload 在首个 turn 完成后发送（如 session.update），上游桩会为它
-	// 回一个 response.completed，客户端按普通事件读取。
+	// midPayload 在首个 turn 完成后发送 session.update；上游桩返回
+	// session.updated，该控制帧不产生计费用量。
 	midPayload                string
 	secondPayload             string
 	userAgent                 *string
@@ -3146,13 +3146,14 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	gin.SetMode(gin.TestMode)
 
 	turnCount := 1
-	if strings.TrimSpace(tc.midPayload) != "" {
-		turnCount++
-	}
 	if strings.TrimSpace(tc.secondPayload) != "" {
 		turnCount++
 	}
-	upstreamPayloadCh := make(chan []byte, turnCount)
+	frameCount := turnCount
+	if strings.TrimSpace(tc.midPayload) != "" {
+		frameCount++
+	}
+	upstreamPayloadCh := make(chan []byte, frameCount)
 	upstreamErrCh := make(chan error, 1)
 	var channelSvc *service.ChannelService
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -3167,7 +3168,9 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			_ = conn.CloseNow()
 		}()
 
-		for turn := 1; turn <= turnCount; turn++ {
+		turn := 0
+		sessionModel := ""
+		for frame := 1; frame <= frameCount; frame++ {
 			readCtx, cancelRead := context.WithTimeout(r.Context(), 3*time.Second)
 			msgType, payload, readErr := conn.Read(readCtx)
 			cancelRead()
@@ -3180,18 +3183,27 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 				return
 			}
 			upstreamPayloadCh <- payload
-			if turn == 1 && tc.afterFirstUpstreamRequest != nil {
+			if frame == 1 && tc.afterFirstUpstreamRequest != nil {
 				if callbackErr := tc.afterFirstUpstreamRequest(channelSvc); callbackErr != nil {
 					upstreamErrCh <- callbackErr
 					return
 				}
 			}
 
-			response := fmt.Sprintf(
-				`{"type":"response.completed","response":{"id":"resp_usage_e2e_%d","model":%q,"usage":{"input_tokens":2,"output_tokens":1}}}`,
-				turn,
-				gjson.GetBytes(payload, "model").String(),
-			)
+			var response string
+			if gjson.GetBytes(payload, "type").String() == "session.update" {
+				sessionModel = gjson.GetBytes(payload, "session.model").String()
+				response = fmt.Sprintf(`{"type":"session.updated","session":{"model":%q}}`, sessionModel)
+			} else {
+				turn++
+				if model := gjson.GetBytes(payload, "model").String(); model != "" {
+					sessionModel = model
+				}
+				response = fmt.Sprintf(
+					`{"type":"response.completed","response":{"id":"resp_usage_e2e_%d","model":%q,"usage":{"input_tokens":2,"output_tokens":1}}}`,
+					turn, sessionModel,
+				)
+			}
 			writeCtx, cancelWrite := context.WithTimeout(r.Context(), 3*time.Second)
 			writeErr := conn.Write(writeCtx, coderws.MessageText, []byte(response))
 			cancelWrite()
@@ -3351,21 +3363,23 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 	}
 
 	clientEvents := make([][]byte, 0, turnCount)
-	readCompleted := func() {
+	readEvent := func(eventType string) {
 		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 		_, event, readErr := clientConn.Read(readCtx)
 		cancelRead()
 		require.NoError(t, readErr)
-		require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
-		clientEvents = append(clientEvents, append([]byte(nil), event...))
+		require.Equal(t, eventType, gjson.GetBytes(event, "type").String())
+		if eventType == "response.completed" {
+			clientEvents = append(clientEvents, append([]byte(nil), event...))
+		}
 	}
-	readCompleted()
+	readEvent("response.completed")
 	if tc.midPayload != "" {
 		writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
 		err = clientConn.Write(writeCtx, coderws.MessageText, []byte(tc.midPayload))
 		cancelWrite()
 		require.NoError(t, err)
-		readCompleted()
+		readEvent("session.updated")
 	}
 	if strings.TrimSpace(tc.secondPayload) != "" && (turnCount >= 2) {
 		writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
@@ -3384,7 +3398,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			_ = clientConn.CloseNow()
 			return openAIResponsesWSUsageLogResult{}
 		}
-		readCompleted()
+		readEvent("response.completed")
 	}
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
@@ -3399,8 +3413,8 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		}
 	}
 
-	upstreamPayloads := make([][]byte, 0, turnCount)
-	for len(upstreamPayloads) < turnCount {
+	upstreamPayloads := make([][]byte, 0, frameCount)
+	for len(upstreamPayloads) < frameCount {
 		select {
 		case payload := <-upstreamPayloadCh:
 			upstreamPayloads = append(upstreamPayloads, payload)

@@ -7,10 +7,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRemovedProviderHasNoBuiltinCapabilities(t *testing.T) {
+	account := &Account{Platform: "deepseek", Type: AccountTypeAPIKey}
+	require.False(t, account.IsCNProvider())
+	require.False(t, account.SupportsNativeCNResponses())
+	require.Empty(t, account.GetOpenAIBaseURL())
+	require.Empty(t, account.GetAnthropicProtocolBaseURL())
+	require.Empty(t, cnBalanceURL(account))
+
+	billing := NewBillingService(nil, nil)
+	for _, model := range []string{"deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"} {
+		_, detected := DetectModelPlatform(model)
+		require.False(t, detected, model)
+		require.False(t, isOpenAIOAuthServableModel(model), model)
+		require.Equal(t, ThinkingProtocolUnknown, ResolveThinkingProtocol(model), model)
+		_, err := billing.GetModelPricing(model)
+		require.ErrorIs(t, err, ErrModelPricingUnavailable, model)
+	}
+}
+
 func TestRetiredPlatformsAreNotActive(t *testing.T) {
 	for _, platform := range []string{
 		PlatformGemini, PlatformAntigravity, PlatformGrok,
-		PlatformKimi, PlatformZhipu, PlatformDeepseek,
+		PlatformKimi, PlatformZhipu, "deepseek",
 	} {
 		require.True(t, IsRetiredPlatform(platform), platform)
 		require.False(t, IsActiveAccountPlatform(platform), platform)
@@ -38,7 +57,7 @@ func TestRetiredPlatformsAreNotActive(t *testing.T) {
 
 func TestGatewayAccessTokenRejectsRetiredPlatforms(t *testing.T) {
 	svc := &GatewayService{}
-	for _, platform := range []string{PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, "GLM"} {
+	for _, platform := range []string{PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, "deepseek", "GLM"} {
 		token, tokenType, err := svc.GetAccessToken(context.Background(), &Account{
 			Platform:    platform,
 			Type:        AccountTypeAPIKey,

@@ -13,7 +13,7 @@ Credentials below are named by config key or env var only.
 
 ### Upstream AI providers (the gateway's reason for existing)
 
-Platform identifiers are defined in `backend/internal/domain/constants.go` (`PlatformAnthropic`, `PlatformOpenAI`, `PlatformGemini`, `PlatformAntigravity`, `PlatformGrok`, `PlatformKimi`, `PlatformZhipu`, `PlatformDeepseek`, `PlatformComposite`). Credentials are stored per-account in the `accounts` table, not in config.
+Platform identifiers are defined in `backend/internal/domain/constants.go` (`PlatformAnthropic`, `PlatformOpenAI`, `PlatformGemini`, `PlatformAntigravity`, `PlatformGrok`, `PlatformKimi`, `PlatformZhipu`, `PlatformComposite`). Credentials are stored per-account in the `accounts` table, not in config.
 
 | Provider | Default base URL | Where defined |
 |----------|------------------|---------------|
@@ -27,7 +27,6 @@ Platform identifiers are defined in `backend/internal/domain/constants.go` (`Pla
 | Grok accounts/OAuth | `https://accounts.x.ai` | `backend/internal/repository/grok_oauth_client.go:29` |
 | Kimi / Moonshot | PayG `https://api.moonshot.cn/v1`, Coding `https://api.kimi.com/coding/v1`, Anthropic-protocol variants | `backend/internal/service/domain_constants.go:73-85` |
 | Zhipu GLM | PayG `https://open.bigmodel.cn/api/paas/v4`, Coding `https://open.bigmodel.cn/api/coding/paas/v4` | `backend/internal/service/domain_constants.go:75-76` |
-| DeepSeek | `https://api.deepseek.com` (+ `/anthropic`) | `backend/internal/service/domain_constants.go:77` |
 | AWS Bedrock | SigV4 or API key, per `credentials.auth_mode` | `AccountTypeBedrock` in `backend/internal/domain/constants.go` |
 | Google Vertex AI | service account credentials | `AccountTypeServiceAccount`; `backend/internal/service/batch_image_provider_vertex.go` |
 | Azure OpenAI | `*.openai.azure.com` (allowlisted) | `security.url_allowlist.upstream_hosts` |

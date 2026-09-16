@@ -1255,10 +1255,11 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 		reqBody["tool_choice"] = map[string]any{"type": "image_generation"}
 		modified = true
 	}
-	if imageModel != openAIImagesResponsesMainModel {
+	mainModel := openAIImagesResponsesMainModelValue()
+	if imageModel != mainModel {
 		modified = true
 	}
-	reqBody["model"] = openAIImagesResponsesMainModel
+	reqBody["model"] = mainModel
 	return modified
 }
 
@@ -1266,7 +1267,8 @@ func normalizeOpenAIModelForUpstream(account *Account, model string) string {
 	if account == nil || account.UsesOpenAICodexProtocol() {
 		return normalizeCodexModel(model)
 	}
-	return strings.TrimSpace(model)
+	model = strings.TrimSpace(model)
+	return model
 }
 
 func SupportsVerbosity(model string) bool {

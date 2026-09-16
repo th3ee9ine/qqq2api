@@ -110,8 +110,6 @@ func DetectModelPlatform(model string) (string, bool) {
 			return PlatformKimi, true
 		case "zhipu", "glm", "bigmodel":
 			return PlatformZhipu, true
-		case "deepseek":
-			return PlatformDeepseek, true
 		case "minimax":
 			return PlatformMiniMax, true
 		}
@@ -148,8 +146,6 @@ func DetectModelPlatform(model string) (string, bool) {
 		return PlatformKimi, true
 	case strings.HasPrefix(normalized, "glm-"):
 		return PlatformZhipu, true
-	case strings.HasPrefix(normalized, "deepseek-"):
-		return PlatformDeepseek, true
 	case strings.HasPrefix(normalized, "minimax-"),
 		strings.HasPrefix(normalized, "abab5"),
 		strings.HasPrefix(normalized, "abab6"),

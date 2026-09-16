@@ -260,7 +260,6 @@ func loadCodexGroupCatalogAccounts(ctx context.Context, repo AccountRepository, 
 			PlatformGrok,
 			PlatformKimi,
 			PlatformZhipu,
-			PlatformDeepseek,
 			PlatformMiniMax,
 		},
 		false,
@@ -334,7 +333,6 @@ const (
 	configuredCodexModelPriority       = 50
 	configuredCodexCustomDescription   = "Custom model routed through Sub2API."
 	configuredCodexFallbackContext     = 272_000
-	configuredCodexDeepSeekV4Context   = 1_000_000
 	configuredCodexGrokContext         = 500_000
 	configuredCodexGrokBuildContext    = 256_000
 	configuredCodexGPT56MaxContext     = 872_000
@@ -453,21 +451,6 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 		EffectiveContextWindowPercent:     95,
 		ExperimentalSupportedTools:        []string{},
 		InputModalities:                   []string{"text"},
-	}
-
-	if isDeepSeekCodexModel(modelID) {
-		defaultReasoningLevel := "high"
-		descriptor.DisplayName = deepSeekCodexDisplayName(modelID)
-		descriptor.Description = "DeepSeek coding and reasoning model routed through Sub2API."
-		descriptor.DefaultReasoningLevel = &defaultReasoningLevel
-		descriptor.SupportedReasoningLevels = []configuredCodexReasoningLevel{
-			{Effort: "low", Description: "Fast responses with lighter reasoning"},
-			{Effort: "high", Description: "Greater reasoning depth for coding and agent tasks"},
-			{Effort: "max", Description: "Maximum reasoning depth for complex tasks"},
-		}
-		descriptor.SupportsParallelToolCalls = true
-		descriptor.ContextWindow = configuredCodexDeepSeekV4Context
-		descriptor.MaxContextWindow = configuredCodexDeepSeekV4Context
 	}
 
 	if isGrokCodexModel(modelID) {
@@ -693,21 +676,6 @@ func openaiCodexDisplayName(modelID string) string {
 		}
 	}
 	return modelID
-}
-
-func deepSeekCodexDisplayName(modelID string) string {
-	switch strings.ToLower(strings.TrimSpace(modelID)) {
-	case "deepseek-v4-pro", "deepseek-4-pro":
-		return "DeepSeek V4 Pro"
-	case "deepseek-v4-flash", "deepseek-4-flash":
-		return "DeepSeek V4 Flash"
-	default:
-		return modelID
-	}
-}
-
-func isDeepSeekCodexModel(modelID string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelID)), "deepseek-")
 }
 
 func isGrokCodexModel(modelID string) bool {
@@ -1226,7 +1194,7 @@ func accountCodexModelSupportsImageInput(account *Account, upstreamModel string)
 				return stringSliceContains(modalities, "image")
 			}
 		}
-		if !isOpenAICodexImageInputModel(upstreamModel) {
+		if account.Platform != PlatformOpenAI || !isOpenAICodexImageInputModel(upstreamModel) {
 			return false
 		}
 		if account.IsOpenAIOAuth() {
@@ -1280,12 +1248,6 @@ func isOfficialGrokCodexBaseURL(raw string) bool {
 		return false
 	}
 	return xai.IsOfficialBaseURLHost(strings.TrimSuffix(parsed.Hostname(), "."))
-}
-
-// BuildDeepSeekCodexModelsManifest preserves the historical entry point for
-// callers that still use the provider-specific function name.
-func BuildDeepSeekCodexModelsManifest(modelIDs []string) ([]byte, error) {
-	return BuildCodexModelsManifest(modelIDs)
 }
 
 func mergeConfiguredCodexModelsManifest(
@@ -2357,7 +2319,7 @@ func completeAPIKeyCodexModelsManifestMetadata(body []byte, completeAll bool, ac
 			continue
 		}
 
-		completeDescriptor := completeAll || isDeepSeekCodexModel(slug)
+		completeDescriptor := completeAll
 		forceOfficialImage := officialOpenAI && isOpenAICodexImageInputModel(slug)
 		if !completeDescriptor && !forceOfficialImage {
 			continue

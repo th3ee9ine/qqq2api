@@ -1333,7 +1333,7 @@ func TestNormalizeChineseLLMThinking(t *testing.T) {
 			wantApplied:   false,
 			wantUnchanged: true,
 		},
-		// Non-MiniMax Chinese LLMs: no-op (Kimi/GLM/DeepSeek accept enabled as-is)
+		// Non-MiniMax Chinese LLMs: no-op (Kimi/GLM/Compatible accept enabled as-is)
 		{
 			name:          "kimi k2.6 with enabled left alone",
 			model:         "kimi-k2.6",
@@ -1349,9 +1349,9 @@ func TestNormalizeChineseLLMThinking(t *testing.T) {
 			wantUnchanged: true,
 		},
 		{
-			name:          "deepseek v4-pro with enabled left alone",
-			model:         "deepseek-v4-pro",
-			input:         `{"model":"deepseek-v4-pro","thinking":{"type":"enabled"},"messages":[]}`,
+			name:          "compatible v4-pro with enabled left alone",
+			model:         "custom-reasoning-model",
+			input:         `{"model":"custom-reasoning-model","thinking":{"type":"enabled"},"messages":[]}`,
 			wantApplied:   false,
 			wantUnchanged: true,
 		},
@@ -1410,11 +1410,6 @@ func TestDefaultEffortForThinkingEnabled(t *testing.T) {
 		{name: "minimax-m3 (lowercase)", model: "minimax-m3", want: strPtr("high")},
 		{name: "MiniMax-M3 (mixed case)", model: "MiniMax-M3", want: strPtr("high")},
 		{name: "qwen3-thinking variant", model: "qwen3-235b-a22b-thinking-2507", want: strPtr("high")},
-
-		// DeepSeek 有原生 effort 支持→不注入默认，让客户端意图透传
-		{name: "deepseek-v4-pro excluded", model: "deepseek-v4-pro", want: nil},
-		{name: "deepseek-v4-flash excluded", model: "deepseek-v4-flash", want: nil},
-		{name: "deepseek-chat excluded", model: "deepseek-chat", want: nil},
 
 		// 非 passback-required 模型一律返回 nil
 		{name: "claude opus 4.6 (anthropic-strict)", model: "claude-opus-4.6-20260201", want: nil},
@@ -1476,10 +1471,10 @@ func TestApplyThinkingEnabledFallback(t *testing.T) {
 			wantPassThr: true,
 		},
 		{
-			name:        "existing low effort kept for deepseek",
+			name:        "existing low effort kept for compatible",
 			effort:      strPtr("low"),
 			body:        `{"thinking":{"type":"enabled"}}`,
-			model:       "deepseek-v4-pro",
+			model:       "custom-reasoning-model",
 			wantPassThr: true,
 		},
 
@@ -1524,10 +1519,10 @@ func TestApplyThinkingEnabledFallback(t *testing.T) {
 
 		// effort=nil + thinking enabled + non-passback → nil
 		{
-			name:   "deepseek + thinking enabled -> nil (deepseek excluded)",
+			name:   "unknown model + thinking enabled -> nil",
 			effort: nil,
 			body:   `{"thinking":{"type":"enabled"}}`,
-			model:  "deepseek-v4-pro",
+			model:  "custom-reasoning-model",
 			want:   nil,
 		},
 		{
@@ -1637,8 +1632,8 @@ func TestNormalizeGLMOpenAIReasoningEffort(t *testing.T) {
 		},
 		{
 			name:          "non glm unchanged",
-			model:         "deepseek-v4-pro",
-			input:         `{"model":"deepseek-v4-pro","reasoning_effort":"xhigh","messages":[]}`,
+			model:         "custom-reasoning-model",
+			input:         `{"model":"custom-reasoning-model","reasoning_effort":"xhigh","messages":[]}`,
 			wantApplied:   false,
 			wantUnchanged: true,
 		},

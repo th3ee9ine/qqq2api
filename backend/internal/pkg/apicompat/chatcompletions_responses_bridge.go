@@ -24,7 +24,7 @@ type ResponsesToChatOptions struct {
 	// ReasoningContentByID looks up the cached reasoning text for a reasoning
 	// item id. Codex histories may carry reasoning items with no plaintext
 	// summary (empty summary + opaque encrypted_content, e.g. after remote
-	// compaction); DeepSeek's thinking mode rejects such histories with 400
+	// compaction); Strict reasoning mode rejects such histories with 400
 	// "The `reasoning_content` in the thinking mode must be passed back to the
 	// API". The gateway caches the reasoning text it streamed under the item
 	// id, so the lookup restores the reasoning_content the client can no
@@ -299,7 +299,7 @@ func HasToolSearchTool(tools []ResponsesTool) bool {
 //	          assistant message that produced a tool call, merging parallel tool
 //	          calls into one assistant message, and skipping item types that have
 //	          no Chat equivalent
-//	normalize — normalizeChatMessages enforces the invariants DeepSeek requires
+//	normalize — normalizeChatMessages enforces the invariants strict upstreams require
 //
 // The build + normalize split keeps every protocol rule in one place rather than
 // scattered across per-item cases, and makes unknown future codex item types
@@ -339,23 +339,79 @@ func responsesInputToChatMessagesWithOptions(instructions string, inputRaw json.
 	if err != nil {
 		return nil, err
 	}
-	return normalizeChatMessagesWithToolOutputMedia(built, mediaByCallID), nil
+	normalized := normalizeChatMessagesWithToolOutputMedia(built, mediaByCallID)
+	return normalizeResponsesDerivedChatMessageRoles(normalized), nil
+}
+
+// normalizeResponsesDerivedChatMessageRoles rewrites the Chat Completions
+// message list produced by the Responses bridge so that strict upstreams which
+// only accept system content at the very start of the conversation accept it.
+//
+// The bridge turns the Responses `instructions` field and every role:"developer"
+// item into a system message. Codex always sends both instructions and a leading
+// developer item, and it also injects developer notices into the middle of the
+// message history (for example when the user switches models). Forwarded as-is
+// that produces two leading system messages and mid-conversation system
+// messages, which Qwen-family upstreams reject with
+// "System message must be at the beginning." (HTTP 400).
+//
+// Leading system/developer messages are therefore merged into a single leading
+// system message, while later ones keep their position but are downgraded to
+// user messages so the same text still reaches the model.
+func normalizeResponsesDerivedChatMessageRoles(messages []ChatMessage) []ChatMessage {
+	isInstructionRole := func(role string) bool {
+		return role == "system" || role == "developer"
+	}
+
+	leading := 0
+	for leading < len(messages) && isInstructionRole(messages[leading].Role) {
+		leading++
+	}
+
+	out := make([]ChatMessage, 0, len(messages))
+	switch leading {
+	case 0:
+		// No leading instructions, nothing to merge.
+	case 1:
+		// A single leading prompt is already valid; keep its content byte for
+		// byte instead of round-tripping it through the text merge below.
+		out = append(out, messages[0])
+	default:
+		merged := make([]string, 0, leading)
+		for _, m := range messages[:leading] {
+			if text := strings.TrimSpace(chatMessageContentText(m.Content)); text != "" {
+				merged = append(merged, text)
+			}
+		}
+		if len(merged) > 0 {
+			content, _ := json.Marshal(strings.Join(merged, "\n\n"))
+			out = append(out, ChatMessage{Role: "system", Content: content})
+		}
+	}
+
+	for _, m := range messages[leading:] {
+		if isInstructionRole(m.Role) {
+			m.Role = "user"
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // buildChatMessagesFromItems walks the Responses input items and appends the
 // corresponding Chat messages.
 func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessage, opts *ResponsesToChatOptions) ([]ChatMessage, toolOutputMediaByCallID, error) {
 	// pendingReasoning holds the reasoning text from a reasoning item until the
-	// assistant message it belongs to is emitted. DeepSeek's thinking mode
+	// assistant message it belongs to is emitted. Strict reasoning mode
 	// requires the reasoning_content that produced a tool call to be passed back
 	// on that assistant message; dropping it yields a 400. It only survives
 	// across an assistant message (so a following tool call in the same turn
 	// still receives it); any other role ends the thinking span.
 	var pendingReasoning string
 	// lastTurnReasoning is the most recent reasoning text of the current turn,
-	// surviving tool outputs. DeepSeek emits reasoning only once per turn, so
+	// surviving tool outputs. Some upstreams emit reasoning only once per turn, so
 	// chained tool calls (reasoning → call A → output A → call B) leave call B's
-	// assistant message without reasoning_content and DeepSeek 400s the history;
+	// assistant message without reasoning_content and strict upstreams reject the history;
 	// replaying the turn's reasoning on B's message satisfies the contract. Only
 	// a user-side item ends the turn and clears it.
 	var lastTurnReasoning string
@@ -523,6 +579,21 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 			})
 			pendingReasoning = ""
 			continue
+		case "agent_message":
+			// Codex multi_agent_v2 用 agent_message 在父线程与子智能体之间传递任务和回复：
+			// input_text 是信封（消息类型、任务名、发送者），正文放在 encrypted_content 片段里
+			// （自定义 provider 下为明文）。chat 上游没有对应条目，按原顺序拼成一条 user 消息，
+			// 否则子智能体收不到任务却仍返回 200。
+			text := agentMessageText(item["content"])
+			if text == "" {
+				pendingReasoning = ""
+				continue
+			}
+			content, _ := json.Marshal(text)
+			messages = append(messages, ChatMessage{Role: "user", Content: content})
+			pendingReasoning = ""
+			lastTurnReasoning = ""
+			continue
 		case "input_text", "text":
 			content, _ := json.Marshal(rawString(item["text"]))
 			messages = append(messages, ChatMessage{Role: "user", Content: content})
@@ -544,7 +615,7 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 		// Responses item types with no Chat equivalent (web_search_call,
 		// local_shell_call, file_search_call, ...). Converting them via the
 		// generic path would insert a spurious message between an assistant
-		// tool_calls message and its tool reply, which DeepSeek rejects
+		// tool_calls message and its tool reply, which strict upstreams reject
 		// ("insufficient tool messages following tool_calls message"). Skip them.
 		if itemType != "" && itemType != "message" {
 			pendingReasoning = ""
@@ -562,7 +633,7 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 			return nil, nil, err
 		}
 		msg := ChatMessage{Role: role, Content: chatContent}
-		// DeepSeek thinking mode requires the reasoning_content from a prior
+		// Strict reasoning mode requires the reasoning_content from a prior
 		// reasoning-only / plain-text assistant turn to be passed back on its
 		// assistant message; dropping it yields 400 "The `reasoning_content` in
 		// the thinking mode must be passed back to the API" on the next turn.
@@ -580,6 +651,32 @@ func buildChatMessagesFromItems(messages []ChatMessage, rawItems []json.RawMessa
 	}
 
 	return messages, mediaByCallID, nil
+}
+
+// agentMessageText 按原顺序拼接 agent_message 里 input_text 与 encrypted_content 片段的文本。
+func agentMessageText(raw json.RawMessage) string {
+	raw = bytesTrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		switch rawString(part["type"]) {
+		case "input_text", "text":
+			_, _ = b.WriteString(rawString(part["text"]))
+		case "encrypted_content":
+			_, _ = b.WriteString(rawString(part["encrypted_content"]))
+		}
+	}
+	return b.String()
 }
 
 // extractToolOutputMedia rewrites only recognized image nodes. Media-free
@@ -736,7 +833,7 @@ func appendAssistantToolCall(messages []ChatMessage, toolCall ChatToolCall, pend
 }
 
 // normalizeChatMessages is the single place that enforces the tool-call
-// invariant the DeepSeek / OpenAI Chat Completions schema requires: an assistant
+// invariant the OpenAI Chat Completions schema requires: an assistant
 // message with tool_calls must be immediately followed by one tool message per
 // tool_call_id, in order, with nothing in between.
 //
@@ -1478,7 +1575,7 @@ type ChatCompletionsToResponsesStreamState struct {
 	// the order of items in the final response.output array.
 	nextOutputIndex int
 
-	// Reasoning item lifecycle. DeepSeek-style upstreams stream all
+	// Reasoning item lifecycle. OpenAI-compatible upstreams stream all
 	// reasoning_content before any content, so reasoning is modeled as its own
 	// "reasoning" output item that must be opened (output_item.added) before any
 	// reasoning delta and closed before the message/tool items open.

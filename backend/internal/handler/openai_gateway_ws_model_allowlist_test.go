@@ -169,11 +169,21 @@ func TestOpenAIResponsesWebSocket_SessionUpdateRotationBypassRejected(t *testing
 func TestOpenAIResponsesWebSocket_SessionUpdateToAllowedModelStillWorks(t *testing.T) {
 	got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
 		firstPayload:  `{"type":"response.create","model":"gpt-5.4","stream":false}`,
-		midPayload:    `{"type":"session.update","session":{"model":"gpt-5.4"}}`,
+		midPayload:    `{"type":"session.update","session":{"model":"gpt-5.5"}}`,
 		secondPayload: `{"type":"response.create","stream":false}`,
-		group:         wsAllowlistGroup(true, "gpt-5.4"),
+		group:         wsAllowlistGroup(true, "gpt-5.4", "gpt-5.5"),
 	})
-	if len(got.clientEvents) < 2 {
-		t.Fatalf("expected at least two completed events, got %d", len(got.clientEvents))
+	if len(got.clientEvents) != 2 || len(got.logs) != 2 || len(got.upstreamPayloads) != 3 {
+		t.Fatalf("expected two billed turns and three upstream frames, got events=%d logs=%d frames=%d", len(got.clientEvents), len(got.logs), len(got.upstreamPayloads))
+	}
+	// Usage persistence is asynchronous; identify turns by response ID instead
+	// of assuming that their writes finish in request order.
+	wantModels := map[string]string{"resp_usage_e2e_1": "gpt-5.4", "resp_usage_e2e_2": "gpt-5.5"}
+	for _, log := range got.logs {
+		want, ok := wantModels[log.RequestID]
+		if !ok || log.RequestedModel != want {
+			t.Fatalf("unexpected turn usage: response=%q model=%q, expected remaining models=%v", log.RequestID, log.RequestedModel, wantModels)
+		}
+		delete(wantModels, log.RequestID)
 	}
 }

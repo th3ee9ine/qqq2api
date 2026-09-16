@@ -144,7 +144,7 @@ func TestCRSSyncSkipsRetiredGeminiCollections(t *testing.T) {
 					{"kind": "claude", "id": "retired-in-claude", "name": "Retired in Claude", "platform": "antigravity", "authType": "oauth", "credentials": map[string]any{"access_token": "legacy"}},
 				},
 				"claudeConsoleAccounts": []map[string]any{
-					{"kind": "claude-console", "id": "retired-in-console", "name": "Retired in Console", "platform": "deepseek", "credentials": map[string]any{"api_key": "legacy"}},
+					{"kind": "claude-console", "id": "retired-in-console", "name": "Retired in Console", "platform": "kimi", "credentials": map[string]any{"api_key": "legacy"}},
 				},
 				"openaiOAuthAccounts": []map[string]any{
 					{"kind": "openai-oauth", "id": "retired-in-openai-oauth", "name": "Retired in OpenAI OAuth", "platform": "grok", "credentials": map[string]any{"access_token": "legacy"}},

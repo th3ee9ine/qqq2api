@@ -1,6 +1,10 @@
 package service
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
+)
 
 func TestResolveOpenAIForwardModel(t *testing.T) {
 	tests := []struct {
@@ -296,11 +300,14 @@ func TestResolveOpenAIForwardMappedModels_CompactMappingPrecedence(t *testing.T)
 }
 
 func TestCanonicalOpenAIAccountSchedulingModelMatchesForwardSemantics(t *testing.T) {
+	original := xai.RuntimeModelMappingOptions()
+	t.Cleanup(func() { xai.SetRuntimeModelMappingOptions(original) })
 	tests := []struct {
-		name    string
-		account *Account
-		model   string
-		want    string
+		name        string
+		account     *Account
+		model       string
+		want        string
+		grokOptions xai.ModelMappingOptions
 	}{
 		{
 			name:    "OpenAI OAuth applies Codex alias normalization",
@@ -322,10 +329,18 @@ func TestCanonicalOpenAIAccountSchedulingModelMatchesForwardSemantics(t *testing
 			model:   "gpt-5.6",
 			want:    "gpt-5.6",
 		},
+		{
+			name:        "Grok OAuth honors enabled cross-client mapping",
+			account:     &Account{Platform: PlatformGrok, Type: AccountTypeOAuth},
+			model:       "gpt-5.6",
+			want:        "grok-4.6",
+			grokOptions: xai.ModelMappingOptions{EnableCrossClientMap: true},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			xai.SetRuntimeModelMappingOptions(tt.grokOptions)
 			if got := canonicalOpenAIAccountSchedulingModel(tt.account, tt.model); got != tt.want {
 				t.Fatalf("canonical scheduling model = %q, want %q", got, tt.want)
 			}
@@ -428,6 +443,18 @@ func TestNormalizeOpenAIModelForUpstream(t *testing.T) {
 			account: &Account{Type: AccountTypeAPIKey},
 			model:   "gpt-4.1",
 			want:    "gpt-4.1",
+		},
+		{
+			name:    "compatible preserves plain model",
+			account: &Account{Type: AccountTypeAPIKey, Platform: PlatformKimi},
+			model:   "glm-flash",
+			want:    "glm-flash",
+		},
+		{
+			name:    "non compatible preserves long context suffix",
+			account: &Account{Type: AccountTypeAPIKey, Platform: PlatformOpenAI},
+			model:   "glm-flash[1m]",
+			want:    "glm-flash[1m]",
 		},
 	}
 

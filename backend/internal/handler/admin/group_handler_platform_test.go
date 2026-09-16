@@ -86,3 +86,8 @@ func TestCompositeRouteTargetPlatform_AllowsOnlyActiveProviders(t *testing.T) {
 		require.Error(t, bindGroupPlatformJSON(t, &req, body), "platform=%s", platform)
 	}
 }
+
+func TestCompositeRouteTargetPlatform_RejectsComposite(t *testing.T) {
+	var req CompositeRouteRequest
+	require.Error(t, bindGroupPlatformJSON(t, &req, `{"public_model":"m","target_platform":"composite"}`))
+}

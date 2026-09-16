@@ -48,7 +48,7 @@
                 v-model="filters.protocol"
                 :options="protocolOptions"
                 :placeholder="t('admin.proxies.allProtocols')"
-                @change="loadProxies"
+                @change="handleFilterChange"
               />
             </div>
             <div class="min-w-0 flex-[1_1_120px] sm:max-w-36">
@@ -56,7 +56,7 @@
                 v-model="filters.status"
                 :options="statusOptions"
                 :placeholder="t('admin.proxies.allStatus')"
-                @change="loadProxies"
+                @change="handleFilterChange"
               />
             </div>
 
@@ -1426,6 +1426,11 @@ const loadProxies = async () => {
   }
 }
 
+const handleFilterChange = () => {
+  pagination.page = 1
+  loadProxies()
+}
+
 let searchTimeout: ReturnType<typeof setTimeout>
 const handleSearch = () => {
   clearTimeout(searchTimeout)
@@ -1691,7 +1696,7 @@ const handleUpdateProxy = async () => {
       protocol: editForm.protocol,
       host: editForm.host.trim(),
       port: editForm.port,
-      username: editForm.username.trim() || null,
+      username: editForm.username.trim(),
       max_accounts: editForm.max_accounts,
       status: editForm.status,
       expires_at: editForm.expires_at ? Math.floor(new Date(editForm.expires_at).getTime() / 1000) : null,
@@ -1702,7 +1707,7 @@ const handleUpdateProxy = async () => {
 
     // Only include password if user actually modified the field
     if (editPasswordDirty.value) {
-      updateData.password = editForm.password.trim() || null
+      updateData.password = editForm.password.trim()
     }
 
     await adminAPI.proxies.update(editingProxy.value.id, updateData)

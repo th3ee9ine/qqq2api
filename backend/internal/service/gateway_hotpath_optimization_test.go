@@ -537,7 +537,7 @@ func TestResolveCompositeModelOwnershipUsesModelsCacheInvalidation(t *testing.T)
 			groupID: {{
 				ID:          1,
 				Platform:    PlatformAnthropic,
-				Credentials: map[string]any{"model_mapping": map[string]any{"company-model": "deepseek-v4-pro"}},
+				Credentials: map[string]any{"model_mapping": map[string]any{"company-model": "glm-v4-pro"}},
 			}},
 		},
 	}

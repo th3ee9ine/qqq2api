@@ -57,7 +57,6 @@ func TestOpenAICompatibleModelNotFound400FailoverScope(t *testing.T) {
 		want    bool
 	}{
 		{name: "openai api key", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, want: true},
-		{name: "compatible provider", account: &Account{Platform: PlatformDeepseek, Type: AccountTypeAPIKey}, want: true},
 		{name: "anthropic account", account: &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}, want: false},
 		{name: "missing account", account: nil, want: false},
 	} {

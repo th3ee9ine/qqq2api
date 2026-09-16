@@ -103,7 +103,7 @@ func sseEventIndex(event map[string]any) (int, bool) {
 // shouldRectifySignatureError 统一判断是否应触发签名整流（strip thinking blocks 并重试）。
 // 根据账号类型检查对应的开关和匹配模式。
 //
-// mappedModel 用于按 thinking 协议族分流：passback-required (DeepSeek/Kimi/GLM 等) 上游
+// mappedModel 用于按 thinking 协议族分流：passback-required (Kimi/GLM 等) 上游
 // 的 400 不是签名缺失问题，retry 任何 thinking 变形都会破坏「原样回传」契约——直接透传
 // 错误给客户端。详见 thinking_protocol.go。
 func (s *GatewayService) shouldRectifySignatureError(ctx context.Context, account *Account, respBody []byte, mappedModel string) bool {

@@ -19,8 +19,8 @@ type cnQuotaProber interface {
 //     调度阈值评估（cnProviderThresholdCandidates）据此自动停调/恢复。
 //
 // 克隆自 AccountExpiryService 的 Start/Stop/runOnce + ticker 骨架。
-// 余额探测仅覆盖有公开余额端点的 kimi / deepseek；智谱无余额端点，仅靠响应式 429/402。
-// 额度探测覆盖 kimi / zhipu 的 coding plan 账号（deepseek 无 coding 套餐）。
+// 余额探测仅覆盖有公开余额端点的 kimi；智谱无余额端点，仅靠响应式 429/402。
+// 额度探测覆盖 kimi / zhipu 的 coding plan 账号。
 type CNProviderBalanceCheckService struct {
 	accountRepo    AccountRepository
 	balanceService *CNProviderBalanceService
@@ -52,7 +52,7 @@ func NewCNProviderBalanceCheckService(
 }
 
 func (s *CNProviderBalanceCheckService) Start() {
-	// Kimi, Zhipu/GLM, and DeepSeek are retired. Keep the historical service
+	// Kimi and Zhipu/GLM are retired. Keep the historical service
 	// type for migrations/tests, but never start its production poller.
 }
 

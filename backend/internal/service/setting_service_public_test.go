@@ -289,3 +289,70 @@ func TestSettingService_GetPublicSettings_DoesNotFallBackToConfigForRetiredWeCha
 	require.False(t, settings.WeChatOAuthMPEnabled)
 	require.False(t, settings.WeChatOAuthMobileEnabled)
 }
+
+// The custom panel keeps retired subscription pages disabled regardless of stored flags.
+func TestSettingService_GetPublicSettings_RetiredSubscriptionsStayDisabled(t *testing.T) {
+	cases := []struct {
+		name   string
+		values map[string]string
+		want   bool
+	}{
+		{name: "missing key stays disabled", values: map[string]string{}, want: false},
+		{name: "empty value stays disabled", values: map[string]string{SettingKeySubscriptionEnabled: ""}, want: false},
+		{name: "explicit true", values: map[string]string{SettingKeySubscriptionEnabled: "true"}, want: false},
+		{name: "explicit false disables", values: map[string]string{SettingKeySubscriptionEnabled: "false"}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewSettingService(&settingPublicRepoStub{values: tc.values}, &config.Config{})
+
+			settings, err := svc.GetPublicSettings(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, tc.want, settings.SubscriptionEnabled)
+		})
+	}
+}
+
+// SSR and public settings must both keep the retired subscription entry disabled.
+func TestSettingService_GetPublicSettingsForInjection_MirrorsSubscriptionEnabled(t *testing.T) {
+	for _, value := range []string{"false", "true"} {
+		repo := &settingPublicRepoStub{values: map[string]string{SettingKeySubscriptionEnabled: value}}
+		svc := NewSettingService(repo, &config.Config{})
+
+		raw, err := svc.GetPublicSettingsForInjection(context.Background())
+		require.NoError(t, err)
+		payload, ok := raw.(*PublicSettingsInjectionPayload)
+		require.True(t, ok)
+		require.False(t, payload.SubscriptionEnabled, "value=%q", value)
+	}
+}
+
+// Legacy payment flags must not re-enable the retired payment UI in either payload.
+func TestSettingService_GetPublicSettings_RetiredPaymentIgnoresBalanceFlag(t *testing.T) {
+	cases := []struct {
+		name  string
+		value map[string]string
+		want  bool
+	}{
+		{name: "missing key stays inactive", value: map[string]string{}, want: false},
+		{name: "explicit false", value: map[string]string{SettingBalancePayDisabled: "false"}, want: false},
+		{name: "explicit true stays inactive", value: map[string]string{SettingBalancePayDisabled: "true"}, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewSettingService(&settingPublicRepoStub{values: tc.value}, &config.Config{})
+
+			settings, err := svc.GetPublicSettings(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, tc.want, settings.PaymentBalanceDisabled)
+			require.False(t, settings.PaymentEnabled)
+
+			raw, err := svc.GetPublicSettingsForInjection(context.Background())
+			require.NoError(t, err)
+			payload, ok := raw.(*PublicSettingsInjectionPayload)
+			require.True(t, ok)
+			require.Equal(t, tc.want, payload.PaymentBalanceDisabled)
+			require.False(t, payload.PaymentEnabled)
+		})
+	}
+}

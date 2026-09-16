@@ -82,7 +82,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	input.Body = StripEmptyTextBlocks(input.Body)
 	// Pre-filter: strip web-search history blocks the upstream cannot accept
 	// (emulation-synthesized ones always; genuine ones additionally for
-	// passback-required third-party upstreams such as GLM/Kimi/DeepSeek,
+	// passback-required third-party upstreams such as GLM/Kimi,
 	// which reject server_tool_use with 400). input.RequestModel 已是映射后的模型 ID。
 	input.Body = FilterWebSearchHistoryBlocks(input.Body, input.RequestModel)
 	if input.Parsed != nil {
@@ -324,10 +324,6 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, clientBeta); changed {
 		body = sanitized
 	}
-
-	// Ollama Cloud DeepSeek 出站 max_tokens clamp：判定与上方 targetURL 的
-	// base 取值同源（GetBaseURL），详见 helper 注释。
-	body = clampOllamaCloudAnthropicMessagesMaxTokens(account, account.GetBaseURL(), body)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {

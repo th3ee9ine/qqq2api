@@ -17,7 +17,7 @@ import (
 
 // 国产供应商原生 Anthropic 直通路径（api_protocol=anthropic）的 reasoning_effort 记录。
 // 回归背景：该路径此前从不提取 Claude 协议的 output_config.effort，也不做
-// thinking-enabled 兜底，导致 kimi/zhipu/deepseek 平台分组的 /v1/messages 请求
+// thinking-enabled 兜底，导致 kimi/zhipu/compatible 平台分组的 /v1/messages 请求
 // usage_log.reasoning_effort 恒为 NULL。
 
 func nativeAnthropicTestAccount() *Account {

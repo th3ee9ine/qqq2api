@@ -293,7 +293,7 @@ func TestExportDataExcludesRetiredPlatformsAndTheirProxies(t *testing.T) {
 		{ID: 26, Name: "grok", Platform: service.PlatformGrok, Type: service.AccountTypeOAuth, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
 		{ID: 27, Name: "kimi", Platform: service.PlatformKimi, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
 		{ID: 28, Name: "glm", Platform: service.PlatformZhipu, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
-		{ID: 29, Name: "deepseek", Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
+		{ID: 29, Name: "deepseek", Platform: "deepseek", Type: service.AccountTypeAPIKey, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
 		{ID: 30, Name: "legacy-upstream", Platform: service.PlatformAnthropic, Type: service.AccountTypeUpstream, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
 	}
 
@@ -451,7 +451,7 @@ func TestValidateDataAccountAllowsOnlyCurrentPlatformTypePairs(t *testing.T) {
 		{service.PlatformGrok, service.AccountTypeOAuth},
 		{service.PlatformKimi, service.AccountTypeAPIKey},
 		{service.PlatformZhipu, service.AccountTypeAPIKey},
-		{service.PlatformDeepseek, service.AccountTypeAPIKey},
+		{"deepseek", service.AccountTypeAPIKey},
 		{"glm", service.AccountTypeAPIKey},
 		{"unknown", service.AccountTypeOAuth},
 	}
@@ -484,7 +484,7 @@ func TestImportDataPreservesBedrockVertexAndOllamaButRejectsRetiredPlatforms(t *
 				{"name": "grok", "platform": service.PlatformGrok, "type": service.AccountTypeOAuth, "credentials": map[string]any{"token": "legacy"}},
 				{"name": "kimi", "platform": service.PlatformKimi, "type": service.AccountTypeAPIKey, "credentials": map[string]any{"token": "legacy"}},
 				{"name": "glm", "platform": service.PlatformZhipu, "type": service.AccountTypeAPIKey, "credentials": map[string]any{"token": "legacy"}},
-				{"name": "deepseek", "platform": service.PlatformDeepseek, "type": service.AccountTypeAPIKey, "credentials": map[string]any{"token": "legacy"}},
+				{"name": "deepseek", "platform": "deepseek", "type": service.AccountTypeAPIKey, "credentials": map[string]any{"token": "legacy"}},
 			},
 		},
 	}

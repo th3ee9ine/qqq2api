@@ -125,7 +125,7 @@ func TestAccountTestCodexHeadersAPIKeyRoutingOverrideRemoved(t *testing.T) {
 	}
 }
 
-func TestAccountTestCodexHeadersImageRoutingUsesResponsesCarrier(t *testing.T) {
+func TestAccountTestCodexHeadersImageRoutingUsesNativeImageModel(t *testing.T) {
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	defaults := (*AccountTestService)(nil).BuildOpenAITestDefaults(account, "images/generations", "")
 	require.Equal(t, "gpt-image-2", defaults.Body["model"])
@@ -133,7 +133,7 @@ func TestAccountTestCodexHeadersImageRoutingUsesResponsesCarrier(t *testing.T) {
 	carrier, ok := defaults.UpstreamBody["model"].(string)
 	require.True(t, ok)
 	require.NotEmpty(t, carrier)
-	require.NotEqual(t, defaults.Body["model"], carrier)
+	require.Equal(t, defaults.Body["model"], carrier)
 	require.Equal(t, "model="+carrier, defaults.Headers["X-Codex-Routing-Hint"])
 	require.Equal(t, openAIRemoteCompactionV2Feature, defaults.Headers["X-Codex-Beta-Features"])
 	encoded, err := json.Marshal(defaults.UpstreamBody)

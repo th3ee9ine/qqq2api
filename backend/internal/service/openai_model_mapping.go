@@ -60,7 +60,7 @@ var openAIOAuthForeignModelPrefixes = []string{
 
 // isOpenAIOAuthServableModel 判断「空 model_mapping 的 OpenAI OAuth 账号」能否
 // 服务请求模型。空映射默认仍是「允许」，仅排除明确属于其他厂商家族的模型
-// （deepseek-*/glm-*、以及 Kimi Code 官方 bare ID k3 / k3-256k 等）——这类
+// （glm-*、以及 Kimi Code 官方 bare ID k3 / k3-256k 等）——这类
 // 请求原样透传必然被 Codex 上游以不可重试的 400 拒绝，且不触发 failover，
 // 应在调度阶段就跳过该账号，把请求让给显式声明支持该模型的账号（#3662）。
 // bare k3 仅精确匹配（取 last segment 后），不使用宽泛 k3- 前缀，以免误伤

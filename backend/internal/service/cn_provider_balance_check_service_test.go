@@ -11,7 +11,7 @@ import (
 )
 
 // 国产供应商余额/额度探测已退役后的 runOnce 行为：
-//   - Kimi、智谱、DeepSeek 账号均不加载、不探测；
+//   - Kimi、智谱账号均不加载、不探测；
 //   - 非激活账号同样跳过；
 //   - 这些断言防止历史轮询逻辑意外恢复。
 
@@ -124,7 +124,7 @@ func TestCNProviderBalanceCheckRunOnceSkipsOllamaCloudUsageAccounts(t *testing.T
 	require.Empty(t, loadRepo.getByIDIDs, "ollama 账号不得进入 payg 检查队列")
 }
 
-// 双币种（deepseek CNY+USD）停调判定：任一币种达标即不停调，全部低于阈值才停；
+// 双币种（CNY+USD）停调判定：任一币种达标即不停调，全部低于阈值才停；
 // 无明细时退回主币种（兼容旧结果）。
 func TestAllCNBalancesBelowThreshold(t *testing.T) {
 	dualLow := &CNProviderBalanceResult{

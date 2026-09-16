@@ -10,7 +10,7 @@ import (
 )
 
 // Ollama Cloud 的 OpenAI 兼容 /v1/chat/completions 把思维放在 reasoning / thinking，
-// 而 DeepSeek/OpenAI 客户端只认 reasoning_content。仅在 raw CC 直转路径上做 wire JSON
+// 而 OpenAI 客户端只认 reasoning_content。仅在 raw CC 直转路径上做 wire JSON
 // 双向补齐，不改 CC↔Responses / Anthropic / Grok 桥。
 
 func isOllamaCloudRawChatCompletionsAccount(account *Account) bool {

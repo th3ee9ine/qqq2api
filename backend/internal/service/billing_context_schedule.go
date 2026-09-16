@@ -222,6 +222,7 @@ func (s *BillingService) contextPricingBreakpoints(resolver *ModelPricingResolve
 	if pricing == nil {
 		return plan
 	}
+	// 仅取长上下文阈值等与计费时点无关的字段。
 	pricing = s.applyModelSpecificPricingPolicy(model, pricing)
 	if pricing.LongContextInputThreshold <= 0 {
 		return plan

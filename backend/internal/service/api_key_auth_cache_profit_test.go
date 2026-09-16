@@ -41,6 +41,7 @@ func profitAuthTestAPIKey() *APIKey {
 			ProfitControlEnabled: true,
 			ProfitMinMargin:      0.2,
 			ProfitSafetyBuffer:   0.05,
+			ModelAllowlist:       GroupModelAllowlist{Enabled: true, Models: []string{"gpt-*"}},
 		},
 	}
 }
@@ -54,7 +55,7 @@ func TestAPIKeyAuthSnapshotProfitControlRoundtrip(t *testing.T) {
 	snapshot := svc.snapshotFromAPIKey(context.Background(), apiKey)
 	require.NotNil(t, snapshot)
 	require.Equal(t, apiKeyAuthSnapshotVersion, snapshot.Version)
-	require.Equal(t, 23, snapshot.Version, "v23 起认证快照包含 API Key 并发限制与 Codex manifest 配置")
+	require.GreaterOrEqual(t, snapshot.Version, 24, "v24 起认证快照包含具有准入语义的模型白名单")
 	require.Equal(t, 7, snapshot.Concurrency)
 
 	// 模拟 L2 缓存的完整 JSON 往返（与 apiKeyCache.SetAuthCache/GetAuthCache 同构）。
@@ -69,6 +70,7 @@ func TestAPIKeyAuthSnapshotProfitControlRoundtrip(t *testing.T) {
 	require.Equal(t, 7, materialized.Concurrency)
 	require.NotNil(t, materialized.Group)
 	require.True(t, materialized.Group.Hydrated)
+	require.Equal(t, apiKey.Group.ModelAllowlist, materialized.Group.ModelAllowlist)
 	require.True(t, materialized.Group.ProfitControlEnabled)
 	require.InDelta(t, 0.2, materialized.Group.ProfitMinMargin, 1e-12)
 	require.InDelta(t, 0.05, materialized.Group.ProfitSafetyBuffer, 1e-12)

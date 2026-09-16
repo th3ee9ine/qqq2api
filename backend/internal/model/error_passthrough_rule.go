@@ -44,8 +44,8 @@ const (
 	PlatformGrok        = domain.PlatformGrok
 	PlatformKimi        = domain.PlatformKimi
 	PlatformZhipu       = domain.PlatformZhipu
-	PlatformDeepseek    = domain.PlatformDeepseek
 	PlatformMiniMax     = domain.PlatformMiniMax
+	PlatformOpenCodeGo  = domain.PlatformOpenCodeGo
 )
 
 // AllPlatforms returns only platforms that can receive production traffic.

@@ -31,6 +31,9 @@ func applyOpenAIAccountTestHeaders(req *http.Request, account *Account, endpoint
 	if isOAuth {
 		req.Host = "chatgpt.com"
 		req.Header.Set("Accept", "text/event-stream")
+		if req.URL != nil && req.URL.Path == "/backend-api/codex/images/generations" {
+			req.Header.Set("Accept", "application/json")
+		}
 		canonical := resolveCodexOutboundIdentity("")
 		req.Header.Set("Originator", canonical.originator)
 		if customUA := strings.TrimSpace(account.GetOpenAICodexUserAgent()); customUA != "" {

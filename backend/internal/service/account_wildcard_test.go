@@ -231,6 +231,14 @@ func TestAccountIsModelSupported(t *testing.T) {
 			requestedModel: "gemini-3-flash",
 			expected:       false,
 		},
+
+		{
+			name:           "anthropic empty mapping still allows all",
+			platform:       PlatformAnthropic,
+			credentials:    map[string]any{},
+			requestedModel: "any-model",
+			expected:       true,
+		},
 	}
 
 	for _, tt := range tests {

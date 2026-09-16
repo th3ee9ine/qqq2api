@@ -245,7 +245,7 @@ func codexCanonicalUserAgent() string {
 	resolver := codexCanonicalUAResolver
 	codexCanonicalUAMu.RUnlock()
 	if resolver != nil {
-		if ua := strings.TrimSpace(resolver()); ua != "" {
+		if ua := resolver(); strings.TrimSpace(ua) != "" {
 			return ua
 		}
 	}
@@ -305,9 +305,12 @@ func resolveCodexOutboundUserAgentIdentity(candidateUA string) (userAgent, origi
 // 让一次请求中的 UA engine 与 Version 即使恰逢同步切换也保持原子一致。
 func resolveCodexOutboundUserAgentIdentityWithVersion(candidateUA, version string) (userAgent, originator string) {
 	canonical := codexCanonicalUserAgent()
-	candidate := strings.TrimSpace(candidateUA)
+	if !isSaneCodexUserAgentHeader(canonical) {
+		canonical = codexCLIUserAgent
+	}
+	candidate := candidateUA
 	ua := candidate
-	if candidate == "" {
+	if strings.TrimSpace(candidate) == "" {
 		ua = canonical
 	}
 	if originatorOverride := codexCanonicalOriginatorOverride(); originatorOverride != "" {
@@ -372,10 +375,10 @@ func resolveCodexOutboundUserAgentIdentityWithVersion(candidateUA, version strin
 // Callers must only pass the canonical global setting, never request-provided
 // or account-local values.
 func pairConfiguredCodexClientIdentity(userAgent string) (originator, pairedUA string, ok bool) {
-	userAgent = strings.TrimSpace(userAgent)
 	if !isSaneCodexUserAgentHeader(userAgent) {
 		return "", "", false
 	}
+	userAgent = strings.TrimSpace(userAgent)
 	slash := strings.IndexByte(userAgent, '/')
 	if slash <= 0 {
 		return "", "", false
@@ -472,7 +475,7 @@ func resolveCodexOutboundIdentityForAccount(account *Account) codexOutboundIdent
 }
 
 func isSaneCodexUserAgentHeader(userAgent string) bool {
-	userAgent = strings.TrimSpace(userAgent)
+	// Validate the raw value before trimming so control bytes cannot be hidden.
 	if userAgent == "" || len(userAgent) > codexAccountLocalUserAgentMaxLen ||
 		NormalizeCodexClientVersion(openai.CodexUserAgentVersion(userAgent)) == "" {
 		return false
