@@ -8,8 +8,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/openai_compat"
+	"github.com/tidwall/gjson"
 )
 
 // ollamaMaxTokensCapTestAccount 构造带自定义 cap 的 Ollama Cloud usage 账号。

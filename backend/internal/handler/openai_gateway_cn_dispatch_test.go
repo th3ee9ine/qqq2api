@@ -12,7 +12,7 @@ import (
 func TestAllowOpenAICompatibleMessagesDispatch_RetiredProvidersRejected(t *testing.T) {
 	require.True(t, allowOpenAICompatibleMessagesDispatch(nil, nil), "无 key 保持放行")
 
-	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformGrok} {
+	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo, service.PlatformGrok} {
 		apiKey := &service.APIKey{Group: &service.Group{Platform: platform, AllowMessagesDispatch: false}}
 		require.False(t, allowOpenAICompatibleMessagesDispatch(nil, apiKey), "platform=%s", platform)
 	}
@@ -67,4 +67,11 @@ func TestResolveOpenAIMessagesDispatchMappedModel_CompositeRetiredTargetsFailClo
 
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(c, apiKey, "claude-sonnet-4-5-20250929"), "model=%s", model)
 	}
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), service.PlatformOpenCodeGo))
+	apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformComposite}}
+	require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(c, apiKey, "claude-sonnet-4-5-20250929"),
+		"composite → opencode_go 不得注入 openai 默认 gpt-5.x 映射")
 }

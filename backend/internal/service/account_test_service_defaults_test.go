@@ -26,7 +26,9 @@ func TestBuildOpenAITestDefaultsUsesAccountTestPayloads(t *testing.T) {
 	require.Equal(t, "b64_json", images.Body["response_format"])
 
 	oauthImages := svc.BuildOpenAITestDefaults(&Account{Type: AccountTypeOAuth}, "images/generations", "")
-	require.Equal(t, "image_generation", oauthImages.UpstreamBody["tools"].([]any)[0].(map[string]any)["type"])
+	require.Equal(t, "gpt-image-2", oauthImages.UpstreamBody["model"])
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/images/generations", oauthImages.URL)
+	require.Equal(t, "application/json", oauthImages.Headers["Accept"])
 }
 
 func TestBuildOpenAITestDefaultsOAuthAndAPIKeyRouting(t *testing.T) {
@@ -40,4 +42,23 @@ func TestBuildOpenAITestDefaultsOAuthAndAPIKeyRouting(t *testing.T) {
 	apiDefaults := svc.BuildOpenAITestDefaults(apiKey, "responses", "")
 	require.Equal(t, "https://upstream.example/v1/responses", apiDefaults.URL)
 	require.NotContains(t, apiDefaults.URL, "secret")
+}
+
+func TestBuildOpenAITestDefaultsOAuthImageMappingUsesResponsesFallback(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gpt-image-2": "gpt-image-1"},
+		},
+	}
+	defaults := (*AccountTestService)(nil).BuildOpenAITestDefaults(account, "images/generations", "")
+	require.Equal(t, "gpt-image-1", defaults.Body["model"])
+	require.Equal(t, chatgptCodexAPIURL, defaults.URL)
+	require.Equal(t, "text/event-stream", defaults.Headers["Accept"])
+	require.Equal(t, true, defaults.UpstreamBody["stream"])
+	tools := defaults.UpstreamBody["tools"].([]any)
+	require.Len(t, tools, 1)
+	require.Equal(t, "image_generation", tools[0].(map[string]any)["type"])
+	require.Equal(t, "gpt-image-1", tools[0].(map[string]any)["model"])
 }

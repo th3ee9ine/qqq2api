@@ -1474,8 +1474,8 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.openai.wsModeDesc') }}
             </p>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t(openAIWSModeConcurrencyHintKey) }}
+            <p v-if="openAIWSModeHintKey" class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t(openAIWSModeHintKey) }}
             </p>
           </div>
           <div class="w-52">
@@ -2589,7 +2589,7 @@ import type {
   UpdateAccountRequest
 } from '@/types'
 import {
-  resolveOpenAIWSModeConcurrencyHintKey,
+  resolveOpenAIWSModeHintKey,
   type OpenAIWSMode
 } from '@/utils/openaiWsMode'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
@@ -2834,8 +2834,8 @@ const openAIWSModeOptions = computed(() => [
   { value: 'passthrough', label: t('admin.accounts.openai.wsModePassthrough') },
   { value: 'http_bridge', label: t('admin.accounts.openai.wsModeHttpBridge') }
 ])
-const openAIWSModeConcurrencyHintKey = computed(() =>
-  resolveOpenAIWSModeConcurrencyHintKey(openAIWSMode.value)
+const openAIWSModeHintKey = computed(() =>
+  resolveOpenAIWSModeHintKey(openAIWSMode.value)
 )
 const codexImageToolOptions = computed<Array<{
   value: CodexImageToolMode

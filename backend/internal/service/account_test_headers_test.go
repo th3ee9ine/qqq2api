@@ -43,7 +43,11 @@ func TestOpenAITestHeaderDefaultsOAuthIdentityAndConditionalHeaders(t *testing.T
 			h := defaults.Headers
 			require.Equal(t, "chatgpt.com", h["Host"])
 			require.Equal(t, "application/json", h["Content-Type"])
-			require.Equal(t, "text/event-stream", h["Accept"])
+			if endpoint == "images/generations" {
+				require.Equal(t, "application/json", h["Accept"])
+			} else {
+				require.Equal(t, "text/event-stream", h["Accept"])
+			}
 			require.Equal(t, "codex_vscode", h["Originator"])
 			require.Equal(t, "0.125.0", h["Version"])
 			require.Contains(t, h["User-Agent"], "codex_vscode/0.125.0")
@@ -139,11 +143,7 @@ func TestOpenAITestHeaderDefaultsMatchLiveRequests(t *testing.T) {
 				}, Extra: map[string]any{openai_compat.ExtraKeyResponsesSupported: true}}
 				body := "data: {\"type\":\"response.completed\"}\n\n"
 				if endpoint == "images/generations" {
-					if accountType == AccountTypeOAuth {
-						body = "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_1\",\"type\":\"image_generation_call\",\"result\":\"aGVsbG8=\",\"output_format\":\"png\"}}\n\ndata: [DONE]\n\n"
-					} else {
-						body = `{"data":[{"b64_json":"aGVsbG8="}]}`
-					}
+					body = `{"data":[{"b64_json":"aGVsbG8="}]}`
 				} else if endpoint == "chat/completions" && accountType == AccountTypeAPIKey {
 					body = "data: [DONE]\n\n"
 				}
