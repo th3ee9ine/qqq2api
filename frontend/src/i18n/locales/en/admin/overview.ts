@@ -3,8 +3,6 @@ export default {
     dashboard: {
       title: 'Admin Dashboard',
       description: 'System overview and real-time statistics',
-      quickActions: 'Quick Actions',
-      groupPricing: 'Groups & Pricing',
       apiKeys: 'API Keys',
       totalApiKeys: 'Total API Keys',
       activeApiKeys: 'Active Keys',
@@ -40,6 +38,7 @@ export default {
       metricTokens: 'By Tokens',
       metricActualCost: 'By Actual Cost',
       tokenUsageTrend: 'Token Usage Trend',
+      userUsageTrend: 'User Usage Trend (Top 12)',
       model: 'Model',
       group: 'Group',
       noGroup: 'No Group',
@@ -51,6 +50,15 @@ export default {
       accountCost: 'Cost',
       noDataAvailable: 'No data available',
       recentUsage: 'Recent Usage',
+      viewModelDistribution: 'Model Distribution',
+      viewSpendingRanking: 'User Spending Ranking',
+      spendingRankingTitle: 'User Spending Ranking',
+      spendingRankingUser: 'User',
+      spendingRankingRequests: 'Requests',
+      spendingRankingTokens: 'Tokens',
+      spendingRankingSpend: 'Spend',
+      spendingRankingOther: 'Others',
+      spendingRankingUsage: 'Usage',
       spendShort: 'Spend',
       requestsShort: 'Req',
       tokensShort: 'Tok',
@@ -58,9 +66,359 @@ export default {
       noUsageRecords: 'No usage records',
       startUsingApi: 'Once you start using the API, your usage history will appear here.',
       viewAllUsage: 'View all',
+      quickActions: 'Quick Actions',
+      manageUsers: 'Manage Users',
+      viewUserAccounts: 'View and manage user accounts',
+      manageAccounts: 'Manage Accounts',
+      configureAiAccounts: 'Configure AI platform accounts',
+      batchImage: 'Batch Image',
+      batchImageDesc: 'Submit jobs and copy agent instructions',
+      groupPricing: 'Group Pricing',
+      groupPricingDesc: 'Configure batch discount and hold ratio',
+      systemSettings: 'System Settings',
+      configureSystem: 'Configure system settings',
       failedToLoad: 'Failed to load dashboard statistics'
     },
 
+    backup: {
+      title: 'Database Backup',
+      description: 'Full database backup to S3-compatible storage with scheduled backup and restore',
+      s3: {
+        title: 'S3 Storage Configuration',
+        description: 'Configure S3-compatible storage (supports Cloudflare R2)',
+        descriptionPrefix: 'Configure S3-compatible storage (supports',
+        descriptionSuffix: ')',
+        enabled: 'Enable S3 Storage',
+        endpoint: 'Endpoint',
+        region: 'Region',
+        bucket: 'Bucket',
+        prefix: 'Key Prefix',
+        accessKeyId: 'Access Key ID',
+        secretAccessKey: 'Secret Access Key',
+        secretConfigured: 'Already configured, leave empty to keep',
+        forcePathStyle: 'Force Path Style',
+        testConnection: 'Test Connection',
+        testSuccess: 'S3 connection test successful',
+        testFailed: 'S3 connection test failed',
+        saved: 'S3 configuration saved'
+      },
+      imageStorage: {
+        title: 'Async image object storage',
+        description: 'Enables the asynchronous image endpoints and offloads generated images to object storage, keeping only short links in Redis. Shares the S3 client with backups and takes effect on save — no restart needed.',
+        enabled: 'Enable async image tasks',
+        reuseBackupS3: 'Reuse the backup S3 configuration above (different bucket/prefix only)',
+        bucket: 'Bucket',
+        bucketInherited: 'Leave empty to use the backup bucket',
+        prefix: 'Key prefix',
+        publicBaseUrl: 'Public base URL',
+        publicBaseUrlPlaceholder: 'Leave empty to return presigned links',
+        presignExpiryHours: 'Presigned link TTL (hours)',
+        saved: 'Async image object storage saved'
+      },
+      schedule: {
+        title: 'Scheduled Backup',
+        description: 'Configure automatic scheduled backups',
+        enabled: 'Enable Scheduled Backup',
+        cronExpr: 'Cron Expression',
+        cronHint: 'e.g. "0 2 * * *" means every day at 2:00 AM',
+        retainDays: 'Backup Expire Days',
+        retainDaysHint: 'Ordinary backups are deleted after this many days; 0 = no age limit',
+        retainCount: 'Max Retain Count',
+        retainCountHint: 'Maximum ordinary backups to keep; 0 = no count limit',
+        ordinaryRetention: 'Ordinary backup retention',
+        ordinaryHint: 'Clean up the oldest ordinary backups when either limit is reached. Monthly archives are retained separately.',
+        preview: 'Retention preview',
+        previewBoth: 'Keep up to {count} ordinary backups from the last {days} days.',
+        previewDays: 'Keep ordinary backups from the last {days} days, with no count limit.',
+        previewCount: 'Keep the latest {count} ordinary backups, with no age limit.',
+        previewUnlimited: 'Ordinary backups are not automatically deleted.',
+        saved: 'Schedule configuration saved'
+      },
+      archive: {
+        title: 'Monthly archives',
+        enabled: 'Enable',
+        dates: 'Archive dates (select multiple)',
+        selectDates: 'Select at least one archive date',
+        selectedDates: '{count} dates selected',
+        day: 'Day {day}',
+        monthEnd: 'Month end',
+        done: 'Done',
+        datesHint: 'Archive the first successful scheduled backup for each selected date, using its start date and the schedule time zone.',
+        retention: 'Archive retention',
+        count: 'Number of archives to keep',
+        copies: 'copies',
+        forever: 'Keep forever',
+        foreverHint: 'Keep all new archives permanently. Existing permanent archives remain protected after settings change.',
+        countHint: 'Count non-permanent archives across all selected dates together; delete the oldest when the limit is exceeded.',
+        fallbackHint: 'If no backup succeeds on a selected date, use the next successful backup in that month. Missing dates use month end. Count each backup only once.',
+        independentHint: 'Archives reuse scheduled backups and do not count toward ordinary retention. No archive is created if the month has no later successful backup.',
+        disabledHint: 'Disabling stops new archives. Existing archives keep their previous retention policy.',
+        invalidRetention: 'Retention days and counts must be non-negative integers. Non-permanent archives require at least 1 copy.',
+        preview: 'Archive one backup on {dates} each month: {retention}.',
+        retainLatest: 'keep the latest {count} archives in total',
+        badge: 'Monthly archive',
+        deleteConfirm: 'This is a monthly archive. Remove archive protection and permanently delete this backup? This cannot be undone.',
+      },
+      operations: {
+        title: 'Backup Records',
+        description: 'Create manual backups and manage existing backup records',
+        createBackup: 'Create Backup',
+        backing: 'Backing up...',
+        backupCreated: 'Backup created successfully',
+        expireDays: 'Expire Days',
+        alreadyInProgress: 'A backup is already in progress',
+        backupRunning: 'Backup in progress...',
+        backupFailed: 'Backup failed',
+        restoreRunning: 'Restore in progress...',
+        restoreFailed: 'Restore failed',
+      },
+      columns: {
+        status: 'Status',
+        fileName: 'File Name',
+        size: 'Size',
+        parts: 'Parts',
+        expiresAt: 'Expires At',
+        triggeredBy: 'Triggered By',
+        startedAt: 'Started At',
+        actions: 'Actions'
+      },
+      status: {
+        pending: 'Pending',
+        running: 'Running',
+        completed: 'Completed',
+        failed: 'Failed'
+      },
+      progress: {
+        pending: 'Preparing',
+        dumping: 'Dumping database',
+        uploading: 'Uploading',
+      },
+      trigger: {
+        manual: 'Manual',
+        scheduled: 'Scheduled'
+      },
+      neverExpire: 'Never',
+      empty: 'No backup records',
+      actions: {
+        download: 'Download',
+        downloadParts: 'Download Parts',
+        downloadPartsHint: 'Download every part in order and concatenate the gzip bytes: on Linux/macOS run cat payload.part-* > backup.sql.gz; on Windows run copy /b payload.part-000001+payload.part-000002 backup.sql.gz.',
+        partLabel: 'Part {index}',
+        downloadFailed: 'Download URL is empty',
+        restore: 'Restore',
+        restoreConfirm: 'Are you sure you want to restore from this backup? This will overwrite the current database!',
+        restorePasswordPrompt: 'Please enter your admin password to confirm the restore operation',
+        restoreSuccess: 'Database restored successfully',
+        deleteConfirm: 'Are you sure you want to delete this backup?',
+        deleted: 'Backup deleted'
+      },
+      r2Guide: {
+        title: 'Cloudflare R2 Setup Guide',
+        intro: 'Cloudflare R2 provides S3-compatible object storage with a free tier of 10GB storage + 1M Class A requests/month, ideal for database backups.',
+        step1: {
+          title: 'Create an R2 Bucket',
+          line1: 'Log in to the Cloudflare Dashboard (dash.cloudflare.com), select "R2 Object Storage" from the sidebar',
+          line2: 'Click "Create bucket", enter a name (e.g. sub2api-backups), choose a region',
+          line3: 'Click create to finish'
+        },
+        step2: {
+          title: 'Create an API Token',
+          line1: 'On the R2 page, click "Manage R2 API Tokens" in the top right',
+          line2: 'Click "Create API token", set permission to "Object Read & Write"',
+          line3: 'Recommended: restrict to specific bucket for better security',
+          line4: 'After creation, you will see the Access Key ID and Secret Access Key',
+          warning: 'The Secret Access Key is only shown once — copy and save it immediately!'
+        },
+        step3: {
+          title: 'Get the S3 Endpoint',
+          desc: 'Find your Account ID on the R2 overview page (in the URL or the right panel). The endpoint format is:',
+          accountId: 'your_account_id'
+        },
+        step4: {
+          title: 'Fill in the Configuration',
+          checkEnabled: 'Checked',
+          bucketValue: 'Your bucket name',
+          fromStep2: 'Value from Step 2',
+          unchecked: 'Unchecked'
+        },
+        freeTier: 'R2 Free Tier: 10GB storage + 1M Class A requests + 10M Class B requests per month — more than enough for database backups.'
+      }
+    },
+
+    dataManagement: {
+      title: 'Data Management',
+      description: 'Manage data management agent status, object storage settings, and backup jobs in one place',
+      agent: {
+        title: 'Data Management Agent Status',
+        description: 'The system probes a fixed Unix socket and enables data management only when reachable.',
+        enabled: 'Data management agent is ready. Data management operations are available.',
+        disabled: 'Data management agent is unavailable. Only diagnostic information is available now.',
+        socketPath: 'Socket Path',
+        version: 'Version',
+        status: 'Status',
+        uptime: 'Uptime',
+        reasonLabel: 'Unavailable Reason',
+        reason: {
+          DATA_MANAGEMENT_AGENT_SOCKET_MISSING: 'Data management socket file is missing',
+          DATA_MANAGEMENT_AGENT_UNAVAILABLE: 'Data management agent is unreachable',
+          BACKUP_AGENT_SOCKET_MISSING: 'Backup socket file is missing',
+          BACKUP_AGENT_UNAVAILABLE: 'Backup agent is unreachable',
+          UNKNOWN: 'Unknown reason'
+        }
+      },
+      sections: {
+        config: {
+          title: 'Backup Configuration',
+          description: 'Configure backup source, retention policy, and S3 settings.'
+        },
+        s3: {
+          title: 'S3 Object Storage',
+          description: 'Configure and test uploads of backup artifacts to a standard S3-compatible storage.'
+        },
+        backup: {
+          title: 'Backup Operations',
+          description: 'Trigger PostgreSQL, Redis, and full backup jobs.'
+        },
+        history: {
+          title: 'Backup History',
+          description: 'Review backup job status, errors, and artifact metadata.'
+        }
+      },
+      form: {
+        sourceMode: 'Source Mode',
+        backupRoot: 'Backup Root',
+        activePostgresProfile: 'Active PostgreSQL Profile',
+        activeRedisProfile: 'Active Redis Profile',
+        activeS3Profile: 'Active S3 Profile',
+        retentionDays: 'Retention Days',
+        keepLast: 'Keep Last Jobs',
+        uploadToS3: 'Upload to S3',
+        useActivePostgresProfile: 'Use Active PostgreSQL Profile',
+        useActiveRedisProfile: 'Use Active Redis Profile',
+        useActiveS3Profile: 'Use Active Profile',
+        idempotencyKey: 'Idempotency Key (Optional)',
+        secretConfigured: 'Configured already, leave empty to keep unchanged',
+        source: {
+          profileID: 'Profile ID (Unique)',
+          profileName: 'Profile Name',
+          setActive: 'Set as active after creation'
+        },
+        postgres: {
+          title: 'PostgreSQL',
+          host: 'Host',
+          port: 'Port',
+          user: 'User',
+          password: 'Password',
+          database: 'Database',
+          sslMode: 'SSL Mode',
+          containerName: 'Container Name (docker_exec mode)'
+        },
+        redis: {
+          title: 'Redis',
+          addr: 'Address (host:port)',
+          username: 'Username',
+          password: 'Password',
+          db: 'Database Index',
+          containerName: 'Container Name (docker_exec mode)'
+        },
+        s3: {
+          enabled: 'Enable S3 Upload',
+          profileID: 'Profile ID (Unique)',
+          profileName: 'Profile Name',
+          endpoint: 'Endpoint (Optional)',
+          region: 'Region',
+          bucket: 'Bucket',
+          accessKeyID: 'Access Key ID',
+          secretAccessKey: 'Secret Access Key',
+          prefix: 'Object Prefix',
+          forcePathStyle: 'Force Path Style',
+          useSSL: 'Use SSL',
+          setActive: 'Set as active after creation'
+        }
+      },
+      sourceProfiles: {
+        createTitle: 'Create Source Profile',
+        editTitle: 'Edit Source Profile',
+        empty: 'No source profiles yet, create one first',
+        deleteConfirm: 'Delete source profile {profileID}?',
+        columns: {
+          profile: 'Profile',
+          active: 'Active',
+          connection: 'Connection',
+          database: 'Database',
+          updatedAt: 'Updated At',
+          actions: 'Actions'
+        }
+      },
+      s3Profiles: {
+        createTitle: 'Create S3 Profile',
+        editTitle: 'Edit S3 Profile',
+        empty: 'No S3 profiles yet, create one first',
+        editHint: 'Click "Edit" to modify profile details in the right drawer.',
+        deleteConfirm: 'Delete S3 profile {profileID}?',
+        columns: {
+          profile: 'Profile',
+          active: 'Active',
+          storage: 'Storage',
+          updatedAt: 'Updated At',
+          actions: 'Actions'
+        }
+      },
+      history: {
+        total: '{count} jobs',
+        empty: 'No backup jobs yet',
+        columns: {
+          jobID: 'Job ID',
+          type: 'Type',
+          status: 'Status',
+          triggeredBy: 'Triggered By',
+          pgProfile: 'PostgreSQL Profile',
+          redisProfile: 'Redis Profile',
+          s3Profile: 'S3 Profile',
+          finishedAt: 'Finished At',
+          artifact: 'Artifact',
+          error: 'Error'
+        },
+        status: {
+          queued: 'Queued',
+          running: 'Running',
+          succeeded: 'Succeeded',
+          failed: 'Failed',
+          partial_succeeded: 'Partial Succeeded'
+        }
+      },
+      actions: {
+        refresh: 'Refresh Status',
+        disabledHint: 'Start datamanagementd first and ensure the socket is reachable.',
+        reloadConfig: 'Reload Config',
+        reloadSourceProfiles: 'Reload Source Profiles',
+        reloadProfiles: 'Reload Profiles',
+        newSourceProfile: 'New Source Profile',
+        saveConfig: 'Save Config',
+        configSaved: 'Configuration saved',
+        testS3: 'Test S3 Connection',
+        s3TestOK: 'S3 connection test succeeded',
+        s3TestFailed: 'S3 connection test failed',
+        newProfile: 'New Profile',
+        saveProfile: 'Save Profile',
+        activateProfile: 'Activate',
+        profileIDRequired: 'Profile ID is required',
+        profileNameRequired: 'Profile name is required',
+        profileSelectRequired: 'Select a profile to edit first',
+        profileCreated: 'S3 profile created',
+        profileSaved: 'S3 profile saved',
+        profileActivated: 'S3 profile activated',
+        profileDeleted: 'S3 profile deleted',
+        sourceProfileCreated: 'Source profile created',
+        sourceProfileSaved: 'Source profile saved',
+        sourceProfileActivated: 'Source profile activated',
+        sourceProfileDeleted: 'Source profile deleted',
+        createBackup: 'Create Backup Job',
+        jobCreated: 'Backup job created: {jobID} ({status})',
+        refreshJobs: 'Refresh Jobs',
+        loadMore: 'Load More'
+      }
+    },
 
     affiliates: {
       invitesDescription: 'View site-wide inviter and invitee relationships',
@@ -103,69 +461,6 @@ export default {
         availableQuota: 'Available Quota',
         historyQuota: 'Historical Rebate'
       }
-    },
-
-    accountAdmins: {
-      title: 'Account Administrators',
-      description: 'Delegate account and IP maintenance, and manage your team’s identities and access in one place.',
-      eyebrow: 'Team & access',
-      directory: 'Administrator directory',
-      directoryHint: 'Manage team sign-in identities and access permissions',
-      matchingAdmins: 'Matching administrators',
-      matchingAdminsHint: 'Total across the current results',
-      activeOnPage: 'Active on this page',
-      activeOnPageHint: 'Can sign in and maintain accounts and IPs',
-      disabledOnPage: 'Disabled on this page',
-      disabledOnPageHint: 'Sign-in access is suspended',
-      permissionScope: 'Own accounts · Proxy IPs · Own earnings',
-      permissionTitle: 'Scoped administrator access',
-      statusFilter: 'Filter by administrator status',
-      clearFilters: 'Clear filters',
-      noMatches: 'No matching administrators',
-      noMatchesHint: 'Try another keyword, or clear your filters to see all administrators.',
-      neverActive: 'No activity yet',
-      deleteFor: 'Delete administrator {email}',
-      showPassword: 'Show password',
-      hidePassword: 'Hide password',
-      generatePassword: 'Generate secure password',
-      passwordRequirement: 'Use 6–72 characters, or generate a secure 16-character password.',
-      create: 'Create Account Administrator',
-      edit: 'Edit Account Administrator',
-      identity: 'Account Administrator',
-      role: 'Role',
-      email: 'Email',
-      emailPlaceholder: 'Enter the sign-in email',
-      username: 'Username',
-      usernamePlaceholder: 'Enter a username (optional)',
-      supplyRateMultiplier: 'Supply Rate Multiplier',
-      supplyRateMultiplierColumn: 'Supply Rate',
-      supplyRateMultiplierHint: 'Used to calculate earnings from this administrator\'s accounts; changes apply only to future usage.',
-      supplyRateMultiplierInvalid: 'The supply rate multiplier must be a valid number greater than or equal to 0.',
-      password: 'Password',
-      passwordPlaceholder: 'Enter at least 6 characters',
-      passwordEditPlaceholder: 'Leave blank to keep the current password',
-      passwordHint: 'Account administrators can maintain their own accounts and proxy IPs, and view their own earnings.',
-      notes: 'Notes',
-      notesPlaceholder: 'Notes visible only to super administrators (optional)',
-      searchPlaceholder: 'Search email, username, or notes',
-      allStatuses: 'All statuses',
-      lastActive: 'Last active',
-      createdAt: 'Created',
-      enable: 'Enable',
-      disable: 'Disable',
-      enabled: 'Account administrator enabled',
-      disabled: 'Account administrator disabled',
-      empty: 'No account administrators',
-      emptyHint: 'Create an account administrator to delegate account and proxy IP maintenance.',
-      deleteTitle: 'Delete Account Administrator',
-      deleteConfirm: 'Delete account administrator “{email}”? This action cannot be undone.',
-      created: 'Account administrator created',
-      updated: 'Account administrator updated',
-      deleted: 'Account administrator deleted',
-      loadFailed: 'Failed to load account administrators',
-      createFailed: 'Failed to create account administrator',
-      updateFailed: 'Failed to update account administrator',
-      deleteFailed: 'Failed to delete account administrator'
     },
 
     // Users
@@ -417,8 +712,7 @@ export default {
       createdAt: 'Created',
       totalRecharged: 'Total Recharged',
       roles: {
-        admin: 'Super Administrator',
-        account_admin: 'Account Administrator',
+        admin: 'Admin',
         user: 'User'
       },
       // Settings Dropdowns
@@ -564,6 +858,7 @@ export default {
         usage: 'Usage',
         status: 'Status',
         actions: 'Actions',
+        billingType: 'Billing Type',
         userName: 'Username',
         userEmail: 'Email',
         userNotes: 'Notes',
@@ -671,6 +966,9 @@ export default {
       createFirstGroup: 'Create your first group to organize API keys.',
       creating: 'Creating...',
       updating: 'Updating...',
+      limitDay: 'd',
+      limitWeek: 'w',
+      limitMonth: 'mo',
       groupCreated: 'Group created successfully',
       groupUpdated: 'Group updated successfully',
       groupDeleted: 'Group deleted successfully',
@@ -713,10 +1011,48 @@ export default {
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         grok: 'Grok',
+        kimi: 'Kimi',
+        zhipu: 'Zhipu GLM',
+        deepseek: 'DeepSeek',
+        minimax: 'MiniMax',
+        opencode_go: 'OpenCode',
         composite: 'Composite',
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
+      deleteConfirmSubscription:
+        "Are you sure you want to delete subscription group '{name}'? This will invalidate all API keys bound to this subscription and delete all related subscription records. This action cannot be undone.",
+      subscription: {
+        title: 'Subscription Settings',
+        type: 'Billing Type',
+        typeHint:
+          'Standard billing deducts from user balance. Subscription mode uses quota limits instead.',
+        typeNotEditable: 'Billing type cannot be changed after group creation.',
+        standard: 'Standard (Balance)',
+        subscription: 'Subscription (Quota)',
+        dailyLimit: 'Daily Limit (USD)',
+        weeklyLimit: 'Weekly Limit (USD)',
+        monthlyLimit: 'Monthly Limit (USD)',
+        defaultValidityDays: 'Default Validity (Days)',
+        validityHint: 'Number of days the subscription is valid when assigned to a user',
+        noLimit: 'No limit'
+      },
+      imagePricing: {
+        title: 'Image Generation Pricing',
+        description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
+        allowImageGeneration: 'Allow image generation for this group',
+        allowBatchImageGeneration: 'Allow batch image generation for this group',
+        independentMultiplier: 'Use independent image multiplier',
+        imageMultiplier: 'Image multiplier',
+        batchDiscountMultiplier: 'Batch image discount',
+        batchHoldMultiplier: 'Batch hold price ratio',
+        batchSectionHint: 'Batch image settings only apply to batch jobs: settlement applies the batch discount, and the upfront hold is normal image price × batch hold price ratio. Reference images also create upstream input-token usage, so a batch image discount above 0.5 is recommended.',
+        batchDisabledHint: 'Enable image generation for this group before enabling batch image generation.',
+        batchGeminiOnlyHint: 'Batch image generation is currently available only for Gemini groups.',
+        modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
+        finalPricePreview: 'Final per-image price preview',
+        notConfigured: 'Not configured'
+      },
       videoPricing: {
         title: 'Video Generation Pricing',
         description:
@@ -736,6 +1072,13 @@ export default {
         searchPricePer1k: 'Search price per 1k calls (USD)',
         pricePlaceholder: 'optional'
       },
+      modelPricing: {
+        title: 'Per-model group pricing',
+        description: 'Overrides channel and built-in prices for matching models. Long-context tiers come from official presets — do not enter custom intervals. Use per-request tiers such as realtime, tts, and stt for audio.',
+        longContext: 'Enable long-context tier pricing',
+        longContextHint: 'When checked, channel intervals or official preset tiers apply. Otherwise the first tier is used unless the account explicitly enables long-context billing.',
+        add: 'Add model price'
+      },
       voicePricing: {
         title: 'Grok Voice Pricing',
         description: 'Optional per-group prices for Voice realtime / TTS / STT (USD). Leave empty to leave unpriced.',
@@ -744,29 +1087,19 @@ export default {
         audioSttPerHour: 'STT price per hour (USD)',
         pricePlaceholder: 'optional'
       },
-      imagePricing: {
-        title: 'Image Generation Pricing',
-        description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
-        allowImageGeneration: 'Allow image generation for this group',
-        independentMultiplier: 'Use independent image multiplier',
-        imageMultiplier: 'Image multiplier',
-        modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
-        finalPricePreview: 'Final per-image price preview',
-        notConfigured: 'Not configured'
-      },
-      modelPricing: {
-        title: 'Per-model group pricing',
-        description: 'Overrides channel and built-in prices for matching models. Long-context tiers come from official presets — do not enter custom intervals. Use per-request tiers such as realtime, tts, and stt for audio.',
-        longContext: 'Enable long-context tier pricing',
-        longContextHint: 'When checked, channel intervals or official preset tiers apply. Otherwise the first tier is used unless the account explicitly enables long-context billing.',
-        add: 'Add model price'
-      },
       webSearchPricing: {
         title: 'Codex Web Search Pricing',
         pricePerCall: 'Price per search call (USD)',
         pricePerCallHint:
           'Leave empty to use the default $0.01 per call (official pricing: $10 per 1,000 calls); 0 means free. The group rate multiplier is applied on top.',
         finalPricePreview: 'Per-call price after current multiplier: {price}'
+      },
+      peakRate: {
+        enable: 'Enable peak rate multiplier',
+        peakStart: 'Peak start',
+        peakEnd: 'Peak end',
+        peakMultiplier: 'Peak multiplier',
+        multiplierHint: 'Applies to token billing multiplier; image tokens in token billing are also affected. 0 means peak token requests are billed at 0x.'
       },
       profitControl: {
         enable: 'Enable profit control',
@@ -827,7 +1160,7 @@ export default {
         endpoint: 'Endpoint',
         targetPlatform: 'Target Platform',
         upstreamModel: 'Upstream Model',
-        upstreamModelHint: 'Leave empty to pass the original requested model through; set a value to forward every matched request to that fixed model.',
+        upstreamModelHint: 'Leave empty to pass the original requested model through: under prefix match each matched model forwards verbatim (e.g. deepseek-v4-flash and deepseek-v4-pro each forwarded as-is); set a value to forward every matched request to that fixed model.',
         notes: 'Notes',
         enabled: 'Enabled',
         preview: 'Preview',
@@ -849,7 +1182,8 @@ export default {
           responses: 'Responses',
           chatCompletions: 'Chat Completions',
           embeddings: 'Embeddings',
-          images: 'Images'
+          images: 'Images',
+          gemini: 'Gemini Native'
         },
         match: {
           exact: 'Exact',
@@ -894,9 +1228,9 @@ export default {
       openaiLive: {
         title: 'OpenAI Live',
         allow: 'Allow Live access',
-        hint: 'When enabled, API keys in this OpenAI group can create and control Live voice sessions. Disabled by default. The QQQ2API server must run on Apple Silicon macOS with the official ChatGPT app installed; client platforms are unrestricted.',
+        hint: 'When enabled, API keys in this OpenAI group can create and control Live voice sessions. Disabled by default. The Sub2API server must run on Apple Silicon macOS with the official ChatGPT app installed; client platforms are unrestricted.',
         unsupportedTitle: 'Current server does not support Live',
-        unsupportedMessage: 'This QQQ2API server cannot generate the required Live attestation. Live will not work even if enabled. Continue anyway?',
+        unsupportedMessage: 'This Sub2API server cannot generate the required Live attestation. Live will not work even if enabled. Continue anyway?',
         enableAnyway: 'Enable anyway'
       },
       openaiFast: {
@@ -946,6 +1280,20 @@ export default {
         enabled: 'Enabled (simulate 1h cache)',
         disabled: 'Disabled',
         hint: 'Only token categories in usage billing logs are adjusted. No per-request mapping state is persisted.'
+      },
+      mcpXml: {
+        title: 'MCP XML Protocol Injection',
+        tooltip: 'When enabled, if the request contains MCP tools, an XML format call protocol prompt will be injected into the system prompt. Disable this to avoid interference with certain clients.',
+        enabled: 'Enabled',
+        disabled: 'Disabled'
+      },
+      supportedScopes: {
+        title: 'Supported Model Families',
+        tooltip: 'Select the model families this group supports. Unchecked families will not be routed to this group.',
+        claude: 'Claude',
+        geminiText: 'Gemini Text',
+        geminiImage: 'Gemini Image',
+        hint: 'Select at least one model family'
       }
     },
 

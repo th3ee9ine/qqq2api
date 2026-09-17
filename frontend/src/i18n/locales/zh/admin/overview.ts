@@ -3,8 +3,6 @@ export default {
     dashboard: {
       title: '管理控制台',
       description: '系统概览与统计数据',
-      quickActions: '快捷操作',
-      groupPricing: '分组与定价',
       apiKeys: 'API 密钥',
       totalApiKeys: 'API 密钥总数',
       activeApiKeys: '活跃密钥',
@@ -43,6 +41,7 @@ export default {
       metricTokens: '按 Token',
       metricActualCost: '按实际消费',
       tokenUsageTrend: 'Token 使用趋势',
+      userUsageTrend: '用户使用趋势（Top 12）',
       noDataAvailable: '暂无数据',
       model: '模型',
       group: '分组',
@@ -51,6 +50,15 @@ export default {
       tokens: 'Token',
       cache: '缓存',
       recentUsage: '最近使用',
+      viewModelDistribution: '模型分布',
+      viewSpendingRanking: '用户消费榜',
+      spendingRankingTitle: '用户消费榜',
+      spendingRankingUser: '用户',
+      spendingRankingRequests: '请求',
+      spendingRankingTokens: 'Token',
+      spendingRankingSpend: '消费',
+      spendingRankingOther: '其他',
+      spendingRankingUsage: '用量',
       spendShort: '消费',
       requestsShort: '请求',
       tokensShort: 'Token',
@@ -58,9 +66,359 @@ export default {
       noUsageRecords: '暂无使用记录',
       startUsingApi: '开始使用 API 后，使用历史将显示在这里。',
       viewAllUsage: '查看全部',
+      quickActions: '快捷操作',
+      manageUsers: '管理用户',
+      viewUserAccounts: '查看和管理用户账户',
+      manageAccounts: '管理账号',
+      configureAiAccounts: '配置 AI 平台账号',
+      batchImage: '批量生图',
+      batchImageDesc: '提交任务、复制 Agent 调用说明',
+      groupPricing: '分组定价',
+      groupPricingDesc: '设置批量折扣和冻结比例',
+      systemSettings: '系统设置',
+      configureSystem: '配置系统设置',
       failedToLoad: '加载仪表盘数据失败'
     },
 
+    backup: {
+      title: '数据库备份',
+      description: '全量数据库备份到 S3 兼容存储，支持定时备份与恢复',
+      s3: {
+        title: 'S3 存储配置',
+        description: '配置 S3 兼容存储（支持 Cloudflare R2）',
+        descriptionPrefix: '配置 S3 兼容存储（支持',
+        descriptionSuffix: '）',
+        enabled: '启用 S3 存储',
+        endpoint: '端点地址',
+        region: '区域',
+        bucket: '存储桶',
+        prefix: 'Key 前缀',
+        accessKeyId: 'Access Key ID',
+        secretAccessKey: 'Secret Access Key',
+        secretConfigured: '已配置，留空保持不变',
+        forcePathStyle: '强制路径风格',
+        testConnection: '测试连接',
+        testSuccess: 'S3 连接测试成功',
+        testFailed: 'S3 连接测试失败',
+        saved: 'S3 配置已保存'
+      },
+      imageStorage: {
+        title: '异步生图对象存储',
+        description: '开启后，异步生图接口可用，生成结果转存到对象存储，只把短链接写入 Redis。与备份共用同一套 S3 客户端，保存后立即生效，无需重启。',
+        enabled: '启用异步生图',
+        reuseBackupS3: '复用上方备份的 S3 配置（只用不同的存储桶/前缀）',
+        bucket: '存储桶',
+        bucketInherited: '留空则沿用备份存储桶',
+        prefix: 'Key 前缀',
+        publicBaseUrl: '公开访问域名',
+        publicBaseUrlPlaceholder: '留空则返回预签名临时链接',
+        presignExpiryHours: '预签名链接有效期（小时）',
+        saved: '异步生图对象存储配置已保存'
+      },
+      schedule: {
+        title: '定时备份',
+        description: '配置自动定时备份',
+        enabled: '启用定时备份',
+        cronExpr: 'Cron 表达式',
+        cronHint: '例如 "0 2 * * *" 表示每天凌晨 2 点',
+        retainDays: '备份过期天数',
+        retainDaysHint: '普通备份超过此天数后自动删除，0 = 不按天数清理',
+        retainCount: '最大保留份数',
+        retainCountHint: '最多保留的普通备份数量，0 = 不按份数清理',
+        ordinaryRetention: '普通备份保留',
+        ordinaryHint: '达到任一清理条件时，清理最旧的普通备份；月度归档独立保留。',
+        preview: '保留效果',
+        previewBoth: '最近 {days} 天内最多保留 {count} 份普通备份。',
+        previewDays: '保留最近 {days} 天的普通备份，份数不限。',
+        previewCount: '保留最新 {count} 份普通备份，天数不限。',
+        previewUnlimited: '普通备份不自动清理。',
+        saved: '定时备份配置已保存'
+      },
+      archive: {
+        title: '月度归档',
+        enabled: '启用',
+        dates: '归档日期（可多选）',
+        selectDates: '请至少选择一个归档日期',
+        selectedDates: '已选择 {count} 个日期',
+        day: '{day} 日',
+        monthEnd: '月末',
+        done: '完成',
+        datesHint: '按备份计划的时区与备份开始日期匹配，每个日期归档首份成功的定时备份。',
+        retention: '归档保留方式',
+        count: '归档保留数量',
+        copies: '份',
+        forever: '永久保留',
+        foreverHint: '所有新归档均永久保留；已有永久归档不会因配置变更被自动删除。',
+        countHint: '所有选定日期的非永久归档合计计数，超出时清理最旧归档。',
+        fallbackHint: '当日无成功备份时，顺延至本月下次成功备份；当月没有所选日期时按月末处理，同一份备份只计一份。',
+        independentHint: '归档不额外执行备份，不占普通备份名额；本月无后续成功备份则不归档。',
+        disabledHint: '关闭后停止产生新归档，已有归档继续按原保留方式管理。',
+        invalidRetention: '保留天数和份数须为非负整数；非永久归档须填写至少 1 份。',
+        preview: '每月 {dates} 各归档一份，{retention}。',
+        retainLatest: '合计保留最近 {count} 份',
+        badge: '月度归档',
+        deleteConfirm: '这是月度归档备份。确定要解除归档保护并永久删除此备份吗？此操作无法撤销。',
+      },
+      operations: {
+        title: '备份记录',
+        description: '创建手动备份和管理已有备份记录',
+        createBackup: '创建备份',
+        backing: '备份中...',
+        backupCreated: '备份创建成功',
+        expireDays: '过期天数',
+        alreadyInProgress: '已有备份正在进行中',
+        backupRunning: '备份进行中...',
+        backupFailed: '备份失败',
+        restoreRunning: '恢复进行中...',
+        restoreFailed: '恢复失败',
+      },
+      columns: {
+        status: '状态',
+        fileName: '文件名',
+        size: '大小',
+        parts: '分卷数',
+        expiresAt: '过期时间',
+        triggeredBy: '触发方式',
+        startedAt: '开始时间',
+        actions: '操作'
+      },
+      status: {
+        pending: '等待中',
+        running: '执行中',
+        completed: '已完成',
+        failed: '失败'
+      },
+      progress: {
+        pending: '准备中',
+        dumping: '导出数据库',
+        uploading: '上传中',
+      },
+      trigger: {
+        manual: '手动',
+        scheduled: '定时'
+      },
+      neverExpire: '永不过期',
+      empty: '暂无备份记录',
+      actions: {
+        download: '下载',
+        downloadParts: '下载分卷',
+        downloadPartsHint: '请按顺序下载全部分卷后拼接 gzip 字节流：Linux/macOS 使用 cat payload.part-* > backup.sql.gz；Windows 使用 copy /b payload.part-000001+payload.part-000002 backup.sql.gz。',
+        partLabel: '第 {index} 卷',
+        downloadFailed: '下载地址为空',
+        restore: '恢复',
+        restoreConfirm: '确定要从此备份恢复吗？这将覆盖当前数据库！',
+        restorePasswordPrompt: '请输入管理员密码以确认恢复操作',
+        restoreSuccess: '数据库恢复成功',
+        deleteConfirm: '确定要删除此备份吗？',
+        deleted: '备份已删除'
+      },
+      r2Guide: {
+        title: 'Cloudflare R2 配置教程',
+        intro: 'Cloudflare R2 提供 S3 兼容的对象存储，免费额度为 10GB 存储 + 每月 100 万次 A 类请求，非常适合数据库备份。',
+        step1: {
+          title: '创建 R2 存储桶',
+          line1: '登录 Cloudflare Dashboard (dash.cloudflare.com)，左侧菜单选择「R2 对象存储」',
+          line2: '点击「创建存储桶」，输入名称（如 sub2api-backups），选择区域',
+          line3: '点击创建完成'
+        },
+        step2: {
+          title: '创建 API 令牌',
+          line1: '在 R2 页面，点击右上角「管理 R2 API 令牌」',
+          line2: '点击「创建 API 令牌」，权限选择「对象读和写」',
+          line3: '建议指定存储桶范围（仅允许访问备份桶，更安全）',
+          line4: '创建后会显示 Access Key ID 和 Secret Access Key',
+          warning: 'Secret Access Key 只会显示一次，请立即复制保存！'
+        },
+        step3: {
+          title: '获取 S3 端点地址',
+          desc: '在 R2 概览页面找到你的账户 ID（在 URL 或右侧面板中），端点格式为：',
+          accountId: '你的账户 ID'
+        },
+        step4: {
+          title: '填写以下配置',
+          checkEnabled: '勾选',
+          bucketValue: '你创建的存储桶名称',
+          fromStep2: '第 2 步获取的值',
+          unchecked: '不勾选'
+        },
+        freeTier: 'R2 免费额度：10GB 存储 + 每月 100 万次 A 类请求 + 1000 万次 B 类请求，对数据库备份完全够用。'
+      }
+    },
+
+    dataManagement: {
+      title: '数据管理',
+      description: '统一管理数据管理代理状态、对象存储配置和备份任务',
+      agent: {
+        title: '数据管理代理状态',
+        description: '系统会自动探测固定 Unix Socket，仅在可连通时启用数据管理功能。',
+        enabled: '数据管理代理已就绪，可继续进行数据管理操作。',
+        disabled: '数据管理代理不可用，当前仅可查看诊断信息。',
+        socketPath: 'Socket 路径',
+        version: '版本',
+        status: '状态',
+        uptime: '运行时长',
+        reasonLabel: '不可用原因',
+        reason: {
+          DATA_MANAGEMENT_AGENT_SOCKET_MISSING: '未检测到数据管理 Socket 文件',
+          DATA_MANAGEMENT_AGENT_UNAVAILABLE: '数据管理代理不可连通',
+          BACKUP_AGENT_SOCKET_MISSING: '未检测到备份 Socket 文件',
+          BACKUP_AGENT_UNAVAILABLE: '备份代理不可连通',
+          UNKNOWN: '未知原因'
+        }
+      },
+      sections: {
+        config: {
+          title: '备份配置',
+          description: '配置备份源、保留策略与 S3 存储参数。'
+        },
+        s3: {
+          title: 'S3 对象存储',
+          description: '配置并测试备份产物上传到标准 S3 对象存储。'
+        },
+        backup: {
+          title: '备份操作',
+          description: '触发 PostgreSQL、Redis 与全量备份任务。'
+        },
+        history: {
+          title: '备份历史',
+          description: '查看备份任务执行状态、错误与产物信息。'
+        }
+      },
+      form: {
+        sourceMode: '源模式',
+        backupRoot: '备份根目录',
+        activePostgresProfile: '当前激活 PostgreSQL 配置',
+        activeRedisProfile: '当前激活 Redis 配置',
+        activeS3Profile: '当前激活 S3 账号',
+        retentionDays: '保留天数',
+        keepLast: '至少保留最近任务数',
+        uploadToS3: '上传到 S3',
+        useActivePostgresProfile: '使用当前激活 PostgreSQL 配置',
+        useActiveRedisProfile: '使用当前激活 Redis 配置',
+        useActiveS3Profile: '使用当前激活账号',
+        idempotencyKey: '幂等键（可选）',
+        secretConfigured: '已配置，留空不变',
+        source: {
+          profileID: '配置 ID（唯一）',
+          profileName: '配置名称',
+          setActive: '创建后立即设为激活配置'
+        },
+        postgres: {
+          title: 'PostgreSQL',
+          host: '主机',
+          port: '端口',
+          user: '用户名',
+          password: '密码',
+          database: '数据库',
+          sslMode: 'SSL 模式',
+          containerName: '容器名（docker_exec 模式）'
+        },
+        redis: {
+          title: 'Redis',
+          addr: '地址（host:port）',
+          username: '用户名',
+          password: '密码',
+          db: '数据库编号',
+          containerName: '容器名（docker_exec 模式）'
+        },
+        s3: {
+          enabled: '启用 S3 上传',
+          profileID: '账号 ID（唯一）',
+          profileName: '账号名称',
+          endpoint: 'Endpoint（可选）',
+          region: 'Region',
+          bucket: 'Bucket',
+          accessKeyID: 'Access Key ID',
+          secretAccessKey: 'Secret Access Key',
+          prefix: '对象前缀',
+          forcePathStyle: '强制 path-style',
+          useSSL: '使用 SSL',
+          setActive: '创建后立即设为激活账号'
+        }
+      },
+      sourceProfiles: {
+        createTitle: '创建数据源配置',
+        editTitle: '编辑数据源配置',
+        empty: '暂无配置，请先创建',
+        deleteConfirm: '确定删除配置 {profileID} 吗？',
+        columns: {
+          profile: '配置',
+          active: '激活状态',
+          connection: '连接信息',
+          database: '数据库',
+          updatedAt: '更新时间',
+          actions: '操作'
+        }
+      },
+      s3Profiles: {
+        createTitle: '创建 S3 账号',
+        editTitle: '编辑 S3 账号',
+        empty: '暂无 S3 账号，请先创建',
+        editHint: '点击“编辑”将在右侧抽屉中修改账号信息。',
+        deleteConfirm: '确定删除 S3 账号 {profileID} 吗？',
+        columns: {
+          profile: '账号',
+          active: '激活状态',
+          storage: '存储配置',
+          updatedAt: '更新时间',
+          actions: '操作'
+        }
+      },
+      history: {
+        total: '共 {count} 条',
+        empty: '暂无备份任务',
+        columns: {
+          jobID: '任务 ID',
+          type: '类型',
+          status: '状态',
+          triggeredBy: '触发人',
+          pgProfile: 'PostgreSQL 配置',
+          redisProfile: 'Redis 配置',
+          s3Profile: 'S3 账号',
+          finishedAt: '完成时间',
+          artifact: '产物',
+          error: '错误'
+        },
+        status: {
+          queued: '排队中',
+          running: '执行中',
+          succeeded: '成功',
+          failed: '失败',
+          partial_succeeded: '部分成功'
+        }
+      },
+      actions: {
+        refresh: '刷新状态',
+        disabledHint: '请先启动 datamanagementd 并确认 Socket 可连通。',
+        reloadConfig: '加载配置',
+        reloadSourceProfiles: '刷新数据源配置',
+        reloadProfiles: '刷新账号列表',
+        newSourceProfile: '新建数据源配置',
+        saveConfig: '保存配置',
+        configSaved: '配置保存成功',
+        testS3: '测试 S3 连接',
+        s3TestOK: 'S3 连接测试成功',
+        s3TestFailed: 'S3 连接测试失败',
+        newProfile: '新建账号',
+        saveProfile: '保存账号',
+        activateProfile: '设为激活',
+        profileIDRequired: '请输入账号 ID',
+        profileNameRequired: '请输入账号名称',
+        profileSelectRequired: '请先选择要编辑的账号',
+        profileCreated: 'S3 账号创建成功',
+        profileSaved: 'S3 账号保存成功',
+        profileActivated: 'S3 账号已切换为激活',
+        profileDeleted: 'S3 账号删除成功',
+        sourceProfileCreated: '数据源配置创建成功',
+        sourceProfileSaved: '数据源配置保存成功',
+        sourceProfileActivated: '数据源配置已切换为激活',
+        sourceProfileDeleted: '数据源配置删除成功',
+        createBackup: '创建备份任务',
+        jobCreated: '备份任务已创建：{jobID}（{status}）',
+        refreshJobs: '刷新任务',
+        loadMore: '加载更多'
+      }
+    },
 
     affiliates: {
       invitesDescription: '查看全站邀请关系和被邀请用户累计返利',
@@ -103,69 +461,6 @@ export default {
         availableQuota: '可提余额',
         historyQuota: '历史返利'
       }
-    },
-
-    accountAdmins: {
-      title: '账号管理员',
-      description: '为团队分配账号与 IP 维护权限，集中管理成员身份和访问状态。',
-      eyebrow: '团队与权限',
-      directory: '管理员名录',
-      directoryHint: '管理团队成员的登录身份与访问权限',
-      matchingAdmins: '匹配管理员',
-      matchingAdminsHint: '当前筛选结果总数',
-      activeOnPage: '本页已启用',
-      activeOnPageHint: '可登录并维护账号与 IP',
-      disabledOnPage: '本页已禁用',
-      disabledOnPageHint: '登录访问已暂停',
-      permissionScope: '本人账号 · IP 管理 · 本人收益',
-      permissionTitle: '限定管理范围',
-      statusFilter: '按管理员状态筛选',
-      clearFilters: '清除筛选',
-      noMatches: '未找到匹配的管理员',
-      noMatchesHint: '尝试其他关键词，或清除筛选查看全部管理员。',
-      neverActive: '尚未活跃',
-      deleteFor: '删除管理员 {email}',
-      showPassword: '显示密码',
-      hidePassword: '隐藏密码',
-      generatePassword: '生成安全密码',
-      passwordRequirement: '密码长度为 6–72 位，也可自动生成 16 位安全密码。',
-      create: '创建账号管理员',
-      edit: '编辑账号管理员',
-      identity: '账号管理员',
-      role: '角色',
-      email: '邮箱',
-      emailPlaceholder: '请输入登录邮箱',
-      username: '用户名',
-      usernamePlaceholder: '请输入用户名（选填）',
-      supplyRateMultiplier: '供货专属倍率',
-      supplyRateMultiplierColumn: '供货倍率',
-      supplyRateMultiplierHint: '用于计算该管理员归属账号的供货收益；修改仅影响后续用量。',
-      supplyRateMultiplierInvalid: '供货专属倍率必须是大于或等于 0 的有效数字。',
-      password: '密码',
-      passwordPlaceholder: '请输入至少 6 位密码',
-      passwordEditPlaceholder: '留空则保持原密码',
-      passwordHint: '账号管理员登录后仅能维护本人添加的账号、IP，并查看本人收益。',
-      notes: '备注',
-      notesPlaceholder: '请输入仅超级管理员可见的备注（选填）',
-      searchPlaceholder: '搜索邮箱、用户名或备注',
-      allStatuses: '全部状态',
-      lastActive: '最后活跃时间',
-      createdAt: '创建时间',
-      enable: '启用',
-      disable: '禁用',
-      enabled: '账号管理员已启用',
-      disabled: '账号管理员已禁用',
-      empty: '暂无账号管理员',
-      emptyHint: '创建账号管理员以委派账号和 IP 维护工作。',
-      deleteTitle: '删除账号管理员',
-      deleteConfirm: '确定要删除账号管理员“{email}”吗？此操作无法撤销。',
-      created: '账号管理员创建成功',
-      updated: '账号管理员更新成功',
-      deleted: '账号管理员删除成功',
-      loadFailed: '加载账号管理员列表失败',
-      createFailed: '创建账号管理员失败',
-      updateFailed: '更新账号管理员失败',
-      deleteFailed: '删除账号管理员失败'
     },
 
     // Users Management
@@ -303,8 +598,7 @@ export default {
       failedToLoadApiKeys: '加载用户 API 密钥失败',
       deleteConfirm: "确定要删除用户 '{email}' 吗？此操作无法撤销。",
       roles: {
-        admin: '超级管理员',
-        account_admin: '账号管理员',
+        admin: '管理员',
         user: '用户'
       },
       form: {
@@ -537,6 +831,8 @@ export default {
       sortOrderUpdated: '排序已更新',
       failedToUpdateSortOrder: '更新排序失败',
       deleteConfirm: "确定要删除分组 '{name}' 吗？所有关联的 API 密钥将不再属于任何分组。",
+      deleteConfirmSubscription:
+        "确定要删除订阅分组 '{name}' 吗？此操作会让所有绑定此订阅的用户的 API Key 失效，并删除所有相关的订阅记录。此操作无法撤销。",
       columns: {
         name: '名称',
         id: 'ID',
@@ -555,6 +851,7 @@ export default {
         usage: '用量',
         status: '状态',
         actions: '操作',
+        billingType: '计费类型',
         userName: '用户名',
         userEmail: '邮箱',
         userNotes: '备注',
@@ -647,6 +944,11 @@ export default {
         gemini: 'Gemini',
         antigravity: 'Antigravity',
         grok: 'Grok',
+        kimi: 'Kimi',
+        zhipu: 'Zhipu GLM',
+        deepseek: 'DeepSeek',
+        minimax: 'MiniMax',
+        opencode_go: 'OpenCode',
         composite: 'Composite',
       },
       saving: '保存中...',
@@ -683,6 +985,9 @@ export default {
       createFirstGroup: '创建您的第一个分组来组织 API 密钥。',
       creating: '创建中...',
       updating: '更新中...',
+      limitDay: '日',
+      limitWeek: '周',
+      limitMonth: '月',
       groupCreated: '分组创建成功',
       groupUpdated: '分组更新成功',
       groupDeleted: '分组删除成功',
@@ -715,6 +1020,36 @@ export default {
       unsavedChanges: '有未保存的修改',
       revertChanges: '撤销修改',
       userInfo: '用户信息',
+      subscription: {
+        title: '订阅设置',
+        type: '计费类型',
+        typeHint: '标准计费从用户余额扣除。订阅模式使用配额限制。',
+        typeNotEditable: '分组创建后无法修改计费类型。',
+        standard: '标准（余额）',
+        subscription: '订阅（配额）',
+        dailyLimit: '每日限额（USD）',
+        weeklyLimit: '每周限额（USD）',
+        monthlyLimit: '每月限额（USD）',
+        defaultValidityDays: '默认有效期（天）',
+        validityHint: '分配给用户时订阅的有效天数',
+        noLimit: '无限制'
+      },
+      imagePricing: {
+        title: '图片生成计费',
+        description: '配置图片生成能力和图片基础单价，留空则使用默认价格',
+        allowImageGeneration: '允许当前分组生图',
+        allowBatchImageGeneration: '允许当前分组批量生图',
+        independentMultiplier: '生图倍率独立',
+        imageMultiplier: '生图独立倍率',
+        batchDiscountMultiplier: '批量生图折扣倍率',
+        batchHoldMultiplier: '批量冻结价格比例',
+        batchSectionHint: '批量生图仅影响批量任务：结算价格会叠加批量折扣倍率，提交时冻结金额按普通生图原价 × 批量冻结价格比例计算。参考图也会产生上游输入 token 消耗，建议批量生图折扣倍率设置大于 0.5。',
+        batchDisabledHint: '请先开启当前分组生图，才能开启批量生图。',
+        batchGeminiOnlyHint: '批量生图当前仅支持 Gemini 分组。',
+        modeHint: '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
+        finalPricePreview: '最终单张价格预览',
+        notConfigured: '未配置'
+      },
       videoPricing: {
         title: '视频生成计费',
         description:
@@ -734,6 +1069,13 @@ export default {
         searchPricePer1k: '搜索每千次价格（USD）',
         pricePlaceholder: '可选'
       },
+      modelPricing: {
+        title: '分组逐模型定价',
+        description: '匹配模型后覆盖渠道和内置价格。长上下文阶梯沿用官方/预设价卡，无需再手填区间。音频可用按次层级配置 realtime、tts、stt。',
+        longContext: '启用长上下文阶梯定价',
+        longContextHint: '勾选后按渠道区间或官方预设阶梯计费；关闭后默认按第一档，账号显式开启时除外。',
+        add: '添加模型价格'
+      },
       voicePricing: {
         title: 'Grok Voice 定价',
         description: '分组级 Voice realtime / TTS / STT 单价（USD）。留空表示未配置。',
@@ -742,29 +1084,19 @@ export default {
         audioSttPerHour: 'STT 每小时价格（USD）',
         pricePlaceholder: '可选'
       },
-      imagePricing: {
-        title: '图片生成计费',
-        description: '配置图片生成能力和图片基础单价，留空则使用默认价格',
-        allowImageGeneration: '允许当前分组生图',
-        independentMultiplier: '生图倍率独立',
-        imageMultiplier: '生图独立倍率',
-        modeHint: '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
-        finalPricePreview: '最终单张价格预览',
-        notConfigured: '未配置'
-      },
-      modelPricing: {
-        title: '分组逐模型定价',
-        description: '匹配模型后覆盖渠道和内置价格。长上下文阶梯沿用官方/预设价卡，无需再手填区间。音频可用按次层级配置 realtime、tts、stt。',
-        longContext: '启用长上下文阶梯定价',
-        longContextHint: '勾选后按渠道区间或官方预设阶梯计费；关闭后默认按第一档，账号显式开启时除外。',
-        add: '添加模型价格'
-      },
       webSearchPricing: {
         title: 'Codex 网页搜索计费',
         pricePerCall: '搜索单次价格（USD/次）',
         pricePerCallHint:
           '留空使用默认价 $0.01/次（官方定价 $10/1000 次）；填 0 表示免费。实际扣费会叠加分组费率倍数。',
         finalPricePreview: '应用当前倍率后的单次价格：{price}'
+      },
+      peakRate: {
+        enable: '启用高峰倍率',
+        peakStart: '高峰开始',
+        peakEnd: '高峰结束',
+        peakMultiplier: '高峰倍率',
+        multiplierHint: '作用于 token 计费倍率；token 计费的图片 token 同样适用，0 表示高峰 token 请求按 0 倍计费'
       },
       profitControl: {
         enable: '启用利润控制',
@@ -825,7 +1157,7 @@ export default {
         endpoint: '端点',
         targetPlatform: '目标平台',
         upstreamModel: '上游模型',
-        upstreamModelHint: '留空表示透传原始请求模型；填写则所有命中请求都固定转发该模型。',
+        upstreamModelHint: '留空表示透传原始请求模型：前缀匹配下每个命中模型各自原样转发（如 deepseek-v4-flash、deepseek-v4-pro 分别转发）；填写则所有命中请求都固定转发该模型。',
         notes: '备注',
         enabled: '启用',
         preview: '预览',
@@ -847,7 +1179,8 @@ export default {
           responses: 'Responses',
           chatCompletions: 'Chat Completions',
           embeddings: 'Embeddings',
-          images: 'Images'
+          images: 'Images',
+          gemini: 'Gemini 原生'
         },
         match: {
           exact: '精确',
@@ -893,9 +1226,9 @@ export default {
       openaiLive: {
         title: 'OpenAI Live',
         allow: '允许访问 Live',
-        hint: '启用后，此 OpenAI 分组的 API Key 可以创建并控制 Live 语音会话。默认关闭。运行 QQQ2API 的服务端必须是 Apple Silicon Mac，并安装官方 ChatGPT App；客户端平台不受限制。',
+        hint: '启用后，此 OpenAI 分组的 API Key 可以创建并控制 Live 语音会话。默认关闭。运行 Sub2API 的服务端必须是 Apple Silicon Mac，并安装官方 ChatGPT App；客户端平台不受限制。',
         unsupportedTitle: '当前服务端不支持 Live',
-        unsupportedMessage: '当前 QQQ2API 服务端无法生成 Live 所需的设备证明，即使开启也不能使用。是否仍然开启？',
+        unsupportedMessage: '当前 Sub2API 服务端无法生成 Live 所需的设备证明，即使开启也不能使用。是否仍然开启？',
         enableAnyway: '仍然开启'
       },
       openaiFast: {
@@ -946,6 +1279,20 @@ export default {
         enabled: '已启用（模拟 1h 缓存）',
         disabled: '已禁用',
         hint: '仅调整用量计费日志中的 token 类别。不会持久化每个请求的映射状态。'
+      },
+      mcpXml: {
+        title: 'MCP XML 协议注入',
+        tooltip: '启用后，当请求包含 MCP 工具时，会在 system prompt 中注入 XML 格式调用协议提示词。关闭此选项可避免对某些客户端造成干扰。',
+        enabled: '已启用',
+        disabled: '已禁用'
+      },
+      supportedScopes: {
+        title: '支持的模型系列',
+        tooltip: '选择此分组支持的模型系列。未勾选的系列将不会被路由到此分组。',
+        claude: 'Claude',
+        geminiText: 'Gemini Text',
+        geminiImage: 'Gemini Image',
+        hint: '至少选择一个模型系列'
       }
     },
 
