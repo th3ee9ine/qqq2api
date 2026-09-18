@@ -69,6 +69,7 @@ func newTurnStateAutoService(t *testing.T) (*OpenAIGatewayService, *turnStateAut
 	repo := &turnStateAutoRepo{accounts: map[int64]*Account{10: account}}
 	settings, sr := turnStateTestSettings("", "gpt-5*")
 	sr.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "true"
+	sr.values[SettingKeyOpenAICodexTurnStateDefaultModel] = "gpt-5"
 	svc := &OpenAIGatewayService{settingService: settings, accountRepo: repo}
 	t.Cleanup(func() { waitTurnStateAutoIdle(t, svc) })
 	copy, err := repo.GetByID(context.Background(), 10)
@@ -137,7 +138,7 @@ func TestCodexTurnStateAutoCollectionCommitDedupAndIsolation(t *testing.T) {
 	other := &Account{ID: 20, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	require.Empty(t, s.autoTurnStateForAccount(context.Background(), other, "gpt-5"))
 	stored, _ := repo.GetByID(context.Background(), 10)
-	require.Equal(t, "collected-secret", stored.Extra[CodexTurnStateAutoExtraKey])
+	require.Equal(t, "collected-secret", codexTurnStateModelAccount(stored, "gpt-5").Extra[CodexTurnStateAutoExtraKey])
 	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-4"))
 }
 func TestCodexTurnStateAutoProbeDedupNonBlockingAndNativeWins(t *testing.T) {
@@ -167,7 +168,7 @@ func TestCodexTurnStateAutoProbeDedupNonBlockingAndNativeWins(t *testing.T) {
 	waitTurnStateAutoIdle(t, s)
 	require.EqualValues(t, 1, calls.Load())
 	stored, _ := repo.GetByID(context.Background(), 10)
-	require.Equal(t, "native-newer-secret", codexTurnStateAutoToken(stored))
+	require.Equal(t, "native-newer-secret", codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 	require.Empty(t, a.Extra)
 }
 func TestCodexTurnStateAutoProbeRenewalAndRetryThrottle(t *testing.T) {
@@ -176,7 +177,7 @@ func TestCodexTurnStateAutoProbeRenewalAndRetryThrottle(t *testing.T) {
 			s, repo, a := newTurnStateAutoService(t)
 			renewed := testGlobalTurnStateToken(time.Now(), 10)
 			old := testGlobalTurnStateToken(time.Now().Add(-51*time.Minute), 10)
-			a.Extra = map[string]any{CodexTurnStateAutoExtraKey: old, CodexTurnStateAutoSetAtExtraKey: time.Now().Add(-51 * time.Minute).UnixMilli()}
+			a.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5"): map[string]any{CodexTurnStateAutoExtraKey: old, CodexTurnStateAutoSetAtExtraKey: time.Now().Add(-51 * time.Minute).UnixMilli()}}
 			repo.accounts[10].Extra = mergeMap(nil, a.Extra)
 			var calls atomic.Int32
 			s.httpUpstream = &turnStateAutoUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
@@ -190,10 +191,10 @@ func TestCodexTurnStateAutoProbeRenewalAndRetryThrottle(t *testing.T) {
 			waitTurnStateAutoIdle(t, s)
 			stored, _ := repo.GetByID(context.Background(), 10)
 			if fail {
-				require.Equal(t, old, codexTurnStateAutoToken(stored))
-				require.Equal(t, "transport_failed", stored.Extra[CodexTurnStateAutoLastErrorExtraKey])
+				require.Equal(t, old, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+				require.Equal(t, "transport_failed", codexTurnStateModelAccount(stored, "gpt-5").Extra[CodexTurnStateAutoLastErrorExtraKey])
 			} else {
-				require.Equal(t, renewed, codexTurnStateAutoToken(stored))
+				require.Equal(t, renewed, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 			}
 			for n := 0; n < 10; n++ {
 				s.autoTurnStateForAccount(context.Background(), a, "gpt-5")
@@ -273,7 +274,7 @@ func TestCodexTurnStateAutoLegacyIgnoredDisableAndWSRefresh(t *testing.T) {
 	require.Equal(t, "auto-state", h.Get(openAICodexTurnStateHeader))
 	h.Set(openAICodexTurnStateHeader, "native-state")
 	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
-	require.Equal(t, "native-state", h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, "auto-state", h.Get(openAICodexTurnStateHeader), "unbound native states cannot override the scoped value")
 	req := openAIWSAcquireRequest{Account: a, Headers: http.Header{}, TurnState: openAIWSTurnStatePolicy{Settings: s.settingService, Gateway: s, Models: []string{"gpt-5"}}}
 	applied := req.withCurrentTurnState(context.Background())
 	require.Equal(t, "auto-state", applied.Headers.Get(openAICodexTurnStateHeader))
@@ -282,7 +283,7 @@ func TestCodexTurnStateAutoLegacyIgnoredDisableAndWSRefresh(t *testing.T) {
 	set.values[SettingKeyOpenAICodexTurnState] = "global-state"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()
 	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
-	require.Equal(t, "native-state", h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, "auto-state", h.Get(openAICodexTurnStateHeader), "unbound native states cannot override the scoped value")
 	set.values[SettingKeyOpenAICodexTurnStateEnabled] = "false"
 	set.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "false"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()
@@ -293,7 +294,7 @@ func TestCodexTurnStateAutoLegacyIgnoredDisableAndWSRefresh(t *testing.T) {
 	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 }
 func TestCodexTurnStateAutoManagedExtraPreservedAndNotImported(t *testing.T) {
-	source := map[string]any{CodexTurnStateAutoExtraKey: "private-state", CodexTurnStateAutoSetAtExtraKey: int64(123), "note": "keep"}
+	source := map[string]any{codexTurnStateModelExtraKey("gpt-5.5"): map[string]any{CodexTurnStateAutoExtraKey: "private-scoped"}, CodexTurnStateAutoExtraKey: "private-state", CodexTurnStateAutoSetAtExtraKey: int64(123), "note": "keep"}
 	stripped := StripCodexTurnStateAutoExtra(source)
 	require.Equal(t, map[string]any{"note": "keep"}, stripped)
 	require.Contains(t, source, CodexTurnStateAutoExtraKey)
@@ -302,9 +303,11 @@ func TestCodexTurnStateAutoManagedExtraPreservedAndNotImported(t *testing.T) {
 	updated, err := svc.UpdateAccount(context.Background(), 10, &UpdateAccountInput{Extra: map[string]any{CodexTurnStateAutoExtraKey: "injected-state", "note": "edited"}})
 	require.NoError(t, err)
 	require.Equal(t, "private-state", updated.Extra[CodexTurnStateAutoExtraKey])
+	require.Equal(t, source[codexTurnStateModelExtraKey("gpt-5.5")], updated.Extra[codexTurnStateModelExtraKey("gpt-5.5")])
 	created, err := buildAccountForCreate(&CreateAccountInput{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, source)
 	require.NoError(t, err)
 	require.NotContains(t, created.Extra, CodexTurnStateAutoExtraKey)
+	require.NotContains(t, created.Extra, codexTurnStateModelExtraKey("gpt-5.5"))
 }
 
 func TestCodexTurnStateAutoProbeWorkerBoundAndDisableInFlight(t *testing.T) {
@@ -346,7 +349,7 @@ func TestCodexTurnStateAutoProbeWorkerBoundAndDisableInFlight(t *testing.T) {
 	waitTurnStateAutoIdle(t, s)
 	for _, account := range accounts {
 		stored, _ := repo.GetByID(context.Background(), account.ID)
-		require.Empty(t, codexTurnStateAutoToken(stored))
+		require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 	}
 }
 
@@ -393,13 +396,13 @@ func TestCodexTurnStateAutoCollectionRetriesFailedPersistence(t *testing.T) {
 	repo.fail = false
 	repo.mu.Unlock()
 	s.openaiTurnStateMu.Lock()
-	s.openaiTurnStates[a.ID].retryAfter = time.Time{}
+	s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5"}].retryAfter = time.Time{}
 	s.openaiTurnStateMu.Unlock()
 	// A duplicate response retries a failed write without resetting collection age.
 	s.collectOpenAICodexTurnState(context.Background(), a, "retry-state")
 	waitTurnStateAutoIdle(t, s)
 	stored, _ := repo.GetByID(context.Background(), a.ID)
-	require.Equal(t, "retry-state", codexTurnStateAutoToken(stored))
+	require.Equal(t, "retry-state", codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 	require.Equal(t, 2, repo.writes)
 }
 
@@ -429,9 +432,9 @@ func TestCodexTurnStateAutoWSHandshakeCollection(t *testing.T) {
 			waitTurnStateAutoIdle(t, s)
 			stored, _ := repo.GetByID(context.Background(), a.ID)
 			if fail {
-				require.Empty(t, codexTurnStateAutoToken(stored))
+				require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 			} else {
-				require.Equal(t, "ws-collected-state", codexTurnStateAutoToken(stored))
+				require.Equal(t, "ws-collected-state", codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 			}
 		})
 	}
@@ -440,11 +443,11 @@ func TestCodexTurnStateAutoWSHandshakeCollection(t *testing.T) {
 func TestCodexTurnStateAutoRepeatedSuccessClearsErrorWithoutRenewingAge(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	at := time.Now().Add(-20 * time.Minute).UnixMilli()
-	a.Extra = map[string]any{CodexTurnStateAutoExtraKey: "same-state", CodexTurnStateAutoSetAtExtraKey: at, CodexTurnStateAutoLastErrorExtraKey: "http_429"}
+	a.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5"): map[string]any{CodexTurnStateAutoExtraKey: "same-state", CodexTurnStateAutoSetAtExtraKey: at, CodexTurnStateAutoLastErrorExtraKey: "http_429"}}
 	repo.accounts[a.ID].Extra = mergeMap(nil, a.Extra)
 	s.collectOpenAICodexTurnState(context.Background(), a, "same-state")
 	waitTurnStateAutoIdle(t, s)
 	stored, _ := repo.GetByID(context.Background(), a.ID)
-	require.Empty(t, stored.GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
-	require.Equal(t, at, codexTurnStateAutoInt64(stored, CodexTurnStateAutoSetAtExtraKey))
+	require.Empty(t, codexTurnStateModelAccount(stored, "gpt-5").GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
+	require.Equal(t, at, codexTurnStateAutoInt64(codexTurnStateModelAccount(stored, "gpt-5"), CodexTurnStateAutoSetAtExtraKey))
 }

@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ func TestAccountCodexTurnStateAutoRedactedAndDiagnosticsSafe(t *testing.T) {
 		service.CodexTurnStateAutoLastErrorExtraKey: "private-provider-error", "note": "public",
 		service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{"invalidated_at_ms": time.Now().UnixMilli(), "pending": true, "rejected": []string{"private-digest"}, "legacy_token": "private-token"},
 	}}
+	a.Extra[service.CodexTurnStateModelExtraPrefix+base64.RawURLEncoding.EncodeToString([]byte("gpt-5.5"))] = map[string]any{service.CodexTurnStateAutoExtraKey: "private-model-token", service.CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli(), service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{"invalidated_at_ms": time.Now().UnixMilli(), "pending": true}}
 	dto := AccountFromService(a)
 	for _, projection := range []any{dto, AccountListItemFromAccount(dto)} {
 		data, err := json.Marshal(projection)

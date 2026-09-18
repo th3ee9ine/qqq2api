@@ -31,8 +31,12 @@ func turnStateTestSettings(legacyToken, models string) (*SettingService, *codexH
 	}}
 	return NewSettingService(repo, &config.Config{}), repo
 }
-func seedAutomaticTurnState(a *Account, token string) {
-	a.Extra = mergeMap(a.Extra, map[string]any{CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli()})
+func seedAutomaticTurnState(a *Account, token string, models ...string) {
+	model := "gpt-5.5"
+	if len(models) > 0 {
+		model = models[0]
+	}
+	a.Extra = mergeMap(a.Extra, map[string]any{codexTurnStateModelExtraKey(model): map[string]any{CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli()}})
 }
 func TestCodexTurnStateModelScope(t *testing.T) {
 	for _, tc := range []struct {
@@ -70,7 +74,7 @@ func TestCodexTurnStateAutomaticHTTPAndCompactBuilders(t *testing.T) {
 	settings, _ := turnStateTestSettings("legacy-private", "alias")
 	svc := &OpenAIGatewayService{settingService: settings, cfg: &config.Config{}}
 	a := &Account{ID: 73, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "access", "chatgpt_account_id": "id"}}
-	seedAutomaticTurnState(a, "account-state")
+	seedAutomaticTurnState(a, "account-state", "gpt-5")
 	for _, path := range []string{"/v1/responses", "/v1/responses/compact"} {
 		for _, passthrough := range []bool{false, true} {
 			for _, native := range []string{"", "native"} {
@@ -88,10 +92,7 @@ func TestCodexTurnStateAutomaticHTTPAndCompactBuilders(t *testing.T) {
 					req, err = svc.buildUpstreamRequest(context.Background(), c, a, body, "access", false, "", false, "alias")
 				}
 				require.NoError(t, err)
-				want := native
-				if want == "" {
-					want = "account-state"
-				}
+				want := "account-state" // unbound client values are replaced
 				require.Equal(t, want, req.Header.Get(openAICodexTurnStateHeader))
 				require.Equal(t, native, c.Request.Header.Get(openAICodexTurnStateHeader))
 			}

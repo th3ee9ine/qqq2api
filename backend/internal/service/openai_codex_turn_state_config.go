@@ -153,18 +153,58 @@ func (s *SettingService) InvalidateOpenAICodexTurnStateCache() {
 	}
 }
 
-func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, account *Account, headers http.Header, models ...string) {
+func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, account *Account, headers http.Header, models ...string) error {
 	if s == nil || headers == nil || s.settingService == nil {
-		return
+		return nil
 	}
-	// Track the routed model even while a native continuation is in use.
+	cfg := s.settingService.GetOpenAICodexTurnState(ctx)
+	if !codexTurnStateAutoEligible(account) || !cfg.AutoEnabled {
+		return nil
+	}
+	model := s.codexTurnStateModel(ctx, models...)
+	ctx = withCodexTurnStateModel(ctx, model)
+	if !codexTurnStateModelMatches(cfg.Models, models...) {
+		// Model scope controls automatic injection, not permission to replay a
+		// foreign/expired client state on a nonmatching model.
+		s.openaiTurnStateMu.Lock()
+		entry := s.codexTurnStateEntryLocked(account, time.Now(), model)
+		native := headers.Get(openAICodexTurnStateHeader)
+		if entry.knownTokens[codexTurnStateCanonicalDigest(native)] <= time.Now().UnixMilli() || !entry.recovery.allows(native, time.Now()) {
+			headers.Del(openAICodexTurnStateHeader)
+		}
+		s.openaiTurnStateMu.Unlock()
+		return nil
+	}
 	auto := s.autoTurnStateForAccount(ctx, account, models...)
-	if !s.codexTurnStateAllowed(ctx, account, headers.Get(openAICodexTurnStateHeader)) {
+	// Check the same account in persistent storage before treating the applicable
+	// pool as empty. Other accounts and other models are never candidates.
+	if err := s.refreshCodexTurnStateSource(ctx, account, model, auto == ""); err != nil {
+		return err
+	}
+	current := s.settingService.GetOpenAICodexTurnState(ctx)
+	if !current.AutoEnabled || !codexTurnStateModelMatches(current.Models, models...) {
+		return nil
+	}
+	auto = s.autoTurnStateForAccount(ctx, account, models...)
+	native := headers.Get(openAICodexTurnStateHeader)
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, time.Now(), model)
+	// Re-evaluate under the same lock as revocation/collection. The automatic
+	// result obtained before acquiring this lock may already have been revoked.
+	auto = ""
+	if !entry.recovery.Pending && entry.recovery.allows(entry.token, time.Now()) && codexTurnStateAutoExpiry(entry.token, entry.setAt, time.Now()) > time.Now().UnixMilli() {
+		auto = entry.token
+	}
+	knownUntil := entry.knownTokens[codexTurnStateCanonicalDigest(native)]
+	nativeAllowed := native != "" && knownUntil > time.Now().UnixMilli() && entry.recovery.allows(native, time.Now())
+	if !nativeAllowed {
 		headers.Del(openAICodexTurnStateHeader)
+		if auto != "" {
+			headers.Set(openAICodexTurnStateHeader, auto)
+		}
 	}
-	if headers.Get(openAICodexTurnStateHeader) == "" && auto != "" {
-		headers.Set(openAICodexTurnStateHeader, auto)
-	}
+	s.openaiTurnStateMu.Unlock()
+	return nil
 }
 
 func codexTurnStateDigest(value string) string {
@@ -229,12 +269,16 @@ func (req openAIWSAcquireRequest) withCurrentTurnState(ctx context.Context) open
 	}
 	req.turnStateFingerprint = ""
 	req.turnStateRecoveryEpoch = ""
+	req.turnStateError = nil
+	req.turnStateModel = ""
 	if req.TurnState.Gateway != nil {
-		req.TurnState.Gateway.applyOpenAICodexTurnState(ctx, req.Account, req.Headers, req.TurnState.Models...)
+		req.turnStateModel = req.TurnState.Gateway.codexTurnStateModel(ctx, req.TurnState.Models...)
+		ctx = withCodexTurnStateModel(ctx, req.turnStateModel)
+		req.turnStateError = req.TurnState.Gateway.applyOpenAICodexTurnState(ctx, req.Account, req.Headers, req.TurnState.Models...)
 		req.turnStateRecoveryEpoch = req.TurnState.Gateway.codexTurnStateRecoveryEpoch(ctx, req.Account)
 	}
-	if token := req.Headers.Get(openAICodexTurnStateHeader); token != "" && token != req.TurnState.NativeState {
-		req.turnStateFingerprint = codexTurnStateDigest(token + "\x00" + config.Models)
+	if token := req.Headers.Get(openAICodexTurnStateHeader); token != "" && config.AutoEnabled && codexTurnStateModelMatches(config.Models, req.TurnState.Models...) {
+		req.turnStateFingerprint = codexTurnStateDigest(token + "\x00" + req.turnStateModel + "\x00" + config.Models)
 	}
 	return req
 }

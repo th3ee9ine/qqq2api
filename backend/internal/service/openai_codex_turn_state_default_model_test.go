@@ -18,7 +18,7 @@ func TestCodexTurnStateConfiguredModelAcrossLifecycle(t *testing.T) {
 			settings.values[SettingKeyOpenAICodexTurnStateDefaultModel] = "custom/probe-model"
 			if phase != "initial" {
 				at := time.Now().Add(-51 * time.Minute)
-				account.Extra = map[string]any{CodexTurnStateAutoExtraKey: testGlobalTurnStateToken(at, 10), CodexTurnStateAutoSetAtExtraKey: at.UnixMilli()}
+				account.Extra = map[string]any{codexTurnStateModelExtraKey("custom/probe-model"): map[string]any{CodexTurnStateAutoExtraKey: testGlobalTurnStateToken(at, 10), CodexTurnStateAutoSetAtExtraKey: at.UnixMilli()}}
 				repo.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
 			}
 			var sent []string
@@ -31,22 +31,22 @@ func TestCodexTurnStateConfiguredModelAcrossLifecycle(t *testing.T) {
 				return turnStateResponse(testGlobalTurnStateToken(time.Now(), 10)), nil
 			}}
 			if phase == "recovery" {
-				s.collectOpenAICodexTurnState(context.Background(), account, testGlobalTurnStateToken(time.Now(), 11), codexTurnStateAutoToken(account))
+				s.collectOpenAICodexTurnState(context.Background(), account, testGlobalTurnStateToken(time.Now(), 11), codexTurnStateAutoToken(codexTurnStateModelAccount(account, "custom/probe-model")))
 			} else {
-				// A different routed user model must not override the probe setting.
-				s.autoTurnStateForAccount(context.Background(), account, "gpt-5.5", "gpt-5.6-sol")
+				// Without an explicit request model, use the configured default.
+				s.autoTurnStateForAccount(context.Background(), account)
 			}
 			waitTurnStateAutoIdle(t, s)
 			require.Equal(t, []string{"custom/probe-model"}, sent)
 			stored, err := repo.GetByID(context.Background(), account.ID)
 			require.NoError(t, err)
-			require.NotEmpty(t, codexTurnStateAutoToken(stored))
-			require.False(t, codexTurnStateRecoveryFromAccount(stored).Pending)
+			require.NotEmpty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "custom/probe-model")))
+			require.False(t, codexTurnStateRecoveryFromAccount(codexTurnStateModelAccount(stored, "custom/probe-model")).Pending)
 		})
 	}
 }
 
-func TestCodexTurnStatePoolRetryReadsChangedDefaultModel(t *testing.T) {
+func TestCodexTurnStatePoolRetryKeepsOwningModel(t *testing.T) {
 	s, _, account := newTurnStateAutoService(t)
 	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
 	settings.values[SettingKeyOpenAICodexTurnStateDefaultModel] = "custom/first"
@@ -65,7 +65,7 @@ func TestCodexTurnStatePoolRetryReadsChangedDefaultModel(t *testing.T) {
 		}
 		return turnStateResponse(testGlobalTurnStateToken(time.Now(), 10)), nil
 	}}
-	s.autoTurnStateForAccount(context.Background(), account, "gpt-5.5")
+	s.autoTurnStateForAccount(context.Background(), account, "gpt-5", "custom/first")
 	waitTurnStateAutoIdle(t, s)
-	require.Equal(t, []string{"custom/first", "custom/updated"}, sent)
+	require.Equal(t, []string{"custom/first", "custom/first"}, sent)
 }

@@ -36,17 +36,21 @@ func (e codexTurnStateAutoError) Error() string { return string(e) }
 // CodexTurnStateAutoInfo contains no token. Expiry is a reference TTL, not an
 // upstream guarantee. Unknown envelopes age from their first collection time.
 type CodexTurnStateAutoInfo struct {
-	Configured      bool   `json:"configured"`
-	SetAtMS         int64  `json:"set_at_ms,omitempty"`
-	ProbeAtMS       int64  `json:"probe_at_ms,omitempty"`
-	ExpiresAtMS     int64  `json:"expires_at_ms,omitempty"`
-	Due             bool   `json:"due"`
-	LastError       string `json:"last_error,omitempty"`
-	RecoveryPending bool   `json:"recovery_pending"`
-	InvalidatedAtMS int64  `json:"invalidated_at_ms,omitempty"`
+	Models          map[string]CodexTurnStateAutoInfo `json:"models,omitempty"`
+	Configured      bool                              `json:"configured"`
+	SetAtMS         int64                             `json:"set_at_ms,omitempty"`
+	ProbeAtMS       int64                             `json:"probe_at_ms,omitempty"`
+	ExpiresAtMS     int64                             `json:"expires_at_ms,omitempty"`
+	Due             bool                              `json:"due"`
+	LastError       string                            `json:"last_error,omitempty"`
+	RecoveryPending bool                              `json:"recovery_pending"`
+	InvalidatedAtMS int64                             `json:"invalidated_at_ms,omitempty"`
 }
 
 type codexTurnStateAutoEntry struct {
+	model          string
+	loadedAt       time.Time
+	knownTokens    map[string]int64
 	token          string
 	setAt, probeAt int64
 	lastError      string
@@ -119,8 +123,7 @@ func CodexTurnStateAutoInfoForAccount(account *Account, now time.Time) *CodexTur
 	if !codexTurnStateAutoEligible(account) {
 		return nil
 	}
-	info := codexTurnStateAutoInfo(account, now)
-	return &info
+	return codexTurnStateScopedInfo(account, now)
 }
 func safeCodexTurnStateAutoError(value string) string {
 	switch value {
@@ -143,9 +146,12 @@ func (s *OpenAIGatewayService) codexTurnStateAutoEnabled(ctx context.Context) bo
 
 // Must hold openaiTurnStateMu. Account snapshots are read-only: background
 // work never mutates the scheduler/request's Extra or Credentials maps.
-func (s *OpenAIGatewayService) codexTurnStateEntryLocked(account *Account, now time.Time) *codexTurnStateAutoEntry {
+func (s *OpenAIGatewayService) codexTurnStateEntryLocked(account *Account, now time.Time, models ...string) *codexTurnStateAutoEntry {
+	model := s.codexTurnStateModel(context.Background(), models...)
+	key := codexTurnStateKey{account.ID, model}
+	account = codexTurnStateModelAccount(account, model)
 	if s.openaiTurnStates == nil {
-		s.openaiTurnStates = make(map[int64]*codexTurnStateAutoEntry)
+		s.openaiTurnStates = make(map[codexTurnStateKey]*codexTurnStateAutoEntry)
 	}
 	if now.Sub(s.openaiTurnStateSweep) >= time.Hour {
 		for id, entry := range s.openaiTurnStates {
@@ -155,10 +161,10 @@ func (s *OpenAIGatewayService) codexTurnStateEntryLocked(account *Account, now t
 		}
 		s.openaiTurnStateSweep = now
 	}
-	entry := s.openaiTurnStates[account.ID]
+	entry := s.openaiTurnStates[key]
 	if entry == nil {
-		entry = &codexTurnStateAutoEntry{recovery: codexTurnStateRecoveryFromAccount(account), lastError: safeCodexTurnStateAutoError(account.GetExtraString(CodexTurnStateAutoLastErrorExtraKey))}
-		s.openaiTurnStates[account.ID] = entry
+		entry = &codexTurnStateAutoEntry{model: model, knownTokens: make(map[string]int64), recovery: codexTurnStateRecoveryFromAccount(account), lastError: safeCodexTurnStateAutoError(account.GetExtraString(CodexTurnStateAutoLastErrorExtraKey))}
+		s.openaiTurnStates[key] = entry
 	}
 	persistedRecovery := codexTurnStateRecoveryFromAccount(account)
 	if persistedRecovery.InvalidatedAtMS > entry.recovery.InvalidatedAtMS {
@@ -178,6 +184,7 @@ func (s *OpenAIGatewayService) codexTurnStateEntryLocked(account *Account, now t
 		entry.probeAt = at
 	}
 	entry.lastUsed = now
+	s.rememberCodexTurnStateLocked(entry, now)
 	return entry
 }
 
@@ -195,7 +202,7 @@ func (s *OpenAIGatewayService) autoTurnStateForAccount(ctx context.Context, acco
 	now := time.Now()
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
-	entry := s.codexTurnStateEntryLocked(account, now)
+	entry := s.codexTurnStateEntryLocked(account, now, s.codexTurnStateModel(ctx, models...))
 
 	expiry := codexTurnStateAutoExpiry(entry.token, entry.setAt, now)
 	if entry.recovery.Pending || entry.token == "" || expiry == 0 || now.Add(codexTurnStateAutoRenewBefore).UnixMilli() >= expiry {
@@ -223,11 +230,11 @@ func (s *OpenAIGatewayService) collectOpenAICodexTurnStateAtEpoch(ctx context.Co
 	now := time.Now()
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
-	entry := s.codexTurnStateEntryLocked(account, now)
+	entry := s.codexTurnStateEntryLocked(account, now, s.codexTurnStateModel(ctx))
 	if epoch != "" && epoch != strconv.FormatInt(entry.recovery.InvalidatedAtMS, 10) {
 		return
 	}
-	if codexTurnStateIs312(state) {
+	if codexTurnStateIsRecoverySignal(state) {
 		s.invalidateCodexTurnStateLocked(entry, state, now, sent...)
 	} else {
 		s.setCodexTurnStateLocked(entry, state, now)
@@ -254,6 +261,7 @@ func (s *OpenAIGatewayService) setCodexTurnStateLocked(entry *codexTurnStateAuto
 		return
 	}
 	entry.token, entry.setAt, entry.lastError, entry.dirty = state, now.UnixMilli(), "", true
+	s.rememberCodexTurnStateLocked(entry, now)
 }
 func (s *OpenAIGatewayService) startCodexTurnStateWorkerLocked(id int64, entry *codexTurnStateAutoEntry) {
 	if s.accountRepo == nil || entry.running || (!entry.dirty && !entry.probe) || time.Now().Before(entry.retryAfter) {
@@ -261,7 +269,7 @@ func (s *OpenAIGatewayService) startCodexTurnStateWorkerLocked(id int64, entry *
 	}
 	if s.openaiTurnStateWorkers >= codexTurnStateAutoMaxWorkers {
 		if !entry.queued {
-			s.openaiTurnStatePending = append(s.openaiTurnStatePending, id)
+			s.openaiTurnStatePending = append(s.openaiTurnStatePending, codexTurnStateKey{id, entry.model})
 			entry.queued = true
 		}
 		return
@@ -287,7 +295,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 			s.openaiTurnStatePending = s.openaiTurnStatePending[1:]
 			if next := s.openaiTurnStates[nextID]; next != nil {
 				next.queued = false
-				s.startCodexTurnStateWorkerLocked(nextID, next)
+				s.startCodexTurnStateWorkerLocked(nextID.accountID, next)
 			}
 		}
 		if len(s.openaiTurnStatePending) == 0 {
@@ -303,14 +311,13 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 		}
 		s.openaiTurnStateMu.Lock()
 		dirty, probe := entry.dirty, entry.probe
-		token, setAt, lastError, recovery := entry.token, entry.setAt, entry.lastError, entry.recovery.clone()
 		entry.dirty, entry.probe = false, false
 		s.openaiTurnStateMu.Unlock()
 		if !dirty && !probe {
 			return
 		}
 		if dirty {
-			err := s.persistCodexTurnState(id, map[string]any{CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: setAt, CodexTurnStateAutoLastErrorExtraKey: lastError, CodexTurnStateAutoRecoveryExtraKey: recovery})
+			err := s.persistCodexTurnState(id, entry)
 			if err != nil {
 				s.openaiTurnStateMu.Lock()
 				entry.dirty = true
@@ -325,7 +332,10 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 		}
 	}
 }
-func (s *OpenAIGatewayService) persistCodexTurnState(id int64, updates map[string]any) error {
+func (s *OpenAIGatewayService) persistCodexTurnState(id int64, entry *codexTurnStateAutoEntry) error {
+	s.openaiTurnStateMu.Lock()
+	updates := map[string]any{codexTurnStateModelExtraKey(entry.model): map[string]any{CodexTurnStateAutoExtraKey: entry.token, CodexTurnStateAutoSetAtExtraKey: entry.setAt, CodexTurnStateAutoProbeAtExtraKey: entry.probeAt, CodexTurnStateAutoLastErrorExtraKey: entry.lastError, CodexTurnStateAutoRecoveryExtraKey: entry.recovery.clone()}}
+	s.openaiTurnStateMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return s.accountRepo.UpdateExtra(ctx, id, updates)
@@ -344,7 +354,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 	// cross-instance duplicates; it is deliberately not a distributed lock.
 	now := time.Now()
 	s.openaiTurnStateMu.Lock()
-	s.codexTurnStateEntryLocked(account, now)
+	s.codexTurnStateEntryLocked(account, now, entry.model)
 	expiry := codexTurnStateAutoExpiry(entry.token, entry.setAt, now)
 	if !entry.forceProbe && ((!entry.recovery.Pending && entry.token != "" && expiry > now.Add(codexTurnStateAutoRenewBefore).UnixMilli()) || (entry.probeAt > 0 && now.Sub(time.UnixMilli(entry.probeAt)) < codexTurnStateAutoProbeInterval)) {
 		s.openaiTurnStateMu.Unlock()
@@ -358,7 +368,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 	if !s.codexTurnStateAutoEnabled(ctx) {
 		return
 	}
-	if err := s.persistCodexTurnState(id, map[string]any{CodexTurnStateAutoProbeAtExtraKey: now.UnixMilli()}); err != nil {
+	if err := s.persistCodexTurnState(id, entry); err != nil {
 		return
 	}
 	// The account route always gets the first attempt. Load the pool only after
@@ -374,8 +384,8 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 		if stale {
 			return
 		}
-		// Resolve at each attempt so queued and pool retries honor saved changes.
-		model := s.settingService.GetOpenAICodexTurnState(ctx).DefaultModel
+		// Renewal and every IP retry must use the model that owns this state.
+		model := entry.model
 		attemptCtx, cancelAttempt := context.WithTimeout(ctx, codexTurnStateProbeAttemptTimeout)
 		state, probeErr := s.probeOpenAICodexTurnStateViaProxy(attemptCtx, account, model, routes[attempt])
 		cancelAttempt()
@@ -388,14 +398,14 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 			return
 		}
 		err = probeErr
-		var revocation map[string]any
+		var revocation bool
 		now := time.Now()
-		if codexTurnStateIs312(state) {
+		if codexTurnStateIsRecoverySignal(state) {
 			s.invalidateCodexTurnStateLocked(entry, state, now)
 			// Continue this bounded round, never recursively schedule probes.
 			entry.forceProbe, entry.probe = false, false
 			generation, before = entry.recovery.InvalidatedAtMS, entry.token
-			revocation = map[string]any{CodexTurnStateAutoExtraKey: entry.token, CodexTurnStateAutoSetAtExtraKey: entry.setAt, CodexTurnStateAutoRecoveryExtraKey: entry.recovery.clone(), CodexTurnStateAutoLastErrorExtraKey: entry.lastError}
+			revocation = true
 			if err == nil {
 				err = codexTurnStateAutoError("state_312")
 			}
@@ -410,8 +420,8 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 		s.openaiTurnStateMu.Unlock()
 		// Persist revocation before more network work so a restart during a
 		// slow pool round cannot reload the now-revoked state.
-		if revocation != nil {
-			if persistErr := s.persistCodexTurnState(id, revocation); persistErr != nil {
+		if revocation {
+			if persistErr := s.persistCodexTurnState(id, entry); persistErr != nil {
 				return // The owning worker retains dirty state and retries persistence.
 			}
 		}
@@ -436,7 +446,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 	entry.lastError = code
 	// This worker owns persistence; release the cache mutex during DB I/O.
 	s.openaiTurnStateMu.Unlock()
-	_ = s.persistCodexTurnState(id, map[string]any{CodexTurnStateAutoLastErrorExtraKey: code})
+	_ = s.persistCodexTurnState(id, entry)
 	slog.Warn("openai_codex_turn_state_probe_failed", "account_id", id, "code", code)
 	s.openaiTurnStateMu.Lock()
 }
@@ -452,7 +462,6 @@ func (s *OpenAIGatewayService) probeOpenAICodexTurnStateViaProxy(ctx context.Con
 	if strings.TrimSpace(model) == "" {
 		model = s.settingService.GetOpenAICodexTurnState(ctx).DefaultModel
 	}
-	model = normalizeOpenAIModelForUpstream(account, model)
 	payload := createOpenAITestPayload(model, true)
 	payload["instructions"] = "Reply with OK only."
 	payloadBytes, _ := json.Marshal(payload)
@@ -494,7 +503,7 @@ func (s *OpenAIGatewayService) probeOpenAICodexTurnStateViaProxy(ctx context.Con
 	}
 	state := extractOpenAICodexTurnState(resp.Header)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if !codexTurnStateIs312(state) {
+		if !codexTurnStateIsRecoverySignal(state) {
 			state = ""
 		}
 		return state, codexTurnStateAutoError(fmt.Sprintf("http_%d", resp.StatusCode))
@@ -507,7 +516,7 @@ func (s *OpenAIGatewayService) probeOpenAICodexTurnStateViaProxy(ctx context.Con
 	}
 	// Allow the tiny response to finish for connection reuse. Cap only this
 	// maintenance response, never a user stream. The context bounds slow bodies.
-	if resp.Body != nil && !codexTurnStateIs312(state) {
+	if resp.Body != nil && !codexTurnStateIsRecoverySignal(state) {
 		_, _ = io.CopyN(io.Discard, resp.Body, codexTurnStateAutoMaxBody)
 	}
 	return state, nil
@@ -521,6 +530,9 @@ func StripCodexTurnStateAutoExtra(extra map[string]any) map[string]any {
 	}
 	result := make(map[string]any, len(extra))
 	for key, value := range extra {
+		if strings.HasPrefix(key, CodexTurnStateModelExtraPrefix) {
+			continue
+		}
 		switch key {
 		case CodexTurnStateAutoExtraKey, CodexTurnStateAutoSetAtExtraKey, CodexTurnStateAutoProbeAtExtraKey, CodexTurnStateAutoLastErrorExtraKey, CodexTurnStateAutoRecoveryExtraKey:
 			continue

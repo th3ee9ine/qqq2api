@@ -957,6 +957,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	for {
 		turnStateRequest.Headers = headers
 		turnStateRequest = turnStateRequest.withCurrentTurnState(ctx)
+		if turnStateRequest.turnStateError != nil {
+			return turnStateRequest.turnStateError
+		}
 		headers = turnStateRequest.Headers
 		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
 		if err != nil {
@@ -967,11 +970,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		sentTurnState = headers.Get(openAICodexTurnStateHeader)
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
-		if codexTurnStateIs312(extractOpenAICodexTurnState(handshakeHeaders)) {
-			s.collectOpenAICodexTurnStateAtEpoch(ctx, account, extractOpenAICodexTurnState(handshakeHeaders), turnStateRequest.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
+		if codexTurnStateIsRecoverySignal(extractOpenAICodexTurnState(handshakeHeaders)) {
+			s.collectOpenAICodexTurnStateAtEpoch(withCodexTurnStateModel(ctx, turnStateRequest.turnStateModel), account, extractOpenAICodexTurnState(handshakeHeaders), turnStateRequest.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
 		}
 		if err == nil {
-			s.collectOpenAICodexTurnStateAtEpoch(ctx, account, extractOpenAICodexTurnState(handshakeHeaders), turnStateRequest.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
+			s.collectOpenAICodexTurnStateAtEpoch(withCodexTurnStateModel(ctx, turnStateRequest.turnStateModel), account, extractOpenAICodexTurnState(handshakeHeaders), turnStateRequest.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
 			break
 		}
 		var handshakeErr *openAIWSHandshakeError
@@ -1200,6 +1203,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			//     覆盖（Store(nil)），因为 OpenAI 上游对该帧实际不传
 			//     service_tier 时按 default 处理，billing 应如实反映。
 			if policyErr == nil && blocked == nil && isResponseCreate {
+				if err := s.checkCodexTurnStatePassthrough(ctx, account, sentTurnState, turnStateRequest.turnStateModel, requestModelForThisFrame, model); err != nil {
+					return payload, nil, err
+				}
 				// This is the last local gate before the frame is returned to the
 				// relay for upstream transmission. Acquire the per-turn user/account
 				// slots here so policy-rejected frames never consume capacity.

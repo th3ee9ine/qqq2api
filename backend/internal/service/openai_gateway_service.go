@@ -534,10 +534,11 @@ type OpenAIGatewayService struct {
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
 	openaiTurnStateMu           sync.Mutex
-	openaiTurnStates            map[int64]*codexTurnStateAutoEntry
+	openaiTurnStates            map[codexTurnStateKey]*codexTurnStateAutoEntry
 	openaiTurnStateWorkers      int
-	openaiTurnStatePending      []int64
+	openaiTurnStatePending      []codexTurnStateKey
 	openaiTurnStateSweep        time.Time
+	openaiTurnStateLoads        codexTurnStateSourceLoads
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

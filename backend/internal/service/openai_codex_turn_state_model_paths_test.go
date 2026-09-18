@@ -34,7 +34,7 @@ func TestAutomaticCodexTurnStateWSPassthroughModelPaths(t *testing.T) {
 			account.Type = AccountTypeOAuth
 			account.Credentials = map[string]any{"access_token": "test-token"}
 			account.Extra = map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough}
-			seedAutomaticTurnState(account, "auto-path-state")
+			seedAutomaticTurnState(account, "auto-path-state", "gpt-5.1")
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			server, serverErr := startPassthroughLifecycleServerWithHooks(t, ctx, svc, account, func(*gin.Context) *OpenAIWSIngressHooks {
@@ -92,7 +92,7 @@ func TestAutomaticCodexTurnStateImagesResponsesModelPaths(t *testing.T) {
 			parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 			require.NoError(t, err)
 			account := directImagesTestAccount()
-			seedAutomaticTurnState(account, "auto-image-state")
+			seedAutomaticTurnState(account, "auto-image-state", openAIImagesResponsesMainModelValue())
 			account.Credentials["model_mapping"] = map[string]any{"gpt-image-channel": "gpt-image-1"}
 			result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "gpt-image-channel")
 			require.NoError(t, err)

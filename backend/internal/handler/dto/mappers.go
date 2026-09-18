@@ -417,6 +417,9 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 	}
 	redacted := make(map[string]any, len(extra))
 	for key, value := range extra {
+		if strings.HasPrefix(key, service.CodexTurnStateModelExtraPrefix) {
+			continue
+		}
 		switch key {
 		case service.CodexTurnStateAutoExtraKey,
 			service.CodexTurnStateAutoSetAtExtraKey,

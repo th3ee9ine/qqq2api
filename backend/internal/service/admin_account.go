@@ -781,6 +781,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
 		normalizedExtra = StripCodexTurnStateAutoExtra(normalizedExtra)
+		for key, value := range account.Extra {
+			if strings.HasPrefix(key, CodexTurnStateModelExtraPrefix) {
+				normalizedExtra[key] = value
+			}
+		}
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
 			CodexTurnStateAutoExtraKey,

@@ -736,7 +736,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	if account.UsesOpenAICodexProtocol() {
-		s.applyOpenAICodexTurnState(ctx, account, req.Header, append(clientModels, gjson.GetBytes(body, "model").String())...)
+		req, err = s.prepareCodexTurnStateRequest(ctx, req, account, append(clientModels, gjson.GetBytes(body, "model").String())...)
+		if err != nil {
+			return nil, err
+		}
 	}
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 

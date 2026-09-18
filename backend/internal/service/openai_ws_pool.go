@@ -73,6 +73,8 @@ type openAIWSAcquireRequest struct {
 	Headers http.Header
 	// TurnState contains only request-local injection policy; never an outbound header.
 	TurnState              openAIWSTurnStatePolicy
+	turnStateError         error
+	turnStateModel         string
 	turnStateFingerprint   string
 	turnStateRecoveryEpoch string
 	// HeadersFactory is evaluated inside dialConn. It exists so credentials
@@ -823,11 +825,9 @@ func (c *openAIWSConn) matchesContinuationHandshakeCompatibility(compatibility o
 		return false
 	}
 	existing := c.handshakeCompatibility
-	// A live response cannot renegotiate Turn State either. New conversations
-	// use the full compatibility key and rotate; pinned continuations finish.
-	// Recovery epoch is never ignored: revoked handshakes cannot continue.
-	existing.turnStateOverride = ""
-	compatibility.turnStateOverride = ""
+	// Pinned continuations cannot bypass account/model ownership, expiry,
+	// mandatory injection or revocation. A changed Turn State requires a new
+	// handshake even when other identity settings may be relaxed below.
 	existing.responsesTiming = ""
 	existing.subagent = ""
 	existing.memgenRequest = ""
@@ -1224,6 +1224,9 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 
 retryAcquire:
 	req = req.withCurrentTurnState(ctx)
+	if req.turnStateError != nil {
+		return nil, req.turnStateError
+	}
 	accountID := req.Account.ID
 	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers, req.turnStateFingerprint, req.turnStateRecoveryEpoch)
 	routingAffinity := normalizeOpenAIWSRoutingAffinity(req.Headers)
@@ -2346,6 +2349,9 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 		return nil, errors.New("openai ws client dialer is nil")
 	}
 	req = req.withCurrentTurnState(ctx)
+	if req.turnStateError != nil {
+		return nil, req.turnStateError
+	}
 	headers := cloneHeader(req.Headers)
 	var err error
 	if req.HeadersFactory != nil {
@@ -2356,8 +2362,8 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	sentTurnState := headers.Get(openAICodexTurnStateHeader)
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
-	if req.TurnState.Gateway != nil && codexTurnStateIs312(extractOpenAICodexTurnState(handshakeHeaders)) {
-		req.TurnState.Gateway.collectOpenAICodexTurnStateAtEpoch(ctx, req.Account, extractOpenAICodexTurnState(handshakeHeaders), req.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
+	if req.TurnState.Gateway != nil && codexTurnStateIsRecoverySignal(extractOpenAICodexTurnState(handshakeHeaders)) {
+		req.TurnState.Gateway.collectOpenAICodexTurnStateAtEpoch(withCodexTurnStateModel(ctx, req.turnStateModel), req.Account, extractOpenAICodexTurnState(handshakeHeaders), req.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
 	}
 	if err != nil {
 		var handshakeErr *openAIWSHandshakeError
@@ -2381,7 +2387,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	id := p.nextConnID(req.Account.ID)
 	if req.TurnState.Gateway != nil {
-		req.TurnState.Gateway.collectOpenAICodexTurnStateAtEpoch(ctx, req.Account, extractOpenAICodexTurnState(handshakeHeaders), req.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
+		req.TurnState.Gateway.collectOpenAICodexTurnStateAtEpoch(withCodexTurnStateModel(ctx, req.turnStateModel), req.Account, extractOpenAICodexTurnState(handshakeHeaders), req.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
 	}
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
 	pooledConn.sentTurnState = &sentTurnState

@@ -86,7 +86,7 @@ func TestCodexTurnStateLiveIntegration(t *testing.T) {
 		stored := snapshot()
 		info := CodexTurnStateAutoInfoForAccount(stored, time.Now())
 		t.Logf("phase=%s configured=%t recovery_pending=%t last_error=%s", phase, info.Configured, info.RecoveryPending, info.LastError)
-		state := codexTurnStateAutoToken(stored)
+		state := codexTurnStateAutoToken(codexTurnStateModelAccount(stored, model))
 		_, blocks, ok := parseCodexTurnState(state)
 		if !ok || blocks != 10 || info.RecoveryPending {
 			t.Fatalf("phase=%s did not produce a usable upstream 292", phase)
@@ -139,15 +139,15 @@ func TestCodexTurnStateLiveIntegration(t *testing.T) {
 
 	// Exercise the renewal branch immediately by aging only local metadata.
 	// The real token is never edited, re-signed or fabricated for the network.
-	beforeRenew := codexTurnStateAutoToken(snapshot())
+	beforeRenew := codexTurnStateAutoToken(codexTurnStateModelAccount(snapshot(), model))
 	age := time.Now().Add(-51 * time.Minute).UnixMilli()
 	repo.mu.Lock()
-	repo.accounts[a.ID].Extra[CodexTurnStateAutoSetAtExtraKey] = age
-	repo.accounts[a.ID].Extra[CodexTurnStateAutoProbeAtExtraKey] = int64(0)
+	codexTurnStateModelAccount(repo.accounts[a.ID], model).Extra[CodexTurnStateAutoSetAtExtraKey] = age
+	codexTurnStateModelAccount(repo.accounts[a.ID], model).Extra[CodexTurnStateAutoProbeAtExtraKey] = int64(0)
 	repo.mu.Unlock()
 	s.openaiTurnStateMu.Lock()
-	s.openaiTurnStates[a.ID].setAt = age
-	s.openaiTurnStates[a.ID].probeAt = 0
+	s.openaiTurnStates[codexTurnStateKey{a.ID, model}].setAt = age
+	s.openaiTurnStates[codexTurnStateKey{a.ID, model}].probeAt = 0
 	s.openaiTurnStateMu.Unlock()
 	network.setPhase("simulated_renewal_clock_real_probe")
 	s.autoTurnStateForAccount(context.Background(), snapshot(), model)
@@ -222,7 +222,7 @@ func (u *codexTurnStateLiveHTTP) Do(req *http.Request, proxy string, _ int64, _ 
 	}
 	state := extractOpenAICodexTurnState(resp.Header)
 	issued, blocks, parsed := parseCodexTurnState(state)
-	if codexTurnStateIs312(state) {
+	if codexTurnStateIsRecoverySignal(state) {
 		u.mu.Lock()
 		u.signals++
 		u.mu.Unlock()

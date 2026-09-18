@@ -9,8 +9,10 @@ import (
 	"time"
 )
 
-// 292/312 describe padded base64url envelope lengths, not HTTP statuses.
-// Use decoded block counts so omitted '=' padding has identical semantics.
+// 292/312/356 describe padded base64url envelope lengths, not HTTP statuses.
+// Personal accounts use the 312-byte envelope as the invalidation signal;
+// team accounts use the 356-byte envelope for the same signal. Use decoded
+// block counts so omitted '=' padding has identical semantics.
 const CodexTurnStateAutoRecoveryExtraKey = "codex_turn_state_auto_recovery"
 const codexTurnStateSignalHistoryLimit = 64
 
@@ -24,6 +26,19 @@ type codexTurnStateRecovery struct {
 func codexTurnStateIs312(state string) bool {
 	_, blocks, ok := parseCodexTurnState(state)
 	return ok && blocks == 11
+}
+
+func codexTurnStateIs356(state string) bool {
+	_, blocks, ok := parseCodexTurnState(state)
+	return ok && blocks == 13
+}
+
+// codexTurnStateIsRecoverySignal covers both account families. A 356-byte
+// team-account signal has the same lifecycle meaning as the 312-byte
+// personal-account signal: revoke the current state immediately and require a
+// newly probed 292-byte state before the next automatic request.
+func codexTurnStateIsRecoverySignal(state string) bool {
+	return codexTurnStateIs312(state) || codexTurnStateIs356(state)
 }
 func codexTurnStateCanonicalDigest(state string) string {
 	// Padding is only a transport representation, never a new credential.
@@ -87,7 +102,7 @@ func (r codexTurnStateRecovery) clone() codexTurnStateRecovery {
 	return r
 }
 func (r codexTurnStateRecovery) allows(state string, now time.Time) bool {
-	if state == "" || codexTurnStateIs312(state) {
+	if state == "" || codexTurnStateIsRecoverySignal(state) {
 		return false
 	}
 	if r.InvalidatedAtMS == 0 {
@@ -100,7 +115,7 @@ func (r codexTurnStateRecovery) allows(state string, now time.Time) bool {
 		!issued.After(now.Add(time.Minute)) && now.Before(issued.Add(codexTurnStateTTL))
 }
 
-// Invalidation applies even before TTL expiry. A duplicate 312 never resets
+// Invalidation applies even before TTL expiry. A duplicate 312/356 never resets
 // cooldown; each new recovery episode gets one immediate probe. Caller holds
 // the state mutex, including while sharing the generation with probe workers.
 func (s *OpenAIGatewayService) invalidateCodexTurnStateLocked(entry *codexTurnStateAutoEntry, state string, now time.Time, sent ...string) {
@@ -117,6 +132,7 @@ func (s *OpenAIGatewayService) invalidateCodexTurnStateLocked(entry *codexTurnSt
 		entry.forceProbe = true
 	}
 	entry.recovery.Pending = true
+	clear(entry.knownTokens)
 	for _, token := range append(sent, entry.token) {
 		entry.recovery.Rejected = appendCodexTurnStateDigest(entry.recovery.Rejected, token)
 	}
@@ -136,7 +152,7 @@ func (s *OpenAIGatewayService) codexTurnStateAllowed(ctx context.Context, accoun
 	}
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
-	entry := s.codexTurnStateEntryLocked(account, time.Now())
+	entry := s.codexTurnStateEntryLocked(account, time.Now(), s.codexTurnStateModel(ctx))
 	return entry.recovery.allows(state, time.Now())
 }
 func (s *OpenAIGatewayService) codexTurnStateRecoveryEpoch(ctx context.Context, account *Account) string {
@@ -145,7 +161,7 @@ func (s *OpenAIGatewayService) codexTurnStateRecoveryEpoch(ctx context.Context, 
 	}
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
-	entry := s.codexTurnStateEntryLocked(account, time.Now())
+	entry := s.codexTurnStateEntryLocked(account, time.Now(), s.codexTurnStateModel(ctx))
 	return strconv.FormatInt(entry.recovery.InvalidatedAtMS, 10)
 }
 
@@ -166,6 +182,9 @@ func (s *OpenAIGatewayService) collectCodexTurnStateHTTP(ctx context.Context, ac
 	if len(requests) > 0 && requests[0] != nil {
 		epoch, _ = requests[0].Context().Value(codexTurnStateEpochContextKey{}).(string)
 		sent = requests[0].Header.Get(openAICodexTurnStateHeader)
+	}
+	if len(requests) > 0 && requests[0] != nil {
+		ctx = withCodexTurnStateModel(ctx, s.codexTurnStateModel(requests[0].Context()))
 	}
 	s.collectOpenAICodexTurnStateAtEpoch(ctx, account, state, epoch, sent)
 }

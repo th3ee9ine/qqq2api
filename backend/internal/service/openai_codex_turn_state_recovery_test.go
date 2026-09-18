@@ -22,7 +22,7 @@ func recoveryTestToken(now time.Time, blocks int, marker byte) string {
 	return base64.URLEncoding.EncodeToString(raw)
 }
 func seedRecoveryTestAccount(repo *turnStateAutoRepo, a *Account, token string) {
-	a.Extra = map[string]any{CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli(), CodexTurnStateAutoProbeAtExtraKey: time.Now().UnixMilli()}
+	a.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5"): map[string]any{CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli(), CodexTurnStateAutoProbeAtExtraKey: time.Now().UnixMilli()}}
 	repo.mu.Lock()
 	repo.accounts[a.ID].Extra = mergeMap(nil, a.Extra)
 	repo.mu.Unlock()
@@ -30,13 +30,42 @@ func seedRecoveryTestAccount(repo *turnStateAutoRepo, a *Account, token string) 
 func TestCodexTurnStateRecoveryRecognizesEnvelopeNotHTTPCodeOrStringLength(t *testing.T) {
 	now := time.Now()
 	normal, signal := recoveryTestToken(now, 10, 1), recoveryTestToken(now, 11, 2)
+	teamSignal := recoveryTestToken(now, 13, 3)
 	require.Len(t, normal, 292)
 	require.Len(t, signal, 312)
+	require.Len(t, teamSignal, 356)
 	require.False(t, codexTurnStateIs312(normal))
 	require.True(t, codexTurnStateIs312(signal))
 	require.True(t, codexTurnStateIs312(strings.TrimRight(signal, "=")))
+	require.False(t, codexTurnStateIs312(teamSignal))
+	require.True(t, codexTurnStateIs356(teamSignal))
+	require.True(t, codexTurnStateIsRecoverySignal(teamSignal))
+	require.True(t, codexTurnStateIsRecoverySignal(strings.TrimRight(teamSignal, "=")))
 	require.False(t, codexTurnStateIs312(strings.Repeat("x", 312)))
 	require.False(t, codexTurnStateIs312("312"))
+}
+
+func TestCodexTurnStateRecovery356RevokesAndFetchesNew292(t *testing.T) {
+	s, repo, a := newTurnStateAutoService(t)
+	now := time.Now()
+	old := recoveryTestToken(now.Add(-time.Minute), 10, 1)
+	next := recoveryTestToken(now, 10, 2)
+	teamSignal := recoveryTestToken(now, 13, 3)
+	seedRecoveryTestAccount(repo, a, old)
+	var calls atomic.Int32
+	s.httpUpstream = &turnStateAutoUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
+		calls.Add(1)
+		return turnStateResponse(next), nil
+	}}
+
+	s.collectOpenAICodexTurnState(context.Background(), a, teamSignal, old)
+	waitTurnStateAutoIdle(t, s)
+
+	require.EqualValues(t, 1, calls.Load())
+	stored, err := repo.GetByID(context.Background(), a.ID)
+	require.NoError(t, err)
+	require.Equal(t, next, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+	require.False(t, codexTurnStateRecoveryFromAccount(codexTurnStateModelAccount(stored, "gpt-5")).Pending)
 }
 func TestCodexTurnStateRecoveryImmediatelyRevokesAndFetchesNew292(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
@@ -78,7 +107,7 @@ func TestCodexTurnStateRecoveryImmediatelyRevokesAndFetchesNew292(t *testing.T) 
 	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
 	require.Equal(t, next, h.Get(openAICodexTurnStateHeader), "old global/native state must not override recovery")
 	stored, _ := repo.GetByID(context.Background(), a.ID)
-	require.Equal(t, next, codexTurnStateAutoToken(stored))
+	require.Equal(t, next, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 	info := CodexTurnStateAutoInfoForAccount(stored, time.Now())
 	require.False(t, info.RecoveryPending)
 	require.Positive(t, info.InvalidatedAtMS)
@@ -133,7 +162,7 @@ func TestCodexTurnStateRecoveryOnlyAcceptsDifferentFresh292(t *testing.T) {
 			waitTurnStateAutoIdle(t, s)
 			require.EqualValues(t, 1, calls.Load())
 			stored, _ := repo.GetByID(context.Background(), a.ID)
-			require.Empty(t, codexTurnStateAutoToken(stored))
+			require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 			require.True(t, CodexTurnStateAutoInfoForAccount(stored, time.Now()).RecoveryPending)
 			// In-flight/old account snapshots and normal collection cannot resurrect it.
 			s.collectOpenAICodexTurnState(context.Background(), a, old)
@@ -169,7 +198,7 @@ func TestCodexTurnStateRecoveryOldProbeCannotUndoSignal(t *testing.T) {
 	waitTurnStateAutoIdle(t, s)
 	require.EqualValues(t, 2, calls.Load(), "312 must schedule a new probe after discarding the older in-flight probe")
 	stored, _ := repo.GetByID(context.Background(), a.ID)
-	require.Equal(t, next, codexTurnStateAutoToken(stored))
+	require.Equal(t, next, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 }
 func TestCodexTurnStateRecoveryHTTPObservationPrecedesSSECommitAndRejectsOldResponses(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)

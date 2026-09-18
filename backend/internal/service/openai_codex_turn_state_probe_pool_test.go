@@ -25,7 +25,7 @@ func TestCodexTurnStateProbePoolRecovers312InSecondRound(t *testing.T) {
 	old := testGlobalTurnStateToken(time.Now().Add(-51*time.Minute), 10)
 	fresh := testGlobalTurnStateToken(time.Now(), 10)
 	signal := testGlobalTurnStateToken(time.Now(), 11)
-	account.Extra = map[string]any{CodexTurnStateAutoExtraKey: old, CodexTurnStateAutoSetAtExtraKey: time.Now().Add(-51 * time.Minute).UnixMilli()}
+	account.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5.5"): map[string]any{CodexTurnStateAutoExtraKey: old, CodexTurnStateAutoSetAtExtraKey: time.Now().Add(-51 * time.Minute).UnixMilli()}}
 	repo.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
 	pool := &turnStateProxyRepo{proxies: []Proxy{{ID: 7, Protocol: "http", Host: "pool.test", Port: 8080, Status: StatusActive}}}
 	s.proxyRepo = pool
@@ -41,13 +41,13 @@ func TestCodexTurnStateProbePoolRecovers312InSecondRound(t *testing.T) {
 			return turnStateResponse(signal), nil
 		case 2:
 			s.openaiTurnStateMu.Lock()
-			revoked := s.openaiTurnStates[account.ID].token == "" && s.openaiTurnStates[account.ID].recovery.Pending
+			revoked := s.openaiTurnStates[codexTurnStateKey{account.ID, "gpt-5.5"}].token == "" && s.openaiTurnStates[codexTurnStateKey{account.ID, "gpt-5.5"}].recovery.Pending
 			s.openaiTurnStateMu.Unlock()
 			require.True(t, revoked, "312 must revoke before the next pool request")
 			stored, err := repo.GetByID(context.Background(), account.ID)
 			require.NoError(t, err)
-			require.True(t, codexTurnStateRecoveryFromAccount(stored).Pending)
-			require.Empty(t, codexTurnStateAutoToken(stored))
+			require.True(t, codexTurnStateRecoveryFromAccount(codexTurnStateModelAccount(stored, "gpt-5.5")).Pending)
+			require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.5")))
 			return turnStateResponse(old), nil // A valid but revoked 292 must not stop the rounds.
 		default:
 			return turnStateResponse(fresh), nil
@@ -59,8 +59,8 @@ func TestCodexTurnStateProbePoolRecovers312InSecondRound(t *testing.T) {
 	require.Equal(t, 1, pool.calls)
 	stored, err := repo.GetByID(context.Background(), account.ID)
 	require.NoError(t, err)
-	require.Equal(t, fresh, codexTurnStateAutoToken(stored))
-	require.False(t, codexTurnStateRecoveryFromAccount(stored).Pending)
+	require.Equal(t, fresh, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.5")))
+	require.False(t, codexTurnStateRecoveryFromAccount(codexTurnStateModelAccount(stored, "gpt-5.5")).Pending)
 	require.Nil(t, stored.ProxyID, "maintenance must not change the account route")
 }
 
@@ -73,6 +73,7 @@ func TestCodexTurnStateProbePoolBoundsAndStops(t *testing.T) {
 		{"fresh-primary", testGlobalTurnStateToken(time.Now(), 10), 200, 1, 0},
 		{"opaque-never-accepted", "opaque", 200, 4, 1},
 		{"312-bounded", testGlobalTurnStateToken(time.Now(), 11), 200, 4, 1},
+		{"356-bounded", testGlobalTurnStateToken(time.Now(), 13), 200, 4, 1},
 		{"auth-stops", "", 401, 1, 0},
 		{"access-denied-stops", "", 403, 1, 0},
 		{"quota-stops", "", 429, 1, 0},
@@ -95,9 +96,9 @@ func TestCodexTurnStateProbePoolBoundsAndStops(t *testing.T) {
 			waitTurnStateAutoIdle(t, s)
 			require.Equal(t, tc.calls, calls)
 			require.Equal(t, tc.poolCalls, pool.calls)
-			if codexTurnStateIs312(tc.state) {
+			if codexTurnStateIsRecoverySignal(tc.state) {
 				s.openaiTurnStateMu.Lock()
-				pending := s.openaiTurnStates[account.ID].recovery.Pending
+				pending := s.openaiTurnStates[codexTurnStateKey{account.ID, "gpt-5.5"}].recovery.Pending
 				s.openaiTurnStateMu.Unlock()
 				require.True(t, pending)
 			}
