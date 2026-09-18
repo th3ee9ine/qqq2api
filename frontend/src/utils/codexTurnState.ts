@@ -16,3 +16,12 @@ export function normalizeCodexTurnStateModels(raw: string): string {
   if (encoder.encode(value).length > 1024) throw new Error('invalid_models')
   return value
 }
+
+/** Exact model ID for automatic probes; blank restores the built-in default. */
+export function normalizeCodexTurnStateDefaultModel(raw: string): string {
+  const model = raw.trim() || 'gpt-5.5'
+  if (model.length > 128 || !/^[a-zA-Z0-9_.:/-]+$/.test(model)) {
+    throw new Error('invalid_default_model')
+  }
+  return model
+}

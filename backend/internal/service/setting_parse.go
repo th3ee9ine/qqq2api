@@ -249,6 +249,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexClientVersionSynced:                     "",
 		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingKeyEnableOpenAIAccountLocalDeviceIdentity:             "true",
+		SettingKeyOpenAICodexTurnStateDefaultModel:                   openai.DefaultTestModel,
 		SettingKeyOpenAICodexTurnStateModels:                         "",
 		SettingKeyOpenAICodexTurnStateAutoEnabled:                    "false",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
@@ -906,6 +907,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.EnableOpenAIAccountLocalDeviceIdentity = v == "true"
 	} else {
 		result.EnableOpenAIAccountLocalDeviceIdentity = true
+	}
+	result.OpenAICodexTurnStateDefaultModel = openai.DefaultTestModel
+	if model, err := NormalizeOpenAICodexTurnStateDefaultModel(settings[SettingKeyOpenAICodexTurnStateDefaultModel]); err == nil {
+		result.OpenAICodexTurnStateDefaultModel = model
 	}
 	if models, err := NormalizeOpenAICodexTurnStateModels(settings[SettingKeyOpenAICodexTurnStateModels]); err == nil {
 		result.OpenAICodexTurnStateModels = models

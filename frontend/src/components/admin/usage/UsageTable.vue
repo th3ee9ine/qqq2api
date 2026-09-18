@@ -274,16 +274,16 @@
         </template>
 
         <template #cell-upstream_turn_state="{ row }">
-          <div v-if="row.upstream_turn_state" class="flex max-w-[260px] items-start gap-1.5">
-            <details class="min-w-0 text-xs" :title="row.openai_ws_mode ? t('admin.usage.turnStateHandshakeHint') : undefined">
-              <summary class="cursor-pointer truncate font-mono text-gray-600 dark:text-gray-300" :title="row.upstream_turn_state">{{ row.upstream_turn_state }}</summary>
-              <p class="mt-1 select-all break-all font-mono text-gray-600 dark:text-gray-300">{{ row.upstream_turn_state }}</p>
-            </details>
-            <button type="button" class="shrink-0 rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-              :title="t('keys.copyToClipboard')" @click="copyIdentifier(row.upstream_turn_state, t('admin.usage.turnStateCopied'))">
-              <Icon :name="copiedRequestId === row.upstream_turn_state ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
-            </button>
-          </div>
+          <button
+            v-if="row.upstream_turn_state"
+            type="button"
+            class="rounded px-1 py-0.5 font-mono text-xs tabular-nums text-primary-600 underline decoration-dotted underline-offset-4 hover:bg-primary-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-900/20"
+            data-testid="turn-state-length"
+            :title="t('admin.usage.turnStateViewDetails')"
+            :aria-label="`${t('admin.usage.turnStateDetails')}: ${row.upstream_turn_state.length}`"
+            aria-haspopup="dialog"
+            @click="turnStateDetails = { value: row.upstream_turn_state, websocket: !!row.openai_ws_mode }"
+          >{{ row.upstream_turn_state.length }}</button>
           <span v-else class="text-xs text-gray-400 dark:text-gray-500">{{ row.upstream_turn_state === '' ? t('admin.usage.turnStateNotSent') : t('admin.usage.turnStateUnknown') }}</span>
         </template>
 
@@ -304,6 +304,21 @@
       </DataTable>
     </div>
   </div>
+
+  <BaseDialog :show="turnStateDetails !== null" :title="t('admin.usage.turnStateDetails')" @close="turnStateDetails = null">
+    <div v-if="turnStateDetails" class="space-y-3">
+      <p class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.usage.turnStateLength') }}: <span class="font-mono">{{ turnStateDetails.value.length }}</span></p>
+      <p v-if="turnStateDetails.websocket" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.usage.turnStateHandshakeHint') }}</p>
+      <pre data-testid="turn-state-detail-value" class="max-h-64 select-all overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-gray-100 p-3 font-mono text-xs text-gray-700 dark:bg-dark-800 dark:text-gray-200">{{ turnStateDetails.value }}</pre>
+    </div>
+    <template #footer>
+      <button type="button" class="btn btn-secondary" @click="turnStateDetails = null">{{ t('common.close') }}</button>
+      <button v-if="turnStateDetails" type="button" class="btn btn-primary" data-testid="turn-state-copy"
+        @click="copyIdentifier(turnStateDetails.value, t('admin.usage.turnStateCopied'))">
+        {{ copiedRequestId === turnStateDetails.value ? t('keys.copied') : t('keys.copyToClipboard') }}
+      </button>
+    </template>
+  </BaseDialog>
 
   <!-- Token Tooltip Portal -->
   <Teleport to="body">
@@ -574,6 +589,7 @@ function accountBilled(row: { total_cost?: number | null; account_stats_cost?: n
 }
 
 
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
@@ -611,6 +627,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const copiedRequestId = ref<string | null>(null)
+const turnStateDetails = ref<{ value: string; websocket: boolean } | null>(null)
 const showAccountBilling = props.showAccountBilling
 const showUpstreamEndpoint = props.showUpstreamEndpoint
 const ipGeoBatchLoading = ref(false)

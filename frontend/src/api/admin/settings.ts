@@ -629,6 +629,7 @@ export interface SystemSettings {
   enable_openai_account_local_device_identity: boolean;
   openai_codex_turn_state_auto_enabled: boolean;
   openai_codex_turn_state_models: string;
+  openai_codex_turn_state_default_model: string;
   // codex_cli_only 加固
   min_codex_version: string;
   max_codex_version: string;
@@ -946,6 +947,7 @@ export interface UpdateSettingsRequest {
   enable_openai_account_local_device_identity?: boolean;
   openai_codex_turn_state_auto_enabled?: boolean;
   openai_codex_turn_state_models?: string;
+  openai_codex_turn_state_default_model?: string;
   // codex_cli_only 加固
   min_codex_version?: string;
   max_codex_version?: string;

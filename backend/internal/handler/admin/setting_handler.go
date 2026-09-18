@@ -312,6 +312,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAICodexClientVersionDefault:                        codexHeaderDefaults.ClientVersion,
 		EnableOpenAIAccountLocalDeviceIdentity:                 settings.EnableOpenAIAccountLocalDeviceIdentity,
 		OpenAICodexTurnStateModels:                             settings.OpenAICodexTurnStateModels,
+		OpenAICodexTurnStateDefaultModel:                       settings.OpenAICodexTurnStateDefaultModel,
 		OpenAICodexTurnStateAutoEnabled:                        settings.OpenAICodexTurnStateAutoEnabled,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,

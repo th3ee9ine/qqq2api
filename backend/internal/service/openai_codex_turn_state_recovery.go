@@ -122,7 +122,7 @@ func (s *OpenAIGatewayService) invalidateCodexTurnStateLocked(entry *codexTurnSt
 	}
 	entry.token, entry.setAt, entry.lastError = "", now.UnixMilli(), "state_312"
 	entry.dirty, entry.probe = true, true
-	// Preserve the most recent routed model recorded by outgoing requests.
+	// The probe reads the current configured default model when it starts.
 }
 
 // Also guard native continuation: its higher priority must not reintroduce a

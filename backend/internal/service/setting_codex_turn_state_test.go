@@ -15,6 +15,7 @@ func TestSystemSettingsCodexTurnStateDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, settings.OpenAICodexTurnStateAutoEnabled)
 	require.Empty(t, settings.OpenAICodexTurnStateModels)
+	require.Equal(t, "gpt-5.5", settings.OpenAICodexTurnStateDefaultModel)
 }
 
 func TestSystemSettingsCodexTurnStateHeaderValidation(t *testing.T) {

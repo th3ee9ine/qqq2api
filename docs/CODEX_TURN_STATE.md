@@ -2,7 +2,7 @@
 
 ## 入口与操作
 
-入口：**系统设置 → GPT → Codex Turn State（自动 / 实验性）**。只提供自动管理开关和模型范围，默认关闭，不需要填写 Token。
+入口：**系统设置 → GPT → Codex Turn State（自动 / 实验性）**。提供自动管理开关、默认探测模型和模型范围，默认关闭，不需要填写 Token。
 
 开启后按账号采集真实上游响应；匹配模型的请求发现 Token 缺失或临近参考期限时，异步发起额外 Responses 探测，从响应头取得上游签发的新值。关闭后保留已采集值，停止自动采集、注入和后续探测；已经发出的探测可能执行到超时，其返回值会丢弃。
 
@@ -11,7 +11,7 @@
 ## 自动采集、生成与续期
 
 1. **采集**：收集 Responses JSON / SSE、Compact 的实际下发响应头以及成功的 WebSocket 握手头。SSE 首输出守卫只在暂存头真正提交后采集；失败切换丢弃的暂存响应不会被采集为可用值。312 失效信号在收到上游响应头时立即处理，不等待 SSE 首输出或响应体解析。相同 Token 不重复写库，不重置采集时间。
-2. **生成**：发出 `POST https://chatgpt.com/backend-api/codex/responses`，请求一个极短回复，使用 `stream: true`、`store: false`，删除旧的 `X-Codex-Turn-State`。使用触发请求的最终上游模型，未提供时默认 `gpt-5.5`。从 2xx 响应头采集有效 HTTP 头格式的新值。没有该头、非 2xx 或网络失败均算失败；不伪造本地 Fernet 签名。
+2. **生成**：发出 `POST https://chatgpt.com/backend-api/codex/responses`，请求一个极短回复，使用 `stream: true`、`store: false`，删除旧的 `X-Codex-Turn-State`。使用可编辑的默认探测模型，初始为 `gpt-5.5`。从 2xx 响应头采集有效 HTTP 头格式的新值。没有该头、非 2xx 或网络失败均算失败；不伪造本地 Fernet 签名。
 3. **续期**：以公开 Fernet 时间戳加一小时作为参考期限，无法解析时使用首次采集时间；未来异常时间戳不会无限延长寿命。匹配请求在参考期限前十分钟触发异步续期，续期期间继续使用未到期值；超过参考期限的自动值不再注入。上游不保证每次都签发不同的新 Token；返回同一值不会重置它的年龄。
 4. **触发方式**：由符合模型范围的网关请求触发，不扫描空闲账号、不做无人使用账号的定时保活。首个请求不会等待探测；本次无 Token 时正常转发，探测成功供后续请求使用。
 5. **请求凭据和出口**：先沿用 OpenAI 网关 HTTP 传输及账号代理；获取不到有效 292 时再使用代理池。OAuth 使用现有 access-token provider；Setup Token 使用其 bearer 凭据；Agent Identity 使用现有 assertion / task 注册流程。探测前重新读取账号，跳过已禁用、暂停或限流等不可调度账号。
@@ -47,7 +47,7 @@ HTTP 请求、WS 握手和后台探测记录发出时的恢复代次；失效前
 
 自动管理适用于 OpenAI OAuth / Setup Token 的 Codex 协议；API Key 和其他平台不注入自动值。采集值仅用于同一账号，原有跨账号回带保护继续执行。
 
-模型范围：为空匹配全部；逗号或换行分隔，忽略大小写、去重，支持精确值和末尾 `*` 前缀匹配，规范化后最多 1024 字节。客户端模型或映射后上游模型任一命中即可；两者均未知时也允许。真实响应可被采集，但自动注入和主动探测只由匹配范围的请求触发。探测优先使用请求最终上游模型。
+模型范围：为空匹配全部；逗号或换行分隔，忽略大小写、去重，支持精确值和末尾 `*` 前缀匹配，规范化后最多 1024 字节。客户端模型或映射后上游模型任一命中即可；两者均未知时也允许。真实响应可被采集，但自动注入和主动探测只由匹配范围的请求触发。额外探测使用设置中的默认探测模型，初始为 `gpt-5.5`。可以填写账号支持的完整模型名称，清空保存恢复 `gpt-5.5`。每次发起请求前读取最新配置，因此已排队任务、续期、312 恢复和后续 IP 池轮次均使用最新值；进行中的请求不重放。此设置不改变用户请求的模型及注入范围。
 
 Token 去除首尾空白后仅允许可打印 ASCII，最多 4096 字节。Fernet 解析仅读取公开封装、密文块数和时间戳，不解密、不验证签名。10 块与一小时 TTL 是经验诊断，不是官方有效性证明。自动模式使用参考期限和 312 提前失效信号共同管理状态。
 
@@ -67,19 +67,20 @@ HTTP 头仅在 WebSocket 握手发送，不能改写已有连接的握手。普�
 ```json
 {
   "openai_codex_turn_state_auto_enabled": true,
+  "openai_codex_turn_state_default_model": "gpt-5.5",
   "openai_codex_turn_state_models": "gpt-5.5,gpt-5.5-*"
 }
 ```
 
 使用 `PUT /api/v1/admin/settings`。字段省略或 `null` 表示保留；关闭自动开关不会删除已采集的账号 Token。
 
-GET / PUT 只保留 `openai_codex_turn_state_auto_enabled` 与 `openai_codex_turn_state_models`。旧的 `openai_codex_turn_state`、`openai_codex_turn_state_enabled`、全局配置诊断和手动设置时间已从接口移除；旧客户端发送这些未知字段时会被忽略，不影响自动配置。
+GET / PUT 提供 `openai_codex_turn_state_auto_enabled`、`openai_codex_turn_state_default_model` 和 `openai_codex_turn_state_models`。默认模型是一个最多 128 字节的完整名称，支持字母、数字及 `-_.:/`，不支持空格、列表和通配符；空值恢复内置默认，省略或 `null` 保留原值。旧的 `openai_codex_turn_state`、`openai_codex_turn_state_enabled`、全局配置诊断和手动设置时间已从接口移除；旧客户端发送这些未知字段时会被忽略，不影响自动配置。
 
 账号详情和列表的 `codex_turn_state_auto` 为只读诊断：`configured/set_at_ms/probe_at_ms/expires_at_ms/due/last_error/recovery_pending/invalidated_at_ms`，不包含 Token。`due` 表示按参考寿命需要续期，不代表开关已开启或探测正在运行。`last_error` 仅允许固定码，例如 `state_312`、`recovery_requires_new_292`、`http_429`、`missing_state`、`transport_failed`；不包含上游错误正文、代理地址或凭据。受管 Extra 字段从普通 DTO 和账号导出中移除；设置审计只记录变更字段名。
 
 ## 管理员使用日志
 
-使用日志默认显示「上游 Turn State」，可展开查看和复制完整值，管理员 CSV 导出同样包含此列。字段 `upstream_turn_state` 保存实际出站时的快照，HTTP 使用产生日志的那次请求，重试不会用后来刷新的账号缓存覆盖旧请求；不读取上游响应里的新 Token。WebSocket 使用该连接握手时发送的状态，后续复用连接的轮次沿用同一快照，头部不会逐轮重发。
+使用日志的「上游 Turn State」列默认只显示实际字符长度（例如 292、312），点击数字打开详情弹窗，查看和复制完整值。列表及悬停提示不显示 Token 内容；管理员 CSV 导出仍包含完整值。字段 `upstream_turn_state` 保存实际出站时的快照，HTTP 使用产生日志的那次请求，重试不会用后来刷新的账号缓存覆盖旧请求；不读取上游响应里的新 Token。WebSocket 使用该连接握手时发送的状态，后续复用连接的轮次沿用同一快照，头部不会逐轮重发。
 
 空字符串表示已观测到未携带，NULL / 字段缺失表示历史或未观测数据。字段仅由管理员日志 DTO 返回，普通用户日志、账号导出和应用 stdout 不新增完整值。迁移 239 只增加可空 TEXT 列，不回填历史请求的未知状态。
 

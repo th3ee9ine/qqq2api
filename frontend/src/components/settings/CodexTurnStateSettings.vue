@@ -11,6 +11,22 @@
     <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.gatewayForwarding.codexTurnStateAutoHint') }}</p>
 
     <div class="mt-4">
+      <label for="openai-codex-turn-state-default-model" class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.gatewayForwarding.codexTurnStateDefaultModel') }}</label>
+      <input
+        id="openai-codex-turn-state-default-model"
+        :value="defaultModel"
+        type="text"
+        class="input w-full font-mono text-sm"
+        data-testid="openai-codex-turn-state-default-model"
+        placeholder="gpt-5.5"
+        maxlength="128"
+        autocomplete="off"
+        @input="emit('update:defaultModel', ($event.target as HTMLInputElement).value)"
+      />
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.gatewayForwarding.codexTurnStateDefaultModelHint') }}</p>
+    </div>
+
+    <div class="mt-4">
       <label for="openai-codex-turn-state-models" class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.gatewayForwarding.codexTurnStateModels') }}</label>
       <input
         id="openai-codex-turn-state-models"
@@ -31,10 +47,11 @@
 import Toggle from '@/components/common/Toggle.vue'
 import { useI18n } from 'vue-i18n'
 
-defineProps<{ autoEnabled: boolean; models: string }>()
+defineProps<{ autoEnabled: boolean; models: string; defaultModel: string }>()
 const emit = defineEmits<{
   'update:autoEnabled': [value: boolean]
   'update:models': [value: string]
+  'update:defaultModel': [value: string]
 }>()
 const { t } = useI18n()
 </script>

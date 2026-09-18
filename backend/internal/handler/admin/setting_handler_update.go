@@ -260,6 +260,7 @@ type UpdateSettingsRequest struct {
 	OpenAICodexClientVersionMode           *string `json:"openai_codex_client_version_mode"`
 	OpenAICodexVersionAutoSyncEnabled      *bool   `json:"openai_codex_version_auto_sync_enabled"`
 	EnableOpenAIAccountLocalDeviceIdentity *bool   `json:"enable_openai_account_local_device_identity"`
+	OpenAICodexTurnStateDefaultModel       *string `json:"openai_codex_turn_state_default_model"`
 	OpenAICodexTurnStateModels             *string `json:"openai_codex_turn_state_models"`
 	OpenAICodexTurnStateAutoEnabled        *bool   `json:"openai_codex_turn_state_auto_enabled"`
 
@@ -452,6 +453,7 @@ var settingOmittablePointerKeys = map[string]string{
 	"openai_codex_version_auto_sync_enabled":      service.SettingKeyOpenAICodexVersionAutoSyncEnabled,
 	"enable_openai_account_local_device_identity": service.SettingKeyEnableOpenAIAccountLocalDeviceIdentity,
 	"openai_codex_turn_state_models":              service.SettingKeyOpenAICodexTurnStateModels,
+	"openai_codex_turn_state_default_model":       service.SettingKeyOpenAICodexTurnStateDefaultModel,
 	"openai_codex_turn_state_auto_enabled":        service.SettingKeyOpenAICodexTurnStateAutoEnabled,
 }
 
@@ -1845,6 +1847,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.EnableOpenAIAccountLocalDeviceIdentity
 		}(),
+		OpenAICodexTurnStateDefaultModel: func() string {
+			if req.OpenAICodexTurnStateDefaultModel != nil {
+				return *req.OpenAICodexTurnStateDefaultModel
+			}
+			return previousSettings.OpenAICodexTurnStateDefaultModel
+		}(),
 		OpenAICodexTurnStateModels: func() string {
 			if req.OpenAICodexTurnStateModels != nil {
 				return strings.TrimSpace(*req.OpenAICodexTurnStateModels)
@@ -2407,6 +2415,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexClientVersionDefault:                        codexHeaderDefaults.ClientVersion,
 		EnableOpenAIAccountLocalDeviceIdentity:                 updatedSettings.EnableOpenAIAccountLocalDeviceIdentity,
 		OpenAICodexTurnStateModels:                             updatedSettings.OpenAICodexTurnStateModels,
+		OpenAICodexTurnStateDefaultModel:                       updatedSettings.OpenAICodexTurnStateDefaultModel,
 		OpenAICodexTurnStateAutoEnabled:                        updatedSettings.OpenAICodexTurnStateAutoEnabled,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,

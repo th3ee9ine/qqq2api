@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 )
 
 const (
@@ -59,6 +61,23 @@ func NormalizeOpenAICodexTurnStateModels(raw string) (string, error) {
 	return value, nil
 }
 
+// An exact, freely editable model ID; empty resets to the built-in default.
+func NormalizeOpenAICodexTurnStateDefaultModel(raw string) (string, error) {
+	model := strings.TrimSpace(raw)
+	if model == "" {
+		return openai.DefaultTestModel, nil
+	}
+	if len(model) > 128 {
+		return "", fmt.Errorf("openai_codex_turn_state_default_model must be at most 128 bytes")
+	}
+	for _, ch := range model {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || strings.ContainsRune("-_.:/", ch)) {
+			return "", fmt.Errorf("openai_codex_turn_state_default_model must be a single model ID without spaces or wildcards")
+		}
+	}
+	return model, nil
+}
+
 func codexTurnStateModelMatches(scope string, models ...string) bool {
 	if scope == "" {
 		return true
@@ -82,8 +101,9 @@ func codexTurnStateModelMatches(scope string, models ...string) bool {
 
 // Only automatic lifecycle settings are read. Legacy manual tokens are inert.
 type OpenAICodexTurnStateConfig struct {
-	Models      string
-	AutoEnabled bool
+	DefaultModel string
+	Models       string
+	AutoEnabled  bool
 }
 type cachedOpenAICodexTurnState struct {
 	config    OpenAICodexTurnStateConfig
@@ -95,7 +115,7 @@ type cachedOpenAICodexTurnState struct {
 // load cannot overwrite an administrator's newly disabled setting.
 func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICodexTurnStateConfig {
 	if s == nil || s.settingRepo == nil {
-		return OpenAICodexTurnStateConfig{}
+		return OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel}
 	}
 	if cached, ok := s.openAICodexTurnStateCache.Load().(*cachedOpenAICodexTurnState); ok && cached != nil && time.Now().Before(cached.expiresAt) {
 		return cached.config
@@ -110,13 +130,14 @@ func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICode
 	}
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
 	defer cancel()
-	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled})
-	config := OpenAICodexTurnStateConfig{}
+	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateDefaultModel, SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled})
+	config := OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel}
 	ttl := gatewayForwardingCacheTTL
 	if err == nil {
 		models, modelsErr := NormalizeOpenAICodexTurnStateModels(values[SettingKeyOpenAICodexTurnStateModels])
-		if modelsErr == nil {
-			config = OpenAICodexTurnStateConfig{Models: models, AutoEnabled: values[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"}
+		defaultModel, modelErr := NormalizeOpenAICodexTurnStateDefaultModel(values[SettingKeyOpenAICodexTurnStateDefaultModel])
+		if modelsErr == nil && modelErr == nil {
+			config = OpenAICodexTurnStateConfig{DefaultModel: defaultModel, Models: models, AutoEnabled: values[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"}
 		}
 	} else {
 		ttl = gatewayForwardingErrorTTL

@@ -255,8 +255,9 @@ type SystemSettings struct {
 	EnableOpenAIAccountLocalDeviceIdentity bool   // 是否优先使用账号本地设备会话中的 UA/Originator（默认 true）
 
 	// Automatic Codex Turn State lifecycle; values are managed per account.
-	OpenAICodexTurnStateModels      string // 逗号分隔模型范围，空=全部
-	OpenAICodexTurnStateAutoEnabled bool   `json:"openai_codex_turn_state_auto_enabled"`
+	OpenAICodexTurnStateDefaultModel string // 自动探测默认模型，空=内置默认
+	OpenAICodexTurnStateModels       string // 逗号分隔模型范围，空=全部
+	OpenAICodexTurnStateAutoEnabled  bool   `json:"openai_codex_turn_state_auto_enabled"`
 
 	// Codex client restrictions.
 	MinCodexVersion                      string // codex_cli_only 最低 Codex 引擎版本；空=不检查

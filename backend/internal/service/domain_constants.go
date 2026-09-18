@@ -705,8 +705,9 @@ const (
 	SettingKeyOpenAICodexTurnStateEnabled = "openai_codex_turn_state_enabled"
 	SettingKeyOpenAICodexTurnState        = "openai_codex_turn_state"
 	SettingKeyOpenAICodexTurnStateSetAtMS = "openai_codex_turn_state_set_at_ms"
-	// Active automatic lifecycle model scope.
-	SettingKeyOpenAICodexTurnStateModels = "openai_codex_turn_state_models"
+	// Active automatic lifecycle probe model and model scope.
+	SettingKeyOpenAICodexTurnStateDefaultModel = "openai_codex_turn_state_default_model"
+	SettingKeyOpenAICodexTurnStateModels       = "openai_codex_turn_state_models"
 	// SettingKeyOpenAICodexTurnStateAutoEnabled enables account-scoped automatic
 	// collection, renewal and bounded upstream probes. It is opt-in because each
 	// probe is an extra upstream request and may consume model quota.

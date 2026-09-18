@@ -520,6 +520,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAICodexClientVersionMode] = versionMode
 	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
 	updates[SettingKeyEnableOpenAIAccountLocalDeviceIdentity] = strconv.FormatBool(settings.EnableOpenAIAccountLocalDeviceIdentity)
+	turnStateDefaultModel, err := NormalizeOpenAICodexTurnStateDefaultModel(settings.OpenAICodexTurnStateDefaultModel)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_DEFAULT_MODEL", err.Error())
+	}
+	updates[SettingKeyOpenAICodexTurnStateDefaultModel] = turnStateDefaultModel
 	turnStateModels, err := NormalizeOpenAICodexTurnStateModels(settings.OpenAICodexTurnStateModels)
 	if err != nil {
 		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_MODELS", err.Error())

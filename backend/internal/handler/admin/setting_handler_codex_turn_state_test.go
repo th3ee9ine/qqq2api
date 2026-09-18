@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ func assertCodexTurnStateAutomaticResponse(t *testing.T, rec *httptest.ResponseR
 	require.NotContains(t, rec.Body.String(), "private-turn-state")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_auto_enabled")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_models")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_default_model")
 }
 func TestOpenAICodexTurnStateAutomaticSettingsOmission(t *testing.T) {
 	for _, body := range []map[string]any{{"risk_control_enabled": true}, {"openai_codex_turn_state_auto_enabled": nil, "openai_codex_turn_state_models": nil}} {
@@ -69,9 +71,45 @@ func TestOpenAICodexTurnStateAutomaticSwitchAndScope(t *testing.T) {
 	}
 }
 func TestOpenAICodexTurnStateAutomaticSettingsAudit(t *testing.T) {
-	changed := diffSettings(&service.SystemSettings{}, &service.SystemSettings{OpenAICodexTurnStateAutoEnabled: true, OpenAICodexTurnStateModels: "gpt-5.*"}, nil, nil, UpdateSettingsRequest{})
+	changed := diffSettings(&service.SystemSettings{}, &service.SystemSettings{OpenAICodexTurnStateAutoEnabled: true, OpenAICodexTurnStateModels: "gpt-5.*", OpenAICodexTurnStateDefaultModel: "custom/probe"}, nil, nil, UpdateSettingsRequest{})
 	require.Contains(t, changed, "openai_codex_turn_state_auto_enabled")
 	require.Contains(t, changed, "openai_codex_turn_state_models")
+	require.Contains(t, changed, "openai_codex_turn_state_default_model")
 	require.NotContains(t, changed, "openai_codex_turn_state")
 	require.NotContains(t, changed, "openai_codex_turn_state_enabled")
+}
+
+func TestOpenAICodexTurnStateEditableDefaultModel(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{})
+	key := service.SettingKeyOpenAICodexTurnStateDefaultModel
+	for _, tc := range []struct{ input, expected string }{
+		{" custom/probe-1 ", "custom/probe-1"}, {"", "gpt-5.5"}, {"custom/probe-2", "custom/probe-2"},
+	} {
+		// Warm the runtime cache before editing; saving must invalidate it.
+		h.settingService.GetOpenAICodexTurnState(context.Background())
+		rec := doUpdateSettings(t, h, map[string]any{"openai_codex_turn_state_default_model": tc.input}, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.Equal(t, tc.expected, repo.values[key])
+		require.Equal(t, tc.expected, h.settingService.GetOpenAICodexTurnState(context.Background()).DefaultModel)
+		var payload struct {
+			Data map[string]any `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+		require.Equal(t, tc.expected, payload.Data["openai_codex_turn_state_default_model"])
+	}
+	for _, body := range []map[string]any{{"risk_control_enabled": true}, {"openai_codex_turn_state_default_model": nil}} {
+		rec := doUpdateSettings(t, h, body, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.Equal(t, "custom/probe-2", repo.values[key])
+	}
+	for _, invalid := range []string{"gpt-5*", "two models", "gpt-5.5,gpt-5.6-sol", "gpt\nmodel", strings.Repeat("a", 129)} {
+		rec := doUpdateSettings(t, h, map[string]any{"openai_codex_turn_state_default_model": invalid}, nil)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+		require.Equal(t, "custom/probe-2", repo.values[key])
+	}
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	h.GetSettings(c)
+	require.Contains(t, rec.Body.String(), `"openai_codex_turn_state_default_model":"custom/probe-2"`)
 }

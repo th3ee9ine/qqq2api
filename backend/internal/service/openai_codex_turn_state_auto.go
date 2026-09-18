@@ -14,8 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 )
 
 const (
@@ -56,7 +54,6 @@ type codexTurnStateAutoEntry struct {
 	dirty, running bool
 	queued         bool
 	retryAfter     time.Time
-	probeModel     string
 	probe          bool
 	forceProbe     bool
 	recovery       codexTurnStateRecovery
@@ -199,23 +196,11 @@ func (s *OpenAIGatewayService) autoTurnStateForAccount(ctx context.Context, acco
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
 	entry := s.codexTurnStateEntryLocked(account, now)
-	for _, candidate := range models {
-		if strings.TrimSpace(candidate) != "" {
-			entry.probeModel = strings.TrimSpace(candidate)
-		}
-	}
+
 	expiry := codexTurnStateAutoExpiry(entry.token, entry.setAt, now)
 	if entry.recovery.Pending || entry.token == "" || expiry == 0 || now.Add(codexTurnStateAutoRenewBefore).UnixMilli() >= expiry {
 		if entry.forceProbe || entry.probeAt <= 0 || now.Sub(time.UnixMilli(entry.probeAt)) >= codexTurnStateAutoProbeInterval {
-			// Callers pass original model followed by final upstream model. Prefer the
-			// latter, so routing aliases never become an unsupported probe model.
-			model := openai.DefaultTestModel
-			for _, candidate := range models {
-				if strings.TrimSpace(candidate) != "" {
-					model = strings.TrimSpace(candidate)
-				}
-			}
-			entry.probe, entry.probeModel = true, model
+			entry.probe = true
 		}
 	}
 	s.startCodexTurnStateWorkerLocked(account.ID, entry)
@@ -317,7 +302,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 			return
 		}
 		s.openaiTurnStateMu.Lock()
-		dirty, probe, model := entry.dirty, entry.probe, entry.probeModel
+		dirty, probe := entry.dirty, entry.probe
 		token, setAt, lastError, recovery := entry.token, entry.setAt, entry.lastError, entry.recovery.clone()
 		entry.dirty, entry.probe = false, false
 		s.openaiTurnStateMu.Unlock()
@@ -336,7 +321,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 			}
 		}
 		if probe {
-			s.runCodexTurnStateProbe(id, entry, model)
+			s.runCodexTurnStateProbe(id, entry)
 		}
 	}
 }
@@ -345,7 +330,7 @@ func (s *OpenAIGatewayService) persistCodexTurnState(id int64, updates map[strin
 	defer cancel()
 	return s.accountRepo.UpdateExtra(ctx, id, updates)
 }
-func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurnStateAutoEntry, model string) {
+func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurnStateAutoEntry) {
 	if s.httpUpstream == nil {
 		return
 	}
@@ -389,6 +374,8 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 		if stale {
 			return
 		}
+		// Resolve at each attempt so queued and pool retries honor saved changes.
+		model := s.settingService.GetOpenAICodexTurnState(ctx).DefaultModel
 		attemptCtx, cancelAttempt := context.WithTimeout(ctx, codexTurnStateProbeAttemptTimeout)
 		state, probeErr := s.probeOpenAICodexTurnStateViaProxy(attemptCtx, account, model, routes[attempt])
 		cancelAttempt()
@@ -463,7 +450,7 @@ func (s *OpenAIGatewayService) probeOpenAICodexTurnStateViaProxy(ctx context.Con
 		return "", codexTurnStateAutoError("account_unavailable")
 	}
 	if strings.TrimSpace(model) == "" {
-		model = openai.DefaultTestModel
+		model = s.settingService.GetOpenAICodexTurnState(ctx).DefaultModel
 	}
 	model = normalizeOpenAIModelForUpstream(account, model)
 	payload := createOpenAITestPayload(model, true)

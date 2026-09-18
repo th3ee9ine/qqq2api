@@ -13,7 +13,7 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({
 
 describe('CodexTurnStateSettings', () => {
   it('provides a single automatic switch with no token editor', async () => {
-    const wrapper = mount(CodexTurnStateSettings, { props: { autoEnabled: false, models: '' } })
+    const wrapper = mount(CodexTurnStateSettings, { props: { autoEnabled: false, defaultModel: 'gpt-5.5', models: '' } })
     expect(wrapper.text()).toContain('No token entry is needed')
     expect(wrapper.text()).toContain('upstream quota')
     expect(wrapper.text()).toContain('312 signal')
@@ -26,11 +26,21 @@ describe('CodexTurnStateSettings', () => {
     wrapper.unmount()
   })
   it('lets model scope be prepared while automatic mode is off', async () => {
-    const wrapper = mount(CodexTurnStateSettings, { props: { autoEnabled: false, models: 'gpt-5.5' } })
+    const wrapper = mount(CodexTurnStateSettings, { props: { autoEnabled: false, defaultModel: 'gpt-5.5', models: 'gpt-5.5' } })
     const input = wrapper.get('[data-testid="openai-codex-turn-state-models"]')
     expect((input.element as HTMLInputElement).value).toBe('gpt-5.5')
     await input.setValue('gpt-5*')
     expect(wrapper.emitted('update:models')).toEqual([['gpt-5*']])
     wrapper.unmount()
   })
+  it('allows editing the probe model without changing the model scope', async () => {
+    const wrapper = mount(CodexTurnStateSettings, { props: { autoEnabled: false, defaultModel: 'gpt-5.5', models: 'gpt-5*' } })
+    const input = wrapper.get('[data-testid="openai-codex-turn-state-default-model"]')
+    expect((input.element as HTMLInputElement).value).toBe('gpt-5.5')
+    await input.setValue('custom/probe-model')
+    expect(wrapper.emitted('update:defaultModel')).toEqual([['custom/probe-model']])
+    expect(wrapper.emitted('update:models')).toBeUndefined()
+    wrapper.unmount()
+  })
+
 })

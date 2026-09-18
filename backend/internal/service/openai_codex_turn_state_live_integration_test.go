@@ -69,6 +69,7 @@ func TestCodexTurnStateLiveIntegration(t *testing.T) {
 	repo := &turnStateAutoRepo{accounts: map[int64]*Account{a.ID: a}}
 	settings, sr := turnStateTestSettings("", "")
 	sr.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "true"
+	sr.values[SettingKeyOpenAICodexTurnStateDefaultModel] = model
 	s := &OpenAIGatewayService{settingService: settings, accountRepo: repo, httpUpstream: network, cfg: &config.Config{}}
 	defer codexTurnStateLiveWait(t, s)
 	gin.SetMode(gin.TestMode)

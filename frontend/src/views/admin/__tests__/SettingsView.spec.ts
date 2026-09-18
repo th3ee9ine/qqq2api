@@ -519,6 +519,7 @@ const baseSettingsResponse = {
   openai_codex_turn_state_auto_enabled: false,
   openai_codex_turn_state_configured: false,
   openai_codex_turn_state_models: "",
+  openai_codex_turn_state_default_model: "gpt-5.5",
   openai_codex_turn_state_set_at_ms: 0,
   openai_codex_turn_state_status: { enabled: false, configured: false, active: false, reason: "disabled", verdict: "unknown", blocks: 0 },
   payment_enabled: true,
@@ -789,12 +790,14 @@ describe("admin SettingsView", () => {
     expect(card.find('[data-testid="openai-codex-turn-state-toggle"]').exists()).toBe(false);
     expect(card.find('[data-testid="openai-codex-turn-state-token"]').exists()).toBe(false);
     expect(card.find('input[type="password"]').exists()).toBe(false);
+    expect(card.get<HTMLInputElement>('[data-testid="openai-codex-turn-state-default-model"]').element.value).toBe("gpt-5.5");
+    await card.get('[data-testid="openai-codex-turn-state-default-model"]').setValue(" custom/probe ");
     await card.get('[data-testid="openai-codex-turn-state-auto-toggle"]').setValue(true);
     await card.get('[data-testid="openai-codex-turn-state-models"]').setValue(" GPT-5, gpt-5, Codex/* ");
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
     const payload = updateSettings.mock.calls.at(-1)?.[0];
-    expect(payload).toMatchObject({ openai_codex_turn_state_auto_enabled: true, openai_codex_turn_state_models: "gpt-5,codex/*" });
+    expect(payload).toMatchObject({ openai_codex_turn_state_auto_enabled: true, openai_codex_turn_state_models: "gpt-5,codex/*", openai_codex_turn_state_default_model: "custom/probe" });
     for (const key of ["openai_codex_turn_state", "openai_codex_turn_state_enabled", "openai_codex_turn_state_set_at_ms", "openai_codex_turn_state_status", "openai_codex_turn_state_configured"]) {
       expect(payload).not.toHaveProperty(key);
     }
@@ -813,6 +816,23 @@ describe("admin SettingsView", () => {
     await flushPromises();
     expect(updateSettings.mock.calls.at(-1)?.[0]).toMatchObject({ openai_codex_turn_state_auto_enabled: false });
     expect(updateSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("openai_codex_turn_state");
+    wrapper.unmount();
+  });
+
+  it("rejects wildcard probe models and resets blank input to gpt-5.5", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openGPTTab(wrapper);
+    const input = wrapper.get('[data-testid="openai-codex-turn-state-default-model"]');
+    await input.setValue("gpt-5*");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenLastCalledWith("admin.settings.gatewayForwarding.codexTurnStateInvalidDefaultModel");
+    await input.setValue(" ");
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls.at(-1)?.[0]).toMatchObject({ openai_codex_turn_state_default_model: "gpt-5.5" });
     wrapper.unmount();
   });
 

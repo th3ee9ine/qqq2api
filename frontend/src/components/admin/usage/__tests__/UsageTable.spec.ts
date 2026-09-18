@@ -770,26 +770,32 @@ describe('admin UsageTable IP geolocation batch toolbar', () => {
 
 
 describe('admin UsageTable Turn State', () => {
-  it('shows and copies the complete token, and distinguishes absent from historical data', async () => {
-    const token = 'test-turn-state-'.repeat(20)
+  it.each([292, 312])('shows only length %i until clicked, then opens copyable details', async (length) => {
+    const token = 'x'.repeat(length)
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     const wrapper = mount(UsageTable, {
       props: { data: [
-        { ...baseImageRow, request_id: 'sent', upstream_turn_state: token },
+        { ...baseImageRow, request_id: 'sent', upstream_turn_state: token, openai_ws_mode: true },
         { ...baseImageRow, request_id: 'absent', upstream_turn_state: '' },
         { ...baseImageRow, request_id: 'historical', upstream_turn_state: null },
       ], loading: false, columns: [] },
       global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
     })
-    expect(wrapper.find('summary').attributes('title')).toBe(token)
-    expect(wrapper.find('details p').text()).toBe(token)
+    const button = wrapper.get('[data-testid="turn-state-length"]')
+    expect(button.text()).toBe(String(length))
+    expect(wrapper.html()).not.toContain(token)
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('admin.usage.turnStateNotSent')
     expect(wrapper.text()).toContain('admin.usage.turnStateUnknown')
-    const button = wrapper.findAll('button').find(el => el.element.parentElement?.querySelector('details'))
-    expect(button).toBeDefined()
-    await button!.trigger('click')
+    await button.trigger('click')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('admin.usage.turnStateHandshakeHint')
+    expect(wrapper.get('[data-testid="turn-state-detail-value"]').text()).toBe(token)
+    await wrapper.get('[data-testid="turn-state-copy"]').trigger('click')
     expect(writeText).toHaveBeenCalledWith(token)
+    await wrapper.get('[aria-label="Close modal"]').trigger('click')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    expect(wrapper.html()).not.toContain(token)
     wrapper.unmount()
     vi.unstubAllGlobals()
   })

@@ -503,6 +503,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAICodexTurnStateAutoEnabled != after.OpenAICodexTurnStateAutoEnabled {
 		changed = append(changed, "openai_codex_turn_state_auto_enabled")
 	}
+	if before.OpenAICodexTurnStateDefaultModel != after.OpenAICodexTurnStateDefaultModel {
+		changed = append(changed, "openai_codex_turn_state_default_model")
+	}
 	if before.OpenAICodexTurnStateModels != after.OpenAICodexTurnStateModels {
 		changed = append(changed, "openai_codex_turn_state_models")
 	}

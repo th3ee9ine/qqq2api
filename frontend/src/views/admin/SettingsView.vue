@@ -4940,8 +4940,10 @@
               <CodexTurnStateSettings
                 :auto-enabled="form.openai_codex_turn_state_auto_enabled"
                 :models="form.openai_codex_turn_state_models"
+                :default-model="form.openai_codex_turn_state_default_model"
                 @update:auto-enabled="form.openai_codex_turn_state_auto_enabled = $event"
                 @update:models="form.openai_codex_turn_state_models = $event"
+                @update:default-model="form.openai_codex_turn_state_default_model = $event"
               />
 
               <!-- Codex 版本号自动同步 -->
@@ -9225,7 +9227,7 @@ import {
   defaultFingerprintSignalRows,
   type FingerprintSignalRow,
 } from "./codexFingerprintSignals";
-import { normalizeCodexTurnStateModels } from "@/utils/codexTurnState";
+import { normalizeCodexTurnStateModels, normalizeCodexTurnStateDefaultModel } from "@/utils/codexTurnState";
 
 const { t, locale } = useI18n();
 const appStore = useAppStore();
@@ -10182,6 +10184,7 @@ const form = reactive<SettingsForm>({
   openai_codex_version_auto_sync_enabled: true,
   openai_codex_turn_state_auto_enabled: false,
   openai_codex_turn_state_models: "",
+  openai_codex_turn_state_default_model: "gpt-5.5",
   // codex_cli_only 加固
   min_codex_version: "",
   max_codex_version: "",
@@ -11562,6 +11565,13 @@ async function saveSettings() {
       );
     form.claude_oauth_system_prompt_blocks =
       claudeOAuthSystemPromptBlocksJSON;
+    let codexTurnStateDefaultModel: string;
+    try {
+      codexTurnStateDefaultModel = normalizeCodexTurnStateDefaultModel(form.openai_codex_turn_state_default_model);
+    } catch {
+      appStore.showError(t("admin.settings.gatewayForwarding.codexTurnStateInvalidDefaultModel"));
+      return;
+    }
     let codexTurnStateModels: string;
     try {
       codexTurnStateModels = normalizeCodexTurnStateModels(form.openai_codex_turn_state_models);
@@ -11622,6 +11632,7 @@ async function saveSettings() {
         form.openai_codex_version_auto_sync_enabled,
       openai_codex_turn_state_auto_enabled: form.openai_codex_turn_state_auto_enabled,
       openai_codex_turn_state_models: codexTurnStateModels,
+      openai_codex_turn_state_default_model: codexTurnStateDefaultModel,
       min_codex_version: form.min_codex_version?.trim() || "",
       max_codex_version: form.max_codex_version?.trim() || "",
       codex_cli_only_allow_app_server_clients:
