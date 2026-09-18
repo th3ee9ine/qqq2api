@@ -15,7 +15,7 @@ func TestOpenAITestDefaultsForAccountResolvesShadowHeaders(t *testing.T) {
 	}}
 	proxyID := int64(7)
 	shadow := &Account{ID: 200, Platform: PlatformOpenAI, Type: AccountTypeOAuth, ParentAccountID: &parent.ID,
-		Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.4": "my-shadow-model"}},
+		Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5.5": "my-shadow-model"}},
 		ProxyID:     &proxyID, Proxy: &Proxy{ID: proxyID, Name: "shadow-proxy", Protocol: "http", Host: "proxy.example", Port: 8080},
 	}
 	svc := &AccountTestService{accountRepo: newStubCredRepo(parent)}

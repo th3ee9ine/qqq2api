@@ -9,6 +9,20 @@ func (s *OpenAIGatewayService) SetPluginManager(manager *PluginManager) {
 // doOpenAIUpstream 只在 OpenAI OAuth 能力绑定已启用时把真实请求交给插件。
 // 插件返回标准 http.Response，响应解析、错误映射、SSE 和计费仍由现有核心链处理。
 func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL string, account *Account) (response *http.Response, err error) {
+	request = s.stampCodexTurnStateRequest(request, account)
+	defer func() {
+		if request == nil || response == nil {
+			return
+		}
+		response.Request = request
+		state := extractOpenAICodexTurnState(response.Header)
+		// Revocation is an upstream observation: do not wait for the first SSE
+		// output or a successful body parse. Positive collection still waits
+		// for the response commit point.
+		if codexTurnStateIs312(state) {
+			s.collectCodexTurnStateHTTP(request.Context(), account, state, request)
+		}
+	}()
 	if request != nil {
 		normalizeLegacyOpenAIOutboundRequestBody(request)
 		SanitizeOutboundGatewayIdentity(request.Header)

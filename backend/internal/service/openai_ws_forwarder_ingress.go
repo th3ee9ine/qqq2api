@@ -790,9 +790,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
 	baseAcquireReq := openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   wsURL,
-		Headers: wsHeaders,
+		Account:   account,
+		WSURL:     wsURL,
+		Headers:   wsHeaders,
+		TurnState: openAIWSTurnStatePolicy{Settings: s.settingService, Gateway: s, Models: []string{firstPayload.originalModel, firstRoutingFields[0].String()}, NativeState: wsHeaders.Get(openAICodexTurnStateHeader)},
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
@@ -938,6 +939,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				updatedHeaders = make(http.Header)
 			}
 			updatedHeaders.Set(openAIWSTurnStateHeader, handshakeTurnState)
+			baseAcquireReq.TurnState.NativeState = handshakeTurnState
 			baseAcquireReq.Headers = updatedHeaders
 		}
 		logOpenAIWSModeInfo(
@@ -1884,6 +1886,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return parseErr
 		}
 		nextRoutingFields := gjson.GetManyBytes(nextPayload.payloadRaw, "model", "service_tier")
+		baseAcquireReq.TurnState.Models = []string{nextPayload.originalModel, nextRoutingFields[0].String()}
 		if nextPayload.promptCacheKey != "" {
 			// ingress 会话在整个客户端 WS 生命周期内复用同一上游连接；
 			// prompt_cache_key 对握手头的更新仅在未来需要重新建连时生效。

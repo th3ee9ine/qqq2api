@@ -164,17 +164,18 @@ describe('AccountTestModal', () => {
     expect((wrapper.vm as any).selectedModelId).toBe('gpt-5.4')
   })
 
-  it('prefers a current generally available model for OAuth account probes', async () => {
+  it('prefers gpt-5.5 for OAuth account probes when available', async () => {
     getAvailableModels.mockResolvedValue([
       { id: 'gpt-5.4', display_name: 'GPT-5.4' },
-      { id: 'gpt-5.6-sol', display_name: 'GPT-5.6 Sol' }
+      { id: 'gpt-5.6-sol', display_name: 'GPT-5.6 Sol' },
+      { id: 'gpt-5.5', display_name: 'GPT-5.5' }
     ])
     const wrapper = mountModal()
 
     await wrapper.setProps({ show: true })
     await flushPromises()
 
-    expect((wrapper.vm as any).selectedModelId).toBe('gpt-5.6-sol')
+    expect((wrapper.vm as any).selectedModelId).toBe('gpt-5.5')
   })
 
   it('falls back to the model id when the upstream omits display_name', async () => {

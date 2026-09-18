@@ -56,6 +56,7 @@ type accountRepository struct {
 var _ service.AccountAutomaticProxyRepository = (*accountRepository)(nil)
 
 var schedulerNeutralExtraKeyPrefixes = []string{
+	"codex_turn_state_auto",
 	"codex_primary_",
 	"codex_secondary_",
 	"codex_5h_",

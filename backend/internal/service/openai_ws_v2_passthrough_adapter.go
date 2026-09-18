@@ -943,11 +943,20 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return errors.New("openai ws passthrough dialer is nil")
 	}
 
+	// Keep both the client's original/session model and the final upstream model
+	// in the turn-state scope candidates.  The former may be an alias that was
+	// rewritten by MapRequestModel or account mapping; global scope is defined to
+	// match either name so an administrator can scope by the model users see or
+	// by the model sent upstream.
+	turnStateRequest := openAIWSAcquireRequest{Account: account, Headers: headers, TurnState: openAIWSTurnStatePolicy{Settings: s.settingService, Gateway: s, Models: []string{initialRequestModel, capturedSessionModel, gjson.GetBytes(firstClientMessage, "model").String()}, NativeState: headers.Get(openAICodexTurnStateHeader)}}
 	agentTaskRecoveryTried := false
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
 	var handshakeHeaders http.Header
 	for {
+		turnStateRequest.Headers = headers
+		turnStateRequest = turnStateRequest.withCurrentTurnState(ctx)
+		headers = turnStateRequest.Headers
 		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
@@ -956,7 +965,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
+		if codexTurnStateIs312(extractOpenAICodexTurnState(handshakeHeaders)) {
+			s.collectOpenAICodexTurnStateAtEpoch(ctx, account, extractOpenAICodexTurnState(handshakeHeaders), turnStateRequest.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
+		}
 		if err == nil {
+			s.collectOpenAICodexTurnStateAtEpoch(ctx, account, extractOpenAICodexTurnState(handshakeHeaders), turnStateRequest.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
 			break
 		}
 		var handshakeErr *openAIWSHandshakeError

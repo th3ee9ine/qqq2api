@@ -253,12 +253,23 @@ type SystemSettings struct {
 	OpenAICodexClientVersionSynced         string // 官方最新稳定 rust-v（只读）；UA engine 与 Responses/WS Version 共用
 	OpenAICodexVersionAutoSyncEnabled      bool   // 是否启用 Codex 客户端版本号自动同步（默认 true）
 	EnableOpenAIAccountLocalDeviceIdentity bool   // 是否优先使用账号本地设备会话中的 UA/Originator（默认 true）
-	MinCodexVersion                        string // codex_cli_only 最低 Codex 引擎版本；空=不检查
-	MaxCodexVersion                        string // codex_cli_only 最高 Codex 引擎版本；空=不检查
-	CodexCLIOnlyBlacklist                  string // codex_cli_only 全局黑名单 JSON（[]AllowedClientEntry，OR deny）
-	CodexCLIOnlyWhitelist                  string // codex_cli_only 全局白名单 JSON（[]AllowedClientEntry，AND allow）
-	CodexCLIOnlyAllowAppServerClients      bool   // codex_cli_only App Server 开关：对未列名客户端开闸（默认 false）
-	CodexCLIOnlyEngineFingerprintSignals   string // codex_cli_only 引擎指纹门信号列表 JSON（[]EngineFingerprintSignal）
+
+	// Global Codex Turn State configuration; not stored in account credentials.
+	OpenAICodexTurnStateEnabled     bool                  // 是否启用全局 Codex Turn State 注入
+	OpenAICodexTurnState            string                `json:"-"` // 敏感 token，仅服务端运行时使用
+	OpenAICodexTurnStateConfigured  bool                  `json:"openai_codex_turn_state_configured"`
+	OpenAICodexTurnStateModels      string                // 逗号分隔模型范围，空=全部
+	OpenAICodexTurnStateSetAtMS     int64                 // token 最后设置时间（毫秒）
+	OpenAICodexTurnStateStatus      *CodexTurnStateStatus `json:"openai_codex_turn_state_status"`
+	OpenAICodexTurnStateAutoEnabled bool                  `json:"openai_codex_turn_state_auto_enabled"`
+
+	// Codex client restrictions.
+	MinCodexVersion                      string // codex_cli_only 最低 Codex 引擎版本；空=不检查
+	MaxCodexVersion                      string // codex_cli_only 最高 Codex 引擎版本；空=不检查
+	CodexCLIOnlyBlacklist                string // codex_cli_only 全局黑名单 JSON（[]AllowedClientEntry，OR deny）
+	CodexCLIOnlyWhitelist                string // codex_cli_only 全局白名单 JSON（[]AllowedClientEntry，AND allow）
+	CodexCLIOnlyAllowAppServerClients    bool   // codex_cli_only App Server 开关：对未列名客户端开闸（默认 false）
+	CodexCLIOnlyEngineFingerprintSignals string // codex_cli_only 引擎指纹门信号列表 JSON（[]EngineFingerprintSignal）
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool // 是否启用 web search 模拟

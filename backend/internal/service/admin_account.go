@@ -165,6 +165,7 @@ var duplicateAccountDiscardedExtraKeys = map[string]struct{}{
 }
 
 func duplicateAccountExtra(value map[string]any) (map[string]any, error) {
+	value = StripCodexTurnStateAutoExtra(value)
 	cloned, err := cloneAccountJSONMap(value)
 	if err != nil {
 		return nil, err
@@ -431,6 +432,7 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	accountExtra = StripCodexTurnStateAutoExtra(accountExtra)
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingRateSyncEnabledExtraKey)
@@ -778,8 +780,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageSessionExtraKey)
 		delete(normalizedExtra, OllamaCloudUsageAutoRefreshExtraKey)
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
+		normalizedExtra = StripCodexTurnStateAutoExtra(normalizedExtra)
 		// 保留配额用量和专用服务受管字段，防止普通账号编辑意外覆盖。
 		for _, key := range []string{
+			CodexTurnStateAutoExtraKey,
+			CodexTurnStateAutoSetAtExtraKey,
+			CodexTurnStateAutoProbeAtExtraKey,
+			CodexTurnStateAutoLastErrorExtraKey,
+			CodexTurnStateAutoRecoveryExtraKey,
 			"quota_used",
 			"quota_daily_used",
 			"quota_daily_start",
@@ -1062,6 +1070,7 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	// safe to merge atomically after account-aware validation.  This lets the
 	// dedicated cleanup endpoint avoid a read/replace race with unrelated
 	// runtime Extra updates.
+	updates = StripCodexTurnStateAutoExtra(updates)
 	updates = stripOpenAINonCurrentSessionRevokeManagedExtra(updates, false)
 	updates, err = normalizeOpenAINonCurrentSessionRevokePatch(account, updates)
 	if err != nil {
@@ -1108,6 +1117,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 	}
 	// Managed probe/session state may only enter through dedicated typed endpoints.
+	input.Extra = StripCodexTurnStateAutoExtra(input.Extra)
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
 	input.Extra = stripOpenAINonCurrentSessionRevokeManagedExtra(input.Extra, true)

@@ -1834,7 +1834,23 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 	upstreamCtx = withOpenAIImagesSelfBuiltRequest(upstreamCtx)
-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, parsed.StickySessionSeed(), false)
+	// Turn-state model scope may target the model supplied by the client, the
+	// channel-mapped request model, or the final upstream image model.  The
+	// Responses bridge puts its own protocol model at the top level and carries
+	// the image model in tools[0], so pass all known candidates explicitly.
+	upstreamReq, err := s.buildUpstreamRequest(
+		upstreamCtx,
+		c,
+		account,
+		responsesBody,
+		token,
+		true,
+		parsed.StickySessionSeed(),
+		false,
+		parsed.Model,
+		requestModel,
+		upstreamModel,
+	)
 	if err != nil {
 		return nil, err
 	}

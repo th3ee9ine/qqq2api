@@ -224,6 +224,14 @@ type SystemSettings struct {
 	OpenAICodexClientVersionDefault        string `json:"openai_codex_client_version_default"`
 	EnableOpenAIAccountLocalDeviceIdentity bool   `json:"enable_openai_account_local_device_identity"`
 
+	// Global Codex Turn State configuration. The token is write-only.
+	OpenAICodexTurnStateEnabled     bool                          `json:"openai_codex_turn_state_enabled"`
+	OpenAICodexTurnStateConfigured  bool                          `json:"openai_codex_turn_state_configured"`
+	OpenAICodexTurnStateModels      string                        `json:"openai_codex_turn_state_models"`
+	OpenAICodexTurnStateSetAtMS     int64                         `json:"openai_codex_turn_state_set_at_ms"`
+	OpenAICodexTurnStateStatus      *service.CodexTurnStateStatus `json:"openai_codex_turn_state_status"`
+	OpenAICodexTurnStateAutoEnabled bool                          `json:"openai_codex_turn_state_auto_enabled"`
+
 	// codex_cli_only 加固
 	MinCodexVersion                      string `json:"min_codex_version"`
 	MaxCodexVersion                      string `json:"max_codex_version"`

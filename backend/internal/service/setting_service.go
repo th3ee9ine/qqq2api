@@ -137,6 +137,7 @@ type SettingService struct {
 	openAICodexOriginatorCache       atomic.Value // *cachedOpenAICodexHeaderOverride
 	openAICodexOriginatorSF          singleflight.Group
 	openAICodexUACache               atomic.Value // *cachedOpenAICodexHeaderOverride
+	openAICodexTurnStateCache        atomic.Value // *cachedOpenAICodexTurnState
 	openAICodexUASF                  singleflight.Group
 	openAICodexResponsesVersionMu    sync.Mutex
 	openAICodexResponsesVersionEpoch atomic.Uint64

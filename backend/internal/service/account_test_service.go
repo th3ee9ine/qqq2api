@@ -889,7 +889,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	// Keep the live wire headers and the workbench's redacted defaults aligned.
-	applyOpenAIAccountTestHeaders(req, credentialAccount, "responses", payloadBytes)
+	applyOpenAIAccountTestHeaders(req, credentialAccount, "responses", payloadBytes, s.settingService)
 
 	// Get proxy URL
 	proxyURL := ""
@@ -2873,7 +2873,11 @@ func (s *AccountTestService) BuildOpenAITestDefaults(account *Account, endpoint,
 	if result.UpstreamBody != nil {
 		upstreamBody = result.UpstreamBody
 	}
-	result.Headers = buildOpenAIAccountTestHeaderDefaults(account, result.Endpoint, result.URL, upstreamBody)
+	var settings *SettingService
+	if s != nil {
+		settings = s.settingService
+	}
+	result.Headers = buildOpenAIAccountTestHeaderDefaults(account, result.Endpoint, result.URL, upstreamBody, settings)
 	result.HeaderDetails = buildOpenAITestHeaderDetails(result.Headers)
 	result.Notes = append(result.Notes,
 		"Headers 来源：项目 AccountTestService 实际上游测试请求，已应用账号身份配置、请求头覆写与最终过滤；认证及账号标识已脱敏。",
@@ -3271,7 +3275,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	} else {
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
-	applyOpenAIAccountTestHeaders(req, credentialAccount, "responses", responsesBody)
+	applyOpenAIAccountTestHeaders(req, credentialAccount, "responses", responsesBody, s.settingService)
 	if direct {
 		req.Header.Set("Accept", "application/json")
 	}

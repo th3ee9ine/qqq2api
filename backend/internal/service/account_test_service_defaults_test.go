@@ -11,7 +11,7 @@ func TestBuildOpenAITestDefaultsUsesAccountTestPayloads(t *testing.T) {
 
 	responses := svc.BuildOpenAITestDefaults(nil, "responses", "")
 	require.Equal(t, "responses", responses.Endpoint)
-	require.Equal(t, "gpt-5.4", responses.Body["model"])
+	require.Equal(t, "gpt-5.5", responses.Body["model"])
 	require.Equal(t, true, responses.Body["stream"])
 	require.NotEmpty(t, responses.Body["instructions"])
 	require.Equal(t, "Bearer ••••••••", responses.Headers["Authorization"])

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,7 +46,7 @@ func openAICodexTurnStateSeed(c *gin.Context) string {
 // 上游响应就是将要写回客户端的响应之后）。上游无该头时主动清除 writer 上
 // 可能残留的上一 failover attempt 的值——否则换号后旧账号的 blob 会粘到
 // 新账号的响应上，这正是本文件要防止的跨账号矛盾。
-func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account *Account, upstream http.Header) {
+func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account *Account, upstream http.Header, requests ...*http.Request) {
 	if c == nil || c.Writer == nil {
 		return
 	}
@@ -57,6 +58,7 @@ func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account
 	}
 	c.Writer.Header().Set(canonical, state)
 	s.noteOpenAICodexTurnStateProvenance(c, account)
+	s.collectCodexTurnStateHTTP(context.Background(), account, state, requests...)
 }
 
 // stageOpenAICodexTurnState 将上游 turn-state 暂存到延迟提交的响应头集合
@@ -85,11 +87,12 @@ func stageOpenAICodexTurnState(dst *http.Header, upstream http.Header) {
 // noteStagedOpenAICodexTurnStateCommitted 在暂存响应头真正写入下游时记录
 // 铸造账号——只有此刻客户端才确定收到了该 blob，溯源表才与客户端持有的
 // 值一致（否则被 failover 丢弃的 attempt 会污染溯源，导致后续误剥离）。
-func (s *OpenAIGatewayService) noteStagedOpenAICodexTurnStateCommitted(c *gin.Context, account *Account, staged http.Header) {
+func (s *OpenAIGatewayService) noteStagedOpenAICodexTurnStateCommitted(c *gin.Context, account *Account, staged http.Header, requests ...*http.Request) {
 	if staged == nil || strings.TrimSpace(staged.Get(openAICodexTurnStateHeader)) == "" {
 		return
 	}
 	s.noteOpenAICodexTurnStateProvenance(c, account)
+	s.collectCodexTurnStateHTTP(context.Background(), account, extractOpenAICodexTurnState(staged), requests...)
 }
 
 func extractOpenAICodexTurnState(upstream http.Header) string {
@@ -117,8 +120,8 @@ func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context
 
 // guardOpenAICodexTurnStateEcho 出站守卫：客户端回带的 turn-state 若已知由
 // 其他账号铸造则剥离，同账号或无溯源记录时保持原样。只剥离、不注入——
-// /responses 路径的客户端是真实 Codex，会按自身回合语义自行回带；服务端
-// 注入是 Claude 兼容桥（无法回带的客户端）的专属行为。
+// /responses 客户端按自身回合语义回带，兼容桥可补入原生续链状态。
+// GPT 系统设置中的显式全局覆盖在此守卫之后独立应用，不改变溯源记录。
 func (s *OpenAIGatewayService) guardOpenAICodexTurnStateEcho(c *gin.Context, account *Account, h http.Header) {
 	if s == nil || h == nil || account == nil {
 		return

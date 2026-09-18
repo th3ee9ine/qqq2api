@@ -120,13 +120,13 @@ import type { Proxy } from '@/types'
 
 type DebugAccount = { id: string; name: string; email: string; typeLabel: string; status: string; platform?: string }
 type DebugModel = { id: string; display_name?: string; type?: string; created_at?: string }
-const fallbackModels: DebugModel[] = [{ id: 'gpt-5.4', display_name: 'GPT-5.4' }, { id: 'gpt-4o', display_name: 'GPT-4o' }, { id: 'gpt-4.1', display_name: 'GPT-4.1' }, { id: 'o3-mini', display_name: 'o3-mini' }, { id: 'gpt-image-2', display_name: 'GPT Image 2' }]
+const fallbackModels: DebugModel[] = [{ id: 'gpt-5.5', display_name: 'GPT-5.5' }, { id: 'gpt-4o', display_name: 'GPT-4o' }, { id: 'gpt-4.1', display_name: 'GPT-4.1' }, { id: 'o3-mini', display_name: 'o3-mini' }, { id: 'gpt-image-2', display_name: 'GPT Image 2' }]
 const accounts = ref<DebugAccount[]>([])
 const models = ref<DebugModel[]>(fallbackModels.map(model => ({ ...model })))
 const proxies = ref<Proxy[]>([])
-const defaultResponsesParams = { model: 'gpt-5.4', instructions: 'You are Codex, based on GPT-5.', input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }], stream: true }
+const defaultResponsesParams = { model: 'gpt-5.5', instructions: 'You are Codex, based on GPT-5.', input: [{ role: 'user', content: [{ type: 'input_text', text: 'hi' }] }], stream: true }
 const baseRequestHeaders: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'text/event-stream', Authorization: 'Bearer ••••••••' }
-const form = reactive({ account: '', proxyId: null as number | null, model: 'gpt-5.4', endpoint: 'responses' as DebugEndpoint, system: defaultResponsesParams.instructions, prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: JSON.stringify(baseRequestHeaders, null, 2), apiParams: JSON.stringify(defaultResponsesParams, null, 2) })
+const form = reactive({ account: '', proxyId: null as number | null, model: 'gpt-5.5', endpoint: 'responses' as DebugEndpoint, system: defaultResponsesParams.instructions, prompt: 'hi', temperature: 0, maxTokens: 0, stream: true, headers: JSON.stringify(baseRequestHeaders, null, 2), apiParams: JSON.stringify(defaultResponsesParams, null, 2) })
 const imageForm = reactive({ prompt: 'hi', n: 1, responseFormat: 'b64_json' })
 const imageMode = ref(false)
 const running = ref(false)
@@ -331,7 +331,7 @@ watch(() => form.endpoint, async endpoint => {
   if (endpoint === 'images/generations') {
     editorTab.value = 'image'
     form.apiParams = JSON.stringify({ model: 'gpt-image-2', prompt: imageForm.prompt, n: 1, response_format: 'b64_json' }, null, 2)
-  } else form.apiParams = JSON.stringify(endpoint === 'responses' ? defaultResponsesParams : { model: 'gpt-5.4', messages: [{ role: 'user', content: 'hi' }], stream: true }, null, 2)
+  } else form.apiParams = JSON.stringify(endpoint === 'responses' ? defaultResponsesParams : { model: 'gpt-5.5', messages: [{ role: 'user', content: 'hi' }], stream: true }, null, 2)
   await loadDefaults()
 })
 watch(() => form.account, async () => {

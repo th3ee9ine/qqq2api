@@ -99,9 +99,15 @@ func (s *SettingService) persistSystemSettingsAndRefresh(
 	if err := s.validateOpenAICodexVersionUpdates(ctx, updates); err != nil {
 		return 0, err
 	}
+	if err := s.prepareOpenAICodexTurnStateUpdates(ctx, updates); err != nil {
+		return 0, err
+	}
 	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
 		return 0, err
 	}
+	// Publish the global Codex turn-state change immediately after persistence;
+	// the runtime cache itself is owned by openai_codex_turn_state_global.go.
+	s.InvalidateOpenAICodexTurnStateCache()
 	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
 	s.settingsUpdateRevision++
 	return s.settingsUpdateRevision, nil
@@ -517,6 +523,14 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAICodexClientVersionMode] = versionMode
 	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
 	updates[SettingKeyEnableOpenAIAccountLocalDeviceIdentity] = strconv.FormatBool(settings.EnableOpenAIAccountLocalDeviceIdentity)
+	turnStateModels, err := NormalizeOpenAICodexTurnStateModels(settings.OpenAICodexTurnStateModels)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_MODELS", err.Error())
+	}
+	updates[SettingKeyOpenAICodexTurnStateEnabled] = strconv.FormatBool(settings.OpenAICodexTurnStateEnabled)
+	updates[SettingKeyOpenAICodexTurnState] = strings.TrimSpace(settings.OpenAICodexTurnState)
+	updates[SettingKeyOpenAICodexTurnStateModels] = turnStateModels
+	updates[SettingKeyOpenAICodexTurnStateAutoEnabled] = strconv.FormatBool(settings.OpenAICodexTurnStateAutoEnabled)
 	// SettingKeyOpenAICodexClientVersionSynced 由自动同步任务独占写入，此处不得覆盖，
 	// 否则面板保存会把同步结果清空。
 	// codex_cli_only 加固
