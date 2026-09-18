@@ -410,7 +410,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 				err = codexTurnStateAutoError("state_312")
 			}
 		} else if err == nil {
-			if codexTurnStateFresh292(state, now) && entry.recovery.allows(state, now) {
+			if codexTurnStateFreshNormal(state, now) && entry.recovery.allows(state, now) {
 				s.setCodexTurnStateLocked(entry, state, now)
 				s.openaiTurnStateMu.Unlock()
 				return

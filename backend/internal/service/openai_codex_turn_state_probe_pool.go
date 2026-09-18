@@ -20,9 +20,9 @@ func codexTurnStateAccountProxy(account *Account) string {
 	return ""
 }
 
-func codexTurnStateFresh292(state string, now time.Time) bool {
+func codexTurnStateFreshNormal(state string, now time.Time) bool {
 	issued, blocks, ok := parseCodexTurnState(state)
-	return ok && blocks == 10 && !issued.After(now.Add(time.Minute)) && now.Before(issued.Add(codexTurnStateTTL))
+	return ok && codexTurnStateNormalBlocks(blocks) && !issued.After(now.Add(time.Minute)) && now.Before(issued.Add(codexTurnStateTTL))
 }
 
 func codexTurnStateProbeRetryable(err error) bool {

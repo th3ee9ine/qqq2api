@@ -30,13 +30,17 @@ func seedRecoveryTestAccount(repo *turnStateAutoRepo, a *Account, token string) 
 func TestCodexTurnStateRecoveryRecognizesEnvelopeNotHTTPCodeOrStringLength(t *testing.T) {
 	now := time.Now()
 	normal, signal := recoveryTestToken(now, 10, 1), recoveryTestToken(now, 11, 2)
+	teamNormal := recoveryTestToken(now, 12, 4)
 	teamSignal := recoveryTestToken(now, 13, 3)
 	require.Len(t, normal, 292)
 	require.Len(t, signal, 312)
+	require.Len(t, teamNormal, 332)
 	require.Len(t, teamSignal, 356)
 	require.False(t, codexTurnStateIs312(normal))
 	require.True(t, codexTurnStateIs312(signal))
 	require.True(t, codexTurnStateIs312(strings.TrimRight(signal, "=")))
+	require.True(t, codexTurnStateIsNormal(teamNormal))
+	require.False(t, codexTurnStateIsRecoverySignal(teamNormal))
 	require.False(t, codexTurnStateIs312(teamSignal))
 	require.True(t, codexTurnStateIs356(teamSignal))
 	require.True(t, codexTurnStateIsRecoverySignal(teamSignal))
@@ -45,11 +49,11 @@ func TestCodexTurnStateRecoveryRecognizesEnvelopeNotHTTPCodeOrStringLength(t *te
 	require.False(t, codexTurnStateIs312("312"))
 }
 
-func TestCodexTurnStateRecovery356RevokesAndFetchesNew292(t *testing.T) {
+func TestCodexTurnStateRecovery356RevokesAndFetchesNew332(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
 	old := recoveryTestToken(now.Add(-time.Minute), 10, 1)
-	next := recoveryTestToken(now, 10, 2)
+	next := recoveryTestToken(now, 12, 2)
 	teamSignal := recoveryTestToken(now, 13, 3)
 	seedRecoveryTestAccount(repo, a, old)
 	var calls atomic.Int32
@@ -66,6 +70,9 @@ func TestCodexTurnStateRecovery356RevokesAndFetchesNew292(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, next, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 	require.False(t, codexTurnStateRecoveryFromAccount(codexTurnStateModelAccount(stored, "gpt-5")).Pending)
+	h := http.Header{}
+	require.NoError(t, s.applyOpenAICodexTurnState(context.Background(), stored, h, "gpt-5"))
+	require.Equal(t, next, h.Get(openAICodexTurnStateHeader))
 }
 func TestCodexTurnStateRecoveryImmediatelyRevokesAndFetchesNew292(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
@@ -124,7 +131,7 @@ func TestCodexTurnStateRecoveryImmediatelyRevokesAndFetchesNew292(t *testing.T) 
 	waitTurnStateAutoIdle(t, s)
 	require.Equal(t, next, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 }
-func TestCodexTurnStateRecoveryOnlyAcceptsDifferentFresh292(t *testing.T) {
+func TestCodexTurnStateRecoveryOnlyAcceptsDifferentFreshNormalState(t *testing.T) {
 	for _, kind := range []string{"same", "unpad-same", "opaque", "312", "expired", "future", "nine-blocks"} {
 		t.Run(kind, func(t *testing.T) {
 			s, repo, a := newTurnStateAutoService(t)

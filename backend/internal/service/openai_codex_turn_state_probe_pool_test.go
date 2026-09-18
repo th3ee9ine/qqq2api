@@ -71,6 +71,7 @@ func TestCodexTurnStateProbePoolBoundsAndStops(t *testing.T) {
 		status, calls, poolCalls int
 	}{
 		{"fresh-primary", testGlobalTurnStateToken(time.Now(), 10), 200, 1, 0},
+		{"fresh-team", testGlobalTurnStateToken(time.Now(), 12), 200, 1, 0},
 		{"opaque-never-accepted", "opaque", 200, 4, 1},
 		{"312-bounded", testGlobalTurnStateToken(time.Now(), 11), 200, 4, 1},
 		{"356-bounded", testGlobalTurnStateToken(time.Now(), 13), 200, 4, 1},

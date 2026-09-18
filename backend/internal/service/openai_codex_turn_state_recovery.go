@@ -9,10 +9,12 @@ import (
 	"time"
 )
 
-// 292/312/356 describe padded base64url envelope lengths, not HTTP statuses.
-// Personal accounts use the 312-byte envelope as the invalidation signal;
-// team accounts use the 356-byte envelope for the same signal. Use decoded
-// block counts so omitted '=' padding has identical semantics.
+// 292/312/332/356 describe padded base64url envelope lengths, not HTTP
+// statuses. Personal accounts use the 312-byte envelope as the invalidation
+// signal; team accounts use the 356-byte envelope for the same signal. A
+// normal personal state is 292 bytes (10 Fernet blocks), while a normal team
+// state is 332 bytes (12 blocks). Use decoded block counts so omitted '='
+// padding has identical semantics.
 const CodexTurnStateAutoRecoveryExtraKey = "codex_turn_state_auto_recovery"
 const codexTurnStateSignalHistoryLimit = 64
 
@@ -33,10 +35,22 @@ func codexTurnStateIs356(state string) bool {
 	return ok && blocks == 13
 }
 
+// codexTurnStateIsNormal accepts both account-family variants of a usable
+// state: 292 bytes / 10 Fernet blocks for personal accounts and 332 bytes / 12
+// blocks for Team accounts. The helper intentionally does not enforce TTL;
+// callers apply the issuance and expiry checks for their operation.
+func codexTurnStateIsNormal(state string) bool {
+	_, blocks, ok := parseCodexTurnState(state)
+	return ok && codexTurnStateNormalBlocks(blocks)
+}
+
+func codexTurnStateNormalBlocks(blocks int) bool { return blocks == 10 || blocks == 12 }
+
 // codexTurnStateIsRecoverySignal covers both account families. A 356-byte
 // team-account signal has the same lifecycle meaning as the 312-byte
 // personal-account signal: revoke the current state immediately and require a
-// newly probed 292-byte state before the next automatic request.
+// newly probed normal state (292-byte personal or 332-byte Team) before the
+// next automatic request.
 func codexTurnStateIsRecoverySignal(state string) bool {
 	return codexTurnStateIs312(state) || codexTurnStateIs356(state)
 }
@@ -109,7 +123,7 @@ func (r codexTurnStateRecovery) allows(state string, now time.Time) bool {
 		return true
 	}
 	issued, blocks, ok := parseCodexTurnState(state)
-	return ok && blocks == 10 &&
+	return ok && codexTurnStateNormalBlocks(blocks) &&
 		!hasCodexTurnStateDigest(r.Rejected, state) &&
 		issued.Unix() >= r.InvalidatedAtMS/1000 &&
 		!issued.After(now.Add(time.Minute)) && now.Before(issued.Add(codexTurnStateTTL))

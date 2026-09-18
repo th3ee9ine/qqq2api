@@ -89,8 +89,12 @@ func TestCodexTurnStateScopedTTLAndLegacy(t *testing.T) {
 	state := recoveryTestToken(now, 10, 1)
 	expires := codexTurnStateAutoExpiry(state, now.UnixMilli(), now)
 	require.Equal(t, now.Add(time.Hour).UnixMilli(), expires)
-	require.True(t, codexTurnStateFresh292(state, now.Add(time.Hour-time.Millisecond)))
-	require.False(t, codexTurnStateFresh292(state, now.Add(time.Hour)))
+	require.True(t, codexTurnStateFreshNormal(state, now.Add(time.Hour-time.Millisecond)))
+	require.False(t, codexTurnStateFreshNormal(state, now.Add(time.Hour)))
+	teamState := recoveryTestToken(now, 12, 2)
+	require.Len(t, teamState, 332)
+	require.True(t, codexTurnStateFreshNormal(teamState, now.Add(time.Hour-time.Millisecond)))
+	require.False(t, codexTurnStateFreshNormal(teamState, now.Add(time.Hour)))
 	s, repo, a := newTurnStateAutoService(t)
 	a.Extra = map[string]any{CodexTurnStateAutoExtraKey: state, CodexTurnStateAutoSetAtExtraKey: now.UnixMilli()}
 	repo.accounts[a.ID].Extra = mergeMap(nil, a.Extra)
@@ -98,7 +102,7 @@ func TestCodexTurnStateScopedTTLAndLegacy(t *testing.T) {
 	h.Set(openAICodexTurnStateHeader, state)
 	require.NoError(t, s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5.5"))
 	require.Empty(t, h.Get(openAICodexTurnStateHeader), "unscoped historical state must not be assigned an invented model")
-	seedScopedTurnState(repo, a, "gpt-5.5", recoveryTestToken(now.Add(-time.Hour), 10, 2))
+	seedScopedTurnState(repo, a, "gpt-5.5", recoveryTestToken(now.Add(-time.Hour), 10, 3))
 	require.NoError(t, s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5.5"))
 	require.Empty(t, h.Get(openAICodexTurnStateHeader), "one-hour expiry also applies to outgoing native headers")
 }
