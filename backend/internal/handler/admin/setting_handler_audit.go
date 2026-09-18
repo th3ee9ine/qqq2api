@@ -2,7 +2,6 @@ package admin
 
 import (
 	"log/slog"
-	"strings"
 
 	"github.com/th3ee9ine/qqq2api/internal/handler/dto"
 	"github.com/th3ee9ine/qqq2api/internal/server/middleware"
@@ -501,15 +500,8 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.EnableOpenAIAccountLocalDeviceIdentity != after.EnableOpenAIAccountLocalDeviceIdentity {
 		changed = append(changed, "enable_openai_account_local_device_identity")
 	}
-	if before.OpenAICodexTurnStateEnabled != after.OpenAICodexTurnStateEnabled {
-		changed = append(changed, "openai_codex_turn_state_enabled")
-	}
 	if before.OpenAICodexTurnStateAutoEnabled != after.OpenAICodexTurnStateAutoEnabled {
 		changed = append(changed, "openai_codex_turn_state_auto_enabled")
-	}
-	if req.OpenAICodexTurnState != nil && before.OpenAICodexTurnState != strings.TrimSpace(*req.OpenAICodexTurnState) {
-		// Only log the field name, never the token value.
-		changed = append(changed, "openai_codex_turn_state")
 	}
 	if before.OpenAICodexTurnStateModels != after.OpenAICodexTurnStateModels {
 		changed = append(changed, "openai_codex_turn_state_models")

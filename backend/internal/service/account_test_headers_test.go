@@ -158,9 +158,9 @@ func TestOpenAITestHeaderDefaultsMatchLiveRequests(t *testing.T) {
 				case endpoint == "images/generations":
 					err = svc.testOpenAIImageAPIKey(c, c.Request.Context(), account, "gpt-image-2", "draw a cat")
 				case endpoint == "chat/completions" && accountType == AccountTypeAPIKey:
-					err = svc.testOpenAIChatCompletionsConnection(c, account, "gpt-5.4", "hi", "https://api.openai.com", "private-api-key")
+					err = svc.testOpenAIChatCompletionsConnection(c, account, "gpt-5.5", "hi", "https://api.openai.com", "private-api-key")
 				default:
-					err = svc.testOpenAIAccountConnection(c, account, "gpt-5.4", "hi", "")
+					err = svc.testOpenAIAccountConnection(c, account, "gpt-5.5", "hi", "")
 				}
 				require.NoError(t, err)
 				require.NotNil(t, upstream.lastReq)

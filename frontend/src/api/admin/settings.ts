@@ -16,17 +16,6 @@ export interface OpenAISessionCleanupGlobalSettings {
   interval_minutes: number
 }
 
-export interface OpenAICodexTurnStateStatus {
-  enabled: boolean
-  configured: boolean
-  active: boolean
-  reason: string
-  verdict: "normal" | "suspect" | "unknown" | string
-  blocks: number
-  issued_at?: number
-  expires_at?: number
-}
-
 export interface DefaultSubscriptionSetting {
   group_id: number;
   validity_days: number;
@@ -638,13 +627,8 @@ export interface SystemSettings {
   openai_codex_client_version_synced: string;
   openai_codex_version_auto_sync_enabled: boolean;
   enable_openai_account_local_device_identity: boolean;
-  openai_codex_turn_state_enabled: boolean;
   openai_codex_turn_state_auto_enabled: boolean;
-  /** Sensitive token is never returned by GET; submit only when replacing/clearing. */
-  openai_codex_turn_state_configured: boolean;
   openai_codex_turn_state_models: string;
-  openai_codex_turn_state_set_at_ms: number;
-  openai_codex_turn_state_status?: OpenAICodexTurnStateStatus;
   // codex_cli_only 加固
   min_codex_version: string;
   max_codex_version: string;
@@ -960,9 +944,7 @@ export interface UpdateSettingsRequest {
   openai_codex_client_version_mode?: "auto" | "pinned";
   openai_codex_version_auto_sync_enabled?: boolean;
   enable_openai_account_local_device_identity?: boolean;
-  openai_codex_turn_state_enabled?: boolean;
   openai_codex_turn_state_auto_enabled?: boolean;
-  openai_codex_turn_state?: string;
   openai_codex_turn_state_models?: string;
   // codex_cli_only 加固
   min_codex_version?: string;

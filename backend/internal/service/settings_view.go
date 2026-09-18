@@ -254,14 +254,9 @@ type SystemSettings struct {
 	OpenAICodexVersionAutoSyncEnabled      bool   // 是否启用 Codex 客户端版本号自动同步（默认 true）
 	EnableOpenAIAccountLocalDeviceIdentity bool   // 是否优先使用账号本地设备会话中的 UA/Originator（默认 true）
 
-	// Global Codex Turn State configuration; not stored in account credentials.
-	OpenAICodexTurnStateEnabled     bool                  // 是否启用全局 Codex Turn State 注入
-	OpenAICodexTurnState            string                `json:"-"` // 敏感 token，仅服务端运行时使用
-	OpenAICodexTurnStateConfigured  bool                  `json:"openai_codex_turn_state_configured"`
-	OpenAICodexTurnStateModels      string                // 逗号分隔模型范围，空=全部
-	OpenAICodexTurnStateSetAtMS     int64                 // token 最后设置时间（毫秒）
-	OpenAICodexTurnStateStatus      *CodexTurnStateStatus `json:"openai_codex_turn_state_status"`
-	OpenAICodexTurnStateAutoEnabled bool                  `json:"openai_codex_turn_state_auto_enabled"`
+	// Automatic Codex Turn State lifecycle; values are managed per account.
+	OpenAICodexTurnStateModels      string // 逗号分隔模型范围，空=全部
+	OpenAICodexTurnStateAutoEnabled bool   `json:"openai_codex_turn_state_auto_enabled"`
 
 	// Codex client restrictions.
 	MinCodexVersion                      string // codex_cli_only 最低 Codex 引擎版本；空=不检查

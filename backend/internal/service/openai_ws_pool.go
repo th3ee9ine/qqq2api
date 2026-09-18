@@ -196,6 +196,15 @@ func (l *openAIWSConnLease) HandshakeHeader(name string) string {
 	return l.conn.handshakeHeader(name)
 }
 
+// SentTurnState reports the handshake request, including for a reused lease.
+func (l *openAIWSConnLease) SentTurnState() *string {
+	if l == nil || l.conn == nil || l.conn.sentTurnState == nil {
+		return nil
+	}
+	state := *l.conn.sentTurnState
+	return &state
+}
+
 func (l *openAIWSConnLease) HandshakeHeaders() http.Header {
 	if l == nil || l.conn == nil {
 		return nil
@@ -305,6 +314,7 @@ type openAIWSConn struct {
 	id string
 	ws openAIWSClientConn
 
+	sentTurnState          *string // Immutable header from this connection's actual handshake.
 	handshakeHeaders       http.Header
 	handshakeCompatibility openAIWSHandshakeCompatibilityKey
 	routingAffinity        string
@@ -2344,6 +2354,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 			return nil, err
 		}
 	}
+	sentTurnState := headers.Get(openAICodexTurnStateHeader)
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
 	if req.TurnState.Gateway != nil && codexTurnStateIs312(extractOpenAICodexTurnState(handshakeHeaders)) {
 		req.TurnState.Gateway.collectOpenAICodexTurnStateAtEpoch(ctx, req.Account, extractOpenAICodexTurnState(handshakeHeaders), req.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
@@ -2373,6 +2384,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 		req.TurnState.Gateway.collectOpenAICodexTurnStateAtEpoch(ctx, req.Account, extractOpenAICodexTurnState(handshakeHeaders), req.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
 	}
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
+	pooledConn.sentTurnState = &sentTurnState
 	accountID := req.Account.ID
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)

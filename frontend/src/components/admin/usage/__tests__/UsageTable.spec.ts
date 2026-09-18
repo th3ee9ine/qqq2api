@@ -95,6 +95,7 @@ const DataTableStub = {
         <slot name="cell-cost" :row="row" />
         <slot name="cell-request_id" :row="row" />
         <slot name="cell-upstream_request_id" :row="row" />
+        <slot name="cell-upstream_turn_state" :row="row" />
       </div>
     </div>
   `,
@@ -764,5 +765,32 @@ describe('admin UsageTable IP geolocation batch toolbar', () => {
     })
     expect(wrapper.text()).toContain('121.35.47.43')
     expect(wrapper.text()).toContain('CN · Guangdong · Shenzhen')
+  })
+})
+
+
+describe('admin UsageTable Turn State', () => {
+  it('shows and copies the complete token, and distinguishes absent from historical data', async () => {
+    const token = 'test-turn-state-'.repeat(20)
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const wrapper = mount(UsageTable, {
+      props: { data: [
+        { ...baseImageRow, request_id: 'sent', upstream_turn_state: token },
+        { ...baseImageRow, request_id: 'absent', upstream_turn_state: '' },
+        { ...baseImageRow, request_id: 'historical', upstream_turn_state: null },
+      ], loading: false, columns: [] },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    expect(wrapper.find('summary').attributes('title')).toBe(token)
+    expect(wrapper.find('details p').text()).toBe(token)
+    expect(wrapper.text()).toContain('admin.usage.turnStateNotSent')
+    expect(wrapper.text()).toContain('admin.usage.turnStateUnknown')
+    const button = wrapper.findAll('button').find(el => el.element.parentElement?.querySelector('details'))
+    expect(button).toBeDefined()
+    await button!.trigger('click')
+    expect(writeText).toHaveBeenCalledWith(token)
+    wrapper.unmount()
+    vi.unstubAllGlobals()
   })
 })

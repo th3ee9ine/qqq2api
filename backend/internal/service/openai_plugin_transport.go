@@ -24,6 +24,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		}
 	}()
 	if request != nil {
+		request = snapshotOpenAIUpstreamTurnState(request)
 		normalizeLegacyOpenAIOutboundRequestBody(request)
 		SanitizeOutboundGatewayIdentity(request.Header)
 	}

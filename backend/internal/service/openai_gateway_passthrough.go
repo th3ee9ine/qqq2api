@@ -521,6 +521,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	forwardResult := &OpenAIForwardResult{
 		RequestID:                     resp.Header.Get("x-request-id"),
+		UpstreamTurnState:             upstreamTurnStateFromResponse(resp),
 		UpstreamHeaders:               resp.Header,
 		ResponseID:                    responseID,
 		Usage:                         *usage,
@@ -948,10 +949,11 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicy(body)
 	if cyberHit {
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
-			Code:           cyberCode,
-			Message:        cyberMsg,
-			Body:           truncateString(string(body), 4096),
-			UpstreamStatus: resp.StatusCode,
+			UpstreamTurnState: upstreamTurnStateFromResponse(resp),
+			Code:              cyberCode,
+			Message:           cyberMsg,
+			Body:              truncateString(string(body), 4096),
+			UpstreamStatus:    resp.StatusCode,
 		})
 	}
 
@@ -2067,12 +2069,13 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				if hit, code, msg := detectOpenAICyberPolicy(dataBytes); hit {
 					cyberHit = true
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
-						Code:           code,
-						Message:        msg,
-						Body:           truncateString(string(dataBytes), 4096),
-						UpstreamStatus: http.StatusOK,
-						UpstreamInTok:  usage.InputTokens,
-						UpstreamOutTok: usage.OutputTokens,
+						UpstreamTurnState: upstreamTurnStateFromResponse(resp),
+						Code:              code,
+						Message:           msg,
+						Body:              truncateString(string(dataBytes), 4096),
+						UpstreamStatus:    http.StatusOK,
+						UpstreamInTok:     usage.InputTokens,
+						UpstreamOutTok:    usage.OutputTokens,
 					})
 				}
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)

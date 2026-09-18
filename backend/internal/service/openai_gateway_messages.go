@@ -613,12 +613,13 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
 		if hit, code, msg := detectOpenAICyberPolicy(payload); hit {
 			MarkOpsCyberPolicy(c, CyberPolicyMark{
-				Code:           code,
-				Message:        msg,
-				Body:           truncateString(string(payload), 4096),
-				UpstreamStatus: http.StatusOK,
-				UpstreamInTok:  usage.InputTokens,
-				UpstreamOutTok: usage.OutputTokens,
+				UpstreamTurnState: upstreamTurnStateFromResponse(resp),
+				Code:              code,
+				Message:           msg,
+				Body:              truncateString(string(payload), 4096),
+				UpstreamStatus:    http.StatusOK,
+				UpstreamInTok:     usage.InputTokens,
+				UpstreamOutTok:    usage.OutputTokens,
 			})
 			clientMsg := msg
 			if clientMsg == "" {
@@ -665,6 +666,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 
 	result := &OpenAIForwardResult{
 		RequestID:                     requestID,
+		UpstreamTurnState:             upstreamTurnStateFromResponse(resp),
 		UpstreamHeaders:               resp.Header,
 		ResponseID:                    finalResponse.ID,
 		Usage:                         usage,
@@ -973,6 +975,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	resultWithUsage := func() *OpenAIForwardResult {
 		out := &OpenAIForwardResult{
 			RequestID:                     requestID,
+			UpstreamTurnState:             upstreamTurnStateFromResponse(resp),
 			UpstreamHeaders:               resp.Header,
 			ResponseID:                    responseID,
 			Usage:                         usage,
@@ -1038,12 +1041,13 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				payloadBytes := []byte(payload)
 				if hit, code, msg := detectOpenAICyberPolicy(payloadBytes); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
-						Code:           code,
-						Message:        msg,
-						Body:           truncateString(payload, 4096),
-						UpstreamStatus: http.StatusOK,
-						UpstreamInTok:  usage.InputTokens,
-						UpstreamOutTok: usage.OutputTokens,
+						UpstreamTurnState: upstreamTurnStateFromResponse(resp),
+						Code:              code,
+						Message:           msg,
+						Body:              truncateString(payload, 4096),
+						UpstreamStatus:    http.StatusOK,
+						UpstreamInTok:     usage.InputTokens,
+						UpstreamOutTok:    usage.OutputTokens,
 					})
 					if !clientDisconnected {
 						writeStreamHeaders()

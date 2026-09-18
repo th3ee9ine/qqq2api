@@ -4938,19 +4938,10 @@
               </div>
 
               <CodexTurnStateSettings
-                :enabled="form.openai_codex_turn_state_enabled"
                 :auto-enabled="form.openai_codex_turn_state_auto_enabled"
-                :token="form.openai_codex_turn_state"
-                :token-dirty="codexTurnStateTokenDirty"
                 :models="form.openai_codex_turn_state_models"
-                :configured="form.openai_codex_turn_state_configured"
-                :set-at-ms="form.openai_codex_turn_state_set_at_ms"
-                :status="form.openai_codex_turn_state_status"
-                @update:enabled="form.openai_codex_turn_state_enabled = $event"
                 @update:auto-enabled="form.openai_codex_turn_state_auto_enabled = $event"
-                @update:token="onCodexTurnStateTokenInput"
                 @update:models="form.openai_codex_turn_state_models = $event"
-                @clear-token="clearCodexTurnStateToken"
               />
 
               <!-- Codex 版本号自动同步 -->
@@ -9234,7 +9225,7 @@ import {
   defaultFingerprintSignalRows,
   type FingerprintSignalRow,
 } from "./codexFingerprintSignals";
-import { isValidCodexTurnStateToken, normalizeCodexTurnStateModels } from "@/utils/codexTurnState";
+import { normalizeCodexTurnStateModels } from "@/utils/codexTurnState";
 
 const { t, locale } = useI18n();
 const appStore = useAppStore();
@@ -9895,7 +9886,6 @@ type SettingsForm = Omit<
   channel_monitor_show_quota: boolean;
   channel_monitor_hide_user_ranking: boolean;
   smtp_password: string;
-  openai_codex_turn_state: string;
   turnstile_secret_key: string;
   tencent_captcha_app_secret_key: string;
   tencent_captcha_cloud_secret_id: string;
@@ -10190,13 +10180,8 @@ const form = reactive<SettingsForm>({
   // Responses/WS Version 共用；不参与提交（提交载荷按字段显式构造）
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
-  openai_codex_turn_state_enabled: false,
   openai_codex_turn_state_auto_enabled: false,
-  openai_codex_turn_state: "",
-  openai_codex_turn_state_configured: false,
   openai_codex_turn_state_models: "",
-  openai_codex_turn_state_set_at_ms: 0,
-  openai_codex_turn_state_status: undefined,
   // codex_cli_only 加固
   min_codex_version: "",
   max_codex_version: "",
@@ -10231,19 +10216,6 @@ const form = reactive<SettingsForm>({
   // Allow user view error requests
   allow_user_view_error_requests: false,
 });
-
-// The token is write-only: an empty field after loading means "preserve" until
-// the operator explicitly edits it or presses Clear.
-const codexTurnStateTokenDirty = ref(false);
-function onCodexTurnStateTokenInput(value: string): void {
-  form.openai_codex_turn_state = value;
-  // Deleting a draft restores preserve semantics. Only Clear removes a saved token.
-  codexTurnStateTokenDirty.value = value.trim() !== "";
-}
-function clearCodexTurnStateToken(): void {
-  form.openai_codex_turn_state = "";
-  codexTurnStateTokenDirty.value = true;
-}
 
 // 人机验证 UI 状态：单卡片「总开关 + 服务商单选」，落库仍是三个独立
 // enabled 键（与上游一致），由下面的映射保证同一时间至多一家启用。
@@ -11327,9 +11299,6 @@ async function loadSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
-    // The secret is write-only. Never echo a server response into the input.
-    form.openai_codex_turn_state = "";
-    codexTurnStateTokenDirty.value = false;
     syncCaptchaProviderSelection();
     if (!form.claude_oauth_system_prompt_blocks?.trim()) {
       form.claude_oauth_system_prompt_blocks =
@@ -11593,11 +11562,6 @@ async function saveSettings() {
       );
     form.claude_oauth_system_prompt_blocks =
       claudeOAuthSystemPromptBlocksJSON;
-
-    if (codexTurnStateTokenDirty.value && !isValidCodexTurnStateToken(form.openai_codex_turn_state)) {
-      appStore.showError(t("admin.settings.gatewayForwarding.codexTurnStateInvalidToken"));
-      return;
-    }
     let codexTurnStateModels: string;
     try {
       codexTurnStateModels = normalizeCodexTurnStateModels(form.openai_codex_turn_state_models);
@@ -11656,7 +11620,6 @@ async function saveSettings() {
         form.enable_openai_account_local_device_identity,
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
-      openai_codex_turn_state_enabled: form.openai_codex_turn_state_enabled,
       openai_codex_turn_state_auto_enabled: form.openai_codex_turn_state_auto_enabled,
       openai_codex_turn_state_models: codexTurnStateModels,
       min_codex_version: form.min_codex_version?.trim() || "",
@@ -11712,9 +11675,6 @@ async function saveSettings() {
         form.account_quota_notify_emails || []
       ).filter((entry) => entry.email.trim() !== ""),
     };
-    if (codexTurnStateTokenDirty.value) {
-      payload.openai_codex_turn_state = form.openai_codex_turn_state.trim();
-    }
 
     // 仅当 openai_fast_policy_settings 已成功从后端加载时才回写，
     // 否则省略整个字段，让后端保留既有规则（含默认值）。
@@ -11758,8 +11718,6 @@ async function saveSettings() {
         (form as Record<string, unknown>)[key] = value;
       }
     }
-    form.openai_codex_turn_state = "";
-    codexTurnStateTokenDirty.value = false;
     form.account_scheduling_thresholds = normalizeAccountSchedulingThresholdsMap(
       updated.account_scheduling_thresholds,
     );

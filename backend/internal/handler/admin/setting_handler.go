@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/th3ee9ine/qqq2api/internal/handler/dto"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
@@ -312,11 +311,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAICodexUserAgentDefault:                            codexHeaderDefaults.UserAgent,
 		OpenAICodexClientVersionDefault:                        codexHeaderDefaults.ClientVersion,
 		EnableOpenAIAccountLocalDeviceIdentity:                 settings.EnableOpenAIAccountLocalDeviceIdentity,
-		OpenAICodexTurnStateEnabled:                            settings.OpenAICodexTurnStateEnabled,
-		OpenAICodexTurnStateConfigured:                         settings.OpenAICodexTurnStateConfigured,
 		OpenAICodexTurnStateModels:                             settings.OpenAICodexTurnStateModels,
-		OpenAICodexTurnStateSetAtMS:                            settings.OpenAICodexTurnStateSetAtMS,
-		OpenAICodexTurnStateStatus:                             service.InspectCodexTurnState(settings.OpenAICodexTurnState, settings.OpenAICodexTurnStateEnabled, time.Now()),
 		OpenAICodexTurnStateAutoEnabled:                        settings.OpenAICodexTurnStateAutoEnabled,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,

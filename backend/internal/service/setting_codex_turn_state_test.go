@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -15,17 +14,7 @@ func TestSystemSettingsCodexTurnStateDefaults(t *testing.T) {
 	settings, err := svc.GetAllSettings(context.Background())
 	require.NoError(t, err)
 	require.False(t, settings.OpenAICodexTurnStateAutoEnabled)
-	require.False(t, settings.OpenAICodexTurnStateEnabled)
-	require.False(t, settings.OpenAICodexTurnStateConfigured)
-	require.Empty(t, settings.OpenAICodexTurnState)
 	require.Empty(t, settings.OpenAICodexTurnStateModels)
-	require.Zero(t, settings.OpenAICodexTurnStateSetAtMS)
-}
-
-func TestSystemSettingsCodexTurnStateSecretIsNotJSONSerializable(t *testing.T) {
-	data, err := json.Marshal(&SystemSettings{OpenAICodexTurnState: "private-turn-state"})
-	require.NoError(t, err)
-	require.NotContains(t, string(data), "private-turn-state")
 }
 
 func TestSystemSettingsCodexTurnStateHeaderValidation(t *testing.T) {
@@ -54,7 +43,7 @@ func TestSystemSettingsCodexTurnStateModelsNormalize(t *testing.T) {
 	}
 }
 
-func TestSystemSettingsCodexTurnStateOmittedPreservesStoredSecretAndClock(t *testing.T) {
+func TestSystemSettingsCodexTurnStateOmittedPreservesScopeAndIgnoresLegacy(t *testing.T) {
 	// UpdateSettings refreshes unrelated package-wide gateway caches too. Keep
 	// this persistence test from disabling local Codex identities (or changing
 	// scheduler defaults) for tests that execute afterwards.
@@ -80,9 +69,7 @@ func TestSystemSettingsCodexTurnStateOmittedPreservesStoredSecretAndClock(t *tes
 		SettingKeyOpenAICodexTurnStateSetAtMS: "12345",
 	}}
 	svc := NewSettingService(repo, &config.Config{})
-	err := svc.UpdateSettingsOmitting(context.Background(), &SystemSettings{
-		OpenAICodexTurnState: "stale-private-state", OpenAICodexTurnStateSetAtMS: 999,
-	}, OmittedSettingKeys{
+	err := svc.UpdateSettingsOmitting(context.Background(), &SystemSettings{}, OmittedSettingKeys{
 		SettingKeyOpenAICodexTurnState: {}, SettingKeyOpenAICodexTurnStateEnabled: {}, SettingKeyOpenAICodexTurnStateModels: {},
 	})
 	require.NoError(t, err)

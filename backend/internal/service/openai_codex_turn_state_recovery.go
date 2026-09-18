@@ -125,8 +125,8 @@ func (s *OpenAIGatewayService) invalidateCodexTurnStateLocked(entry *codexTurnSt
 	// Preserve the most recent routed model recorded by outgoing requests.
 }
 
-// Also guard global/manual and native continuation sources: otherwise their
-// higher priority would reintroduce a revoked state after the cache is cleared.
+// Also guard native continuation: its higher priority must not reintroduce a
+// revoked state after the account cache is cleared.
 func (s *OpenAIGatewayService) codexTurnStateAllowed(ctx context.Context, account *Account, state string) bool {
 	if state == "" {
 		return false

@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/antigravity"
@@ -250,10 +249,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexClientVersionSynced:                     "",
 		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingKeyEnableOpenAIAccountLocalDeviceIdentity:             "true",
-		SettingKeyOpenAICodexTurnStateEnabled:                        "false",
-		SettingKeyOpenAICodexTurnState:                               "",
 		SettingKeyOpenAICodexTurnStateModels:                         "",
-		SettingKeyOpenAICodexTurnStateSetAtMS:                        "0",
 		SettingKeyOpenAICodexTurnStateAutoEnabled:                    "false",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
@@ -911,20 +907,10 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else {
 		result.EnableOpenAIAccountLocalDeviceIdentity = true
 	}
-	result.OpenAICodexTurnState = strings.TrimSpace(settings[SettingKeyOpenAICodexTurnState])
 	if models, err := NormalizeOpenAICodexTurnStateModels(settings[SettingKeyOpenAICodexTurnStateModels]); err == nil {
 		result.OpenAICodexTurnStateModels = models
 	}
-	result.OpenAICodexTurnStateConfigured = result.OpenAICodexTurnState != ""
-	result.OpenAICodexTurnStateEnabled = settings[SettingKeyOpenAICodexTurnStateEnabled] == "true"
 	result.OpenAICodexTurnStateAutoEnabled = settings[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"
-	if value, err := strconv.ParseInt(settings[SettingKeyOpenAICodexTurnStateSetAtMS], 10, 64); err == nil && value > 0 {
-		result.OpenAICodexTurnStateSetAtMS = value
-	}
-	if !result.OpenAICodexTurnStateConfigured {
-		result.OpenAICodexTurnStateSetAtMS = 0
-	}
-	result.OpenAICodexTurnStateStatus = InspectCodexTurnState(result.OpenAICodexTurnState, result.OpenAICodexTurnStateEnabled, time.Now())
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]
 	result.MaxCodexVersion = settings[SettingKeyMaxCodexVersion]

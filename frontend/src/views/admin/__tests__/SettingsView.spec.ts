@@ -775,88 +775,51 @@ describe("admin SettingsView", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
-  it("renders global Codex Turn State settings and keeps the token write-only", async () => {
+  it("exposes only automatic Turn State settings even with legacy server fields", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       openai_codex_turn_state_enabled: true,
       openai_codex_turn_state_configured: true,
       openai_codex_turn_state_models: "gpt-5,gpt-5-*",
-      openai_codex_turn_state_set_at_ms: 1_800_000_000_000,
-      openai_codex_turn_state_status: {
-        enabled: true, configured: true, active: true, reason: "expired",
-        verdict: "normal", blocks: 10, issued_at: 1_800_000_000, expires_at: 1_800_003_600,
-      },
-      // A GET response must never contain the sensitive token.
     });
     const wrapper = mountView();
     await flushPromises();
     await openGPTTab(wrapper);
     const card = wrapper.get('[data-testid="codex-turn-state-settings"]');
-    expect(card.get('[data-testid="openai-codex-turn-state-toggle"]').exists()).toBe(true);
-    expect((card.get('[data-testid="openai-codex-turn-state-token"]').element as HTMLInputElement).value).toBe("");
-    expect((card.get('[data-testid="openai-codex-turn-state-models"]').element as HTMLInputElement).value).toBe("gpt-5,gpt-5-*");
+    expect(card.find('[data-testid="openai-codex-turn-state-toggle"]').exists()).toBe(false);
+    expect(card.find('[data-testid="openai-codex-turn-state-token"]').exists()).toBe(false);
+    expect(card.find('input[type="password"]').exists()).toBe(false);
     await card.get('[data-testid="openai-codex-turn-state-auto-toggle"]').setValue(true);
-    await card.get('[data-testid="openai-codex-turn-state-token"]').setValue(" opaque token ");
     await card.get('[data-testid="openai-codex-turn-state-models"]').setValue(" GPT-5, gpt-5, Codex/* ");
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
-    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-      openai_codex_turn_state_enabled: true,
-      openai_codex_turn_state: "opaque token",
-      openai_codex_turn_state_auto_enabled: true,
-      openai_codex_turn_state_models: "gpt-5,codex/*",
-    }));
-    expect((card.get('[data-testid="openai-codex-turn-state-token"]').element as HTMLInputElement).value).toBe("");
     const payload = updateSettings.mock.calls.at(-1)?.[0];
-    expect(payload).not.toHaveProperty("openai_codex_turn_state_set_at_ms");
-    expect(payload).not.toHaveProperty("openai_codex_turn_state_status");
-    expect(payload).not.toHaveProperty("openai_codex_turn_state_configured");
+    expect(payload).toMatchObject({ openai_codex_turn_state_auto_enabled: true, openai_codex_turn_state_models: "gpt-5,codex/*" });
+    for (const key of ["openai_codex_turn_state", "openai_codex_turn_state_enabled", "openai_codex_turn_state_set_at_ms", "openai_codex_turn_state_status", "openai_codex_turn_state_configured"]) {
+      expect(payload).not.toHaveProperty(key);
+    }
     wrapper.unmount();
   });
 
-  it("sends an explicit empty token only after Clear, while untouched blank preserves", async () => {
-    getSettings.mockResolvedValueOnce({ ...baseSettingsResponse, openai_codex_turn_state_enabled: true, openai_codex_turn_state_configured: true });
-    updateSettings.mockResolvedValueOnce({ ...baseSettingsResponse, openai_codex_turn_state_enabled: true, openai_codex_turn_state_configured: true });
+  it("defaults automatic Turn State off and saves without any token field", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openGPTTab(wrapper);
-    const card = wrapper.get('[data-testid="codex-turn-state-settings"]');
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-    expect(updateSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("openai_codex_turn_state");
-    await card.get('[data-testid="openai-codex-turn-state-clear"]').trigger("click");
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-    expect(updateSettings.mock.calls.at(-1)?.[0]).toHaveProperty("openai_codex_turn_state", "");
-    wrapper.unmount();
-  });
-
-  it("defaults the system Turn State switch off and does not delete tokens when toggled off", async () => {
-    const wrapper = mountView();
-    await flushPromises();
-    await openGPTTab(wrapper);
-    const toggle = wrapper.get<HTMLInputElement>('[data-testid="openai-codex-turn-state-toggle"]');
+    const toggle = wrapper.get<HTMLInputElement>('[data-testid="openai-codex-turn-state-auto-toggle"]');
     expect(toggle.element.checked).toBe(false);
     await toggle.setValue(true);
     await toggle.setValue(false);
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
-    expect(updateSettings.mock.calls.at(-1)?.[0]).toMatchObject({ openai_codex_turn_state_enabled: false });
+    expect(updateSettings.mock.calls.at(-1)?.[0]).toMatchObject({ openai_codex_turn_state_auto_enabled: false });
     expect(updateSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("openai_codex_turn_state");
     wrapper.unmount();
   });
 
-  it("blocks unsafe token and malformed scopes before any settings write", async () => {
+  it("blocks malformed model scopes before writing automatic settings", async () => {
     const wrapper = mountView();
     await flushPromises();
     await openGPTTab(wrapper);
-    const token = wrapper.get('[data-testid="openai-codex-turn-state-token"]');
-    await token.setValue("非 ASCII");
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-    expect(updateSettings).not.toHaveBeenCalled();
-    expect(showError).toHaveBeenLastCalledWith("admin.settings.gatewayForwarding.codexTurnStateInvalidToken");
-    await token.setValue("");
     await wrapper.get('[data-testid="openai-codex-turn-state-models"]').setValue("gpt*bad");
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();

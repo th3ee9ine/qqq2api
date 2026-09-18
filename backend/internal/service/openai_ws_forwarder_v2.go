@@ -479,6 +479,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			OpenAIWSMode:                  true,
 			UpstreamTerminalEvent:         upstreamTerminalEvent,
 			ResponseHeaders:               lease.HandshakeHeaders(),
+			UpstreamTurnState:             lease.SentTurnState(),
 			Duration:                      time.Since(startTime),
 			FirstTokenMs:                  firstTokenMs,
 			ClientDisconnect:              clientDisconnected,

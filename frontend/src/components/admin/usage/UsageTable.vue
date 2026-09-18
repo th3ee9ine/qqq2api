@@ -273,6 +273,20 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
+        <template #cell-upstream_turn_state="{ row }">
+          <div v-if="row.upstream_turn_state" class="flex max-w-[260px] items-start gap-1.5">
+            <details class="min-w-0 text-xs" :title="row.openai_ws_mode ? t('admin.usage.turnStateHandshakeHint') : undefined">
+              <summary class="cursor-pointer truncate font-mono text-gray-600 dark:text-gray-300" :title="row.upstream_turn_state">{{ row.upstream_turn_state }}</summary>
+              <p class="mt-1 select-all break-all font-mono text-gray-600 dark:text-gray-300">{{ row.upstream_turn_state }}</p>
+            </details>
+            <button type="button" class="shrink-0 rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              :title="t('keys.copyToClipboard')" @click="copyIdentifier(row.upstream_turn_state, t('admin.usage.turnStateCopied'))">
+              <Icon :name="copiedRequestId === row.upstream_turn_state ? 'check' : 'copy'" size="sm" class="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <span v-else class="text-xs text-gray-400 dark:text-gray-500">{{ row.upstream_turn_state === '' ? t('admin.usage.turnStateNotSent') : t('admin.usage.turnStateUnknown') }}</span>
+        </template>
+
         <template #cell-user_agent="{ row }">
           <span v-if="row.user_agent" class="text-sm text-gray-600 dark:text-gray-400 block max-w-[320px] truncate" :title="row.user_agent">{{ formatUserAgent(row.user_agent) }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>

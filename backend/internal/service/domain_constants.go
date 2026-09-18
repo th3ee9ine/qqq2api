@@ -700,12 +700,13 @@ const (
 	SettingKeyOpenAICodexVersionAutoSyncEnabled = "openai_codex_version_auto_sync_enabled"
 	// SettingKeyEnableOpenAIAccountLocalDeviceIdentity 是否优先使用账号本地设备会话中的 UA/Originator（默认 true）。
 	SettingKeyEnableOpenAIAccountLocalDeviceIdentity = "enable_openai_account_local_device_identity"
-	// OpenAI Codex global turn-state injection. The token is sensitive and is
-	// never returned by the admin settings API; only configured metadata is.
+	// Retired manual Turn State keys identify legacy data in upgrade tests.
+	// Runtime settings neither read nor write them.
 	SettingKeyOpenAICodexTurnStateEnabled = "openai_codex_turn_state_enabled"
 	SettingKeyOpenAICodexTurnState        = "openai_codex_turn_state"
-	SettingKeyOpenAICodexTurnStateModels  = "openai_codex_turn_state_models"
 	SettingKeyOpenAICodexTurnStateSetAtMS = "openai_codex_turn_state_set_at_ms"
+	// Active automatic lifecycle model scope.
+	SettingKeyOpenAICodexTurnStateModels = "openai_codex_turn_state_models"
 	// SettingKeyOpenAICodexTurnStateAutoEnabled enables account-scoped automatic
 	// collection, renewal and bounded upstream probes. It is opt-in because each
 	// probe is an extra upstream request and may consume model quota.

@@ -112,6 +112,11 @@ func TestCodexTurnStateLiveIntegration(t *testing.T) {
 			t.Fatal("live gateway transport failed (details suppressed)")
 		}
 		defer resp.Body.Close()
+		sentSnapshot := upstreamTurnStateFromResponse(resp)
+		if sentSnapshot == nil || *sentSnapshot != req.Header.Get(openAICodexTurnStateHeader) || *sentSnapshot == "" {
+			t.Fatal("actual outbound Turn State snapshot was not preserved")
+		}
+		t.Logf("phase=%s outbound_state_snapshot_matches=true", phase)
 		body, err = io.ReadAll(io.LimitReader(resp.Body, codexTurnStateAutoMaxBody))
 		if err != nil || resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"type":"response.completed"`)) {
 			t.Fatalf("phase=%s response did not complete successfully; http=%d", phase, resp.StatusCode)

@@ -8,18 +8,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
-
-	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
 const (
 	codexTurnStateModelsMaxLen = 1024
 	codexTurnStateMaxLength    = 4096
 	codexTurnStateTTL          = time.Hour
-	codexTurnStateMaxBlocks    = 10
 )
 
 // Only the HTTP representation is validated. Envelope heuristics are diagnostics,
@@ -84,39 +80,9 @@ func codexTurnStateModelMatches(scope string, models ...string) bool {
 	return !known
 }
 
-// Called under settingsUpdateMu after omitted keys have been dropped. The
-// timestamp describes replacement, never a save, enable, or scope change.
-func (s *SettingService) prepareOpenAICodexTurnStateUpdates(ctx context.Context, updates map[string]string) error {
-	token, exists := updates[SettingKeyOpenAICodexTurnState]
-	if !exists {
-		return nil
-	}
-	if err := ValidateOpenAICodexTurnState(token); err != nil {
-		return infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE", err.Error())
-	}
-	token = strings.TrimSpace(token)
-	updates[SettingKeyOpenAICodexTurnState] = token
-	if token == "" {
-		updates[SettingKeyOpenAICodexTurnStateSetAtMS] = "0"
-		return nil
-	}
-	old, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyOpenAICodexTurnState, SettingKeyOpenAICodexTurnStateSetAtMS})
-	if err != nil {
-		return fmt.Errorf("read existing Codex turn-state settings: %w", err)
-	}
-	setAt, _ := strconv.ParseInt(old[SettingKeyOpenAICodexTurnStateSetAtMS], 10, 64)
-	if token != old[SettingKeyOpenAICodexTurnState] || setAt <= 0 {
-		setAt = time.Now().UnixMilli()
-	}
-	updates[SettingKeyOpenAICodexTurnStateSetAtMS] = strconv.FormatInt(setAt, 10)
-	return nil
-}
-
+// Only automatic lifecycle settings are read. Legacy manual tokens are inert.
 type OpenAICodexTurnStateConfig struct {
-	Enabled     bool
-	Token       string `json:"-"`
 	Models      string
-	SetAtMS     int64
 	AutoEnabled bool
 }
 type cachedOpenAICodexTurnState struct {
@@ -144,15 +110,13 @@ func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICode
 	}
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
 	defer cancel()
-	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateEnabled, SettingKeyOpenAICodexTurnState, SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateSetAtMS, SettingKeyOpenAICodexTurnStateAutoEnabled})
+	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled})
 	config := OpenAICodexTurnStateConfig{}
 	ttl := gatewayForwardingCacheTTL
 	if err == nil {
-		token := strings.TrimSpace(values[SettingKeyOpenAICodexTurnState])
 		models, modelsErr := NormalizeOpenAICodexTurnStateModels(values[SettingKeyOpenAICodexTurnStateModels])
-		if ValidateOpenAICodexTurnState(token) == nil && modelsErr == nil {
-			config = OpenAICodexTurnStateConfig{Enabled: values[SettingKeyOpenAICodexTurnStateEnabled] == "true", Token: token, Models: models, AutoEnabled: values[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"}
-			config.SetAtMS, _ = strconv.ParseInt(values[SettingKeyOpenAICodexTurnStateSetAtMS], 10, 64)
+		if modelsErr == nil {
+			config = OpenAICodexTurnStateConfig{Models: models, AutoEnabled: values[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"}
 		}
 	} else {
 		ttl = gatewayForwardingErrorTTL
@@ -168,26 +132,16 @@ func (s *SettingService) InvalidateOpenAICodexTurnStateCache() {
 	}
 }
 
-func (config OpenAICodexTurnStateConfig) resolve(account *Account, models ...string) string {
-	if account == nil || account.Platform != PlatformOpenAI || !account.UsesOpenAICodexProtocol() || !config.Enabled || config.Token == "" || !codexTurnStateModelMatches(config.Models, models...) {
-		return ""
-	}
-	return config.Token
-}
 func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, account *Account, headers http.Header, models ...string) {
 	if s == nil || headers == nil || s.settingService == nil {
 		return
 	}
-	config := s.settingService.GetOpenAICodexTurnState(ctx)
-	token := config.resolve(account, models...)
-	// Track the routed model even while a manual/native value is in use.
+	// Track the routed model even while a native continuation is in use.
 	auto := s.autoTurnStateForAccount(ctx, account, models...)
 	if !s.codexTurnStateAllowed(ctx, account, headers.Get(openAICodexTurnStateHeader)) {
 		headers.Del(openAICodexTurnStateHeader)
 	}
-	if token != "" && s.codexTurnStateAllowed(ctx, account, token) {
-		headers.Set(openAICodexTurnStateHeader, token)
-	} else if headers.Get(openAICodexTurnStateHeader) == "" && auto != "" {
+	if headers.Get(openAICodexTurnStateHeader) == "" && auto != "" {
 		headers.Set(openAICodexTurnStateHeader, auto)
 	}
 }
@@ -230,59 +184,8 @@ func parseCodexTurnState(value string) (time.Time, int, bool) {
 	return time.Unix(int64(seconds), 0), cipherBytes / 16, true
 }
 
-type CodexTurnStateStatus struct {
-	Enabled    bool   `json:"enabled"`
-	Configured bool   `json:"configured"`
-	Active     bool   `json:"active"`
-	Reason     string `json:"reason"`
-	Verdict    string `json:"verdict"`
-	Blocks     int    `json:"blocks"`
-	IssuedAt   int64  `json:"issued_at,omitempty"`
-	ExpiresAt  int64  `json:"expires_at,omitempty"`
-}
-
-// Active means eligible to inject, not upstream-valid. As in gpt-load, the
-// reference one-hour TTL and ten-block baseline warn but never stop injection.
-func InspectCodexTurnState(token string, enabled bool, now time.Time) *CodexTurnStateStatus {
-	status := &CodexTurnStateStatus{Enabled: enabled, Configured: strings.TrimSpace(token) != "", Reason: "disabled", Verdict: "unknown"}
-	issued, blocks, valid := parseCodexTurnState(token)
-	if valid {
-		status.Blocks, status.IssuedAt, status.ExpiresAt = blocks, issued.Unix(), issued.Add(codexTurnStateTTL).Unix()
-		status.Verdict = "normal"
-		if blocks > codexTurnStateMaxBlocks {
-			status.Verdict = "suspect"
-		}
-	}
-	if !enabled {
-		return status
-	}
-	if !status.Configured {
-		status.Reason = "missing"
-		return status
-	}
-	if ValidateOpenAICodexTurnState(token) != nil {
-		status.Reason = "invalid"
-		return status
-	}
-	status.Active = true
-	switch {
-	case !valid:
-		status.Reason = "unknown"
-	case issued.After(now.Add(time.Minute)):
-		status.Reason = "future"
-	case !now.Before(issued.Add(codexTurnStateTTL)):
-		status.Reason = "expired"
-	case blocks > codexTurnStateMaxBlocks:
-		status.Reason = "suspect"
-	default:
-		status.Reason = "ready"
-	}
-	return status
-}
-
-// NativeState is kept separately so disabling/replacing the system override
-// restores the original continuation header rather than replaying a stale
-// injected token. Values never enter headers/logs as internal markers.
+// NativeState is kept separately so disabling automatic injection restores the
+// original continuation instead of replaying a cached automatic value.
 type openAIWSTurnStatePolicy struct {
 	Settings    *SettingService
 	Gateway     *OpenAIGatewayService
@@ -308,8 +211,6 @@ func (req openAIWSAcquireRequest) withCurrentTurnState(ctx context.Context) open
 	if req.TurnState.Gateway != nil {
 		req.TurnState.Gateway.applyOpenAICodexTurnState(ctx, req.Account, req.Headers, req.TurnState.Models...)
 		req.turnStateRecoveryEpoch = req.TurnState.Gateway.codexTurnStateRecoveryEpoch(ctx, req.Account)
-	} else if token := config.resolve(req.Account, req.TurnState.Models...); token != "" {
-		req.Headers.Set(openAICodexTurnStateHeader, token)
 	}
 	if token := req.Headers.Get(openAICodexTurnStateHeader); token != "" && token != req.TurnState.NativeState {
 		req.turnStateFingerprint = codexTurnStateDigest(token + "\x00" + config.Models)

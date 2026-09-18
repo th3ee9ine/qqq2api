@@ -184,7 +184,7 @@ func (s *OpenAIGatewayService) codexTurnStateEntryLocked(account *Account, now t
 	return entry
 }
 
-// Global explicit override > native continuation > account automatic fallback.
+// Native continuation > account automatic fallback.
 // Near-expiry values remain usable while renewal runs; expired automatic values
 // are omitted. No probe is awaited by the caller.
 func (s *OpenAIGatewayService) autoTurnStateForAccount(ctx context.Context, account *Account, models ...string) string {
@@ -205,10 +205,6 @@ func (s *OpenAIGatewayService) autoTurnStateForAccount(ctx context.Context, acco
 		}
 	}
 	expiry := codexTurnStateAutoExpiry(entry.token, entry.setAt, now)
-	manual := cfg.resolve(account, models...)
-	if manual != "" && !entry.recovery.Pending && entry.recovery.allows(manual, now) {
-		return ""
-	}
 	if entry.recovery.Pending || entry.token == "" || expiry == 0 || now.Add(codexTurnStateAutoRenewBefore).UnixMilli() >= expiry {
 		if entry.forceProbe || entry.probeAt <= 0 || now.Sub(time.UnixMilli(entry.probeAt)) >= codexTurnStateAutoProbeInterval {
 			// Callers pass original model followed by final upstream model. Prefer the
@@ -240,10 +236,6 @@ func (s *OpenAIGatewayService) collectOpenAICodexTurnStateAtEpoch(ctx context.Co
 		return
 	}
 	now := time.Now()
-	cfg := s.settingService.GetOpenAICodexTurnState(ctx)
-	if cfg.Enabled && epoch == "" {
-		sent = append(sent, cfg.Token)
-	}
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
 	entry := s.codexTurnStateEntryLocked(account, now)
@@ -357,7 +349,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 	if s.httpUpstream == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), codexTurnStateProbeTotalTimeout)
 	defer cancel()
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil || !codexTurnStateAutoEligible(account) || !account.IsSchedulable() {
@@ -384,30 +376,71 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 	if err := s.persistCodexTurnState(id, map[string]any{CodexTurnStateAutoProbeAtExtraKey: now.UnixMilli()}); err != nil {
 		return
 	}
-	state, err := s.probeOpenAICodexTurnState(ctx, account, model)
-	if !s.codexTurnStateAutoEnabled(ctx) {
-		return
+	// The account route always gets the first attempt. Load the pool only after
+	// failure, so healthy accounts do not query it or consume additional quota.
+	routes := []string{codexTurnStateAccountProxy(account)}
+	for attempt := 0; attempt < len(routes); attempt++ {
+		if ctx.Err() != nil || !s.codexTurnStateAutoEnabled(ctx) {
+			return
+		}
+		s.openaiTurnStateMu.Lock()
+		stale := entry.token != before || entry.recovery.InvalidatedAtMS != generation
+		s.openaiTurnStateMu.Unlock()
+		if stale {
+			return
+		}
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, codexTurnStateProbeAttemptTimeout)
+		state, probeErr := s.probeOpenAICodexTurnStateViaProxy(attemptCtx, account, model, routes[attempt])
+		cancelAttempt()
+		if !s.codexTurnStateAutoEnabled(ctx) {
+			return
+		}
+		s.openaiTurnStateMu.Lock()
+		if entry.token != before || entry.recovery.InvalidatedAtMS != generation {
+			s.openaiTurnStateMu.Unlock()
+			return
+		}
+		err = probeErr
+		var revocation map[string]any
+		now := time.Now()
+		if codexTurnStateIs312(state) {
+			s.invalidateCodexTurnStateLocked(entry, state, now)
+			// Continue this bounded round, never recursively schedule probes.
+			entry.forceProbe, entry.probe = false, false
+			generation, before = entry.recovery.InvalidatedAtMS, entry.token
+			revocation = map[string]any{CodexTurnStateAutoExtraKey: entry.token, CodexTurnStateAutoSetAtExtraKey: entry.setAt, CodexTurnStateAutoRecoveryExtraKey: entry.recovery.clone(), CodexTurnStateAutoLastErrorExtraKey: entry.lastError}
+			if err == nil {
+				err = codexTurnStateAutoError("state_312")
+			}
+		} else if err == nil {
+			if codexTurnStateFresh292(state, now) && entry.recovery.allows(state, now) {
+				s.setCodexTurnStateLocked(entry, state, now)
+				s.openaiTurnStateMu.Unlock()
+				return
+			}
+			err = codexTurnStateAutoError("recovery_requires_new_292")
+		}
+		s.openaiTurnStateMu.Unlock()
+		// Persist revocation before more network work so a restart during a
+		// slow pool round cannot reload the now-revoked state.
+		if revocation != nil {
+			if persistErr := s.persistCodexTurnState(id, revocation); persistErr != nil {
+				return // The owning worker retains dirty state and retries persistence.
+			}
+		}
+		// Authentication, quota and invalid payload failures are not route
+		// failures. Preserve the upstream rejection rather than rotate around it.
+		if !codexTurnStateProbeRetryable(err) || ctx.Err() != nil {
+			break
+		}
+		if attempt == 0 {
+			routes = append(routes, s.codexTurnStatePoolRoutes(ctx, routes[0])...)
+		}
 	}
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
-	// A live response arriving during a slow probe wins. Never replace it with
-	// an older probe result (or its error).
 	if entry.token != before || entry.recovery.InvalidatedAtMS != generation {
 		return
-	}
-	if err == nil {
-		if codexTurnStateIs312(state) {
-			s.invalidateCodexTurnStateLocked(entry, state, time.Now())
-			// A 312 returned by the recovery probe is a failed attempt. It
-			// must not recursively spend quota in an unbounded probe loop.
-			entry.forceProbe, entry.probe = false, false
-			return
-		}
-		if entry.recovery.allows(state, time.Now()) {
-			s.setCodexTurnStateLocked(entry, state, time.Now())
-			return
-		}
-		err = codexTurnStateAutoError("recovery_requires_new_292")
 	}
 	code := safeCodexTurnStateAutoError(err.Error())
 	if code == "" {
@@ -422,6 +455,10 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 }
 
 func (s *OpenAIGatewayService) probeOpenAICodexTurnState(ctx context.Context, account *Account, model string) (string, error) {
+	return s.probeOpenAICodexTurnStateViaProxy(ctx, account, model, codexTurnStateAccountProxy(account))
+}
+
+func (s *OpenAIGatewayService) probeOpenAICodexTurnStateViaProxy(ctx context.Context, account *Account, model, proxyURL string) (string, error) {
 	if s == nil || s.httpUpstream == nil || !codexTurnStateAutoEligible(account) {
 		return "", codexTurnStateAutoError("account_unavailable")
 	}
@@ -454,10 +491,6 @@ func (s *OpenAIGatewayService) probeOpenAICodexTurnState(ctx context.Context, ac
 	}
 	req.Header.Del(openAICodexTurnStateHeader)
 	SanitizeOutboundGatewayIdentity(req.Header)
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
-	}
 	// Match the OpenAI gateway's ordinary transport (including its proxy).
 	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
@@ -472,10 +505,13 @@ func (s *OpenAIGatewayService) probeOpenAICodexTurnState(ctx context.Context, ac
 	if resp.Body != nil {
 		defer resp.Body.Close()
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", codexTurnStateAutoError(fmt.Sprintf("http_%d", resp.StatusCode))
-	}
 	state := extractOpenAICodexTurnState(resp.Header)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if !codexTurnStateIs312(state) {
+			state = ""
+		}
+		return state, codexTurnStateAutoError(fmt.Sprintf("http_%d", resp.StatusCode))
+	}
 	if state == "" {
 		return "", codexTurnStateAutoError("missing_state")
 	}

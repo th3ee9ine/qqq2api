@@ -174,6 +174,7 @@ func TestCodexTurnStateAutoProbeRenewalAndRetryThrottle(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(map[bool]string{true: "failure", false: "success"}[fail], func(t *testing.T) {
 			s, repo, a := newTurnStateAutoService(t)
+			renewed := testGlobalTurnStateToken(time.Now(), 10)
 			old := testGlobalTurnStateToken(time.Now().Add(-51*time.Minute), 10)
 			a.Extra = map[string]any{CodexTurnStateAutoExtraKey: old, CodexTurnStateAutoSetAtExtraKey: time.Now().Add(-51 * time.Minute).UnixMilli()}
 			repo.accounts[10].Extra = mergeMap(nil, a.Extra)
@@ -183,7 +184,7 @@ func TestCodexTurnStateAutoProbeRenewalAndRetryThrottle(t *testing.T) {
 				if fail {
 					return nil, errors.New("token=private-transport-error")
 				}
-				return turnStateResponse("renewed-state"), nil
+				return turnStateResponse(renewed), nil
 			}}
 			require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"), "keep usable token while renewing")
 			waitTurnStateAutoIdle(t, s)
@@ -192,7 +193,7 @@ func TestCodexTurnStateAutoProbeRenewalAndRetryThrottle(t *testing.T) {
 				require.Equal(t, old, codexTurnStateAutoToken(stored))
 				require.Equal(t, "transport_failed", stored.Extra[CodexTurnStateAutoLastErrorExtraKey])
 			} else {
-				require.Equal(t, "renewed-state", codexTurnStateAutoToken(stored))
+				require.Equal(t, renewed, codexTurnStateAutoToken(stored))
 			}
 			for n := 0; n < 10; n++ {
 				s.autoTurnStateForAccount(context.Background(), a, "gpt-5")
@@ -263,7 +264,7 @@ func TestCodexTurnStateAutoProbeAuthenticationAndResponseValidation(t *testing.T
 		require.EqualError(t, err, tc.code)
 	}
 }
-func TestCodexTurnStateAutoOverrideDisableAndWSRefresh(t *testing.T) {
+func TestCodexTurnStateAutoLegacyIgnoredDisableAndWSRefresh(t *testing.T) {
 	s, _, a := newTurnStateAutoService(t)
 	s.collectOpenAICodexTurnState(context.Background(), a, "auto-state")
 	waitTurnStateAutoIdle(t, s)
@@ -281,7 +282,7 @@ func TestCodexTurnStateAutoOverrideDisableAndWSRefresh(t *testing.T) {
 	set.values[SettingKeyOpenAICodexTurnState] = "global-state"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()
 	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
-	require.Equal(t, "global-state", h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, "native-state", h.Get(openAICodexTurnStateHeader))
 	set.values[SettingKeyOpenAICodexTurnStateEnabled] = "false"
 	set.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "false"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()

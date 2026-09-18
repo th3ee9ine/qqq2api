@@ -257,8 +257,10 @@ type OpenAIForwardResult struct {
 	ResponseID string
 	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
 	UpstreamHeaders http.Header
-	Usage           OpenAIUsage
-	Model           string // 原始模型（用于响应和日志显示）
+	// UpstreamTurnState snapshots the sent header (nil: unobserved; empty: absent).
+	UpstreamTurnState *string `json:"-"`
+	Usage             OpenAIUsage
+	Model             string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
@@ -462,6 +464,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	proxyRepo             ProxyRepository
 	accountRepo           AccountRepository
 	usageLogRepo          UsageLogRepository
 	usageBillingRepo      UsageBillingRepository

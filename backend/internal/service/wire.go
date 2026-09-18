@@ -177,6 +177,7 @@ func ProvideOpenAIQuotaService(
 // data compatibility, but production deliberately injects nil.
 func ProvideOpenAIGatewayService(
 	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
 	usageLogRepo UsageLogRepository,
 	usageBillingRepo UsageBillingRepository,
 	userRepo UserRepository,
@@ -198,7 +199,7 @@ func ProvideOpenAIGatewayService(
 	settingService *SettingService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 ) *OpenAIGatewayService {
-	return NewOpenAIGatewayService(
+	svc := NewOpenAIGatewayService(
 		accountRepo,
 		usageLogRepo,
 		usageBillingRepo,
@@ -222,6 +223,8 @@ func ProvideOpenAIGatewayService(
 		settingService,
 		userPlatformQuotaRepo,
 	)
+	svc.proxyRepo = proxyRepo
+	return svc
 }
 
 // ProvideCRSSyncService keeps CRS support for Anthropic/OpenAI while omitting

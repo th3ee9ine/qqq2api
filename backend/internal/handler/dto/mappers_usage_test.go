@@ -332,3 +332,18 @@ func TestUsageLogFromService_PreservesHistoricalMissingImageSize(t *testing.T) {
 func f64Ptr(value float64) *float64 {
 	return &value
 }
+
+func TestUsageLogTurnStateAdminOnly(t *testing.T) {
+	for _, state := range []string{"actual-upstream-state", ""} {
+		log := &service.UsageLog{UpstreamTurnState: &state}
+		admin, err := json.Marshal(UsageLogFromServiceAdmin(log))
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(admin, &fields))
+		require.Equal(t, state, fields["upstream_turn_state"])
+		user, err := json.Marshal(UsageLogFromService(log))
+		require.NoError(t, err)
+		require.NotContains(t, string(user), "upstream_turn_state")
+		require.NotContains(t, string(user), "actual-upstream-state")
+	}
+}

@@ -953,6 +953,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
 	var handshakeHeaders http.Header
+	var sentTurnState string
 	for {
 		turnStateRequest.Headers = headers
 		turnStateRequest = turnStateRequest.withCurrentTurnState(ctx)
@@ -963,6 +964,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 		SanitizeOutboundGatewayIdentity(headers)
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
+		sentTurnState = headers.Get(openAICodexTurnStateHeader)
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
 		if codexTurnStateIs312(extractOpenAICodexTurnState(handshakeHeaders)) {
@@ -1323,6 +1325,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					OpenAIWSMode:                  true,
 					UpstreamTerminalEvent:         normalizeOpenAIWSTerminalEvent(turn.TerminalEventType),
 					ResponseHeaders:               cloneHeader(handshakeHeaders),
+					UpstreamTurnState:             &sentTurnState,
 					Duration:                      turn.Duration,
 					FirstTokenMs:                  turn.FirstTokenMs,
 				}
@@ -1462,6 +1465,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		OpenAIWSMode:                  true,
 		UpstreamTerminalEvent:         normalizeOpenAIWSTerminalEvent(relayResult.TerminalEventType),
 		ResponseHeaders:               cloneHeader(handshakeHeaders),
+		UpstreamTurnState:             &sentTurnState,
 		Duration:                      relayResult.Duration,
 		FirstTokenMs:                  relayResult.FirstTokenMs,
 	}

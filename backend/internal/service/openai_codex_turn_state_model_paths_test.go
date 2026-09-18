@@ -16,11 +16,11 @@ import (
 
 // Exercise the real passthrough handshake, after the client model has already
 // been mapped, rather than only testing the shared model-matching helper.
-func TestGlobalCodexTurnStateWSPassthroughModelPaths(t *testing.T) {
+func TestAutomaticCodexTurnStateWSPassthroughModelPaths(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, scope := range []string{"friendly-codex", "gpt-5.1", "unrelated-model"} {
 		t.Run(scope, func(t *testing.T) {
-			settings, _ := turnStateTestSettings("global-path-state", scope)
+			settings, _ := turnStateTestSettings("auto-path-state", scope)
 			cfg := passthroughLifecycleConfig()
 			cfg.Gateway.OpenAIWS.OAuthEnabled = true
 			upstream := &openAIWSCaptureConn{events: [][]byte{
@@ -34,6 +34,7 @@ func TestGlobalCodexTurnStateWSPassthroughModelPaths(t *testing.T) {
 			account.Type = AccountTypeOAuth
 			account.Credentials = map[string]any{"access_token": "test-token"}
 			account.Extra = map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough}
+			seedAutomaticTurnState(account, "auto-path-state")
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			server, serverErr := startPassthroughLifecycleServerWithHooks(t, ctx, svc, account, func(*gin.Context) *OpenAIWSIngressHooks {
@@ -46,7 +47,7 @@ func TestGlobalCodexTurnStateWSPassthroughModelPaths(t *testing.T) {
 			})
 			defer server.Close()
 			client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), &coderws.DialOptions{
-				HTTPHeader: http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{"native-state"}},
+				HTTPHeader: http.Header{},
 			})
 			require.NoError(t, err)
 			defer client.CloseNow()
@@ -60,9 +61,9 @@ func TestGlobalCodexTurnStateWSPassthroughModelPaths(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("passthrough did not finish")
 			}
-			want := "global-path-state"
+			want := "auto-path-state"
 			if scope == "unrelated-model" {
-				want = "native-state"
+				want = ""
 			}
 			require.Equal(t, want, dialer.lastHeaders.Get(openAICodexTurnStateHeader))
 			require.Len(t, upstream.writes, 1)
@@ -73,13 +74,13 @@ func TestGlobalCodexTurnStateWSPassthroughModelPaths(t *testing.T) {
 
 // The Responses bridge has a text-driver model at the top level, so model
 // scope must also see the image model before and after channel/account mapping.
-func TestGlobalCodexTurnStateImagesResponsesModelPaths(t *testing.T) {
+func TestAutomaticCodexTurnStateImagesResponsesModelPaths(t *testing.T) {
 	for _, scope := range []string{"gpt-image-original", "gpt-image-channel", "gpt-image-1", "unrelated-model"} {
 		t.Run(scope, func(t *testing.T) {
-			settings, _ := turnStateTestSettings("global-image-state", scope)
+			settings, _ := turnStateTestSettings("auto-image-state", scope)
 			body := []byte(`{"model":"gpt-image-original","prompt":"draw","response_format":"b64_json"}`)
 			c, _ := newOpenAIImagesTestContext(t, body)
-			c.Request.Header.Set(openAICodexTurnStateHeader, "native-image-state")
+
 			upstream := &httpUpstreamRecorder{resp: &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -91,18 +92,19 @@ func TestGlobalCodexTurnStateImagesResponsesModelPaths(t *testing.T) {
 			parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 			require.NoError(t, err)
 			account := directImagesTestAccount()
+			seedAutomaticTurnState(account, "auto-image-state")
 			account.Credentials["model_mapping"] = map[string]any{"gpt-image-channel": "gpt-image-1"}
 			result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "gpt-image-channel")
 			require.NoError(t, err)
 			require.Equal(t, 1, result.ImageCount)
 			require.Equal(t, chatgptCodexURL, upstream.lastReq.URL.String())
 			require.Equal(t, "gpt-image-1", gjson.GetBytes(upstream.lastBody, "tools.0.model").String())
-			want := "global-image-state"
+			want := "auto-image-state"
 			if scope == "unrelated-model" {
-				want = "native-image-state"
+				want = ""
 			}
 			require.Equal(t, want, upstream.lastReq.Header.Get(openAICodexTurnStateHeader))
-			require.Equal(t, "native-image-state", c.Request.Header.Get(openAICodexTurnStateHeader))
+			require.Empty(t, c.Request.Header.Get(openAICodexTurnStateHeader))
 		})
 	}
 }

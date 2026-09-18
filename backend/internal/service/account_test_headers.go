@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/tidwall/gjson"
 )
 
 const (
@@ -18,7 +17,7 @@ const (
 // their workbench templates. Authentication is supplied separately: generating
 // Agent Identity assertions may register a task and must never run in a preview.
 // endpoint is the upstream protocol, not necessarily the caller's API endpoint.
-func applyOpenAIAccountTestHeaders(req *http.Request, account *Account, endpoint string, body []byte, settings ...*SettingService) {
+func applyOpenAIAccountTestHeaders(req *http.Request, account *Account, endpoint string, body []byte) {
 	if req == nil {
 		return
 	}
@@ -61,18 +60,13 @@ func applyOpenAIAccountTestHeaders(req *http.Request, account *Account, endpoint
 	if isOAuth {
 		stripOpenAILegacyResponsesBeta(req.Header)
 	}
-	if endpoint == "responses" && len(settings) > 0 && settings[0] != nil {
-		if token := settings[0].GetOpenAICodexTurnState(req.Context()).resolve(account, gjson.GetBytes(body, "model").String()); token != "" {
-			req.Header.Set(openAICodexTurnStateHeader, token)
-		}
-	}
 	SanitizeOutboundGatewayIdentity(req.Header)
 }
 
 // buildOpenAIAccountTestHeaderDefaults snapshots only headers this probe sets.
 // Host is carried by http.Request.Host rather than Header but is part of the
 // request on the wire. Other transport-derived fields are explained in Notes.
-func buildOpenAIAccountTestHeaderDefaults(account *Account, endpoint, upstreamURL string, body map[string]any, settings ...*SettingService) map[string]string {
+func buildOpenAIAccountTestHeaderDefaults(account *Account, endpoint, upstreamURL string, body map[string]any) map[string]string {
 	req, err := http.NewRequest(http.MethodPost, upstreamURL, nil)
 	if err != nil {
 		return map[string]string{}
@@ -83,7 +77,7 @@ func buildOpenAIAccountTestHeaderDefaults(account *Account, endpoint, upstreamUR
 		req.Header.Set("Authorization", "Bearer "+openAITestRedactedHeader)
 	}
 	bodyBytes, _ := json.Marshal(body)
-	applyOpenAIAccountTestHeaders(req, account, endpoint, bodyBytes, settings...)
+	applyOpenAIAccountTestHeaders(req, account, endpoint, bodyBytes)
 
 	result := make(map[string]string, len(req.Header)+1)
 	overrides := account.GetHeaderOverrides()
