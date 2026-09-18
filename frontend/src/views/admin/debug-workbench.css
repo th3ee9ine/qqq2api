@@ -76,6 +76,16 @@ select.workbench-input { padding-right: 25px; text-overflow: ellipsis; }
 .field-warning { font-size: 12px; color: var(--wb-warning); margin-top: 5px; overflow-wrap: anywhere; }
 .proxy-field :deep(.select-trigger) { min-height: 43px; border-radius: 7px; border-color: var(--wb-border); background: var(--wb-input); color: var(--wb-text); box-shadow: 0 1px 2px #12214103; }
 .proxy-field :deep(.select-value) { font-size: 14px; }
+.verification-mode-panel { margin: 0 22px 18px; padding: 15px 17px; border: 1px solid var(--wb-border); border-radius: 8px; background: var(--wb-subtle); }
+.verification-mode-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.verification-mode-heading > div { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.verification-mode-heading strong { font-size: 13px; font-weight: 600; }
+.verification-mode-heading > div span { color: var(--wb-muted); font-size: 12px; }
+.verification-scope { display: grid; grid-template-columns: auto minmax(150px, 220px) auto minmax(0, 1fr); align-items: center; gap: 10px 12px; margin-top: 13px; }
+.verification-scope > label { color: var(--wb-muted); font-size: 12px; }
+.verification-scope .workbench-input { padding: 6px 9px; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.verification-stage-badge { justify-self: start; padding: 3px 7px; border: 1px solid var(--wb-border); border-radius: 4px; background: var(--wb-surface); color: var(--wb-accent); font-size: 11px; font-weight: 600; }
+.verification-scope .context-state { margin-left: 0; text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .request-bar { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--wb-border); border-radius: 0 0 12px 12px; padding: 14px 22px; background: var(--wb-subtle); }
 .endpoint-address { min-width: 0; display: flex; align-items: center; gap: 13px; }
 .method-badge { padding: 3px 7px; color: var(--wb-accent); background: var(--wb-accent-soft); border-radius: 4px; font: 600 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -206,6 +216,10 @@ select.workbench-input { padding-right: 25px; text-overflow: ellipsis; }
   .workspace-footer > span:last-child { display: none; }
   .image-mode-row { align-items: flex-start; }
   .image-mode-row .switch-control { white-space: nowrap; }
+  .verification-mode-panel { margin-left: 15px; margin-right: 15px; }
+  .verification-mode-heading { align-items: flex-start; }
+  .verification-scope { grid-template-columns: minmax(0, 1fr); }
+  .verification-scope .context-state { text-align: left; }
 }
 @media (prefers-reduced-motion: reduce) { .workbench *, .workbench *::after { transition: none !important; animation: none !important; } }
 

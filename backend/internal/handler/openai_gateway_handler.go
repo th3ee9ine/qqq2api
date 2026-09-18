@@ -436,6 +436,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	legacyCompact := service.IsOpenAIResponsesCompactPath(c)
 	nativeV2 := isBareOpenAIResponsesPath(c) && isOpenAIRemoteCompactionV2Request(body)
+	if shouldMarkOpenAICodexTurnStateUsageVerification(c, apiKey, body) {
+		c.Request = c.Request.WithContext(service.WithOpenAICodexTurnStateUsageVerification(c.Request.Context(), apiKey.ID))
+	}
 	if nativeV2 {
 		// 原生 v2 压缩出站前补注 x-codex-beta-features: remote_compaction_v2，
 		// 与真实 Codex 线型一致（网关链剥头后本级负责恢复，#5586）。
@@ -794,6 +797,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			}()
 			return h.gatewayService.Forward(c.Request.Context(), c, account, attemptBody)
 		}()
+		h.gatewayService.CaptureOpenAICodexTurnStateUsageEvidence(c, result)
 		var cyberBlockBodyHTTP []byte
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockBodyHTTP = sessionHashBody
@@ -1024,6 +1028,19 @@ func isBareOpenAIResponsesPath(c *gin.Context) bool {
 	default:
 		return false
 	}
+}
+
+// shouldMarkOpenAICodexTurnStateUsageVerification keeps the durable publication
+// gate off ordinary traffic. The API key must be bound to the exact hydrated
+// exclusive group carried by authentication; single-account membership remains
+// a deployment property and is independently proven by the persisted usage row's
+// selected account ID before the candidate can be published.
+func shouldMarkOpenAICodexTurnStateUsageVerification(c *gin.Context, apiKey *service.APIKey, body []byte) bool {
+	if !isBareOpenAIResponsesPath(c) || apiKey == nil || apiKey.ID <= 0 || apiKey.GroupID == nil || *apiKey.GroupID <= 0 ||
+		apiKey.Group == nil || apiKey.Group.ID != *apiKey.GroupID || !apiKey.Group.Hydrated || !apiKey.Group.IsExclusive {
+		return false
+	}
+	return service.IsOpenAICodexTurnStateUsageVerificationRequest(body, c.GetHeader("x-codex-turn-state"))
 }
 
 func isOpenAIRemoteCompactionV2Request(body []byte) bool {

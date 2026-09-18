@@ -440,8 +440,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		// x-codex-turn-state 溯源：下游回传由 writeOpenAIPassthroughResponseHeaders
 		// 在各 handler 的写头点强制放行，铸造账号在此统一记录，供出站守卫剥离
 		// failover 换号后的跨账号回带（openai_codex_turn_state.go）。
-		if extractOpenAICodexTurnState(resp.Header) != "" {
-			s.noteOpenAICodexTurnStateProvenance(c, account)
+		if state := extractOpenAICodexTurnState(resp.Header); state != "" {
+			// Passthrough responses expose the native header immediately, but the
+			// provenance and automatic cache must wait until both raw lifecycle
+			// model events have been consumed by the response handler below.
+			s.stagePendingCodexTurnStateObservation(c, account, state, resp.Request)
+		} else {
+			s.clearPendingCodexTurnStateObservation(c)
 		}
 
 		if reqStream {
@@ -638,7 +643,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站（openai_codex_turn_state.go）。
-	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
+	s.guardOpenAICodexTurnStateEcho(c, account, req.Header, gjson.GetBytes(body, "model").String())
 
 	// 覆盖入站鉴权残留，并注入上游认证
 	req.Header.Del("authorization")
@@ -1849,6 +1854,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	originalModel string,
 	mappedModel string,
 ) (*openaiStreamingResultPassthrough, error) {
+	defer s.commitPendingCodexTurnStateObservation(c, true)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2288,6 +2294,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	originalModel string,
 	mappedModel string,
 ) (*openaiNonStreamingResultPassthrough, error) {
+	defer s.commitPendingCodexTurnStateObservation(c, true)
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err

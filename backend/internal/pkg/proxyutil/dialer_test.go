@@ -126,6 +126,73 @@ func TestConfigureTransportProxy_WithAuth(t *testing.T) {
 	assert.NotNil(t, transport.DialContext, "SOCKS5 with auth should set DialContext")
 }
 
+func TestConfigureTransportProxyChain_HTTPConnectThroughSOCKS(t *testing.T) {
+	transport := &http.Transport{}
+	target, err := url.Parse("http://target-user:target-pass@proxy.example.com:3000")
+	require.NoError(t, err)
+	preProxy, err := url.Parse("socks5h://127.0.0.1:7890")
+	require.NoError(t, err)
+
+	err = ConfigureTransportProxyChain(transport, target, preProxy, false)
+
+	require.NoError(t, err)
+	require.NotNil(t, transport.DialContext)
+	require.NotNil(t, transport.Proxy)
+	request := &http.Request{URL: &url.URL{Scheme: "https", Host: "chatgpt.com"}}
+	configured, err := transport.Proxy(request)
+	require.NoError(t, err)
+	require.Equal(t, "http", configured.Scheme)
+	require.Equal(t, target.Host, configured.Host)
+	require.Equal(t, target.User.String(), configured.User.String())
+}
+
+func TestConfigureTransportProxyChain_ForceHTTPPreservesEndpointAndCredentials(t *testing.T) {
+	transport := &http.Transport{}
+	target, err := url.Parse("socks5h://target-user:target-pass@us.1024proxy.io:3000")
+	require.NoError(t, err)
+	preProxy, err := url.Parse("socks5h://host.docker.internal:7890")
+	require.NoError(t, err)
+
+	err = ConfigureTransportProxyChain(transport, target, preProxy, true)
+
+	require.NoError(t, err)
+	require.NotNil(t, transport.DialContext)
+	require.NotNil(t, transport.Proxy)
+	request := &http.Request{URL: &url.URL{Scheme: "https", Host: "chatgpt.com"}}
+	configured, err := transport.Proxy(request)
+	require.NoError(t, err)
+	require.Equal(t, "http", configured.Scheme)
+	require.Equal(t, target.Host, configured.Host)
+	require.Equal(t, target.User.String(), configured.User.String())
+}
+
+func TestConfigureTransportProxyChain_SOCKSThroughSOCKS(t *testing.T) {
+	transport := &http.Transport{}
+	target, err := url.Parse("socks5h://target-user:target-pass@proxy.example.com:3000")
+	require.NoError(t, err)
+	preProxy, err := url.Parse("socks5h://127.0.0.1:7890")
+	require.NoError(t, err)
+
+	err = ConfigureTransportProxyChain(transport, target, preProxy, false)
+
+	require.NoError(t, err)
+	require.NotNil(t, transport.DialContext)
+	require.Nil(t, transport.Proxy)
+}
+
+func TestConfigureTransportProxyChain_RejectsHTTPPreProxy(t *testing.T) {
+	transport := &http.Transport{}
+	target, err := url.Parse("http://proxy.example.com:3000")
+	require.NoError(t, err)
+	preProxy, err := url.Parse("http://127.0.0.1:7890")
+	require.NoError(t, err)
+
+	err = ConfigureTransportProxyChain(transport, target, preProxy, false)
+
+	require.Error(t, err)
+	require.Nil(t, transport.Proxy)
+}
+
 func TestConfigureTransportProxy_EmptyScheme(t *testing.T) {
 	transport := &http.Transport{}
 	// 空 scheme 的 URL

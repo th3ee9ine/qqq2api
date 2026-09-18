@@ -2,19 +2,15 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// 292/312/332/356 describe padded base64url envelope lengths, not HTTP
-// statuses. Personal accounts use the 312-byte envelope as the invalidation
-// signal; team accounts use the 356-byte envelope for the same signal. A
-// normal personal state is 292 bytes (10 Fernet blocks), while a normal team
-// state is 332 bytes (12 blocks). Use decoded block counts so omitted '='
-// padding has identical semantics.
+// Kept as a persisted compatibility key. Older builds wrote length-derived
+// revocation metadata here; current builds deliberately ignore it because an
+// opaque state length is diagnostic evidence, not a validity signal.
 const CodexTurnStateAutoRecoveryExtraKey = "codex_turn_state_auto_recovery"
 const codexTurnStateSignalHistoryLimit = 64
 
@@ -83,32 +79,7 @@ func hasCodexTurnStateDigest(list []string, state string) bool {
 	return false
 }
 func codexTurnStateRecoveryFromAccount(account *Account) codexTurnStateRecovery {
-	if account == nil {
-		return codexTurnStateRecovery{}
-	}
-	// Decode only the small service-owned projection, never reflect arbitrary
-	// imported/legacy fields in a DTO, log or write-back.
-	var out codexTurnStateRecovery
-	raw, _ := json.Marshal(account.Extra[CodexTurnStateAutoRecoveryExtraKey])
-	_ = json.Unmarshal(raw, &out)
-	sanitize := func(values []string) []string {
-		result := make([]string, 0, len(values))
-		for _, v := range values {
-			if len(v) != 64 || strings.Trim(v, "0123456789abcdef") != "" {
-				continue
-			}
-			result = append(result, v)
-			if len(result) == codexTurnStateSignalHistoryLimit {
-				break
-			}
-		}
-		return result
-	}
-	out.Rejected, out.Signals = sanitize(out.Rejected), sanitize(out.Signals)
-	if out.InvalidatedAtMS <= 0 {
-		return codexTurnStateRecovery{}
-	}
-	return out
+	return codexTurnStateRecovery{}
 }
 func (r codexTurnStateRecovery) clone() codexTurnStateRecovery {
 	r.Rejected = append([]string(nil), r.Rejected...)
@@ -116,47 +87,11 @@ func (r codexTurnStateRecovery) clone() codexTurnStateRecovery {
 	return r
 }
 func (r codexTurnStateRecovery) allows(state string, now time.Time) bool {
-	if state == "" || codexTurnStateIsRecoverySignal(state) {
-		return false
-	}
-	if r.InvalidatedAtMS == 0 {
-		return true
-	}
-	issued, blocks, ok := parseCodexTurnState(state)
-	return ok && codexTurnStateNormalBlocks(blocks) &&
-		!hasCodexTurnStateDigest(r.Rejected, state) &&
-		issued.Unix() >= r.InvalidatedAtMS/1000 &&
-		!issued.After(now.Add(time.Minute)) && now.Before(issued.Add(codexTurnStateTTL))
+	return strings.TrimSpace(state) != "" && ValidateOpenAICodexTurnState(state) == nil
 }
 
-// Invalidation applies even before TTL expiry. A duplicate 312/356 never resets
-// cooldown; each new recovery episode gets one immediate probe. Caller holds
-// the state mutex, including while sharing the generation with probe workers.
-func (s *OpenAIGatewayService) invalidateCodexTurnStateLocked(entry *codexTurnStateAutoEntry, state string, now time.Time, sent ...string) {
-	if hasCodexTurnStateDigest(entry.recovery.Signals, state) {
-		return
-	}
-	entry.recovery.Signals = appendCodexTurnStateDigest(entry.recovery.Signals, state)
-	if !entry.recovery.Pending {
-		at := now.UnixMilli()
-		if at <= entry.recovery.InvalidatedAtMS {
-			at = entry.recovery.InvalidatedAtMS + 1
-		}
-		entry.recovery.InvalidatedAtMS = at
-		entry.forceProbe = true
-	}
-	entry.recovery.Pending = true
-	clear(entry.knownTokens)
-	for _, token := range append(sent, entry.token) {
-		entry.recovery.Rejected = appendCodexTurnStateDigest(entry.recovery.Rejected, token)
-	}
-	entry.token, entry.setAt, entry.lastError = "", now.UnixMilli(), "state_312"
-	entry.dirty, entry.probe = true, true
-	// The probe reads the current configured default model when it starts.
-}
-
-// Also guard native continuation: its higher priority must not reintroduce a
-// revoked state after the account cache is cleared.
+// Native continuation remains authoritative. Length-derived revocation data
+// from older builds must not suppress an official client's opaque state.
 func (s *OpenAIGatewayService) codexTurnStateAllowed(ctx context.Context, account *Account, state string) bool {
 	if state == "" {
 		return false
@@ -164,10 +99,7 @@ func (s *OpenAIGatewayService) codexTurnStateAllowed(ctx context.Context, accoun
 	if !codexTurnStateAutoEligible(account) || !s.codexTurnStateAutoEnabled(ctx) {
 		return true
 	}
-	s.openaiTurnStateMu.Lock()
-	defer s.openaiTurnStateMu.Unlock()
-	entry := s.codexTurnStateEntryLocked(account, time.Now(), s.codexTurnStateModel(ctx))
-	return entry.recovery.allows(state, time.Now())
+	return ValidateOpenAICodexTurnState(state) == nil
 }
 func (s *OpenAIGatewayService) codexTurnStateRecoveryEpoch(ctx context.Context, account *Account) string {
 	if !codexTurnStateAutoEligible(account) || !s.codexTurnStateAutoEnabled(ctx) {

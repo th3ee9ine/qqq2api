@@ -31,6 +31,7 @@ func TestDebugWorkbenchTraceCapturesActualBodiesAndHeaderDecisions(t *testing.T)
 	require.JSONEq(t, `{"model":"custom-model","input":"完整参数","stream":false}`, string(attempt.Request.Body))
 	require.Contains(t, string(attempt.Response.Body), "real reply")
 	require.Contains(t, string(attempt.Response.Body), "[redacted]")
+	require.Equal(t, []string{"[redacted:19]"}, attempt.Response.Headers["X-Codex-Turn-State"])
 	require.True(t, attempt.Response.Complete)
 	require.False(t, attempt.Response.Truncated)
 	require.NotNil(t, attempt.TTFTMS)
@@ -48,6 +49,31 @@ func TestDebugWorkbenchTraceCapturesActualBodiesAndHeaderDecisions(t *testing.T)
 	for _, secret := range []string{"actual-secret", "editor-secret", "private-custom", "private-query", "proxy-secret", "username:", "opaque-state-secret", "secret-cookie"} {
 		require.NotContains(t, string(encoded), secret)
 	}
+}
+
+func TestDebugWorkbenchStateVerificationUsesObservedModelsAndRedactedStateLength(t *testing.T) {
+	trace := NewDebugWorkbenchTrace(nil, nil)
+	trace.NoteTurnStateSource("automatic")
+	observer := &upstreamResponseModelObserver{}
+	observer.ObserveOpenAI([]byte(`{"type":"response.created","response":{"model":"gpt-6-astra"}}`), "response.created")
+	observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"model":"gpt-6-astra"}}`), "response.completed")
+	attempts := []DebugUpstreamAttempt{{
+		AccountID: 42,
+		Request:   DebugHTTPSnapshot{Headers: map[string][]string{"X-Codex-Turn-State": {"[redacted:332]"}}},
+		Response:  &DebugHTTPSnapshot{Headers: map[string][]string{"X-Codex-Turn-State": {"[redacted:376]"}}},
+	}}
+
+	evidence := debugWorkbenchStateVerification([]byte(`{"model":"codex-auto-review"}`), attempts, trace, observer, nil, "")
+	require.Equal(t, "codex-auto-review", evidence.RequestedModel)
+	require.Equal(t, "gpt-6-astra", evidence.ResponseCreatedModel)
+	require.Equal(t, "gpt-6-astra", evidence.ResponseCompletedModel)
+	require.Equal(t, "automatic", evidence.StateSource)
+	require.True(t, evidence.StateSent)
+	require.True(t, evidence.StateReceived)
+	require.Equal(t, 376, evidence.StateLength)
+	require.Equal(t, int64(42), evidence.ActualAccountID)
+	require.Zero(t, evidence.UsageLogAccountID, "a request trace must not impersonate durable usage_logs evidence")
+	require.Empty(t, evidence.UpstreamResponseModel)
 }
 
 func TestDebugWorkbenchTraceBoundedCaptureDoesNotTruncateForwarding(t *testing.T) {

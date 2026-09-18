@@ -22,7 +22,11 @@ func recoveryTestToken(now time.Time, blocks int, marker byte) string {
 	return base64.URLEncoding.EncodeToString(raw)
 }
 func seedRecoveryTestAccount(repo *turnStateAutoRepo, a *Account, token string) {
-	a.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5"): map[string]any{CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli(), CodexTurnStateAutoProbeAtExtraKey: time.Now().UnixMilli()}}
+	now := time.Now().UnixMilli()
+	a.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5"): map[string]any{
+		CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: now, CodexTurnStateAutoProbeAtExtraKey: now,
+		CodexTurnStateAutoVerifiedAtExtraKey: now, CodexTurnStateAutoVerifiedModelExtraKey: "gpt-5",
+	}}
 	repo.mu.Lock()
 	repo.accounts[a.ID].Extra = mergeMap(nil, a.Extra)
 	repo.mu.Unlock()
@@ -49,140 +53,93 @@ func TestCodexTurnStateRecoveryRecognizesEnvelopeNotHTTPCodeOrStringLength(t *te
 	require.False(t, codexTurnStateIs312("312"))
 }
 
-func TestCodexTurnStateRecovery356RevokesAndFetchesNew332(t *testing.T) {
+func TestCodexTurnStateRecovery356HeaderOnlyDoesNotRevokeVerifiedState(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
 	old := recoveryTestToken(now.Add(-time.Minute), 10, 1)
-	next := recoveryTestToken(now, 12, 2)
 	teamSignal := recoveryTestToken(now, 13, 3)
 	seedRecoveryTestAccount(repo, a, old)
 	var calls atomic.Int32
 	s.httpUpstream = &turnStateAutoUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
 		calls.Add(1)
-		return turnStateResponse(next), nil
+		return turnStateResponse("unexpected-probe"), nil
 	}}
 
 	s.collectOpenAICodexTurnState(context.Background(), a, teamSignal, old)
 	waitTurnStateAutoIdle(t, s)
 
-	require.EqualValues(t, 1, calls.Load())
+	require.Zero(t, calls.Load(), "a 356-byte header is diagnostic only and must not trigger a probe")
 	stored, err := repo.GetByID(context.Background(), a.ID)
 	require.NoError(t, err)
-	require.Equal(t, next, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+	require.Equal(t, old, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 	require.False(t, codexTurnStateRecoveryFromAccount(codexTurnStateModelAccount(stored, "gpt-5")).Pending)
 	h := http.Header{}
 	require.NoError(t, s.applyOpenAICodexTurnState(context.Background(), stored, h, "gpt-5"))
-	require.Equal(t, next, h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, old, h.Get(openAICodexTurnStateHeader))
 }
-func TestCodexTurnStateRecoveryImmediatelyRevokesAndFetchesNew292(t *testing.T) {
+func TestCodexTurnStateRecovery312HeaderOnlyPreservesNativeAndAutomaticState(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
 	old := recoveryTestToken(now.Add(-time.Minute), 10, 1)
-	next := recoveryTestToken(now, 10, 2)
 	signal := recoveryTestToken(now, 11, 3)
 	seedRecoveryTestAccount(repo, a, old)
-	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
-	settings.values[SettingKeyOpenAICodexTurnState] = old
-	started, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
 	s.httpUpstream = &turnStateAutoUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
 		calls.Add(1)
-		close(started)
-		<-release
-		return turnStateResponse(next), nil
+		return turnStateResponse("unexpected-probe"), nil
 	}}
-	// A global override and the one-hour TTL cannot hide the invalidation. The
-	// persisted probe time is 'now', proving the first recovery bypasses cooldown.
+	// A 312-byte header is not evidence of invalidity. It must not revoke the
+	// local cache or cause a route-rotating maintenance request.
 	s.collectOpenAICodexTurnState(context.Background(), a, signal, old)
-	select {
-	case <-started:
-	case <-time.After(time.Second):
-		t.Fatal("recovery delayed by regular probe cooldown")
-	}
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, old)
 	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
-	require.Empty(t, h.Get(openAICodexTurnStateHeader))
-	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
-	for n := 0; n < 20; n++ {
-		s.collectOpenAICodexTurnState(context.Background(), a, signal, old)
-	}
-	close(release)
+	require.Equal(t, old, h.Get(openAICodexTurnStateHeader))
 	waitTurnStateAutoIdle(t, s)
-	require.EqualValues(t, 1, calls.Load())
-	h.Set(openAICodexTurnStateHeader, old)
-	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
-	require.Equal(t, next, h.Get(openAICodexTurnStateHeader), "old global/native state must not override recovery")
+	require.Zero(t, calls.Load())
+	require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 	stored, _ := repo.GetByID(context.Background(), a.ID)
-	require.Equal(t, next, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+	require.Equal(t, old, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 	info := CodexTurnStateAutoInfoForAccount(stored, time.Now())
 	require.False(t, info.RecoveryPending)
-	require.Positive(t, info.InvalidatedAtMS)
 	require.Empty(t, info.LastError)
-	// Another instance loading persisted revocation cannot resurrect the old
-	// manual value or an old native continuation, even after recovery succeeds.
-	second := &OpenAIGatewayService{settingService: s.settingService, accountRepo: repo}
-	h.Set(openAICodexTurnStateHeader, old)
-	second.applyOpenAICodexTurnState(context.Background(), stored, h, "gpt-5")
-	require.Equal(t, next, h.Get(openAICodexTurnStateHeader))
-	waitTurnStateAutoIdle(t, second)
-	// Late duplicate signals do not invalidate the newly recovered value.
-	s.collectOpenAICodexTurnState(context.Background(), a, signal)
-	waitTurnStateAutoIdle(t, s)
-	require.Equal(t, next, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 }
-func TestCodexTurnStateRecoveryOnlyAcceptsDifferentFreshNormalState(t *testing.T) {
-	for _, kind := range []string{"same", "unpad-same", "opaque", "312", "expired", "future", "nine-blocks"} {
-		t.Run(kind, func(t *testing.T) {
+func TestCodexTurnStateRecoveryHeaderOnlyLengthsNeverReplaceVerifiedState(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name  string
+		state string
+	}{
+		{"personal-292", recoveryTestToken(now, 10, 2)},
+		{"personal-312", recoveryTestToken(now, 11, 2)},
+		{"team-332", recoveryTestToken(now, 12, 2)},
+		{"team-356", recoveryTestToken(now, 13, 2)},
+		{"observed-376", strings.Repeat("x", 376)},
+		{"opaque-arbitrary", "opaque-state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			s, repo, a := newTurnStateAutoService(t)
-			now := time.Now()
-			old := recoveryTestToken(now, 10, 1)
-			signal := recoveryTestToken(now, 11, 2)
+			old := recoveryTestToken(now.Add(-time.Minute), 10, 1)
 			seedRecoveryTestAccount(repo, a, old)
-			candidate := old
-			switch kind {
-			case "unpad-same":
-				candidate = strings.TrimRight(old, "=")
-			case "opaque":
-				candidate = "opaque-state"
-			case "312":
-				candidate = recoveryTestToken(now, 11, 3)
-			case "expired":
-				candidate = recoveryTestToken(now.Add(-2*time.Hour), 10, 3)
-			case "future":
-				candidate = recoveryTestToken(now.Add(2*time.Hour), 10, 3)
-			case "nine-blocks":
-				candidate = recoveryTestToken(now, 9, 3)
-			}
-			var calls atomic.Int32
-			s.httpUpstream = &turnStateAutoUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
-				calls.Add(1)
-				return turnStateResponse(candidate), nil
-			}}
-			s.collectOpenAICodexTurnState(context.Background(), a, signal)
-			waitTurnStateAutoIdle(t, s)
-			require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
-			// Repeated signals and requests must not start a tight probe loop.
-			for n := 0; n < 5; n++ {
-				s.collectOpenAICodexTurnState(context.Background(), a, signal)
+
+			for range 5 {
+				s.collectOpenAICodexTurnState(context.Background(), a, tc.state, old)
 			}
 			waitTurnStateAutoIdle(t, s)
-			require.EqualValues(t, 1, calls.Load())
-			stored, _ := repo.GetByID(context.Background(), a.ID)
-			require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
-			require.True(t, CodexTurnStateAutoInfoForAccount(stored, time.Now()).RecoveryPending)
-			// In-flight/old account snapshots and normal collection cannot resurrect it.
-			s.collectOpenAICodexTurnState(context.Background(), a, old)
-			waitTurnStateAutoIdle(t, s)
-			require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
+
+			require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
+			stored, err := repo.GetByID(context.Background(), a.ID)
+			require.NoError(t, err)
+			require.Equal(t, old, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+			require.False(t, CodexTurnStateAutoInfoForAccount(stored, time.Now()).RecoveryPending)
+			require.Zero(t, repo.writes, "header-only observations must not persist or schedule recovery work")
 		})
 	}
 }
-func TestCodexTurnStateRecoveryOldProbeCannotUndoSignal(t *testing.T) {
+func TestCodexTurnStateRecoveryHeaderOnlySignalCannotSupersedeInflightVerifiedProbe(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
 	oldProbeResult := recoveryTestToken(now, 10, 1)
-	next := recoveryTestToken(now, 10, 2)
 	signal := recoveryTestToken(now, 11, 3)
 	started, release := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
@@ -192,7 +149,7 @@ func TestCodexTurnStateRecoveryOldProbeCannotUndoSignal(t *testing.T) {
 			<-release
 			return turnStateResponse(oldProbeResult), nil
 		}
-		return turnStateResponse(next), nil
+		return turnStateResponse("unexpected-second-probe"), nil
 	}}
 	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 	select {
@@ -203,11 +160,18 @@ func TestCodexTurnStateRecoveryOldProbeCannotUndoSignal(t *testing.T) {
 	s.collectOpenAICodexTurnState(context.Background(), a, signal)
 	close(release)
 	waitTurnStateAutoIdle(t, s)
-	require.EqualValues(t, 2, calls.Load(), "312 must schedule a new probe after discarding the older in-flight probe")
+	require.EqualValues(t, 1, calls.Load(), "a header-only 312 must not restart or supersede a verified probe")
 	stored, _ := repo.GetByID(context.Background(), a.ID)
-	require.Equal(t, next, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+	require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")), "a replayed maintenance result must not publish without a usage row")
+	s.openaiTurnStateMu.Lock()
+	entry := s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5"}]
+	require.NotNil(t, entry)
+	require.Equal(t, oldProbeResult, entry.candidate.state, "the verified probe remains the pending candidate")
+	require.NotEqual(t, signal, entry.candidate.state, "the header-only signal cannot supersede the in-flight probe")
+	require.Empty(t, entry.candidate.requestID)
+	s.openaiTurnStateMu.Unlock()
 }
-func TestCodexTurnStateRecoveryHTTPObservationPrecedesSSECommitAndRejectsOldResponses(t *testing.T) {
+func TestCodexTurnStateRecoveryHTTPResponseEvidenceStillNeedsReplayBeforePublication(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
 	old := recoveryTestToken(now.Add(-time.Minute), 10, 1)
@@ -215,7 +179,7 @@ func TestCodexTurnStateRecoveryHTTPObservationPrecedesSSECommitAndRejectsOldResp
 	next := recoveryTestToken(now, 10, 3)
 	seedRecoveryTestAccount(repo, a, old)
 	oldReq := s.stampCodexTurnStateRequest(httptest.NewRequest(http.MethodPost, "/responses", nil), a)
-	s.httpUpstream = &turnStateAutoUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
+	s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
 		if req.URL.Path == "/responses" {
 			return turnStateResponse(signal), nil
 		}
@@ -227,26 +191,30 @@ func TestCodexTurnStateRecoveryHTTPObservationPrecedesSSECommitAndRejectsOldResp
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	waitTurnStateAutoIdle(t, s)
-	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"), "must revoke before parsing/committing SSE body")
-	// This response started before revocation, even if its token has the same
-	// public second timestamp as the new generation. It must not recover state.
+	require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"), "a response header is not model evidence")
+	// A header-only collection attempt, even with a newer-looking blob, cannot
+	// replace the verified state.
 	s.collectCodexTurnStateHTTP(context.Background(), a, next, oldReq)
 	waitTurnStateAutoIdle(t, s)
-	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
-	// A newly started request may recover with a fresh 292.
+	require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
+	// Matching lifecycle evidence from an ordinary client response is still not
+	// a same-route and daily-route replay, so it cannot publish the candidate.
 	current := s.stampCodexTurnStateRequest(httptest.NewRequest(http.MethodPost, "/responses", nil), a)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = req
+	observer := beginUpstreamResponseModelObservation(c)
+	observer.ObserveOpenAI([]byte(`{"type":"response.created","response":{"model":"gpt-5"}}`), "response.created")
+	observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"model":"gpt-5"}}`), "response.completed")
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, next)
 	var staged http.Header
 	stageOpenAICodexTurnState(&staged, h)
 	s.noteStagedOpenAICodexTurnStateCommitted(c, a, staged, current)
 	waitTurnStateAutoIdle(t, s)
-	require.Equal(t, next, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
+	require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 }
-func TestCodexTurnStateRecoveryWSConnectionsCannotContinueOldEpoch(t *testing.T) {
+func TestCodexTurnStateRecoveryWSHeaderOnlyKeepsNativeContinuation(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
 	old := recoveryTestToken(now.Add(-time.Minute), 10, 1)
@@ -259,10 +227,10 @@ func TestCodexTurnStateRecoveryWSConnectionsCannotContinueOldEpoch(t *testing.T)
 	s.collectOpenAICodexTurnState(context.Background(), a, signal, old)
 	waitTurnStateAutoIdle(t, s)
 	after := before.withCurrentTurnState(context.Background())
-	require.Empty(t, after.Headers.Get(openAICodexTurnStateHeader))
+	require.Equal(t, old, after.Headers.Get(openAICodexTurnStateHeader), "a WS/header-only state remains an official native continuation")
 	key := normalizeOpenAIWSHandshakeCompatibility(a, after.Headers, after.turnStateFingerprint, after.turnStateRecoveryEpoch)
-	require.False(t, conn.matchesHandshakeCompatibility(key))
-	require.False(t, conn.matchesContinuationHandshakeCompatibility(key), "pinned continuations must not ignore revocation")
+	require.True(t, conn.matchesHandshakeCompatibility(key))
+	require.True(t, conn.matchesContinuationHandshakeCompatibility(key), "without verified model evidence there is no recovery epoch to invalidate")
 }
 func TestCodexTurnStateRecoveryDisabledAndUnrelatedAccounts(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
@@ -292,6 +260,10 @@ func TestCodexTurnStateRecoveryMetadataDoesNotExposeOrExportHashes(t *testing.T)
 	old := recoveryTestToken(now, 10, 1)
 	signal := recoveryTestToken(now, 11, 2)
 	seedRecoveryTestAccount(repo, a, old)
+	// Simulate metadata left by an older length-based build. It is ignored.
+	repo.accounts[a.ID].Extra[CodexTurnStateAutoRecoveryExtraKey] = map[string]any{
+		"invalidated_at_ms": now.UnixMilli(), "pending": true,
+	}
 	s.collectOpenAICodexTurnState(context.Background(), a, signal)
 	waitTurnStateAutoIdle(t, s)
 	stored, _ := repo.GetByID(context.Background(), a.ID)
@@ -301,7 +273,10 @@ func TestCodexTurnStateRecoveryMetadataDoesNotExposeOrExportHashes(t *testing.T)
 	require.NotContains(t, string(encoded), signal)
 	require.NotContains(t, string(encoded), codexTurnStateCanonicalDigest(old))
 	require.NotContains(t, StripCodexTurnStateAutoExtra(stored.Extra), CodexTurnStateAutoRecoveryExtraKey)
-	require.True(t, CodexTurnStateAutoInfoForAccount(stored, time.Now()).Due)
+	info := CodexTurnStateAutoInfoForAccount(stored, time.Now())
+	require.False(t, info.RecoveryPending)
+	require.False(t, info.Due)
+	require.Equal(t, len(old), info.Models["gpt-5"].StateLength)
 }
 
 type recoverySignalDialer struct{ state string }
@@ -309,7 +284,7 @@ type recoverySignalDialer struct{ state string }
 func (d *recoverySignalDialer) Dial(context.Context, string, http.Header, string) (openAIWSClientConn, int, http.Header, error) {
 	return nil, 403, turnStateResponse(d.state).Header, errors.New("handshake failed")
 }
-func TestCodexTurnStateRecoveryFailedWSHandshakeStillRevokes(t *testing.T) {
+func TestCodexTurnStateRecoveryFailedWSHandshakeDoesNotPromoteHeader(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
 	old := recoveryTestToken(now.Add(-time.Minute), 10, 1)
@@ -321,7 +296,7 @@ func TestCodexTurnStateRecoveryFailedWSHandshakeStillRevokes(t *testing.T) {
 	_, err := pool.dialConn(context.Background(), openAIWSAcquireRequest{Account: a, Headers: http.Header{}, TurnState: openAIWSTurnStatePolicy{Settings: s.settingService, Gateway: s, Models: []string{"gpt-5"}, NativeState: old}})
 	require.Error(t, err)
 	waitTurnStateAutoIdle(t, s)
-	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
+	require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 	stored, _ := repo.GetByID(context.Background(), a.ID)
-	require.True(t, CodexTurnStateAutoInfoForAccount(stored, time.Now()).RecoveryPending)
+	require.False(t, CodexTurnStateAutoInfoForAccount(stored, time.Now()).RecoveryPending)
 }

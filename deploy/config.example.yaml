@@ -241,6 +241,14 @@ gateway:
   # - account_proxy: Isolate by account+proxy combination (default, finest granularity)
   # - account_proxy: 按账户+代理组合隔离（默认，最细粒度）
   connection_pool_isolation: "account_proxy"
+  # Optional two-hop route for configured account proxies. The first hop must
+  # be SOCKS5/SOCKS5H; direct requests are never sent through it.
+  # 配置账号代理前可选的 SOCKS 前置代理；不会影响直连请求。
+  proxy_chain:
+    pre_proxy_url: ""
+    # Some providers publish socks5 URLs for ports that actually speak HTTP CONNECT.
+    # 某些供应商给出的 socks5 URL 实际需要按 HTTP CONNECT 握手时启用。
+    force_http_proxy: false
   # Force Codex CLI mode: treat all /openai/v1/responses requests as Codex CLI.
   # 强制按 Codex CLI 处理 /openai/v1/responses 请求（用于网关未透传/改写 User-Agent 的兜底）。
   #

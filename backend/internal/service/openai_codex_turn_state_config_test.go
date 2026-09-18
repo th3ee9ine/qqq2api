@@ -36,7 +36,11 @@ func seedAutomaticTurnState(a *Account, token string, models ...string) {
 	if len(models) > 0 {
 		model = models[0]
 	}
-	a.Extra = mergeMap(a.Extra, map[string]any{codexTurnStateModelExtraKey(model): map[string]any{CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli()}})
+	now := time.Now().UnixMilli()
+	a.Extra = mergeMap(a.Extra, map[string]any{codexTurnStateModelExtraKey(model): map[string]any{
+		CodexTurnStateAutoExtraKey: token, CodexTurnStateAutoSetAtExtraKey: now,
+		CodexTurnStateAutoVerifiedAtExtraKey: now, CodexTurnStateAutoVerifiedModelExtraKey: model,
+	}})
 }
 func TestCodexTurnStateModelScope(t *testing.T) {
 	for _, tc := range []struct {
@@ -92,7 +96,10 @@ func TestCodexTurnStateAutomaticHTTPAndCompactBuilders(t *testing.T) {
 					req, err = svc.buildUpstreamRequest(context.Background(), c, a, body, "access", false, "", false, "alias")
 				}
 				require.NoError(t, err)
-				want := "account-state" // unbound client values are replaced
+				want := "account-state"
+				if native != "" {
+					want = native // official client continuation has priority
+				}
 				require.Equal(t, want, req.Header.Get(openAICodexTurnStateHeader))
 				require.Equal(t, native, c.Request.Header.Get(openAICodexTurnStateHeader))
 			}
@@ -144,7 +151,7 @@ func TestCodexTurnStateAutomaticPoolDialAndRotation(t *testing.T) {
 	require.Equal(t, firstID, reused.ConnID())
 	require.Equal(t, "first", *reused.SentTurnState())
 	reused.Release()
-	svc.collectOpenAICodexTurnState(context.Background(), a, "second")
+	publishVerifiedTurnStateForTest(svc, a, "gpt-5.5", "second")
 	second, err := pool.Acquire(context.Background(), req)
 	require.NoError(t, err)
 	require.NotEqual(t, firstID, second.ConnID())

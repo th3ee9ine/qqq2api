@@ -18,6 +18,16 @@ func TestUpstreamResponseModelObserverTerminalWinsAndRecordsConflict(t *testing.
 	require.True(t, observer.Conflict())
 }
 
+func TestUpstreamResponseModelObserverTreatsAstraLifecycleVariantsAsEquivalent(t *testing.T) {
+	observer := &upstreamResponseModelObserver{}
+
+	observer.ObserveOpenAI([]byte(`{"type":"response.created","response":{"model":"openai/gpt-6-astra-2026-09-18"}}`), "response.created")
+	observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"model":"gpt-6"}}`), "response.completed")
+
+	require.Equal(t, "gpt-6", observer.Model())
+	require.False(t, observer.Conflict())
+}
+
 func TestUpstreamResponseModelObserverSupportsAnthropicAndGeminiShapes(t *testing.T) {
 	t.Run("anthropic", func(t *testing.T) {
 		observer := &upstreamResponseModelObserver{}
@@ -94,6 +104,59 @@ func TestUpstreamModelMismatchTreatsGrokBuildRuntimeIDsAsAliases(t *testing.T) {
 			require.NotNil(t, mismatch)
 			require.False(t, *mismatch)
 		})
+	}
+}
+
+func TestUpstreamModelMismatchKeepsCodexAutoReviewAsItsOwnRuntime(t *testing.T) {
+	matched := upstreamModelMismatch("codex-auto-review", "codex-auto-review")
+	require.NotNil(t, matched)
+	require.False(t, *matched)
+
+	astra := upstreamModelMismatch("codex-auto-review", "gpt-6-astra")
+	require.NotNil(t, astra)
+	require.True(t, *astra)
+
+	luna := upstreamModelMismatch("codex-auto-review", "gpt-5.6-luna")
+	require.NotNil(t, luna)
+	require.True(t, *luna)
+
+	direct := upstreamModelMismatch("gpt-6-astra", "gpt-6-astra")
+	require.NotNil(t, direct)
+	require.False(t, *direct)
+
+	prefixed := upstreamModelMismatch("codex-auto-review", "provider/codex-auto-review")
+	require.NotNil(t, prefixed)
+	require.False(t, *prefixed)
+
+	prefixedSelf := upstreamModelMismatch("provider/codex-auto-review", "provider/codex-auto-review")
+	require.NotNil(t, prefixedSelf)
+	require.False(t, *prefixedSelf)
+}
+
+func TestUpstreamModelMismatchTreatsAstraVariantsAsOneRuntime(t *testing.T) {
+	tests := []struct {
+		name          string
+		sentModel     string
+		responseModel string
+	}{
+		{name: "base to dated", sentModel: "gpt-6-astra", responseModel: "gpt-6-astra-2026-09-18"},
+		{name: "dated to base", sentModel: "gpt-6-astra-2026-09-18", responseModel: "gpt-6-astra"},
+		{name: "provider build to public alias", sentModel: "openai/gpt-6-astra-build-42", responseModel: "gpt-6"},
+		{name: "public alias to provider dated", sentModel: "gpt-6", responseModel: "provider/gpt-6-astra-2026-09-18"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mismatch := upstreamModelMismatch(tt.sentModel, tt.responseModel)
+			require.NotNil(t, mismatch)
+			require.False(t, *mismatch)
+		})
+	}
+
+	for _, degraded := range []string{"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"} {
+		mismatch := upstreamModelMismatch("gpt-6-astra", degraded)
+		require.NotNil(t, mismatch)
+		require.True(t, *mismatch, degraded)
 	}
 }
 
@@ -269,4 +332,26 @@ func TestObservedUpstreamResponseServiceTierFromContext(t *testing.T) {
 	observer := beginUpstreamResponseModelObservation(c)
 	observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.6-sol","service_tier":"default"}}`), "response.completed")
 	require.Equal(t, "default", observedUpstreamResponseServiceTier(c))
+}
+
+func TestReplaceOpenAIWSMessageModelPreservesAcceptanceFamilies(t *testing.T) {
+	for _, tc := range []struct {
+		name, from, to string
+	}{
+		{name: "luna cannot masquerade as astra", from: "gpt-5.6-luna", to: "gpt-6-astra"},
+		{name: "dated astra stays raw", from: "openai/gpt-6-astra-2026-09-18", to: "gpt-6-astra"},
+		{name: "luna cannot masquerade as auto review", from: "gpt-5.6-luna", to: "codex-auto-review"},
+		{name: "auto review variant stays raw", from: "provider/codex-auto-review-2026-09-18", to: "codex-auto-review"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			message := []byte(`{"type":"response.completed","response":{"model":"` + tc.from + `"}}`)
+			require.Equal(t, string(message), string(replaceOpenAIWSMessageModel(message, tc.from, tc.to)))
+		})
+	}
+
+	ordinary := []byte(`{"type":"response.completed","response":{"model":"gpt-5.5"}}`)
+	require.JSONEq(t,
+		`{"type":"response.completed","response":{"model":"client-alias"}}`,
+		string(replaceOpenAIWSMessageModel(ordinary, "gpt-5.5", "client-alias")),
+	)
 }

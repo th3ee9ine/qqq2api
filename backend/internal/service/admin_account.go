@@ -782,7 +782,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		delete(normalizedExtra, OllamaCloudUsageSnapshotExtraKey)
 		normalizedExtra = StripCodexTurnStateAutoExtra(normalizedExtra)
 		for key, value := range account.Extra {
-			if strings.HasPrefix(key, CodexTurnStateModelExtraPrefix) {
+			if strings.HasPrefix(key, CodexTurnStateModelExtraPrefix) || strings.HasPrefix(key, CodexTurnStateProbeBurstBudgetExtraPrefix) {
 				normalizedExtra[key] = value
 			}
 		}

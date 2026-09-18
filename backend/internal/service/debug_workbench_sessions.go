@@ -19,11 +19,15 @@ const (
 )
 
 var (
-	ErrDebugSessionInvalidScope  = errors.New("debug session requires a valid owner and account")
-	ErrDebugSessionInvalidAction = errors.New("invalid debug session action")
-	ErrDebugSessionNotFound      = errors.New("debug session not found or expired")
-	ErrDebugSessionBusy          = errors.New("debug session already has an in-flight request")
-	ErrDebugSessionCapacity      = errors.New("debug session capacity reached")
+	ErrDebugSessionInvalidScope   = errors.New("debug session requires a valid owner and account")
+	ErrDebugSessionInvalidAction  = errors.New("invalid debug session action")
+	ErrDebugSessionNotFound       = errors.New("debug session not found or expired")
+	ErrDebugSessionBusy           = errors.New("debug session already has an in-flight request")
+	ErrDebugSessionModelMismatch  = errors.New("debug session model does not match request model")
+	ErrDebugSessionAPIKeyMismatch = errors.New("debug session API key does not match request API key")
+	ErrDebugSessionCaptureMissing = errors.New("debug capture state is missing or was not verified")
+	ErrDebugSessionProxyMismatch  = errors.New("debug replay must use the capture's sticky proxy")
+	ErrDebugSessionCapacity       = errors.New("debug session capacity reached")
 )
 
 // DebugWorkbenchSessionStore holds only local debugging context, never account
@@ -37,24 +41,30 @@ type DebugWorkbenchSessionStore struct {
 }
 
 type debugWorkbenchSession struct {
-	ownerID   int64
-	accountID int64
-	view      DebugSessionView
-	turnState string
-	expiresAt time.Time
-	lease     uint64
-	inflight  bool
+	ownerID        int64
+	accountID      int64
+	apiKeyID       int64
+	model          string
+	view           DebugSessionView
+	turnState      string
+	turnStateStage string
+	proxyURL       string
+	collectedAt    time.Time
+	expiresAt      time.Time
+	lease          uint64
+	inflight       bool
 }
 
 // DebugWorkbenchSessionLease is a single request's immutable context. Finishing
 // an old lease is a no-op: it cannot release or overwrite a newer request.
 type DebugWorkbenchSessionLease struct {
-	store      *DebugWorkbenchSessionStore
-	session    *debugWorkbenchSession
-	generation uint64
-	headers    http.Header
-	view       DebugSessionView
-	finished   bool
+	store             *DebugWorkbenchSessionStore
+	session           *debugWorkbenchSession
+	generation        uint64
+	headers           http.Header
+	view              DebugSessionView
+	verificationStage string
+	finished          bool
 }
 
 func NewDebugWorkbenchSessionStore() *DebugWorkbenchSessionStore {
@@ -75,11 +85,11 @@ func (s *DebugWorkbenchSessionStore) Acquire(ownerID, accountID int64, input Deb
 	if action == "" {
 		action = "new_turn"
 	}
-	if action != "new_session" && action != "new_turn" && action != "continue_turn" {
+	if action != "new_session" && action != "new_turn" && action != "continue_turn" && action != "replay_capture" {
 		return nil, ErrDebugSessionInvalidAction
 	}
 	id := strings.TrimSpace(input.ID)
-	if id == "" && action == "continue_turn" {
+	if id == "" && (action == "continue_turn" || action == "replay_capture") {
 		return nil, ErrDebugSessionNotFound
 	}
 
@@ -102,11 +112,44 @@ func (s *DebugWorkbenchSessionStore) Acquire(ownerID, accountID int64, input Deb
 			return nil, ErrDebugSessionBusy
 		}
 	}
-	if session == nil || action == "new_session" {
+	requestModel := strings.TrimSpace(input.model)
+	if session != nil && action != "new_session" && session.apiKeyID != input.apiKeyID {
+		return nil, ErrDebugSessionAPIKeyMismatch
+	}
+	if session != nil && action != "new_session" && session.model != requestModel {
+		// A session's opaque turn state is model-bound. Do not silently clear it
+		// and continue under another model: require an explicit new session.
+		return nil, ErrDebugSessionModelMismatch
+	}
+	if action == "replay_capture" {
+		if strings.TrimSpace(input.verificationStage) != DebugVerificationStageReplay ||
+			strings.TrimSpace(session.turnState) == "" || session.turnStateStage != DebugVerificationStageCapture {
+			return nil, ErrDebugSessionCaptureMissing
+		}
+		if session.proxyURL != input.proxyURL {
+			return nil, ErrDebugSessionProxyMismatch
+		}
+		if session.collectedAt.IsZero() || now.Sub(session.collectedAt) >= codexTurnStateUsageCandidateTTL {
+			return nil, ErrDebugSessionCaptureMissing
+		}
+		replacement, err := newDebugWorkbenchSession(ownerID, accountID, input.apiKeyID, requestModel)
+		if err != nil {
+			return nil, err
+		}
+		replacement.turnState = session.turnState
+		replacement.turnStateStage = session.turnStateStage
+		replacement.proxyURL = session.proxyURL
+		replacement.collectedAt = session.collectedAt
+		replacement.view.TurnStateAvailable = true
+		delete(s.sessions, session.view.ID)
+		session = replacement
+		session.proxyURL = input.proxyURL
+		s.sessions[session.view.ID] = session
+	} else if session == nil || action == "new_session" {
 		if session == nil && len(s.sessions) >= debugWorkbenchMaxSessions {
 			return nil, ErrDebugSessionCapacity
 		}
-		replacement, err := newDebugWorkbenchSession(ownerID, accountID)
+		replacement, err := newDebugWorkbenchSession(ownerID, accountID, input.apiKeyID, requestModel)
 		if err != nil {
 			return nil, err
 		}
@@ -116,6 +159,7 @@ func (s *DebugWorkbenchSessionStore) Acquire(ownerID, accountID int64, input Deb
 			delete(s.sessions, session.view.ID)
 		}
 		session = replacement
+		session.proxyURL = input.proxyURL
 		s.sessions[session.view.ID] = session
 	} else if action == "new_turn" {
 		turnID, err := uuid.NewRandom()
@@ -125,7 +169,9 @@ func (s *DebugWorkbenchSessionStore) Acquire(ownerID, accountID int64, input Deb
 		session.view.TurnID = turnID.String()
 		session.view.TurnIndex++
 		session.turnState = ""
+		session.turnStateStage = ""
 		session.view.TurnStateAvailable = false
+		session.model = requestModel
 	}
 	session.lease++
 	session.inflight = true
@@ -133,10 +179,11 @@ func (s *DebugWorkbenchSessionStore) Acquire(ownerID, accountID int64, input Deb
 	return &DebugWorkbenchSessionLease{
 		store: s, session: session, generation: session.lease,
 		headers: debugWorkbenchSessionHeaders(session), view: session.view,
+		verificationStage: strings.TrimSpace(input.verificationStage),
 	}, nil
 }
 
-func newDebugWorkbenchSession(ownerID, accountID int64) (*debugWorkbenchSession, error) {
+func newDebugWorkbenchSession(ownerID, accountID, apiKeyID int64, model string) (*debugWorkbenchSession, error) {
 	var ids [5]string
 	for i := range ids {
 		id, err := uuid.NewRandom()
@@ -146,11 +193,18 @@ func newDebugWorkbenchSession(ownerID, accountID int64) (*debugWorkbenchSession,
 		ids[i] = id.String()
 	}
 	return &debugWorkbenchSession{
-		ownerID: ownerID, accountID: accountID,
+		ownerID: ownerID, accountID: accountID, apiKeyID: apiKeyID, model: strings.TrimSpace(model),
 		view: DebugSessionView{
 			ID: ids[0], SessionID: ids[1], ThreadID: ids[2], TurnID: ids[3], WindowID: ids[4], TurnIndex: 1,
 		},
 	}, nil
+}
+
+func (l *DebugWorkbenchSessionLease) replayState() string {
+	if l == nil || l.verificationStage != DebugVerificationStageReplay {
+		return ""
+	}
+	return strings.TrimSpace(l.headers.Get(openAICodexTurnStateHeader))
 }
 
 func debugWorkbenchSessionHeaders(session *debugWorkbenchSession) http.Header {
@@ -188,7 +242,7 @@ func (l *DebugWorkbenchSessionLease) View() DebugSessionView {
 // successful upstream response. Failed requests retain the previous state.
 // Duplicate/stale completion and completion after expiry never mutate storage.
 // Callers should defer Finish("", false) to release a lease on every error path.
-func (l *DebugWorkbenchSessionLease) Finish(turnState string, success bool) DebugSessionView {
+func (l *DebugWorkbenchSessionLease) Finish(turnState string, success bool, collectedAt ...time.Time) DebugSessionView {
 	if l == nil || l.store == nil {
 		return DebugSessionView{}
 	}
@@ -216,6 +270,17 @@ func (l *DebugWorkbenchSessionLease) Finish(turnState string, success bool) Debu
 			turnState = ""
 		}
 		session.turnState = turnState
+		if turnState == "" {
+			session.turnStateStage = ""
+		} else {
+			session.turnStateStage = l.verificationStage
+			if l.verificationStage == DebugVerificationStageCapture {
+				session.collectedAt = now
+				if len(collectedAt) > 0 && !collectedAt[0].IsZero() && collectedAt[0].Before(now) {
+					session.collectedAt = collectedAt[0]
+				}
+			}
+		}
 	}
 	session.view.TurnStateAvailable = session.turnState != ""
 	session.inflight = false

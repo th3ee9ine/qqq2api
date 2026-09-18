@@ -14,10 +14,10 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({
 describe('CodexTurnStateSettings', () => {
   it('provides a single automatic switch with no token editor', async () => {
     const wrapper = mount(CodexTurnStateSettings, { props: { autoEnabled: false, defaultModel: 'gpt-5.5', models: '' } })
-    expect(wrapper.text()).toContain('No token entry is needed')
-    expect(wrapper.text()).toContain('upstream quota')
-    expect(wrapper.text()).toContain('312 signal')
-    expect(wrapper.text()).toContain('new 292 state')
+    expect(wrapper.text()).toContain('clients do not enter it manually')
+    expect(wrapper.text()).toContain('upstream validity guarantee')
+    expect(wrapper.text()).toContain('response.created and response.completed models')
+    expect(wrapper.text()).toContain('429 stops IP rotation')
     expect(wrapper.findAll('button')).toHaveLength(1)
     expect(wrapper.find('input[type="password"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="openai-codex-turn-state-clear"]').exists()).toBe(false)

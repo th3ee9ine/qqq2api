@@ -2362,9 +2362,6 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	sentTurnState := headers.Get(openAICodexTurnStateHeader)
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
-	if req.TurnState.Gateway != nil && codexTurnStateIsRecoverySignal(extractOpenAICodexTurnState(handshakeHeaders)) {
-		req.TurnState.Gateway.collectOpenAICodexTurnStateAtEpoch(withCodexTurnStateModel(ctx, req.turnStateModel), req.Account, extractOpenAICodexTurnState(handshakeHeaders), req.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
-	}
 	if err != nil {
 		var handshakeErr *openAIWSHandshakeError
 		var responseBody []byte
@@ -2386,9 +2383,6 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 		}
 	}
 	id := p.nextConnID(req.Account.ID)
-	if req.TurnState.Gateway != nil {
-		req.TurnState.Gateway.collectOpenAICodexTurnStateAtEpoch(withCodexTurnStateModel(ctx, req.turnStateModel), req.Account, extractOpenAICodexTurnState(handshakeHeaders), req.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
-	}
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
 	pooledConn.sentTurnState = &sentTurnState
 	accountID := req.Account.ID

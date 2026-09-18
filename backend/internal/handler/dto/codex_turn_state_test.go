@@ -11,19 +11,30 @@ import (
 )
 
 func TestAccountCodexTurnStateAutoRedactedAndDiagnosticsSafe(t *testing.T) {
+	now := time.Now().UnixMilli()
 	a := &service.Account{ID: 10, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: map[string]any{
-		service.CodexTurnStateAutoExtraKey: "private-token", service.CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli(),
+		service.CodexTurnStateAutoExtraKey: "private-token", service.CodexTurnStateAutoSetAtExtraKey: now,
 		service.CodexTurnStateAutoLastErrorExtraKey: "private-provider-error", "note": "public",
-		service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{"invalidated_at_ms": time.Now().UnixMilli(), "pending": true, "rejected": []string{"private-digest"}, "legacy_token": "private-token"},
+		service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{"invalidated_at_ms": now, "pending": true, "rejected": []string{"private-digest"}, "legacy_token": "private-token"},
 	}}
-	a.Extra[service.CodexTurnStateModelExtraPrefix+base64.RawURLEncoding.EncodeToString([]byte("gpt-5.5"))] = map[string]any{service.CodexTurnStateAutoExtraKey: "private-model-token", service.CodexTurnStateAutoSetAtExtraKey: time.Now().UnixMilli(), service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{"invalidated_at_ms": time.Now().UnixMilli(), "pending": true}}
+	a.Extra[service.CodexTurnStateModelExtraPrefix+base64.RawURLEncoding.EncodeToString([]byte("gpt-5.5"))] = map[string]any{
+		service.CodexTurnStateAutoExtraKey: "private-model-token", service.CodexTurnStateAutoSetAtExtraKey: now,
+		service.CodexTurnStateAutoVerifiedAtExtraKey: now, service.CodexTurnStateAutoVerifiedModelExtraKey: "gpt-5.5",
+		service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{"invalidated_at_ms": now, "pending": true},
+	}
+	a.Extra[service.CodexTurnStateProbeBurstBudgetExtraKey("gpt-5.5")] = service.CodexTurnStateProbeBurstBudget{
+		Version: 1, Model: "gpt-5.5", StartedAtMS: now, Attempts: 1,
+	}
 	dto := AccountFromService(a)
 	for _, projection := range []any{dto, AccountListItemFromAccount(dto)} {
 		data, err := json.Marshal(projection)
 		require.NoError(t, err)
 		require.NotContains(t, string(data), "private")
+		require.NotContains(t, string(data), service.CodexTurnStateProbeBurstBudgetExtraPrefix)
 		require.Contains(t, string(data), `"configured":true`)
-		require.Contains(t, string(data), `"recovery_pending":true`)
+		// Legacy length-derived recovery metadata is intentionally ignored; state
+		// length is diagnostic only and cannot revoke an otherwise verified value.
+		require.Contains(t, string(data), `"recovery_pending":false`)
 		require.Contains(t, string(data), `"note":"public"`)
 	}
 	require.Equal(t, "private-token", a.Extra[service.CodexTurnStateAutoExtraKey])

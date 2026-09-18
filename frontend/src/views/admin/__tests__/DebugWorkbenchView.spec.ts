@@ -221,6 +221,34 @@ describe('actual gateway debug execution', () => {
     }
   }
 
+  function verificationExecution(requestID: string, stage: 'baseline' | 'capture' | 'replay' | 'automatic') {
+    const stateReceived = stage === 'capture'
+    const stateSent = stage === 'replay' || stage === 'automatic'
+    return execution({
+      request_id: requestID,
+      session: { id: `${stage}-handle`, session_id: `${stage}-session`, thread_id: `${stage}-thread`, turn_id: `${stage}-turn`, window_id: `${stage}-window`, turn_index: 1, turn_state_available: stateReceived },
+      state_verification: {
+        requested_model: 'gpt-6-astra',
+        response_created_model: 'gpt-6-astra-2026-09-18',
+        response_completed_model: 'gpt-6-astra-2026-09-18',
+        state_sent: stateSent,
+        state_received: stateReceived,
+        state_length: stateReceived ? 332 : undefined,
+        state_source: stage === 'automatic' ? 'automatic' : stage === 'replay' ? 'native' : 'none',
+        actual_account_id: 1,
+        usage_log_account_id: 1,
+        usage_log_api_key_id: 19,
+        usage_log_requested_model: 'gpt-6-astra',
+        upstream_response_model: 'gpt-6-astra-2026-09-18',
+        usage_log_state_sent: stateSent,
+        usage_log_verified: true,
+        state_matches_capture: stage === 'replay',
+        state_published: stage === 'replay',
+        daily_route_verified: stage === 'replay'
+      }
+    })
+  }
+
   it('submits the complete JSON and header editors to the real endpoint without dropping custom fields', async () => {
     runTest.mockResolvedValue(execution())
     await render()
@@ -269,6 +297,41 @@ describe('actual gateway debug execution', () => {
     expect(wrapper.find('.context-ids').exists()).toBe(false)
     await wrapper.get('.send-button').trigger('click'); await flushPromises()
     expect(runTest.mock.calls[3][1].session).toEqual({ action: 'new_session' })
+  })
+
+  it('submits the four verification stages with a fixed API key and replays only the capture handle', async () => {
+    runTest
+      .mockResolvedValueOnce(verificationExecution('verify-baseline', 'baseline'))
+      .mockResolvedValueOnce(verificationExecution('verify-capture', 'capture'))
+      .mockResolvedValueOnce(verificationExecution('verify-replay', 'replay'))
+      .mockResolvedValueOnce(verificationExecution('verify-automatic', 'automatic'))
+    await render()
+    await wrapper.get('#debug-model').setValue('gpt-6-astra')
+    await wrapper.get('#debug-verification-mode').setValue(true)
+    await wrapper.get('#debug-verification-api-key').setValue('19')
+
+    const exactBody = {
+      model: 'gpt-6-astra',
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Reply with exactly OK.' }] }],
+      stream: true
+    }
+    expect(JSON.parse((wrapper.get('#debug-api-params').element as HTMLTextAreaElement).value)).toEqual(exactBody)
+
+    await wrapper.get('.send-button').trigger('click'); await flushPromises()
+    expect(runTest.mock.calls[0][1]).toMatchObject({ api_key_id: 19, verification_stage: 'baseline', body: exactBody, session: { action: 'new_session' } })
+    expect(runTest.mock.calls[0][1]).not.toHaveProperty('session.id')
+
+    await wrapper.get('.send-button').trigger('click'); await flushPromises()
+    expect(runTest.mock.calls[1][1]).toMatchObject({ api_key_id: 19, verification_stage: 'capture', session: { action: 'new_session' } })
+    expect(runTest.mock.calls[1][1]).not.toHaveProperty('session.id')
+
+    await wrapper.get('.send-button').trigger('click'); await flushPromises()
+    expect(runTest.mock.calls[2][1]).toMatchObject({ api_key_id: 19, verification_stage: 'replay', session: { id: 'capture-handle', action: 'replay_capture' } })
+
+    await wrapper.get('.send-button').trigger('click'); await flushPromises()
+    expect(runTest.mock.calls[3][1]).toMatchObject({ api_key_id: 19, verification_stage: 'automatic', session: { action: 'new_session' } })
+    expect(runTest.mock.calls[3][1]).not.toHaveProperty('session.id')
+    expect(wrapper.get('.overall-status').text()).toContain('自动注入已验收')
   })
 
   it('resets session on account changes and ignores stale in-flight results', async () => {

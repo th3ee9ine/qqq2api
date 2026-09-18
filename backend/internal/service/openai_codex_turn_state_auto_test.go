@@ -1,12 +1,14 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type turnStateAutoRepo struct {
@@ -36,6 +39,38 @@ func (r *turnStateAutoRepo) GetByID(_ context.Context, id int64) (*Account, erro
 	copy.Extra = mergeMap(nil, a.Extra)
 	copy.Credentials = mergeMap(nil, a.Credentials)
 	return &copy, nil
+}
+func (r *turnStateAutoRepo) GetCodexTurnStateSource(ctx context.Context, id int64) (*Account, error) {
+	return r.GetByID(ctx, id)
+}
+func (r *turnStateAutoRepo) CompareAndSwapCodexTurnStateProbeBurstBudget(
+	_ context.Context,
+	id int64,
+	slot string,
+	expectedVersion int64,
+	budget CodexTurnStateProbeBurstBudget,
+) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	account := r.accounts[id]
+	if account == nil {
+		return false, ErrAccountNotFound
+	}
+	current, err := codexTurnStateProbeBurstBudgetFromAccount(account, slot)
+	if err != nil {
+		return false, err
+	}
+	if current.Version != expectedVersion {
+		return false, nil
+	}
+	if budget.Version != expectedVersion+1 || slot != codexTurnStateProbeBurstBudgetExtraKey(budget.Model) {
+		return false, errCodexTurnStateProbeBurstBudgetCorrupt
+	}
+	if account.Extra == nil {
+		account.Extra = make(map[string]any)
+	}
+	account.Extra[slot] = budget
+	return true, nil
 }
 func (r *turnStateAutoRepo) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
 	r.mu.Lock()
@@ -60,8 +95,34 @@ type turnStateAutoUpstream struct {
 	call func(*http.Request, string, int64) (*http.Response, error)
 }
 
-func (u *turnStateAutoUpstream) Do(req *http.Request, proxy string, id int64, _ int) (*http.Response, error) {
+type turnStateRawUpstream struct {
+	HTTPUpstream
+	call func(*http.Request, string, int64) (*http.Response, error)
+}
+
+func (u *turnStateRawUpstream) Do(req *http.Request, proxy string, id int64, _ int) (*http.Response, error) {
 	return u.call(req, proxy, id)
+}
+
+func (u *turnStateAutoUpstream) Do(req *http.Request, proxy string, id int64, _ int) (*http.Response, error) {
+	var payload []byte
+	if req.Body != nil {
+		payload, _ = io.ReadAll(req.Body)
+		req.Body = io.NopCloser(bytes.NewReader(payload))
+	}
+	model := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+	if req.Header.Get(openAICodexTurnStateHeader) != "" {
+		return turnStateModelResponse("", model), nil
+	}
+	resp, err := u.call(req, proxy, id)
+	if err != nil || resp == nil || resp.Body == nil {
+		return resp, err
+	}
+	if _, synthetic := resp.Body.(*turnStateSyntheticBody); synthetic {
+		_ = resp.Body.Close()
+		resp.Body = turnStateModelResponse("", model).Body
+	}
+	return resp, nil
 }
 func newTurnStateAutoService(t *testing.T) (*OpenAIGatewayService, *turnStateAutoRepo, *Account) {
 	t.Helper()
@@ -70,7 +131,11 @@ func newTurnStateAutoService(t *testing.T) (*OpenAIGatewayService, *turnStateAut
 	settings, sr := turnStateTestSettings("", "gpt-5*")
 	sr.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "true"
 	sr.values[SettingKeyOpenAICodexTurnStateDefaultModel] = "gpt-5"
-	svc := &OpenAIGatewayService{settingService: settings, accountRepo: repo}
+	svc := &OpenAIGatewayService{
+		settingService: settings,
+		accountRepo:    repo,
+		proxyRepo:      &turnStateProxyRepo{proxies: []Proxy{turnStateDedicatedSessionProxy("DEFAULT01")}},
+	}
 	t.Cleanup(func() { waitTurnStateAutoIdle(t, svc) })
 	copy, err := repo.GetByID(context.Background(), 10)
 	require.NoError(t, err)
@@ -87,7 +152,29 @@ func waitTurnStateAutoIdle(t *testing.T, s *OpenAIGatewayService) {
 func turnStateResponse(state string) *http.Response {
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, state)
-	return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("data: [DONE]\n\n"))}
+	return &http.Response{StatusCode: 200, Header: h, Body: &turnStateSyntheticBody{Reader: strings.NewReader("data: [DONE]\n\n")}}
+}
+
+type turnStateSyntheticBody struct{ *strings.Reader }
+
+func (b *turnStateSyntheticBody) Close() error { return nil }
+
+func turnStateModelResponse(state, model string) *http.Response {
+	resp := turnStateResponse(state)
+	body := "data: {\"type\":\"response.created\",\"response\":{\"model\":" + strconv.Quote(model) + "}}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"model\":" + strconv.Quote(model) + ",\"status\":\"completed\",\"output\":[]}}\n\n" +
+		"data: [DONE]\n\n"
+	resp.Body = io.NopCloser(strings.NewReader(body))
+	return resp
+}
+
+func publishVerifiedTurnStateForTest(s *OpenAIGatewayService, account *Account, model, state string) {
+	now := time.Now()
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, model)
+	s.setCodexTurnStateLocked(entry, state, now)
+	s.startCodexTurnStateWorkerLocked(account.ID, entry)
+	s.openaiTurnStateMu.Unlock()
 }
 func TestCodexTurnStateAutoExpiryAndSafeDiagnostics(t *testing.T) {
 	now := time.Now()
@@ -106,7 +193,12 @@ func TestCodexTurnStateAutoExpiryAndSafeDiagnostics(t *testing.T) {
 		{"unsafe", "state\r\nsecret", now.UnixMilli(), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a := &Account{Extra: map[string]any{CodexTurnStateAutoExtraKey: tc.token, CodexTurnStateAutoSetAtExtraKey: tc.setAt, CodexTurnStateAutoLastErrorExtraKey: "bearer-private-error"}}
+			extra := map[string]any{CodexTurnStateAutoExtraKey: tc.token, CodexTurnStateAutoSetAtExtraKey: tc.setAt, CodexTurnStateAutoLastErrorExtraKey: "bearer-private-error"}
+			if tc.token != "" {
+				extra[CodexTurnStateAutoVerifiedAtExtraKey] = tc.setAt
+				extra[CodexTurnStateAutoVerifiedModelExtraKey] = "gpt-5"
+			}
+			a := &Account{Extra: extra}
 			info := codexTurnStateAutoInfo(a, now)
 			require.Equal(t, tc.due, info.Due)
 			data, err := json.Marshal(info)
@@ -118,7 +210,7 @@ func TestCodexTurnStateAutoExpiryAndSafeDiagnostics(t *testing.T) {
 		})
 	}
 }
-func TestCodexTurnStateAutoCollectionCommitDedupAndIsolation(t *testing.T) {
+func TestCodexTurnStateAutoCollectionRequiresReplayVerification(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -127,19 +219,19 @@ func TestCodexTurnStateAutoCollectionCommitDedupAndIsolation(t *testing.T) {
 	var staged http.Header
 	stageOpenAICodexTurnState(&staged, h)
 	require.Equal(t, 0, repo.writes, "staging alone must not collect")
+	observer := beginUpstreamResponseModelObservation(c)
+	observer.ObserveOpenAI([]byte(`{"type":"response.created","response":{"model":"gpt-5"}}`), "response.created")
+	observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"model":"gpt-5"}}`), "response.completed")
 	s.noteStagedOpenAICodexTurnStateCommitted(c, a, staged)
 	waitTurnStateAutoIdle(t, s)
 	s.relayOpenAICodexTurnState(c, a, h)
 	s.collectOpenAICodexTurnState(context.Background(), a, "bad\nstate")
 	waitTurnStateAutoIdle(t, s)
-	require.Equal(t, 1, repo.writes)
+	require.Equal(t, 0, repo.writes, "an ordinary response must not publish a candidate before both replay stages")
 	require.Empty(t, a.Extra, "never mutate the caller's snapshot")
-	require.Equal(t, "collected-secret", s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
-	other := &Account{ID: 20, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
-	require.Empty(t, s.autoTurnStateForAccount(context.Background(), other, "gpt-5"))
 	stored, _ := repo.GetByID(context.Background(), 10)
-	require.Equal(t, "collected-secret", codexTurnStateModelAccount(stored, "gpt-5").Extra[CodexTurnStateAutoExtraKey])
-	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-4"))
+	require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+	require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-4")))
 }
 func TestCodexTurnStateAutoProbeDedupNonBlockingAndNativeWins(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
@@ -163,7 +255,7 @@ func TestCodexTurnStateAutoProbeDedupNonBlockingAndNativeWins(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("probe did not start")
 	}
-	s.collectOpenAICodexTurnState(context.Background(), a, "native-newer-secret")
+	publishVerifiedTurnStateForTest(s, a, "gpt-5", "native-newer-secret")
 	close(release)
 	waitTurnStateAutoIdle(t, s)
 	require.EqualValues(t, 1, calls.Load())
@@ -177,7 +269,8 @@ func TestCodexTurnStateAutoProbeRenewalAndRetryThrottle(t *testing.T) {
 			s, repo, a := newTurnStateAutoService(t)
 			renewed := testGlobalTurnStateToken(time.Now(), 10)
 			old := testGlobalTurnStateToken(time.Now().Add(-51*time.Minute), 10)
-			a.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5"): map[string]any{CodexTurnStateAutoExtraKey: old, CodexTurnStateAutoSetAtExtraKey: time.Now().Add(-51 * time.Minute).UnixMilli()}}
+			seedAutomaticTurnState(a, old, "gpt-5")
+			codexTurnStateModelAccount(a, "gpt-5").Extra[CodexTurnStateAutoSetAtExtraKey] = time.Now().Add(-51 * time.Minute).UnixMilli()
 			repo.accounts[10].Extra = mergeMap(nil, a.Extra)
 			var calls atomic.Int32
 			s.httpUpstream = &turnStateAutoUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
@@ -194,7 +287,11 @@ func TestCodexTurnStateAutoProbeRenewalAndRetryThrottle(t *testing.T) {
 				require.Equal(t, old, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
 				require.Equal(t, "transport_failed", codexTurnStateModelAccount(stored, "gpt-5").Extra[CodexTurnStateAutoLastErrorExtraKey])
 			} else {
-				require.Equal(t, renewed, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+				require.Equal(t, old, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")), "maintenance success only stages a candidate; it cannot replace the verified token before usage evidence")
+				s.openaiTurnStateMu.Lock()
+				require.Equal(t, renewed, s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5"}].candidate.state)
+				require.Empty(t, s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5"}].candidate.requestID)
+				s.openaiTurnStateMu.Unlock()
 			}
 			for n := 0; n < 10; n++ {
 				s.autoTurnStateForAccount(context.Background(), a, "gpt-5")
@@ -254,7 +351,7 @@ func TestCodexTurnStateAutoProbeAuthenticationAndResponseValidation(t *testing.T
 	for _, tc := range []struct {
 		status      int
 		state, code string
-	}{{401, "sensitive", "http_401"}, {429, "sensitive", "http_429"}, {200, "", "missing_state"}, {200, "bad\nsecret", "invalid_state"}} {
+	}{{401, "sensitive", "http_401"}, {429, "sensitive", codexTurnStateProbe429NoRetryAfterCode}, {200, "", "missing_state"}, {200, "bad\nsecret", "invalid_state"}} {
 		s.httpUpstream = &turnStateAutoUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
 			r := turnStateResponse(tc.state)
 			r.StatusCode = tc.status
@@ -267,14 +364,14 @@ func TestCodexTurnStateAutoProbeAuthenticationAndResponseValidation(t *testing.T
 }
 func TestCodexTurnStateAutoLegacyIgnoredDisableAndWSRefresh(t *testing.T) {
 	s, _, a := newTurnStateAutoService(t)
-	s.collectOpenAICodexTurnState(context.Background(), a, "auto-state")
+	publishVerifiedTurnStateForTest(s, a, "gpt-5", "auto-state")
 	waitTurnStateAutoIdle(t, s)
 	h := http.Header{}
 	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
 	require.Equal(t, "auto-state", h.Get(openAICodexTurnStateHeader))
 	h.Set(openAICodexTurnStateHeader, "native-state")
 	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
-	require.Equal(t, "auto-state", h.Get(openAICodexTurnStateHeader), "unbound native states cannot override the scoped value")
+	require.Equal(t, "native-state", h.Get(openAICodexTurnStateHeader), "official native continuation has priority over automatic injection")
 	req := openAIWSAcquireRequest{Account: a, Headers: http.Header{}, TurnState: openAIWSTurnStatePolicy{Settings: s.settingService, Gateway: s, Models: []string{"gpt-5"}}}
 	applied := req.withCurrentTurnState(context.Background())
 	require.Equal(t, "auto-state", applied.Headers.Get(openAICodexTurnStateHeader))
@@ -283,7 +380,7 @@ func TestCodexTurnStateAutoLegacyIgnoredDisableAndWSRefresh(t *testing.T) {
 	set.values[SettingKeyOpenAICodexTurnState] = "global-state"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()
 	s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5")
-	require.Equal(t, "auto-state", h.Get(openAICodexTurnStateHeader), "unbound native states cannot override the scoped value")
+	require.Equal(t, "native-state", h.Get(openAICodexTurnStateHeader), "legacy settings do not displace native continuation")
 	set.values[SettingKeyOpenAICodexTurnStateEnabled] = "false"
 	set.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "false"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()
@@ -294,20 +391,30 @@ func TestCodexTurnStateAutoLegacyIgnoredDisableAndWSRefresh(t *testing.T) {
 	require.Empty(t, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 }
 func TestCodexTurnStateAutoManagedExtraPreservedAndNotImported(t *testing.T) {
-	source := map[string]any{codexTurnStateModelExtraKey("gpt-5.5"): map[string]any{CodexTurnStateAutoExtraKey: "private-scoped"}, CodexTurnStateAutoExtraKey: "private-state", CodexTurnStateAutoSetAtExtraKey: int64(123), "note": "keep"}
+	burstKey := codexTurnStateProbeBurstBudgetExtraKey("gpt-5.5")
+	source := map[string]any{
+		codexTurnStateModelExtraKey("gpt-5.5"): map[string]any{CodexTurnStateAutoExtraKey: "private-scoped"},
+		burstKey:                               CodexTurnStateProbeBurstBudget{Version: 1, Model: "gpt-5.5", StartedAtMS: 123, Attempts: 1},
+		CodexTurnStateAutoExtraKey:             "private-state",
+		CodexTurnStateAutoSetAtExtraKey:        int64(123),
+		"note":                                 "keep",
+	}
 	stripped := StripCodexTurnStateAutoExtra(source)
 	require.Equal(t, map[string]any{"note": "keep"}, stripped)
 	require.Contains(t, source, CodexTurnStateAutoExtraKey)
+	require.Contains(t, source, burstKey)
 	repo := &upstreamBillingProbeAdminRepo{upstreamBillingProbeAccountRepo: &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{10: {ID: 10, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Extra: source}}}}
 	svc := &adminServiceImpl{accountRepo: repo}
 	updated, err := svc.UpdateAccount(context.Background(), 10, &UpdateAccountInput{Extra: map[string]any{CodexTurnStateAutoExtraKey: "injected-state", "note": "edited"}})
 	require.NoError(t, err)
 	require.Equal(t, "private-state", updated.Extra[CodexTurnStateAutoExtraKey])
 	require.Equal(t, source[codexTurnStateModelExtraKey("gpt-5.5")], updated.Extra[codexTurnStateModelExtraKey("gpt-5.5")])
+	require.Equal(t, source[burstKey], updated.Extra[burstKey], "ordinary account edits must not reset the durable burst budget")
 	created, err := buildAccountForCreate(&CreateAccountInput{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, source)
 	require.NoError(t, err)
 	require.NotContains(t, created.Extra, CodexTurnStateAutoExtraKey)
 	require.NotContains(t, created.Extra, codexTurnStateModelExtraKey("gpt-5.5"))
+	require.NotContains(t, created.Extra, burstKey)
 }
 
 func TestCodexTurnStateAutoProbeWorkerBoundAndDisableInFlight(t *testing.T) {
@@ -377,9 +484,9 @@ func TestCodexTurnStateAutoProbeBodyBoundAndUnavailableAccount(t *testing.T) {
 		return resp, nil
 	}}
 	token, err := s.probeOpenAICodexTurnState(context.Background(), a, "gpt-5")
-	require.NoError(t, err)
-	require.Equal(t, "bounded-state", token)
-	require.Equal(t, codexTurnStateAutoMaxBody, body.read)
+	require.ErrorIs(t, err, errCodexTurnStateResponseNotCompleted)
+	require.Empty(t, token)
+	require.Equal(t, codexTurnStateAutoMaxBody+1, body.read)
 	require.True(t, body.closed)
 	repo.accounts[a.ID].Schedulable = false
 	s.autoTurnStateForAccount(context.Background(), a, "gpt-5")
@@ -390,7 +497,7 @@ func TestCodexTurnStateAutoProbeBodyBoundAndUnavailableAccount(t *testing.T) {
 func TestCodexTurnStateAutoCollectionRetriesFailedPersistence(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	repo.fail = true
-	s.collectOpenAICodexTurnState(context.Background(), a, "retry-state")
+	publishVerifiedTurnStateForTest(s, a, "gpt-5", "retry-state")
 	waitTurnStateAutoIdle(t, s)
 	repo.mu.Lock()
 	repo.fail = false
@@ -399,7 +506,7 @@ func TestCodexTurnStateAutoCollectionRetriesFailedPersistence(t *testing.T) {
 	s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5"}].retryAfter = time.Time{}
 	s.openaiTurnStateMu.Unlock()
 	// A duplicate response retries a failed write without resetting collection age.
-	s.collectOpenAICodexTurnState(context.Background(), a, "retry-state")
+	publishVerifiedTurnStateForTest(s, a, "gpt-5", "retry-state")
 	waitTurnStateAutoIdle(t, s)
 	stored, _ := repo.GetByID(context.Background(), a.ID)
 	require.Equal(t, "retry-state", codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
@@ -415,10 +522,12 @@ func (d *turnStateAutoWSDialer) Dial(context.Context, string, http.Header, strin
 	}
 	return &openAIWSFakeConn{}, 101, h, nil
 }
-func TestCodexTurnStateAutoWSHandshakeCollection(t *testing.T) {
+func TestCodexTurnStateAutoWSHandshakeDoesNotPromoteHeaderOnlyState(t *testing.T) {
 	for _, fail := range []bool{true, false} {
 		t.Run(map[bool]string{true: "rejected", false: "accepted"}[fail], func(t *testing.T) {
 			s, repo, a := newTurnStateAutoService(t)
+			seedAutomaticTurnState(a, "previous-verified-state", "gpt-5")
+			repo.accounts[a.ID].Extra = mergeMap(nil, a.Extra)
 			pool := newOpenAIWSConnPool(nil)
 			t.Cleanup(pool.Close)
 			pool.setClientDialerForTest(&turnStateAutoWSDialer{fail: fail})
@@ -431,11 +540,8 @@ func TestCodexTurnStateAutoWSHandshakeCollection(t *testing.T) {
 			}
 			waitTurnStateAutoIdle(t, s)
 			stored, _ := repo.GetByID(context.Background(), a.ID)
-			if fail {
-				require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
-			} else {
-				require.Equal(t, "ws-collected-state", codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
-			}
+			require.Equal(t, "previous-verified-state", codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")),
+				"a WS handshake header has no created/completed evidence and must not replace the automatic cache")
 		})
 	}
 }
@@ -443,11 +549,16 @@ func TestCodexTurnStateAutoWSHandshakeCollection(t *testing.T) {
 func TestCodexTurnStateAutoRepeatedSuccessClearsErrorWithoutRenewingAge(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	at := time.Now().Add(-20 * time.Minute).UnixMilli()
-	a.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5"): map[string]any{CodexTurnStateAutoExtraKey: "same-state", CodexTurnStateAutoSetAtExtraKey: at, CodexTurnStateAutoLastErrorExtraKey: "http_429"}}
+	a.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5"): map[string]any{
+		CodexTurnStateAutoExtraKey: "same-state", CodexTurnStateAutoSetAtExtraKey: at, CodexTurnStateAutoLastErrorExtraKey: "http_429",
+		CodexTurnStateAutoVerifiedAtExtraKey: at, CodexTurnStateAutoVerifiedModelExtraKey: "gpt-5",
+	}}
 	repo.accounts[a.ID].Extra = mergeMap(nil, a.Extra)
-	s.collectOpenAICodexTurnState(context.Background(), a, "same-state")
+	publishVerifiedTurnStateForTest(s, a, "gpt-5", "same-state")
 	waitTurnStateAutoIdle(t, s)
 	stored, _ := repo.GetByID(context.Background(), a.ID)
 	require.Empty(t, codexTurnStateModelAccount(stored, "gpt-5").GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
 	require.Equal(t, at, codexTurnStateAutoInt64(codexTurnStateModelAccount(stored, "gpt-5"), CodexTurnStateAutoSetAtExtraKey))
+	require.Equal(t, at, codexTurnStateAutoInt64(codexTurnStateModelAccount(stored, "gpt-5"), CodexTurnStateAutoVerifiedAtExtraKey),
+		"same-token verification must not mint a new burst generation")
 }

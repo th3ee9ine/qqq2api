@@ -84,3 +84,53 @@ func ConfigureTransportProxy(transport *http.Transport, proxyURL *url.URL) error
 		return fmt.Errorf("unsupported proxy scheme: %s", scheme)
 	}
 }
+
+// ConfigureTransportProxyChain configures a two-hop route through a SOCKS
+// pre-proxy before reaching proxyURL. Direct routes must not call this helper.
+// When forceHTTPProxy is true, only the transport protocol used to reach the
+// configured proxy is changed; its host, port and credentials stay untouched.
+func ConfigureTransportProxyChain(transport *http.Transport, proxyURL, preProxyURL *url.URL, forceHTTPProxy bool) error {
+	if transport == nil || proxyURL == nil || preProxyURL == nil {
+		return fmt.Errorf("proxy chain requires transport, proxy, and pre-proxy")
+	}
+	preScheme := strings.ToLower(strings.TrimSpace(preProxyURL.Scheme))
+	if preScheme != "socks5" && preScheme != "socks5h" {
+		return fmt.Errorf("proxy chain pre-proxy must use socks5 or socks5h")
+	}
+	preDialer, err := proxy.FromURL(preProxyURL, socks5ForwardDialer)
+	if err != nil {
+		return fmt.Errorf("create proxy chain pre-proxy dialer")
+	}
+
+	target := *proxyURL
+	target.Scheme = strings.ToLower(strings.TrimSpace(target.Scheme))
+	if forceHTTPProxy {
+		target.Scheme = "http"
+	}
+	switch target.Scheme {
+	case "http", "https":
+		setTransportProxyDialer(transport, preDialer)
+		transport.Proxy = http.ProxyURL(&target)
+		return nil
+	case "socks5", "socks5h":
+		targetDialer, dialErr := proxy.FromURL(&target, preDialer)
+		if dialErr != nil {
+			return fmt.Errorf("create chained socks5 proxy dialer")
+		}
+		transport.Proxy = nil
+		setTransportProxyDialer(transport, targetDialer)
+		return nil
+	default:
+		return fmt.Errorf("unsupported chained proxy scheme: %s", target.Scheme)
+	}
+}
+
+func setTransportProxyDialer(transport *http.Transport, dialer proxy.Dialer) {
+	if contextDialer, ok := dialer.(proxy.ContextDialer); ok {
+		transport.DialContext = contextDialer.DialContext
+		return
+	}
+	transport.DialContext = func(_ context.Context, network, address string) (net.Conn, error) {
+		return dialer.Dial(network, address)
+	}
+}

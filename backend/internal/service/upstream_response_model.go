@@ -7,6 +7,17 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+// Acceptance models expose the real upstream identity even when a channel or
+// compact fallback maps the outbound request to another model.
+func preserveOpenAIResponseModel(models ...string) bool {
+	for _, model := range models {
+		if isOpenAIGPT6AstraModel(model) || isCodexAutoReviewFamilyModel(model) {
+			return true
+		}
+	}
+	return false
+}
+
 const (
 	upstreamResponseModelObserverContextKey = "upstream_response_model_observer"
 	upstreamResponseModelMaxLength          = 200
@@ -30,6 +41,13 @@ type upstreamResponseModelObserver struct {
 	terminal string
 	conflict bool
 
+	// Responses state validation needs the two lifecycle declarations
+	// separately. Model() remains the compatibility view used by billing, while
+	// these fields let the turn-state cache require evidence from both events.
+	created   string
+	completed string
+	failed    bool
+
 	// firstTier holds the first non-terminal tier declaration; it is discarded
 	// when later non-terminal declarations disagree. terminalTier comes from a
 	// terminal event and always wins.
@@ -44,7 +62,7 @@ func (o *upstreamResponseModelObserver) Observe(model string, terminal bool) {
 		return
 	}
 	current := o.Model()
-	if current != "" && !strings.EqualFold(current, model) {
+	if current != "" && !upstreamResponseModelsEquivalent(current, model) {
 		o.conflict = true
 	}
 	if terminal {
@@ -68,10 +86,55 @@ func normalizeObservedUpstreamResponseModel(model string) string {
 	return model
 }
 
+func isCodexAutoReviewFamilyModel(model string) bool {
+	model = strings.ToLower(lastOpenAIModelSegment(model))
+	return model == "codex-auto-review" || strings.HasPrefix(model, "codex-auto-review-")
+}
+
+// Equivalence is a validation rule only; raw model names are never changed.
+func upstreamResponseModelsEquivalent(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	if isCodexAutoReviewFamilyModel(left) || isCodexAutoReviewFamilyModel(right) {
+		return isCodexAutoReviewFamilyModel(left) && isCodexAutoReviewFamilyModel(right)
+	}
+	if strings.EqualFold(left, right) {
+		return true
+	}
+	return isOpenAIGPT6AstraModel(left) && isOpenAIGPT6AstraModel(right)
+}
+
 func (o *upstreamResponseModelObserver) ObserveOpenAI(payload []byte, eventType string) {
+	if o == nil {
+		return
+	}
+	eventType = strings.TrimSpace(eventType)
+	if eventType == "" {
+		eventType = strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+	}
 	model := firstValidTrimmedGJSONString(payload, "response.model", "model")
 	terminal := isUpstreamResponseModelTerminalEvent(eventType)
 	o.Observe(model, terminal)
+	switch eventType {
+	case "response.created":
+		if model != "" {
+			o.created = model
+		}
+	case "response.completed":
+		if model != "" {
+			o.completed = model
+		}
+	case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
+		o.failed = true
+	}
+	// A non-SSE JSON response has no event name, but a completed status is still
+	// terminal evidence. It intentionally does not synthesize response.created.
+	if eventType == "" && strings.EqualFold(strings.TrimSpace(gjson.GetBytes(payload, "status").String()), "completed") && model != "" {
+		o.completed = model
+	}
 	// Every payload that declares a service tier also declares a model, so
 	// model-free delta frames skip the extra lookups entirely.
 	if model == "" {
@@ -185,6 +248,16 @@ func (o *upstreamResponseModelObserver) Conflict() bool {
 	return o != nil && o.conflict
 }
 
+// CodexTurnStateEvidence returns raw lifecycle model declarations. Empty
+// values are meaningful: the caller must treat missing evidence as unknown,
+// never infer success from HTTP 200 or an envelope length.
+func (o *upstreamResponseModelObserver) CodexTurnStateEvidence() (created, completed string, failed bool) {
+	if o == nil {
+		return "", "", false
+	}
+	return o.created, o.completed, o.failed
+}
+
 func beginUpstreamResponseModelObservation(c *gin.Context) *upstreamResponseModelObserver {
 	observer := &upstreamResponseModelObserver{}
 	if c != nil {
@@ -282,10 +355,9 @@ func upstreamModelMismatch(sentModel, responseModel string) *bool {
 }
 
 func upstreamModelsMatchForAudit(sentModel, responseModel string) bool {
-	if strings.EqualFold(sentModel, responseModel) {
+	if upstreamResponseModelsEquivalent(sentModel, responseModel) {
 		return true
 	}
-
 	// xAI reports the runtime build ID for these supported public aliases.
 	// Canonicalize only for mismatch auditing; keep the raw response model for
 	// observability and for the separate response-model billing safeguards.

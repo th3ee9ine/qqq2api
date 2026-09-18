@@ -974,6 +974,9 @@ type GatewayConfig struct {
 	GeminiDebugResponseHeaders bool `mapstructure:"gemini_debug_response_headers"`
 	// ConnectionPoolIsolation: 上游连接池隔离策略（proxy/account/account_proxy）
 	ConnectionPoolIsolation string `mapstructure:"connection_pool_isolation"`
+	// ProxyChain allows a configured account proxy to be reached through a local
+	// SOCKS pre-proxy. It is disabled by default and never affects direct routes.
+	ProxyChain GatewayProxyChainConfig `mapstructure:"proxy_chain"`
 	// ForceCodexCLI: 强制将 OpenAI `/v1/responses` 请求按 Codex CLI 处理。
 	// 用于网关未透传/改写 User-Agent 时的兼容兜底（默认关闭，避免影响其他客户端）。
 	ForceCodexCLI bool `mapstructure:"force_codex_cli"`
@@ -1099,6 +1102,15 @@ type GatewayConfig struct {
 	// CNProviders: 国产 OpenAI 兼容供应商（kimi/zhipu）的余额检测配置。
 	// 仅作用于 payg（按量付费）账号：周期探测余额，低于阈值则临时停调。
 	CNProviders GatewayCNProvidersConfig `mapstructure:"cn_providers"`
+}
+
+// GatewayProxyChainConfig configures an optional two-hop route:
+// client -> SOCKS pre-proxy -> configured account proxy -> upstream.
+// ForceHTTPProxy is for providers whose dashboard emits a socks5-shaped URL
+// even though the advertised endpoint accepts HTTP CONNECT on that port.
+type GatewayProxyChainConfig struct {
+	PreProxyURL    string `mapstructure:"pre_proxy_url"`
+	ForceHTTPProxy bool   `mapstructure:"force_http_proxy"`
 }
 
 // GatewayGrokConfig holds Grok-specific gateway scheduling knobs.
@@ -2456,6 +2468,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.models_list_read_max_bytes", DefaultModelsListReadMaxBytes)
 	viper.SetDefault("gateway.proxy_probe_response_read_max_bytes", int64(1024*1024))
 	viper.SetDefault("gateway.connection_pool_isolation", ConnectionPoolIsolationAccountProxy)
+	viper.SetDefault("gateway.proxy_chain.pre_proxy_url", "")
+	viper.SetDefault("gateway.proxy_chain.force_http_proxy", false)
 	// HTTP 上游连接池配置（针对 5000+ 并发用户优化）
 	viper.SetDefault("gateway.max_idle_conns", 2560)          // 最大空闲连接总数（高并发场景可调大）
 	viper.SetDefault("gateway.max_idle_conns_per_host", 120)  // 每主机最大空闲连接（HTTP/2 场景默认）

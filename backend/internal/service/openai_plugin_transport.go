@@ -19,13 +19,6 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 			return
 		}
 		response.Request = request
-		state := extractOpenAICodexTurnState(response.Header)
-		// Revocation is an upstream observation: do not wait for the first SSE
-		// output or a successful body parse. Positive collection still waits
-		// for the response commit point.
-		if codexTurnStateIsRecoverySignal(state) {
-			s.collectCodexTurnStateHTTP(request.Context(), account, state, request)
-		}
 	}()
 	if request != nil {
 		request = snapshotOpenAIUpstreamTurnState(request)

@@ -28,6 +28,14 @@ func newTurnStateTestContext(t *testing.T, apiKeyID int64, sessionID string) (*g
 	return c, rec
 }
 
+func commitVerifiedAstraTurnState(t *testing.T, svc *OpenAIGatewayService, c *gin.Context) {
+	t.Helper()
+	observer := beginUpstreamResponseModelObservation(c)
+	observer.ObserveOpenAI([]byte(`{"type":"response.created","response":{"model":"gpt-6-astra"}}`), "response.created")
+	observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"model":"gpt-6-astra"}}`), "response.completed")
+	svc.commitPendingCodexTurnStateObservation(c, true)
+}
+
 func TestOpenAICodexTurnStateSeed(t *testing.T) {
 	c, _ := newTurnStateTestContext(t, 7, "sess-1")
 	require.Equal(t, "7\x00sess-1", openAICodexTurnStateSeed(c))
@@ -50,9 +58,12 @@ func TestRelayOpenAICodexTurnState_SetsHeaderAndRecordsProvenance(t *testing.T) 
 
 	upstream := http.Header{}
 	upstream.Set("x-codex-turn-state", "blob-A")
-	svc.relayOpenAICodexTurnState(c, account, upstream)
+	svc.relayOpenAICodexTurnState(c, account, upstream, turnStateModelRequest("gpt-6-astra"))
 
 	require.Equal(t, "blob-A", c.Writer.Header().Get("X-Codex-Turn-State"))
+	_, premature := svc.openaiCodexTurnStateOrigins.Load("7\x00sess-relay")
+	require.False(t, premature, "the response header is not model provenance")
+	commitVerifiedAstraTurnState(t, svc, c)
 
 	raw, ok := svc.openaiCodexTurnStateOrigins.Load("7\x00sess-relay")
 	require.True(t, ok)
@@ -89,8 +100,11 @@ func TestStageOpenAICodexTurnState_StagedHeaders(t *testing.T) {
 	_, noted := svc.openaiCodexTurnStateOrigins.Load("9\x00sess-staged")
 	require.False(t, noted, "暂存阶段不得记录溯源：该 attempt 仍可能 failover 丢弃")
 
-	// 真正提交时才记录
-	svc.noteStagedOpenAICodexTurnStateCommitted(c, &Account{ID: 44}, staged)
+	// 响应头真正提交后仍只是候选，生命周期模型证据通过后才记录。
+	svc.noteStagedOpenAICodexTurnStateCommitted(c, &Account{ID: 44}, staged, turnStateModelRequest("gpt-6-astra"))
+	_, premature := svc.openaiCodexTurnStateOrigins.Load("9\x00sess-staged")
+	require.False(t, premature)
+	commitVerifiedAstraTurnState(t, svc, c)
 	raw, ok := svc.openaiCodexTurnStateOrigins.Load("9\x00sess-staged")
 	require.True(t, ok)
 	origin, ok := raw.(openAICodexTurnStateOrigin)
@@ -118,12 +132,13 @@ func TestStagedTurnState_AbandonedAttemptDoesNotPoisonProvenance(t *testing.T) {
 	stageOpenAICodexTurnState(&staged, upstreamA)
 
 	// 账号 B 接手并真正提交
-	svc.relayOpenAICodexTurnState(c, &Account{ID: 52}, upstreamA)
+	svc.relayOpenAICodexTurnState(c, &Account{ID: 52}, upstreamA, turnStateModelRequest("gpt-6-astra"))
+	commitVerifiedAstraTurnState(t, svc, c)
 
 	// 客户端回带的 blob 来自 B，出站到 B 时不得被剥离
 	h := http.Header{}
 	h.Set("x-codex-turn-state", "blob-A")
-	svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 52}, h)
+	svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 52}, h, "gpt-6-astra")
 	require.Equal(t, "blob-A", h.Get("x-codex-turn-state"))
 
 	raw, ok := svc.openaiCodexTurnStateOrigins.Load("11\x00sess-abandoned")
@@ -158,10 +173,11 @@ func TestGuardOpenAICodexTurnStateEcho(t *testing.T) {
 		c, _ := newTurnStateTestContext(t, 7, "sess-g1")
 		upstream := http.Header{}
 		upstream.Set("x-codex-turn-state", "blob-A")
-		svc.relayOpenAICodexTurnState(c, &Account{ID: 42}, upstream)
+		svc.relayOpenAICodexTurnState(c, &Account{ID: 42}, upstream, turnStateModelRequest("gpt-6-astra"))
+		commitVerifiedAstraTurnState(t, svc, c)
 
 		h := newOutbound("blob-A")
-		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 42}, h)
+		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 42}, h, "gpt-6-astra")
 		require.Equal(t, "blob-A", h.Get("x-codex-turn-state"))
 	})
 
@@ -170,11 +186,12 @@ func TestGuardOpenAICodexTurnStateEcho(t *testing.T) {
 		c, _ := newTurnStateTestContext(t, 7, "sess-g2")
 		upstream := http.Header{}
 		upstream.Set("x-codex-turn-state", "blob-A")
-		svc.relayOpenAICodexTurnState(c, &Account{ID: 42}, upstream)
+		svc.relayOpenAICodexTurnState(c, &Account{ID: 42}, upstream, turnStateModelRequest("gpt-6-astra"))
+		commitVerifiedAstraTurnState(t, svc, c)
 
 		// failover 换到账号 43：blob 由 42 铸造，必须剥离
 		h := newOutbound("blob-A")
-		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 43}, h)
+		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 43}, h, "gpt-6-astra")
 		require.Empty(t, h.Get("x-codex-turn-state"))
 	})
 

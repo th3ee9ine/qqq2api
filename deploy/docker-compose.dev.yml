@@ -73,6 +73,10 @@ services:
       - GATEWAY_MAX_CONNS_PER_HOST=${GATEWAY_MAX_CONNS_PER_HOST:-1024}
       - GATEWAY_MAX_IDLE_CONNS=${GATEWAY_MAX_IDLE_CONNS:-2560}
       - GATEWAY_MAX_IDLE_CONNS_PER_HOST=${GATEWAY_MAX_IDLE_CONNS_PER_HOST:-120}
+      # Optional two-hop route for configured account proxies. Empty keeps the
+      # existing one-hop behavior; local Turn State validation enables it in .env.
+      - GATEWAY_PROXY_CHAIN_PRE_PROXY_URL=${GATEWAY_PROXY_CHAIN_PRE_PROXY_URL:-}
+      - GATEWAY_PROXY_CHAIN_FORCE_HTTP_PROXY=${GATEWAY_PROXY_CHAIN_FORCE_HTTP_PROXY:-false}
       - GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING=${GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING:-3}
       - GATEWAY_SCHEDULING_STICKY_SESSION_WAIT_TIMEOUT=${GATEWAY_SCHEDULING_STICKY_SESSION_WAIT_TIMEOUT:-120s}
       - GATEWAY_SCHEDULING_FALLBACK_WAIT_TIMEOUT=${GATEWAY_SCHEDULING_FALLBACK_WAIT_TIMEOUT:-30s}
@@ -104,7 +108,10 @@ services:
     networks:
       - sub2api-network
     healthcheck:
-      test: ["CMD", "wget", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
+      # The container inherits HTTP(S)_PROXY for upstream access. Disable
+      # proxy use for the in-container health endpoint or wget may probe the
+      # host proxy and mark a healthy service as unhealthy.
+      test: ["CMD", "wget", "-Y", "off", "-q", "-T", "5", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3

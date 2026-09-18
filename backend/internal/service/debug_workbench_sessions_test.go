@@ -71,6 +71,34 @@ func TestDebugWorkbenchSessionLifecycle(t *testing.T) {
 	final.Finish("", true)
 }
 
+func TestDebugWorkbenchSessionRejectsCrossModelContinuation(t *testing.T) {
+	store := NewDebugWorkbenchSessionStore()
+	first, err := store.Acquire(1, 7, DebugSessionInput{Action: "new_session", model: "gpt-6-astra"})
+	require.NoError(t, err)
+	id := first.View().ID
+	first.Finish("astra-state", true)
+
+	sameModel, err := store.Acquire(1, 7, DebugSessionInput{ID: id, Action: "continue_turn", model: "gpt-6-astra"})
+	require.NoError(t, err)
+	require.Equal(t, "astra-state", sameModel.Headers().Get(openAICodexTurnStateHeader))
+	sameModel.Finish("astra-state-2", true)
+
+	_, err = store.Acquire(1, 7, DebugSessionInput{ID: id, Action: "continue_turn", model: "codex-auto-review"})
+	require.ErrorIs(t, err, ErrDebugSessionModelMismatch)
+
+	stillAstra, err := store.Acquire(1, 7, DebugSessionInput{ID: id, Action: "continue_turn", model: "gpt-6-astra"})
+	require.NoError(t, err)
+	require.Equal(t, "astra-state-2", stillAstra.Headers().Get(openAICodexTurnStateHeader))
+	stillAstra.Finish("", false)
+
+	// Explicit replacement is the only way to change the model scope.
+	replacement, err := store.Acquire(1, 7, DebugSessionInput{ID: id, Action: "new_session", model: "codex-auto-review"})
+	require.NoError(t, err)
+	require.NotEqual(t, id, replacement.View().ID)
+	require.Empty(t, replacement.Headers().Get(openAICodexTurnStateHeader))
+	replacement.Finish("review-state", true)
+}
+
 func TestDebugWorkbenchSessionScopeAndActions(t *testing.T) {
 	store := NewDebugWorkbenchSessionStore()
 	for _, input := range []DebugSessionInput{{}, {Action: "new_turn"}, {Action: "new_session"}} {

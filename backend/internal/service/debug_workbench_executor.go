@@ -9,11 +9,16 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/usagestats"
 	"golang.org/x/net/http/httpguts"
 )
 
@@ -21,6 +26,8 @@ const (
 	DebugWorkbenchMaxBodyBytes     = 8 << 20
 	DebugWorkbenchMaxEnvelopeBytes = 9 << 20
 	debugWorkbenchTimeout          = 120 * time.Second
+	debugWorkbenchUsageLookupTries = 3
+	debugWorkbenchUsageLookupDelay = 150 * time.Millisecond
 )
 
 // DebugWorkbenchAccountSource keeps the execution path independent of the admin
@@ -28,6 +35,12 @@ const (
 type DebugWorkbenchAccountSource interface {
 	GetAccount(context.Context, int64) (*Account, error)
 	GetProxy(context.Context, int64) (*Proxy, error)
+}
+
+type debugWorkbenchVerificationSource interface {
+	GetGroup(context.Context, int64) (*Group, error)
+	GetGroupAPIKeys(context.Context, int64, int, int) ([]APIKey, int64, error)
+	ListAccounts(context.Context, int, int, string, string, string, string, int64, string, string, string) ([]Account, int64, error)
 }
 
 type DebugWorkbenchInputError struct {
@@ -41,14 +54,21 @@ func debugInputError(status int, message string) error {
 }
 
 type DebugWorkbenchService struct {
-	gateway  *OpenAIGatewayService
-	accounts DebugWorkbenchAccountSource
-	sessions *DebugWorkbenchSessionStore
-	slots    chan struct{}
+	gateway             *OpenAIGatewayService
+	accounts            DebugWorkbenchAccountSource
+	apiKeys             *APIKeyService
+	sessions            *DebugWorkbenchSessionStore
+	slots               chan struct{}
+	verificationMu      sync.Mutex
+	verificationBudgets map[debugWorkbenchVerificationBudgetKey]*debugWorkbenchVerificationBudget
 }
 
-func NewDebugWorkbenchService(gateway *OpenAIGatewayService, accounts DebugWorkbenchAccountSource) *DebugWorkbenchService {
-	return &DebugWorkbenchService{gateway: gateway, accounts: accounts, sessions: NewDebugWorkbenchSessionStore(), slots: make(chan struct{}, 4)}
+func NewDebugWorkbenchService(gateway *OpenAIGatewayService, accounts DebugWorkbenchAccountSource, apiKeyServices ...*APIKeyService) *DebugWorkbenchService {
+	var apiKeys *APIKeyService
+	if len(apiKeyServices) > 0 {
+		apiKeys = apiKeyServices[0]
+	}
+	return &DebugWorkbenchService{gateway: gateway, accounts: accounts, apiKeys: apiKeys, sessions: NewDebugWorkbenchSessionStore(), slots: make(chan struct{}, 4)}
 }
 
 // ValidateDebugWorkbenchRequest validates the complete edited request, rather
@@ -95,9 +115,45 @@ func ValidateDebugWorkbenchRequest(input DebugWorkbenchRequest) error {
 		return debugInputError(http.StatusBadRequest, "invalid debug session ID")
 	}
 	switch input.Session.Action {
-	case "", "new_session", "new_turn", "continue_turn":
+	case "", "new_session", "new_turn", "continue_turn", "replay_capture":
 	default:
 		return debugInputError(http.StatusBadRequest, "invalid debug session action")
+	}
+	stage := strings.TrimSpace(input.VerificationStage)
+	switch stage {
+	case "":
+		return nil
+	case DebugVerificationStageBaseline, DebugVerificationStageCapture, DebugVerificationStageReplay, DebugVerificationStageAutomatic:
+	default:
+		return debugInputError(http.StatusBadRequest, "invalid state verification stage")
+	}
+	if input.Endpoint != "responses" {
+		return debugInputError(http.StatusBadRequest, "state verification requires the responses endpoint")
+	}
+	if input.APIKeyID <= 0 {
+		return debugInputError(http.StatusConflict, "state verification requires an explicit dedicated API key ID")
+	}
+	for name, value := range input.Headers {
+		if strings.EqualFold(name, openAICodexTurnStateHeader) && strings.TrimSpace(value) != "" {
+			return debugInputError(http.StatusBadRequest, "state verification does not accept client-supplied turn state")
+		}
+	}
+	if !IsOpenAICodexTurnStateUsageVerificationRequest(input.Body, "") {
+		return debugInputError(http.StatusBadRequest, "state verification requires the exact short acceptance prompt")
+	}
+	var request struct {
+		Stream *bool `json:"stream"`
+	}
+	if err := json.Unmarshal(input.Body, &request); err != nil || request.Stream == nil || !*request.Stream {
+		return debugInputError(http.StatusBadRequest, "state verification requires stream=true lifecycle evidence")
+	}
+	action := strings.TrimSpace(input.Session.Action)
+	if stage == DebugVerificationStageReplay {
+		if action != "replay_capture" || strings.TrimSpace(input.Session.ID) == "" {
+			return debugInputError(http.StatusConflict, "state replay requires a verified capture handle")
+		}
+	} else if action != "new_session" || strings.TrimSpace(input.Session.ID) != "" {
+		return debugInputError(http.StatusConflict, "this state verification stage requires a fresh session")
 	}
 	return nil
 }
@@ -132,6 +188,27 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 	}
 	if !selected.IsOpenAI() {
 		return nil, debugInputError(http.StatusBadRequest, "debug workbench requires an OpenAI account")
+	}
+	verificationStage := strings.TrimSpace(input.VerificationStage)
+	var verificationScope *debugWorkbenchVerificationScope
+	if verificationStage != "" {
+		verificationScope, err = s.resolveDebugWorkbenchVerificationScope(ctx, selected, input.APIKeyID)
+		if err != nil {
+			return nil, err
+		}
+		if s.gateway.concurrencyService == nil {
+			return nil, debugInputError(http.StatusServiceUnavailable, "state verification API key concurrency limiter is unavailable")
+		}
+		keySlot, slotErr := s.gateway.concurrencyService.AcquireAPIKeySlot(ctx, verificationScope.apiKey.ID, 1)
+		if slotErr != nil {
+			return nil, debugInputError(http.StatusServiceUnavailable, "state verification API key concurrency limiter failed")
+		}
+		if keySlot == nil || !keySlot.Acquired {
+			return nil, debugInputError(http.StatusConflict, "the dedicated API key already has an active request")
+		}
+		if keySlot.ReleaseFunc != nil {
+			defer keySlot.ReleaseFunc()
+		}
 	}
 	// Never change the repository account or a shared service containing mutexes.
 	account := *selected
@@ -168,6 +245,16 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 		}
 		account.Proxy = proxy
 	}
+	input.Session.model = debugWorkbenchRequestModel(input.Body)
+	input.Session.verificationStage = verificationStage
+	input.Session.proxyURL = codexTurnStateAccountProxy(&account)
+	if verificationScope != nil {
+		input.Session.apiKeyID = verificationScope.apiKey.ID
+		if err := s.reserveDebugWorkbenchVerificationContext(ctx, verificationScope.apiKey.ID, &account, selected, input); err != nil {
+			return nil, err
+		}
+		ctx = context.WithValue(ctx, codexTurnStateManualVerificationContextKey{}, true)
+	}
 	lease, err := s.sessions.Acquire(ownerID, accountID, input.Session)
 	if err != nil {
 		return nil, debugWorkbenchSessionError(err)
@@ -194,10 +281,19 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 	}
 	trace := NewDebugWorkbenchTrace(submitted, secrets)
 	ctx = trace.Context(ctx)
+	requestID := uuid.NewString()
+	ctx = context.WithValue(ctx, ctxkey.ClientRequestID, requestID)
+	switch verificationStage {
+	case DebugVerificationStageBaseline, DebugVerificationStageCapture:
+		ctx = withOpenAICodexTurnStateInjectionPolicy(ctx, codexTurnStateInjectionDisabled)
+	case DebugVerificationStageReplay:
+		ctx = withOpenAICodexTurnStateInjectionPolicy(ctx, codexTurnStateInjectionNativeOnly)
+	case DebugVerificationStageAutomatic:
+		ctx = WithOpenAICodexTurnStateUsageVerification(ctx, verificationScope.apiKey.ID)
+	}
 	// Snapshot exactly what the editor submitted, before account and session rules.
 	inbound, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/v1/"+input.Endpoint, bytes.NewReader(input.Body))
 	inbound.Header = submitted.Clone()
-	requestID := uuid.NewString()
 	result := &DebugWorkbenchResult{RequestID: requestID, Endpoint: input.Endpoint, Transport: "http", Inbound: trace.SnapshotRequest(inbound)}
 
 	req := inbound.Clone(ctx)
@@ -208,6 +304,9 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 	}
 	for name, values := range lease.Headers() {
 		req.Header[name] = append([]string(nil), values...)
+	}
+	if verificationStage != DebugVerificationStageReplay && verificationStage != "" {
+		req.Header.Del(openAICodexTurnStateHeader)
 	}
 	executionBody, metadataChanged, metadataErr := debugWorkbenchAlignSessionMetadata(req.Header, input.Body, lease.View())
 	if metadataErr != nil {
@@ -220,14 +319,20 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 	recorder := NewDebugWorkbenchResponseWriter()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = req
-	// A separate negative namespace isolates administrator sessions from API-key
-	// traffic; this synthetic key is not used for authentication or billing.
-	c.Set("api_key", &APIKey{ID: -ownerID, UserID: ownerID})
+	if verificationScope != nil {
+		c.Set("api_key", verificationScope.apiKey)
+	} else {
+		// A separate negative namespace isolates ordinary administrator debug
+		// sessions from API-key traffic; it is never used for billing.
+		c.Set("api_key", &APIKey{ID: -ownerID, UserID: ownerID})
+	}
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 	start := time.Now()
+	var forwardResult *OpenAIForwardResult
 	switch input.Endpoint {
 	case "responses":
-		_, err = s.gateway.Forward(ctx, c, &account, executionBody)
+		forwardResult, err = s.gateway.Forward(ctx, c, &account, executionBody)
+		s.gateway.CaptureOpenAICodexTurnStateUsageEvidence(c, forwardResult)
 	case "chat/completions":
 		_, err = s.gateway.ForwardAsChatCompletions(ctx, c, &account, executionBody, promptCacheKey, "")
 	case "images/generations":
@@ -235,6 +340,12 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 		parsed, err = s.gateway.ParseOpenAIImagesRequest(c, executionBody)
 		if err == nil {
 			_, err = s.gateway.ForwardImages(ctx, c, &account, executionBody, parsed, "")
+		}
+	}
+	usageRecordWarning := ""
+	if verificationScope != nil && forwardResult != nil {
+		if usageErr := s.recordDebugWorkbenchVerificationUsage(ctx, c, &account, verificationScope, executionBody, forwardResult, start); usageErr != nil {
+			usageRecordWarning = "本次专用 API Key 的 usage 记录失败；不会重试计费或把该请求作为 state 发布证据。"
 		}
 	}
 	trace.AddSecrets(debugWorkbenchCredentialSecrets(codexAccountIdentitySource(c, &account).Credentials))
@@ -250,7 +361,34 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 	result.Success = err == nil && recorder.Status() >= 200 && recorder.Status() < 300
 	result.Outbound = recorder.Snapshot(trace)
 	result.Attempts = trace.Attempts()
+	verificationPersistenceWarning := ""
+	if verificationScope != nil {
+		if persistErr := s.noteDebugWorkbenchVerificationLimitContext(ctx, verificationScope.apiKey.ID, accountID, result.Attempts); persistErr != nil {
+			verificationPersistenceWarning = "Turn State 验证预算或 429 冷却未能持久化；本进程仍保持阻断，本次不会通过更换出口继续请求。"
+		}
+	}
+	usageEvidenceWarning := ""
+	if input.Endpoint == "responses" {
+		result.StateVerification = debugWorkbenchStateVerification(executionBody, result.Attempts, trace, upstreamResponseModelObserverFromContext(c), forwardResult, lease.replayState())
+		if verificationScope != nil && (usageRecordWarning != "" || !s.attachDebugWorkbenchUsageEvidence(ctx, requestID, accountID, verificationScope.apiKey.ID, result.StateVerification, forwardResult)) {
+			usageEvidenceWarning = "未找到与本次 request_id、同账号且同请求模型匹配的持久化 usage_logs 记录；usage-log 验收保持未通过。"
+		}
+		if verificationStage == DebugVerificationStageBaseline && verificationScope != nil {
+			if persistErr := s.noteDebugWorkbenchVerificationBaselineContext(ctx, verificationScope.apiKey.ID, accountID, result.StateVerification); persistErr != nil {
+				verificationPersistenceWarning = "基线证据未能持久化到专用账号预算；本次基线不会解锁后续采集。"
+			}
+		}
+	}
 	result.Warnings = append([]string{"调试执行复用正式网关的 HTTP 请求构造与响应转换；本次固定使用 HTTP，不进行 WebSocket 握手。", "会话上下文关联请求标识与上游回合状态，不自动补写历史消息；完整历史或 previous_response_id 由 Body 显式提供。"}, trace.Warnings()...)
+	if usageRecordWarning != "" {
+		result.Warnings = append(result.Warnings, usageRecordWarning)
+	}
+	if usageEvidenceWarning != "" {
+		result.Warnings = append(result.Warnings, usageEvidenceWarning)
+	}
+	if verificationPersistenceWarning != "" {
+		result.Warnings = append(result.Warnings, verificationPersistenceWarning)
+	}
 	if cacheNote != "" {
 		result.Warnings = append(result.Warnings, cacheNote)
 	}
@@ -263,15 +401,236 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 	if err != nil {
 		result.Error = trace.RedactText(err.Error())
 	}
-	result.Session = lease.Finish(trace.LastTurnState(), result.Success)
+	if verificationStage == DebugVerificationStageReplay && result.Success && debugWorkbenchVerifiedReplay(result.StateVerification, accountID, verificationScope.apiKey.ID) {
+		state := lease.replayState()
+		dailyVerified := codexTurnStateAccountProxy(selected) == codexTurnStateAccountProxy(&account)
+		dailyForwardResult := forwardResult
+		dailyVerification := result.StateVerification
+		if !dailyVerified {
+			result.DailyReplay, dailyForwardResult, err = s.runDebugWorkbenchDailyReplay(ctx, ownerID, selected, verificationScope, input, state)
+			dailyVerified = err == nil && result.DailyReplay != nil && result.DailyReplay.Success && debugWorkbenchVerifiedReplay(result.DailyReplay.StateVerification, accountID, verificationScope.apiKey.ID)
+			if result.DailyReplay != nil {
+				dailyVerification = result.DailyReplay.StateVerification
+			}
+		}
+		result.StateVerification.DailyRouteVerified = dailyVerified
+		if dailyVerified {
+			publishEvidence := debugWorkbenchStatePublicationEvidence{
+				apiKeyID:           verificationScope.apiKey.ID,
+				state:              state,
+				collectedAt:        lease.session.collectedAt,
+				dailyRouteVerified: dailyVerified,
+				replay: debugWorkbenchStateReplayPublicationEvidence{
+					result:       forwardResult,
+					verification: result.StateVerification,
+				},
+				dailyReplay: debugWorkbenchStateReplayPublicationEvidence{
+					result:       dailyForwardResult,
+					verification: dailyVerification,
+				},
+			}
+			if publishErr := s.publishDebugWorkbenchState(ctx, selected, publishEvidence); publishErr != nil {
+				result.Warnings = append(result.Warnings, "回放已通过，但 state 原子发布失败；旧有效值保持不变。")
+			} else {
+				result.StateVerification.StatePublished = true
+			}
+		} else {
+			result.Warnings = append(result.Warnings, "切回日常代理后的回放未通过；候选 state 未发布，旧有效值保持不变。")
+		}
+	}
+	acceptSessionState := result.Success
+	if verificationStage != "" {
+		acceptSessionState = false
+		if verificationStage == DebugVerificationStageCapture && result.Success && result.StateVerification != nil && result.StateVerification.StateReceived && result.StateVerification.UsageLogVerified {
+			acceptSessionState = validateCodexTurnStateResponseEvidence(
+				upstreamResponseModelObserverFromContext(c),
+				codexTurnStateExpectedResponseModel(result.StateVerification.RequestedModel),
+			) == nil
+		}
+	}
+	result.Session = lease.Finish(trace.LastTurnState(), acceptSessionState, start)
 	finished = true
 	return result, nil
+}
+
+func debugWorkbenchRequestModel(body []byte) string {
+	var request struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(request.Model)
+}
+
+func debugWorkbenchStateVerification(body []byte, attempts []DebugUpstreamAttempt, trace *DebugWorkbenchTrace, observer *upstreamResponseModelObserver, result *OpenAIForwardResult, replayState string) *DebugStateVerification {
+	var request struct {
+		Model string `json:"model"`
+	}
+	_ = json.Unmarshal(body, &request)
+	evidence := &DebugStateVerification{RequestedModel: strings.TrimSpace(request.Model)}
+	if trace != nil {
+		evidence.StateSource = trace.TurnStateSource()
+	}
+	if observer != nil {
+		evidence.ResponseCreatedModel, evidence.ResponseCompletedModel, _ = observer.CodexTurnStateEvidence()
+		evidence.ResponseModel = observer.Model()
+	}
+	selected := -1
+	for i := len(attempts) - 1; i >= 0; i-- {
+		if attempts[i].Response != nil {
+			selected = i
+			break
+		}
+	}
+	if selected < 0 && len(attempts) > 0 {
+		selected = len(attempts) - 1
+	}
+	if selected < 0 {
+		return evidence
+	}
+	attempt := attempts[selected]
+	evidence.ActualAccountID = attempt.AccountID
+	evidence.StateSent, _ = debugTurnStateHeaderEvidence(attempt.Request.Headers)
+	if attempt.Response != nil {
+		evidence.StateReceived, evidence.StateLength = debugTurnStateHeaderEvidence(attempt.Response.Headers)
+	}
+	if replayState != "" && result != nil && result.UpstreamTurnState != nil {
+		evidence.StateMatchesCapture = strings.TrimSpace(*result.UpstreamTurnState) == strings.TrimSpace(replayState)
+	}
+	return evidence
+}
+
+// attachDebugWorkbenchUsageEvidence links a debug run to the durable usage log
+// recorded with the real dedicated API key after Forward. Ordinary synthetic
+// administrator runs are not billed. The lookup is bounded and fail-closed;
+// it never creates substitute evidence. A row is accepted only when its request ID, account,
+// and requested model all belong to this run. The upstream response model is
+// copied verbatim; it is evidence, not a value to rewrite in the response.
+func (s *DebugWorkbenchService) attachDebugWorkbenchUsageEvidence(ctx context.Context, requestID string, accountID, apiKeyID int64, evidence *DebugStateVerification, result *OpenAIForwardResult) bool {
+	if s == nil || s.gateway == nil || s.gateway.usageLogRepo == nil || evidence == nil || result == nil {
+		return false
+	}
+	requestID = strings.TrimSpace(requestID)
+	expectedModel := strings.TrimSpace(evidence.RequestedModel)
+	if requestID == "" || accountID <= 0 || apiKeyID <= 0 || expectedModel == "" {
+		return false
+	}
+	actualAccountID := evidence.ActualAccountID
+	createdModel := strings.TrimSpace(evidence.ResponseCreatedModel)
+	completedModel := strings.TrimSpace(evidence.ResponseCompletedModel)
+	rawResponseModel := strings.TrimSpace(result.UpstreamResponseModel)
+	if actualAccountID <= 0 || createdModel == "" || completedModel == "" || rawResponseModel == "" {
+		return false
+	}
+	resultCreated := strings.TrimSpace(result.CodexTurnStateResponseCreatedModel)
+	resultCompleted := strings.TrimSpace(result.CodexTurnStateResponseCompletedModel)
+	if result.CodexTurnStateResponseFailed || result.UpstreamResponseModelConflict ||
+		createdModel != resultCreated || completedModel != resultCompleted || rawResponseModel != completedModel {
+		return false
+	}
+	sentState := ""
+	if result.UpstreamTurnState != nil {
+		sentState = strings.TrimSpace(*result.UpstreamTurnState)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, debugWorkbenchUsageLookupDelay*time.Duration(debugWorkbenchUsageLookupTries+1))
+	defer cancel()
+	requestIDs := []string{"client:" + requestID, requestID}
+	params := pagination.PaginationParams{Page: 1, PageSize: 4, SortBy: "id", SortOrder: pagination.SortOrderDesc}
+	for attempt := 0; attempt < debugWorkbenchUsageLookupTries; attempt++ {
+		for _, candidate := range requestIDs {
+			logs, _, err := s.gateway.usageLogRepo.ListWithFilters(lookupCtx, params, usagestats.UsageLogFilters{
+				RequestID: candidate,
+				SkipCount: true,
+			})
+			if err != nil {
+				// A database error is not evidence of a match. Stop rather than
+				// retrying indefinitely or turning a transient error into a pass.
+				return false
+			}
+			for i := range logs {
+				log := &logs[i]
+				if log.RequestID != candidate || log.AccountID != accountID || log.AccountID != actualAccountID || log.APIKeyID != apiKeyID {
+					continue
+				}
+				loggedModel := strings.TrimSpace(log.RequestedModel)
+				if loggedModel == "" {
+					loggedModel = strings.TrimSpace(log.Model)
+				}
+				// Requested model is the exact client value. Family equivalence is
+				// used only for upstream response acceptance, never to make a usage
+				// row from another requested model look like this request.
+				if loggedModel == "" || loggedModel != expectedModel {
+					continue
+				}
+				if optionalStringValue(log.InboundEndpoint) != codexTurnStateUsageVerificationEndpoint ||
+					optionalStringValue(log.UpstreamEndpoint) != codexTurnStateUsageVerificationEndpoint ||
+					optionalStringValue(log.UpstreamTurnState) != sentState ||
+					log.UpstreamResponseModel == nil || strings.TrimSpace(*log.UpstreamResponseModel) != rawResponseModel {
+					// The account/model row is real, but without the raw upstream
+					// lifecycle and state identity it cannot satisfy verification.
+					continue
+				}
+				evidence.UsageLogAccountID = log.AccountID
+				evidence.UsageLogAPIKeyID = log.APIKeyID
+				evidence.UsageLogRequestedModel = loggedModel
+				evidence.UsageLogStateSent = sentState != ""
+				// Preserve the exact stored string. Astra family normalization is
+				// performed only by the verifier, never by the evidence display.
+				evidence.UpstreamResponseModel = *log.UpstreamResponseModel
+				evidence.UsageLogVerified = true
+				return true
+			}
+		}
+		if attempt+1 < debugWorkbenchUsageLookupTries {
+			timer := time.NewTimer(debugWorkbenchUsageLookupDelay * time.Duration(attempt+1))
+			select {
+			case <-lookupCtx.Done():
+				return false
+			case <-timer.C:
+			}
+		}
+	}
+	return false
+}
+
+func debugTurnStateHeaderEvidence(headers map[string][]string) (present bool, length int) {
+	for name, values := range headers {
+		if !strings.EqualFold(name, openAICodexTurnStateHeader) || len(values) == 0 {
+			continue
+		}
+		value := strings.TrimSpace(values[0])
+		if value == "" {
+			return false, 0
+		}
+		const prefix = "[redacted:"
+		if strings.HasPrefix(value, prefix) && strings.HasSuffix(value, "]") {
+			n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(value, prefix), "]"))
+			if err == nil && n >= 0 {
+				return true, n
+			}
+		}
+		return true, len(value)
+	}
+	return false, 0
 }
 
 func debugWorkbenchSessionError(err error) error {
 	switch {
 	case errors.Is(err, ErrDebugSessionBusy):
 		return debugInputError(http.StatusConflict, "debug session already has an active request")
+	case errors.Is(err, ErrDebugSessionModelMismatch):
+		return debugInputError(http.StatusConflict, "debug session belongs to a different model; start a new session before changing models")
+	case errors.Is(err, ErrDebugSessionAPIKeyMismatch):
+		return debugInputError(http.StatusConflict, "debug session belongs to a different dedicated API key; restart the verification sequence")
+	case errors.Is(err, ErrDebugSessionCaptureMissing):
+		return debugInputError(http.StatusConflict, "debug capture state is missing or was not verified; run capture again")
+	case errors.Is(err, ErrDebugSessionProxyMismatch):
+		return debugInputError(http.StatusConflict, "replay must use the capture's exact sticky proxy; daily-route verification is performed by the server")
 	case errors.Is(err, ErrDebugSessionCapacity):
 		return debugInputError(http.StatusServiceUnavailable, "debug session capacity reached")
 	case errors.Is(err, ErrDebugSessionNotFound):

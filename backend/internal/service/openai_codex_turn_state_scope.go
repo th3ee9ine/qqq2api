@@ -24,8 +24,10 @@ type codexTurnStateKey struct {
 type codexTurnStateModelContextKey struct{}
 type codexTurnStateRequestPolicyKey struct{}
 type codexTurnStateRequestPolicy struct {
-	native string
-	models []string
+	native        string
+	nativeAllowed bool
+	compat        string
+	models        []string
 }
 type codexTurnStateSourceLoads struct{ group singleflight.Group }
 
@@ -36,7 +38,30 @@ type CodexTurnStateSourceRepository interface {
 var errCodexTurnStateLookup = errors.New("codex turn state lookup failed")
 
 func codexTurnStateModelExtraKey(model string) string {
-	return CodexTurnStateModelExtraPrefix + base64.RawURLEncoding.EncodeToString([]byte(model))
+	return codexTurnStateRawModelExtraKey(codexTurnStateOwnerModel(model))
+}
+
+func codexTurnStateRawModelExtraKey(model string) string {
+	return CodexTurnStateModelExtraPrefix + base64.RawURLEncoding.EncodeToString([]byte(strings.TrimSpace(model)))
+}
+
+// codexTurnStateOwnerModel affects only state ownership. The requested model
+// remains unchanged in outbound payloads and usage logs.
+func codexTurnStateOwnerModel(model string) string {
+	model = strings.TrimSpace(model)
+	if isCodexAutoReviewFamilyModel(model) {
+		return "codex-auto-review"
+	}
+	if isOpenAIGPT6AstraModel(model) {
+		return "gpt-6-astra"
+	}
+	return model
+}
+
+// CodexTurnStateOwnerModel exposes the canonical state owner to repository
+// adapters without changing the model carried by requests or usage logs.
+func CodexTurnStateOwnerModel(model string) string {
+	return codexTurnStateOwnerModel(model)
 }
 
 func codexTurnStateModelAccount(account *Account, model string) *Account {
@@ -44,7 +69,47 @@ func codexTurnStateModelAccount(account *Account, model string) *Account {
 		return nil
 	}
 	copy := *account
-	copy.Extra, _ = account.Extra[codexTurnStateModelExtraKey(model)].(map[string]any)
+	owner := codexTurnStateOwnerModel(model)
+	if canonical, ok := account.Extra[codexTurnStateModelExtraKey(owner)].(map[string]any); ok {
+		copy.Extra = canonical
+		return &copy
+	}
+
+	// Compatibility for deployments that wrote exact variant slots before
+	// family ownership was introduced. A canonical slot, even an invalid one,
+	// always wins above. Without one, accept exactly one verified same-family
+	// slot; multiple legacy claims fail closed. The fallback stays read-only
+	// until a later atomic canonical publish.
+	var selected map[string]any
+	ambiguous := false
+	for key, raw := range account.Extra {
+		if !strings.HasPrefix(key, CodexTurnStateModelExtraPrefix) || key == CodexTurnStateNativeProvenanceExtraKey {
+			continue
+		}
+		decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(key, CodexTurnStateModelExtraPrefix))
+		if err != nil || codexTurnStateOwnerModel(string(decoded)) != owner || string(decoded) == owner {
+			continue
+		}
+		slot, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		slotAccount := *account
+		slotAccount.Extra = slot
+		verifiedModel := strings.TrimSpace(slotAccount.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey))
+		if codexTurnStateOwnerModel(verifiedModel) != owner || codexTurnStateAutoToken(&slotAccount) == "" {
+			continue
+		}
+		if selected != nil {
+			ambiguous = true
+			break
+		}
+		selected = slot
+	}
+	if ambiguous {
+		selected = nil
+	}
+	copy.Extra = selected
 	return &copy
 }
 
@@ -58,7 +123,10 @@ func codexTurnStateScopedInfo(account *Account, now time.Time) *CodexTurnStateAu
 		if err != nil || len(decoded) == 0 {
 			continue
 		}
-		model := string(decoded)
+		model := codexTurnStateOwnerModel(string(decoded))
+		if _, exists := result.Models[model]; exists {
+			continue
+		}
 		if _, err := NormalizeOpenAICodexTurnStateDefaultModel(model); err != nil {
 			continue
 		}
@@ -77,6 +145,14 @@ func codexTurnStateScopedInfo(account *Account, now time.Time) *CodexTurnStateAu
 		}
 		if info.ProbeAtMS > result.ProbeAtMS {
 			result.ProbeAtMS = info.ProbeAtMS
+		}
+		if info.VerifiedAtMS > result.VerifiedAtMS {
+			result.VerifiedAtMS = info.VerifiedAtMS
+			result.VerifiedModel = info.VerifiedModel
+			result.StateLength = info.StateLength
+		}
+		if info.ProbeNotBeforeMS > result.ProbeNotBeforeMS {
+			result.ProbeNotBeforeMS = info.ProbeNotBeforeMS
 		}
 		if info.InvalidatedAtMS > result.InvalidatedAtMS {
 			result.InvalidatedAtMS = info.InvalidatedAtMS
@@ -136,6 +212,7 @@ func (s *OpenAIGatewayService) refreshCodexTurnStateSource(ctx context.Context, 
 	if s.accountRepo == nil {
 		return nil
 	}
+	model = codexTurnStateOwnerModel(model)
 	key := codexTurnStateKey{account.ID, model}
 	s.openaiTurnStateMu.Lock()
 	entry := s.codexTurnStateEntryLocked(account, time.Now(), model)
@@ -184,7 +261,40 @@ func (s *OpenAIGatewayService) prepareCodexTurnStateRequest(ctx context.Context,
 	policy := codexTurnStateRequestPolicy{native: request.Header.Get(openAICodexTurnStateHeader), models: append([]string(nil), models...)}
 	request = request.WithContext(context.WithValue(request.Context(), codexTurnStateRequestPolicyKey{}, policy))
 	request = request.WithContext(withCodexTurnStateModel(request.Context(), s.codexTurnStateModel(ctx, models...)))
-	return request, s.applyOpenAICodexTurnState(request.Context(), account, request.Header, models...)
+	if err := s.applyOpenAICodexTurnState(request.Context(), account, request.Header, models...); err != nil {
+		return request, err
+	}
+	policy.nativeAllowed = strings.TrimSpace(policy.native) != "" &&
+		request.Header.Get(openAICodexTurnStateHeader) == policy.native
+	request = request.WithContext(context.WithValue(request.Context(), codexTurnStateRequestPolicyKey{}, policy))
+	return request, nil
+}
+
+// preferOpenAICompatTurnState gives a Messages bridge continuation priority
+// over candidate/automatic injection without displacing an accepted client
+// native continuation. The final transport refresh validates the selected
+// value against the current account/model provenance before it is sent.
+func preferOpenAICompatTurnState(request *http.Request, state string) *http.Request {
+	if request == nil || request.Header == nil {
+		return request
+	}
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return request
+	}
+	policy, ok := request.Context().Value(codexTurnStateRequestPolicyKey{}).(codexTurnStateRequestPolicy)
+	if !ok {
+		if strings.TrimSpace(request.Header.Get(openAICodexTurnStateHeader)) == "" {
+			request.Header.Set(openAICodexTurnStateHeader, state)
+		}
+		return request
+	}
+	if policy.nativeAllowed {
+		return request
+	}
+	policy.compat = state
+	request.Header.Set(openAICodexTurnStateHeader, state)
+	return request.WithContext(context.WithValue(request.Context(), codexTurnStateRequestPolicyKey{}, policy))
 }
 
 func (s *OpenAIGatewayService) refreshCodexTurnStateRequest(request *http.Request, account *Account) (*http.Request, error) {
@@ -195,18 +305,17 @@ func (s *OpenAIGatewayService) refreshCodexTurnStateRequest(request *http.Reques
 	if !ok {
 		return request, nil
 	}
-	native := policy.native
-	// Compatibility bridges may attach their cached continuation after the
-	// initial prepare step. Preserve that value across the final refresh while
-	// still validating it against the current account/model scope below.
-	if native == "" {
-		native = request.Header.Get(openAICodexTurnStateHeader)
+	preferred := ""
+	if policy.nativeAllowed {
+		preferred = policy.native
+	} else if policy.compat != "" {
+		preferred = policy.compat
 	}
 
 	request = request.Clone(request.Context())
 	request.Header.Del(openAICodexTurnStateHeader)
-	if native != "" {
-		request.Header.Set(openAICodexTurnStateHeader, native)
+	if preferred != "" {
+		request.Header.Set(openAICodexTurnStateHeader, preferred)
 	}
 	return request, s.applyOpenAICodexTurnState(request.Context(), account, request.Header, policy.models...)
 }

@@ -398,6 +398,12 @@ func replaceOpenAIWSMessageModel(message []byte, fromModel, toModel string) []by
 	if len(message) == 0 {
 		return message
 	}
+	// Acceptance-sensitive families must expose the model actually declared by
+	// upstream. Rewriting Luna to a requested Astra/auto-review alias would turn
+	// a real downgrade into a false success and would diverge from HTTP/SSE.
+	if preserveOpenAIResponseModel(fromModel, toModel) {
+		return message
+	}
 	if strings.TrimSpace(fromModel) == "" || strings.TrimSpace(toModel) == "" || fromModel == toModel {
 		return message
 	}

@@ -87,6 +87,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 2. Model mapping
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	// Compatibility continuation state is bound to the model actually sent
+	// upstream, not merely to a caller-supplied prompt-cache key. This prevents
+	// an explicit key from carrying Astra state into another model.
+	compatSessionModel := strings.TrimSpace(upstreamModel)
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	apiKeyID := getAPIKeyIDFromContext(c)
 	anthropicDigestChain := ""
@@ -125,10 +129,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	compatContinuationEnabled := openAICompatContinuationEnabled(account, upstreamModel)
 	previousResponseID := ""
 	if compatContinuationEnabled {
-		previousResponseID = s.getOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
+		previousResponseID = s.getOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, compatSessionModel)
 	}
 	compatContinuationDisabled := compatContinuationEnabled &&
-		s.isOpenAICompatSessionContinuationDisabled(ctx, c, account, promptCacheKey)
+		s.isOpenAICompatSessionContinuationDisabled(ctx, c, account, promptCacheKey, compatSessionModel)
 	compatTurnState := ""
 	// ChatGPT/Codex credentials rely on session_id + x-codex-turn-state; trimming to a
 	// sliding 12-message window makes the cached prefix stall at system/tools.
@@ -250,7 +254,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), apiKeyID)
 		delete(reqBody, "prompt_cache_key")
 		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
-			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey)
+			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, compatSessionModel)
 		}
 		// OAuth codex transform forces stream=true upstream, so always use
 		// the streaming response handler regardless of what the client asked.
@@ -381,8 +385,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.UsesOpenAICodexProtocol() && promptCacheKey != "" && strings.TrimSpace(c.GetHeader("conversation_id")) == "" {
 		upstreamReq.Header.Del("conversation_id")
 	}
-	if compatTurnState != "" && upstreamReq.Header.Get("x-codex-turn-state") == "" {
-		upstreamReq.Header.Set("x-codex-turn-state", compatTurnState)
+	if compatTurnState != "" {
+		upstreamReq = preferOpenAICompatTurnState(upstreamReq, compatTurnState)
 	}
 
 	// 7. Send request
@@ -455,9 +459,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 		if previousResponseID != "" && (isOpenAICompatPreviousResponseNotFound(resp.StatusCode, upstreamMsg, respBody) || isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody)) {
 			if isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody) {
-				s.disableOpenAICompatSessionContinuation(ctx, c, account, promptCacheKey)
+				s.disableOpenAICompatSessionContinuation(ctx, c, account, promptCacheKey, compatSessionModel)
 			} else {
-				s.deleteOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
+				s.deleteOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, compatSessionModel)
 			}
 			logger.L().Info("openai messages: previous_response_id unavailable, retrying without continuation",
 				zap.Int64("account_id", account.ID),
@@ -491,7 +495,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	if account.UsesOpenAICodexProtocol() && promptCacheKey != "" {
 		if turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state")); turnState != "" {
-			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)
+			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, compatSessionModel, turnState)
 		}
 	}
 
@@ -518,7 +522,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// Propagate ServiceTier and ReasoningEffort to result for billing
 	if handleErr == nil && result != nil {
 		if compatContinuationEnabled && promptCacheKey != "" && result.ResponseID != "" {
-			s.bindOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, result.ResponseID)
+			s.bindOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, compatSessionModel, result.ResponseID)
 		}
 		if promptCacheKey != "" && anthropicDigestChain != "" {
 			s.bindOpenAICompatAnthropicDigestPromptCacheKey(account, apiKeyID, anthropicDigestChain, promptCacheKey, anthropicMatchedDigestChain)

@@ -53,6 +53,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 	}
+	// State headers are staged before the first SSE event. Commit only after the
+	// stream has been drained so created/completed model evidence is available.
+	defer s.commitPendingCodexTurnStateObservation(c, true)
 	firstOutputTimeout := time.Duration(0)
 	if account != nil && account.Platform == PlatformOpenAI {
 		firstOutputTimeout = s.openAIFirstOutputTimeout(reasoningEffort)
@@ -1075,6 +1078,9 @@ func effectiveOpenAISSEEventType(payload []byte, eventType string) string {
 }
 
 func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel string) string {
+	if preserveOpenAIResponseModel(fromModel, toModel) {
+		return line
+	}
 	data, ok := extractOpenAISSEDataLine(line)
 	if !ok {
 		return line
@@ -1609,6 +1615,7 @@ func openAICacheCreationTokensFromUsage(value gjson.Result) int {
 }
 
 func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+	defer s.commitPendingCodexTurnStateObservation(c, true)
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
@@ -1731,6 +1738,11 @@ func bodyHasSSEFraming(body []byte) bool {
 }
 
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+	defer s.commitPendingCodexTurnStateObservation(c, true)
+	if observer := upstreamResponseModelObserverFromContext(c); observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+		observeOpenAISSEBody(observer, string(body))
+	}
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {

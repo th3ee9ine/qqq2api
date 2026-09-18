@@ -40,11 +40,12 @@ func ProvideDebugAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	gateway *service.OpenAIGatewayService,
+	apiKeyService *service.APIKeyService,
 ) *admin.AccountHandler {
 	h := admin.ProvideAccountHandler(cfg, adminService, oauthService, openaiOAuthService,
 		rateLimitService, accountUsageService, accountTestService, concurrencyService,
 		crsSyncService, sessionLimitCache, rpmCache, tokenCacheInvalidator)
-	h.SetDebugWorkbenchService(service.NewDebugWorkbenchService(gateway, adminService))
+	h.SetDebugWorkbenchService(service.NewDebugWorkbenchService(gateway, adminService, apiKeyService))
 	return h
 }
 

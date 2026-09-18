@@ -970,11 +970,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		sentTurnState = headers.Get(openAICodexTurnStateHeader)
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
-		if codexTurnStateIsRecoverySignal(extractOpenAICodexTurnState(handshakeHeaders)) {
-			s.collectOpenAICodexTurnStateAtEpoch(withCodexTurnStateModel(ctx, turnStateRequest.turnStateModel), account, extractOpenAICodexTurnState(handshakeHeaders), turnStateRequest.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
-		}
 		if err == nil {
-			s.collectOpenAICodexTurnStateAtEpoch(withCodexTurnStateModel(ctx, turnStateRequest.turnStateModel), account, extractOpenAICodexTurnState(handshakeHeaders), turnStateRequest.turnStateRecoveryEpoch, headers.Get(openAICodexTurnStateHeader))
 			break
 		}
 		var handshakeErr *openAIWSHandshakeError

@@ -43,6 +43,10 @@ type OpenAIRecordUsageInput struct {
 	// Responses handler from stream=true + compaction_trigger. It never stores
 	// the request payload and does not replace the transport request type.
 	NativeCompactionV2 bool
+	// RequireDurableUsageLog is reserved for administrator acceptance runs.
+	// It bypasses the best-effort queue without retrying billing or insertion.
+	RequireDurableUsageLog bool
+	usageLogInserted       bool
 	ChannelUsageFields
 }
 
@@ -484,7 +488,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+		s.writeOpenAIUsageLogWithTurnStateGate(ctx, input, usageLog)
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
@@ -515,12 +519,36 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	if billingErr != nil {
 		usageLog.ActualCost = 0
-		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+		s.writeOpenAIUsageLogWithTurnStateGate(ctx, input, usageLog)
 		return billingErr
 	}
-	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+	s.writeOpenAIUsageLogWithTurnStateGate(ctx, input, usageLog)
 
 	return nil
+}
+
+// writeOpenAIUsageLogWithTurnStateGate preserves the existing best-effort path
+// for normal traffic. A request carrying a reserved Turn State candidate is the
+// narrow exception: publication needs an unambiguous, synchronous insert result.
+func (s *OpenAIGatewayService) writeOpenAIUsageLogWithTurnStateGate(ctx context.Context, input *OpenAIRecordUsageInput, usageLog *UsageLog) {
+	if !input.RequireDurableUsageLog && !s.codexTurnStateUsageRequiresDurableInsert(input, usageLog) {
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+		return
+	}
+	if s.usageLogRepo == nil {
+		s.confirmCodexTurnStateUsageLog(input, usageLog, false)
+		return
+	}
+	usageCtx, cancel := detachedBillingContext(ctx)
+	defer cancel()
+	inserted, err := s.usageLogRepo.Create(usageCtx, usageLog)
+	if err != nil {
+		logger.LegacyPrintf("service.openai_gateway", "Create usage log failed: %v", err)
+		s.confirmCodexTurnStateUsageLog(input, usageLog, false)
+		return
+	}
+	input.usageLogInserted = inserted
+	s.confirmCodexTurnStateUsageLog(input, usageLog, inserted)
 }
 
 // hasIdentifiedOpenAIResponsePricing 判断上游自报的响应模型是否可以作为计费基准，

@@ -38,12 +38,15 @@ export async function getUpstreamTestDefaults(endpoint: string, accountId?: stri
 }
 
 export type DebugEndpoint = 'responses' | 'chat/completions' | 'images/generations'
-export type DebugSessionAction = 'new_session' | 'new_turn' | 'continue_turn'
+export type DebugVerificationStage = 'baseline' | 'capture' | 'replay' | 'automatic'
+export type DebugSessionAction = 'new_session' | 'new_turn' | 'continue_turn' | 'replay_capture'
 export interface DebugWorkbenchRequest {
   endpoint: DebugEndpoint
   headers: Record<string, string>
   body: Record<string, unknown>
   proxy_id?: number
+  api_key_id?: number
+  verification_stage?: DebugVerificationStage
   session: { id?: string; action: DebugSessionAction }
 }
 export interface DebugSnapshot {
@@ -87,6 +90,26 @@ export interface DebugSession {
   turn_index: number
   turn_state_available: boolean
 }
+export interface DebugStateVerification {
+  requested_model?: string
+  response_created_model?: string
+  response_completed_model?: string
+  response_model?: string
+  state_sent: boolean
+  state_received: boolean
+  state_length?: number
+  state_source?: 'native' | 'automatic' | 'none'
+  actual_account_id?: number
+  usage_log_account_id?: number
+  usage_log_api_key_id?: number
+  usage_log_requested_model?: string
+  upstream_response_model?: string
+  usage_log_state_sent: boolean
+  usage_log_verified: boolean
+  state_matches_capture: boolean
+  state_published?: boolean
+  daily_route_verified?: boolean
+}
 export interface DebugWorkbenchResult {
   request_id: string
   success: boolean
@@ -99,6 +122,8 @@ export interface DebugWorkbenchResult {
   attempts: DebugAttempt[]
   warnings?: string[]
   error?: string
+  state_verification?: DebugStateVerification
+  daily_replay?: DebugWorkbenchResult
 }
 
 /** Sends the complete editor payload through the actual gateway and returns redacted execution traces. */

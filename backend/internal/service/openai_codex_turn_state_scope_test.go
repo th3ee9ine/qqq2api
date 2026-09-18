@@ -22,6 +22,58 @@ func seedScopedTurnState(repo *turnStateAutoRepo, a *Account, model, token strin
 	repo.mu.Unlock()
 }
 
+func verifiedTurnStateSlot(model, token string, timestamp int64) map[string]any {
+	return map[string]any{
+		CodexTurnStateAutoExtraKey:              token,
+		CodexTurnStateAutoSetAtExtraKey:         timestamp,
+		CodexTurnStateAutoVerifiedAtExtraKey:    timestamp,
+		CodexTurnStateAutoVerifiedModelExtraKey: model,
+	}
+}
+
+func TestCodexTurnStateModelFamilyCanonicalSlotsAndLegacyFallback(t *testing.T) {
+	now := time.Now().UnixMilli()
+	astraKey := codexTurnStateModelExtraKey("gpt-6-astra")
+	for _, variant := range []string{"gpt-6", "gpt-6-astra-2026-09-19", "openai/gpt-6-astra-build-42"} {
+		require.Equal(t, astraKey, codexTurnStateModelExtraKey(variant))
+	}
+	reviewKey := codexTurnStateModelExtraKey("codex-auto-review")
+	require.Equal(t, reviewKey, codexTurnStateModelExtraKey("provider/codex-auto-review-2026-09-19"))
+	require.NotEqual(t, astraKey, reviewKey)
+
+	account := &Account{Extra: map[string]any{
+		astraKey:  verifiedTurnStateSlot("openai/gpt-6-astra-2026-09-19", "astra-family-state", now),
+		reviewKey: verifiedTurnStateSlot("codex-auto-review-build-42", "review-family-state", now),
+	}}
+	for _, variant := range []string{"gpt-6", "gpt-6-astra-2026-09-20", "provider/gpt-6-astra-build-43"} {
+		require.Equal(t, "astra-family-state", codexTurnStateAutoToken(codexTurnStateModelAccount(account, variant)))
+	}
+	for _, variant := range []string{"codex-auto-review", "openai/codex-auto-review-2026-09-20"} {
+		require.Equal(t, "review-family-state", codexTurnStateAutoToken(codexTurnStateModelAccount(account, variant)))
+	}
+	require.NotEqual(t,
+		codexTurnStateAutoToken(codexTurnStateModelAccount(account, "gpt-6-astra")),
+		codexTurnStateAutoToken(codexTurnStateModelAccount(account, "codex-auto-review")),
+	)
+
+	legacyOne := &Account{Extra: map[string]any{
+		codexTurnStateRawModelExtraKey("gpt-6-astra-2026-09-18"): verifiedTurnStateSlot("gpt-6-astra-2026-09-18", "legacy-one", now),
+	}}
+	require.Equal(t, "legacy-one", codexTurnStateAutoToken(codexTurnStateModelAccount(legacyOne, "gpt-6")), "one verified same-family legacy slot remains readable")
+
+	legacyAmbiguous := &Account{Extra: map[string]any{
+		codexTurnStateRawModelExtraKey("gpt-6-astra-2026-09-18"): verifiedTurnStateSlot("gpt-6-astra-2026-09-18", "legacy-one", now),
+		codexTurnStateRawModelExtraKey("gpt-6-astra-2026-09-19"): verifiedTurnStateSlot("gpt-6-astra-2026-09-19", "legacy-two", now),
+	}}
+	require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(legacyAmbiguous, "gpt-6-astra")), "multiple same-family legacy slots fail closed")
+
+	canonicalWins := &Account{Extra: map[string]any{
+		astraKey: map[string]any{},
+		codexTurnStateRawModelExtraKey("gpt-6-astra-2026-09-18"): verifiedTurnStateSlot("gpt-6-astra-2026-09-18", "must-not-override-canonical", now),
+	}}
+	require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(canonicalWins, "gpt-6")), "an existing canonical slot always wins over legacy fallback")
+}
+
 func TestCodexTurnStateScopedAccountModelAndIP(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
@@ -36,8 +88,9 @@ func TestCodexTurnStateScopedAccountModelAndIP(t *testing.T) {
 		account             *Account
 		model, native, want string
 	}{
-		{a, "gpt-5.5", "", stateA}, {a, "gpt-5.4", stateA, stateB},
-		{a, "gpt-5.3", stateA, ""}, {&other, "gpt-5.5", stateA, ""},
+		{a, "gpt-5.5", "", stateA}, {a, "gpt-5.4", "", stateB},
+		{a, "gpt-5.3", "", ""}, {&other, "gpt-5.5", "", ""},
+		{a, "gpt-5.4", "official-native", "official-native"},
 	} {
 		h := http.Header{}
 		h.Set(openAICodexTurnStateHeader, tc.native)
@@ -47,7 +100,7 @@ func TestCodexTurnStateScopedAccountModelAndIP(t *testing.T) {
 	waitTurnStateAutoIdle(t, s)
 	// Changing the transport IP must not change ownership or the selected state.
 	for _, route := range []string{"http://first.test:8080", "socks5://second.test:1080"} {
-		s.httpUpstream = &turnStateAutoUpstream{call: func(req *http.Request, proxy string, _ int64) (*http.Response, error) {
+		s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, proxy string, _ int64) (*http.Response, error) {
 			require.Equal(t, route, proxy)
 			require.Equal(t, stateA, req.Header.Get(openAICodexTurnStateHeader))
 			return turnStateResponse(""), nil
@@ -60,7 +113,7 @@ func TestCodexTurnStateScopedAccountModelAndIP(t *testing.T) {
 	}
 }
 
-func TestCodexTurnStateScoped312OnlyRevokesOwningModel(t *testing.T) {
+func TestCodexTurnStateScoped312HeaderOnlyDoesNotRevokeAnyModel(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	now := time.Now()
 	stateA, stateB := recoveryTestToken(now.Add(-time.Minute), 10, 1), recoveryTestToken(now.Add(-time.Minute), 10, 2)
@@ -72,11 +125,12 @@ func TestCodexTurnStateScoped312OnlyRevokesOwningModel(t *testing.T) {
 	h := http.Header{}
 	h.Set(openAICodexTurnStateHeader, stateA)
 	require.NoError(t, s.applyOpenAICodexTurnState(ctx, a, h, "gpt-5.5"))
-	require.Empty(t, h.Get(openAICodexTurnStateHeader))
+	require.Equal(t, stateA, h.Get(openAICodexTurnStateHeader))
+	h = http.Header{}
 	require.NoError(t, s.applyOpenAICodexTurnState(ctx, a, h, "gpt-5.4"))
 	require.Equal(t, stateB, h.Get(openAICodexTurnStateHeader))
 	next := recoveryTestToken(now, 10, 4)
-	s.collectOpenAICodexTurnState(ctx, a, next)
+	publishVerifiedTurnStateForTest(s, a, "gpt-5.5", next)
 	waitTurnStateAutoIdle(t, s)
 	stored, err := repo.GetByID(ctx, a.ID)
 	require.NoError(t, err)
@@ -99,12 +153,14 @@ func TestCodexTurnStateScopedTTLAndLegacy(t *testing.T) {
 	a.Extra = map[string]any{CodexTurnStateAutoExtraKey: state, CodexTurnStateAutoSetAtExtraKey: now.UnixMilli()}
 	repo.accounts[a.ID].Extra = mergeMap(nil, a.Extra)
 	h := http.Header{}
-	h.Set(openAICodexTurnStateHeader, state)
 	require.NoError(t, s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5.5"))
 	require.Empty(t, h.Get(openAICodexTurnStateHeader), "unscoped historical state must not be assigned an invented model")
 	seedScopedTurnState(repo, a, "gpt-5.5", recoveryTestToken(now.Add(-time.Hour), 10, 3))
 	require.NoError(t, s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5.5"))
-	require.Empty(t, h.Get(openAICodexTurnStateHeader), "one-hour expiry also applies to outgoing native headers")
+	require.Empty(t, h.Get(openAICodexTurnStateHeader), "the local one-hour bound prevents expired automatic injection")
+	h.Set(openAICodexTurnStateHeader, state)
+	require.NoError(t, s.applyOpenAICodexTurnState(context.Background(), a, h, "gpt-5.5"))
+	require.Equal(t, state, h.Get(openAICodexTurnStateHeader), "an official native continuation has priority and is not re-aged as cache data")
 }
 
 func TestCodexTurnStateScopedWorkersPersistIndependentModels(t *testing.T) {
@@ -133,17 +189,35 @@ func TestCodexTurnStateScopedWorkersPersistIndependentModels(t *testing.T) {
 	require.NoError(t, err)
 	first := codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.5"))
 	second := codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.4"))
-	require.NotEmpty(t, first)
-	require.NotEmpty(t, second)
-	require.NotEqual(t, first, second)
+	require.Empty(t, first, "maintenance candidates are not persisted as verified state")
+	require.Empty(t, second, "maintenance candidates are not persisted as verified state")
+	s.openaiTurnStateMu.Lock()
+	firstCandidate := s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5.5"}].candidate
+	secondCandidate := s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5.4"}].candidate
+	s.openaiTurnStateMu.Unlock()
+	require.NotEmpty(t, firstCandidate.state)
+	require.NotEmpty(t, secondCandidate.state)
+	require.NotEqual(t, firstCandidate.state, secondCandidate.state)
+	require.Equal(t, "gpt-5.5", firstCandidate.expectedResponseModel)
+	require.Equal(t, "gpt-5.4", secondCandidate.expectedResponseModel)
+	require.Empty(t, firstCandidate.requestID)
+	require.Empty(t, secondCandidate.requestID)
 	info := CodexTurnStateAutoInfoForAccount(stored, time.Now())
 	require.Len(t, info.Models, 2)
+	require.False(t, info.Models["gpt-5.5"].Configured)
+	require.Empty(t, info.Models["gpt-5.5"].VerifiedModel)
+	require.Zero(t, info.Models["gpt-5.5"].VerifiedAtMS)
+	require.Zero(t, info.Models["gpt-5.5"].StateLength)
+	require.False(t, info.Models["gpt-5.4"].Configured)
+	require.Empty(t, info.Models["gpt-5.4"].VerifiedModel)
+	require.Zero(t, info.Models["gpt-5.4"].StateLength)
 	encoded, err := json.Marshal(info)
 	require.NoError(t, err)
-	require.NotContains(t, string(encoded), first)
+	require.NotContains(t, string(encoded), firstCandidate.state)
+	require.NotContains(t, string(encoded), secondCandidate.state)
 }
 
-func TestCodexTurnStateScopedDispatchReloadAndResponseAttribution(t *testing.T) {
+func TestCodexTurnStateScopedDispatchReloadAndUnverifiedResponseAttribution(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	req, err := s.prepareCodexTurnStateRequest(context.Background(), httptest.NewRequest(http.MethodPost, "https://example.com/responses", nil), a, "gpt-5.5")
 	require.NoError(t, err)
@@ -151,7 +225,7 @@ func TestCodexTurnStateScopedDispatchReloadAndResponseAttribution(t *testing.T) 
 	waitTurnStateAutoIdle(t, s)
 	value := recoveryTestToken(time.Now(), 10, 1)
 	seedScopedTurnState(repo, a, "gpt-5.5", value)
-	s.httpUpstream = &turnStateAutoUpstream{call: func(sent *http.Request, _ string, _ int64) (*http.Response, error) {
+	s.httpUpstream = &turnStateRawUpstream{call: func(sent *http.Request, _ string, _ int64) (*http.Response, error) {
 		require.Equal(t, value, sent.Header.Get(openAICodexTurnStateHeader))
 		return turnStateResponse(""), nil
 	}}
@@ -166,8 +240,40 @@ func TestCodexTurnStateScopedDispatchReloadAndResponseAttribution(t *testing.T) 
 	waitTurnStateAutoIdle(t, s)
 	stored, err := repo.GetByID(context.Background(), a.ID)
 	require.NoError(t, err)
-	require.Equal(t, returned, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.5")))
+	require.NotEqual(t, returned, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.5")))
+	require.Equal(t, value, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.5")), "a single response must not replace the verified model slot without both replay stages")
 	require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.4")))
+}
+
+func TestCodexTurnStateScopedNativeProvenanceRejectsCrossAccountAndModel(t *testing.T) {
+	s, _, a := newTurnStateAutoService(t)
+	c, _ := newTurnStateTestContext(t, 7, "scoped-native")
+	originRequest := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	originRequest = originRequest.WithContext(withCodexTurnStateModel(originRequest.Context(), "gpt-5.5"))
+	stateHeader := func() http.Header {
+		header := http.Header{}
+		header.Set(openAICodexTurnStateHeader, "native-state")
+		return header
+	}
+	upstream := stateHeader()
+	s.relayOpenAICodexTurnState(c, a, upstream, originRequest)
+	observer := beginUpstreamResponseModelObservation(c)
+	observeCodexTurnStateLifecycle(observer, "gpt-5.5", "gpt-5.5", false)
+	s.commitPendingCodexTurnStateObservation(c, true)
+
+	same := stateHeader()
+	s.guardOpenAICodexTurnStateEcho(c, a, same, "gpt-5.5")
+	require.Equal(t, "native-state", same.Get(openAICodexTurnStateHeader))
+
+	crossModel := stateHeader()
+	s.guardOpenAICodexTurnStateEcho(c, a, crossModel, "gpt-5.4")
+	require.Empty(t, crossModel.Get(openAICodexTurnStateHeader))
+
+	other := *a
+	other.ID++
+	crossAccount := stateHeader()
+	s.guardOpenAICodexTurnStateEcho(c, &other, crossAccount, "gpt-5.5")
+	require.Empty(t, crossAccount.Get(openAICodexTurnStateHeader))
 }
 
 type failingTurnStateSource struct{ *turnStateAutoRepo }

@@ -652,6 +652,17 @@ func TestLoadOpenAIResponseHeaderTimeoutFromEnv(t *testing.T) {
 	require.Equal(t, 1800, cfg.Gateway.OpenAIResponseHeaderTimeout)
 }
 
+func TestLoadGatewayProxyChainFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_PROXY_CHAIN_PRE_PROXY_URL", "socks5://host.docker.internal:7890")
+	t.Setenv("GATEWAY_PROXY_CHAIN_FORCE_HTTP_PROXY", "true")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "socks5://host.docker.internal:7890", cfg.Gateway.ProxyChain.PreProxyURL)
+	require.True(t, cfg.Gateway.ProxyChain.ForceHTTPProxy)
+}
+
 func TestLoadImageNonstreamKeepaliveFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_IMAGE_NONSTREAM_KEEPALIVE_INTERVAL", "15")

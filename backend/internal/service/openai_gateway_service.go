@@ -273,6 +273,12 @@ type OpenAIForwardResult struct {
 	// response before any client-facing rewrite or protocol conversion.
 	UpstreamResponseModel         string
 	UpstreamResponseModelConflict bool
+	// CodexTurnStateResponse* keeps the raw Responses lifecycle evidence used
+	// only by the automatic Turn State acceptance gate. These values are never
+	// rewritten into client responses or usage_logs.
+	CodexTurnStateResponseCreatedModel   string `json:"-"`
+	CodexTurnStateResponseCompletedModel string `json:"-"`
+	CodexTurnStateResponseFailed         bool   `json:"-"`
 	// UpstreamResponseServiceTier is the tier the upstream reports having used
 	// (response service_tier: "priority" / "default" / "flex" / ...); "" when not declared.
 	UpstreamResponseServiceTier string

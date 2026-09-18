@@ -157,22 +157,49 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 	if s == nil || headers == nil || s.settingService == nil {
 		return nil
 	}
-	cfg := s.settingService.GetOpenAICodexTurnState(ctx)
-	if !codexTurnStateAutoEligible(account) || !cfg.AutoEnabled {
-		return nil
+	noteSource := func(source string) {
+		if trace := DebugWorkbenchTraceFromContext(ctx); trace != nil {
+			trace.NoteTurnStateSource(source)
+		}
 	}
 	model := s.codexTurnStateModel(ctx, models...)
+	policy := openAICodexTurnStateInjectionPolicy(ctx)
+	if policy == codexTurnStateInjectionDisabled {
+		headers.Del(openAICodexTurnStateHeader)
+		noteSource("none")
+		return nil
+	}
+	if native := strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)); native != "" &&
+		!s.codexTurnStateNativeScopeAllowed(ctx, account, model, native) {
+		headers.Del(openAICodexTurnStateHeader)
+	}
+	if policy == codexTurnStateInjectionNativeOnly {
+		if strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)) != "" {
+			noteSource("native")
+		} else {
+			noteSource("none")
+		}
+		return nil
+	}
+	cfg := s.settingService.GetOpenAICodexTurnState(ctx)
+	if !codexTurnStateAutoEligible(account) || !cfg.AutoEnabled {
+		if strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)) != "" {
+			noteSource("native")
+		} else {
+			noteSource("none")
+		}
+		return nil
+	}
 	ctx = withCodexTurnStateModel(ctx, model)
 	if !codexTurnStateModelMatches(cfg.Models, models...) {
-		// Model scope controls automatic injection, not permission to replay a
-		// foreign/expired client state on a nonmatching model.
-		s.openaiTurnStateMu.Lock()
-		entry := s.codexTurnStateEntryLocked(account, time.Now(), model)
-		native := headers.Get(openAICodexTurnStateHeader)
-		if entry.knownTokens[codexTurnStateCanonicalDigest(native)] <= time.Now().UnixMilli() || !entry.recovery.allows(native, time.Now()) {
-			headers.Del(openAICodexTurnStateHeader)
+		// The model scope controls only automatic injection. A native Codex
+		// continuation remains the client's first choice; cross-account echoes are
+		// already removed by guardOpenAICodexTurnStateEcho before this point.
+		if strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)) != "" {
+			noteSource("native")
+		} else {
+			noteSource("none")
 		}
-		s.openaiTurnStateMu.Unlock()
 		return nil
 	}
 	auto := s.autoTurnStateForAccount(ctx, account, models...)
@@ -188,22 +215,46 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 	auto = s.autoTurnStateForAccount(ctx, account, models...)
 	native := headers.Get(openAICodexTurnStateHeader)
 	s.openaiTurnStateMu.Lock()
-	entry := s.codexTurnStateEntryLocked(account, time.Now(), model)
+	now := time.Now()
+	entry := s.codexTurnStateEntryLocked(account, now, model)
 	// Re-evaluate under the same lock as revocation/collection. The automatic
 	// result obtained before acquiring this lock may already have been revoked.
 	auto = ""
-	if !entry.recovery.Pending && entry.recovery.allows(entry.token, time.Now()) && codexTurnStateAutoExpiry(entry.token, entry.setAt, time.Now()) > time.Now().UnixMilli() {
+	if !entry.reconciling && !entry.recovery.Pending && entry.recovery.allows(entry.token, now) && codexTurnStateAutoExpiry(entry.token, entry.setAt, now) > now.UnixMilli() {
 		auto = entry.token
 	}
-	knownUntil := entry.knownTokens[codexTurnStateCanonicalDigest(native)]
-	nativeAllowed := native != "" && knownUntil > time.Now().UnixMilli() && entry.recovery.allows(native, time.Now())
+	// Native continuation has priority over automatic cache injection. It need
+	// not be present in this process's cache: official clients can legitimately
+	// bring a state produced before a restart. Validation here is representation
+	// and recovery-epoch only; account provenance is enforced separately.
+	nativeAllowed := native != "" && ValidateOpenAICodexTurnState(native) == nil && entry.recovery.allows(native, now)
+	candidate := ""
+	if !nativeAllowed && !codexTurnStateManualVerification(ctx) {
+		candidate = s.codexTurnStateUsageCandidateForRequestLocked(
+			ctx,
+			entry,
+			firstCodexTurnStateRequestModel(model, models...),
+			now,
+		)
+	}
 	if !nativeAllowed {
 		headers.Del(openAICodexTurnStateHeader)
-		if auto != "" {
+		if candidate != "" {
+			headers.Set(openAICodexTurnStateHeader, candidate)
+		} else if auto != "" {
 			headers.Set(openAICodexTurnStateHeader, auto)
 		}
 	}
+	source := "none"
+	if nativeAllowed {
+		source = "native"
+	} else if candidate != "" {
+		source = "candidate"
+	} else if auto != "" {
+		source = "automatic"
+	}
 	s.openaiTurnStateMu.Unlock()
+	noteSource(source)
 	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -32,6 +33,9 @@ type DebugWorkbenchTrace struct {
 	dropped   bool
 	warnings  []string
 	turnState string
+	// turnStateSource records the gateway decision only. It never contains the
+	// opaque state and is exposed solely to the administrator's debug run.
+	turnStateSource string
 }
 
 type DebugWorkbenchAttemptCapture struct {
@@ -77,6 +81,27 @@ func DebugWorkbenchTraceFromContext(ctx context.Context) *DebugWorkbenchTrace {
 	}
 	t, _ := ctx.Value(debugWorkbenchTraceKey{}).(*DebugWorkbenchTrace)
 	return t
+}
+func (t *DebugWorkbenchTrace) NoteTurnStateSource(source string) {
+	if t == nil {
+		return
+	}
+	switch source {
+	case "native", "candidate", "automatic", "none":
+	default:
+		return
+	}
+	t.mu.Lock()
+	t.turnStateSource = source
+	t.mu.Unlock()
+}
+func (t *DebugWorkbenchTrace) TurnStateSource() string {
+	if t == nil {
+		return ""
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.turnStateSource
 }
 func (t *DebugWorkbenchTrace) AddSecrets(values []string) {
 	if t == nil {
@@ -157,7 +182,19 @@ func (t *DebugWorkbenchTrace) headersLocked(headers http.Header) map[string][]st
 		copied := make([]string, len(values))
 		for i, v := range values {
 			if !debugPublicHeader(name) {
-				copied[i] = "[redacted]"
+				if strings.EqualFold(name, openAICodexTurnStateHeader) {
+					// Length is useful diagnostic evidence for upstream-issued state
+					// variants, but never a validity decision and never a reason to
+					// expose the opaque credential itself.
+					trimmed := strings.TrimSpace(v)
+					if strings.HasPrefix(trimmed, "[redacted:") && strings.HasSuffix(trimmed, "]") {
+						copied[i] = trimmed // Attempts() re-snapshots an already-redacted header.
+					} else {
+						copied[i] = fmt.Sprintf("[redacted:%d]", len(trimmed))
+					}
+				} else {
+					copied[i] = "[redacted]"
+				}
 			} else {
 				copied[i] = t.redactLocked(v)
 			}
