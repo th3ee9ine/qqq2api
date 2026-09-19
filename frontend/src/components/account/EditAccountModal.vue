@@ -1500,13 +1500,13 @@
             <Select
               v-model="openAIResponsesMode"
               :options="openAIResponsesModeOptions"
-              :disabled="!openAITextGenerationEnabled"
+              :disabled="!openAITextGenerationCapabilityEnabled"
               data-testid="openai-responses-mode-select"
             />
           </div>
         </div>
         <div
-          v-if="openAITextGenerationEnabled"
+          v-if="openAITextGenerationCapabilityEnabled"
           class="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300"
         >
           <span class="font-medium">{{ t(openAIResponsesStatusKey) }}</span>
@@ -1531,7 +1531,7 @@
                 class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
                 :data-testid="`openai-endpoint-capability-${option.value}`"
                 :checked="openAIEndpointCapabilities.includes(option.value)"
-                @change="toggleEndpointCapability(option.value, $event)"
+                @change="toggleOpenAIEndpointCapability(option.value, $event)"
               />
               <span class="text-gray-700 dark:text-gray-200">{{ option.label }}</span>
             </label>
@@ -2995,7 +2995,6 @@ const expiresAtInput = computed({
   get: () => formatDateTimeLocalInput(expiresAt.value),
   set: (value: string) => { expiresAt.value = parseDateTimeLocalInput(value) }
 })
-const openAITextGenerationEnabled = computed(() => openAIEndpointCapabilities.value.includes('chat_completions'))
 const openAITextEndpointCapabilityLabel = computed(() => {
   if (openAIResponsesMode.value === 'force_responses') {
     return t('admin.accounts.openai.capabilityResponses')
@@ -3017,8 +3016,74 @@ const openAIEndpointCapabilityOptions = computed<Array<{
   label: string
 }>>(() => [
   { value: 'chat_completions', label: openAITextEndpointCapabilityLabel.value },
-  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') }
+  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') },
+  { value: 'seedance', label: 'Seedance (Ark)' }
 ])
+const openAITextGenerationCapabilityEnabled = computed(() =>
+  openAIEndpointCapabilities.value.includes('chat_completions')
+)
+
+const normalizeOpenAIEndpointCapabilities = (values: OpenAIEndpointCapability[]) => {
+  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance']
+  const selected = allowed.filter((value) => values.includes(value))
+  return selected.length > 0 ? selected : ['chat_completions', 'embeddings'] as OpenAIEndpointCapability[]
+}
+
+const readOpenAIEndpointCapabilities = (credentials?: Record<string, unknown>): OpenAIEndpointCapability[] => {
+  const raw = credentials?.openai_capabilities
+  if (Array.isArray(raw)) {
+    return normalizeOpenAIEndpointCapabilities(
+      raw.filter((value): value is OpenAIEndpointCapability =>
+        value === 'chat_completions' || value === 'embeddings' || value === 'seedance'
+      )
+    )
+  }
+  if (raw != null && typeof raw === 'object') {
+    const capabilityMap = raw as Record<string, unknown>
+    return normalizeOpenAIEndpointCapabilities(
+      openAIEndpointCapabilityOptions.value
+        .map((option) => option.value)
+        .filter((value) => capabilityMap[value] === true)
+    )
+  }
+  return ['chat_completions', 'embeddings']
+}
+
+const toggleOpenAIEndpointCapability = (capability: OpenAIEndpointCapability, event?: Event) => {
+  if (openAIEndpointCapabilities.value.includes(capability)) {
+    if (openAIEndpointCapabilities.value.length <= 1) {
+      const input = event?.target as HTMLInputElement | null
+      if (input) input.checked = true
+      return
+    }
+    openAIEndpointCapabilities.value = openAIEndpointCapabilities.value.filter(
+      (value) => value !== capability
+    )
+    if (!openAITextGenerationCapabilityEnabled.value) {
+      openAIResponsesMode.value = 'auto'
+    }
+    return
+  }
+  openAIEndpointCapabilities.value = normalizeOpenAIEndpointCapabilities([
+    ...openAIEndpointCapabilities.value,
+    capability
+  ])
+}
+
+const applyOpenAIEndpointCapabilities = (credentials: Record<string, unknown>) => {
+  const capabilities = normalizeOpenAIEndpointCapabilities(openAIEndpointCapabilities.value)
+  if (capabilities.length === 2 && !capabilities.includes('seedance')) {
+    delete credentials.openai_capabilities
+    return
+  }
+  credentials.openai_capabilities = capabilities
+}
+const normalizeOpenAIResponsesMode = (mode: unknown): OpenAIResponsesMode => {
+  if (mode === 'force_responses' || mode === 'force_chat_completions') {
+    return mode
+  }
+  return 'auto'
+}
 const isOpenAIModelRestrictionDisabled = computed(() =>
   isOpenAI.value && openaiPassthroughEnabled.value
 )
@@ -3228,11 +3293,8 @@ function hydrate() {
     ? extra.openai_compact_mode
     : 'auto'
   const storedResponsesMode = extra.openai_responses_mode
-  openAIResponsesMode.value = storedResponsesMode === 'force_responses' ||
-    storedResponsesMode === 'force_chat_completions'
-    ? storedResponsesMode
-    : 'auto'
-  openAIEndpointCapabilities.value = normalizeEndpointCapabilities(credentials.openai_capabilities)
+  openAIResponsesMode.value = normalizeOpenAIResponsesMode(storedResponsesMode)
+  openAIEndpointCapabilities.value = readOpenAIEndpointCapabilities(credentials)
   const wsKey = account.type === 'apikey'
     ? 'openai_apikey_responses_websockets_v2_mode'
     : 'openai_oauth_responses_websockets_v2_mode'
@@ -3362,19 +3424,6 @@ function hydrate() {
     ? extra.quota_reset_timezone
     : 'UTC'
   loadQuotaNotifyFromExtra(extra)
-}
-
-function normalizeEndpointCapabilities(value: unknown): OpenAIEndpointCapability[] {
-  const rawValues = Array.isArray(value)
-    ? value
-    : asRecord(value).chat_completions === true || asRecord(value).embeddings === true
-      ? Object.entries(asRecord(value)).filter(([, enabled]) => enabled === true).map(([key]) => key)
-      : []
-  const selected = rawValues.filter(
-    (item): item is OpenAIEndpointCapability =>
-      item === 'chat_completions' || item === 'embeddings'
-  )
-  return selected.length > 0 ? [...new Set(selected)] : ['chat_completions', 'embeddings']
 }
 
 function parseRetryStatusCodes(value: unknown): number[] {
@@ -3527,30 +3576,6 @@ function buildTempUnschedRules() {
       Number.isFinite(rule.duration_minutes) &&
       rule.duration_minutes > 0
     )
-}
-
-function toggleEndpointCapability(
-  capability: OpenAIEndpointCapability,
-  event: Event
-) {
-  const input = event.target as HTMLInputElement
-  const checked = input.checked
-  if (checked) {
-    if (!openAIEndpointCapabilities.value.includes(capability)) {
-      openAIEndpointCapabilities.value = [...openAIEndpointCapabilities.value, capability]
-    }
-    return
-  }
-  if (openAIEndpointCapabilities.value.length === 1) {
-    input.checked = true
-    return
-  }
-  openAIEndpointCapabilities.value = openAIEndpointCapabilities.value.filter(
-    value => value !== capability
-  )
-  if (!openAIEndpointCapabilities.value.includes('chat_completions')) {
-    openAIResponsesMode.value = 'auto'
-  }
 }
 
 function handleUpstreamBillingProbeChange(enabled: boolean) {
@@ -3875,7 +3900,7 @@ async function handleSubmit() {
     }
 
     if (isOpenAI.value && isApiKey.value) {
-      credentials.openai_capabilities = [...openAIEndpointCapabilities.value]
+      applyOpenAIEndpointCapabilities(credentials)
     }
 
     if (isOpenAI.value) {

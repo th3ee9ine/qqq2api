@@ -266,6 +266,11 @@ func ProvideOpenAIGatewayHandler(
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
 ) *OpenAIGatewayHandler {
+	// Host account-directory access is capability-gated by PluginManager. Wire it
+	// alongside the existing transport hook before the manager starts runtimes.
+	if pluginManager != nil {
+		pluginManager.SetAccountDirectory(gatewayService)
+	}
 	gatewayService.SetPluginManager(pluginManager)
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)

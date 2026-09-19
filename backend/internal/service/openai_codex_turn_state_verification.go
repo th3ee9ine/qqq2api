@@ -228,8 +228,8 @@ func (s *OpenAIGatewayService) CaptureOpenAICodexTurnStateUsageEvidence(c *gin.C
 
 // stageCodexTurnStateUsageCandidateLocked records the maintenance result without
 // replacing the old verified token. Caller must hold openaiTurnStateMu.
-func (s *OpenAIGatewayService) stageCodexTurnStateUsageCandidateLocked(entry *codexTurnStateAutoEntry, state string, generation int64, now time.Time) {
-	s.stageCodexTurnStateUsageCandidateWithModeLocked(entry, state, generation, now, false)
+func (s *OpenAIGatewayService) stageCodexTurnStateUsageCandidateLocked(entry *codexTurnStateAutoEntry, state string, generation int64, now time.Time) bool {
+	return s.stageCodexTurnStateUsageCandidateWithModeLocked(entry, state, generation, now, false)
 }
 
 // stageCodexTurnStateUsageCandidateWithModeLocked records whether an

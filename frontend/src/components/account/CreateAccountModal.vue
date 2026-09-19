@@ -2320,13 +2320,13 @@
             <Select
               v-model="openAIResponsesMode"
               :options="openAIResponsesModeOptions"
-              :disabled="!openAITextGenerationEnabled"
+              :disabled="!openAITextGenerationCapabilityEnabled"
               data-testid="create-openai-responses-mode-select"
             />
           </div>
         </div>
         <p
-          v-if="!openAITextGenerationEnabled"
+          v-if="!openAITextGenerationCapabilityEnabled"
           class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
           data-testid="openai-responses-mode-not-applicable"
         >
@@ -2345,7 +2345,7 @@
                 class="rounded border-gray-300 text-primary-600 focus:ring-primary-500 dark:border-dark-500"
                 :data-testid="`create-openai-endpoint-capability-${option.value}`"
                 :checked="openAIEndpointCapabilities.includes(option.value)"
-                @change="toggleEndpointCapability(option.value, $event)"
+                @change="toggleOpenAIEndpointCapability(option.value, $event)"
               />
               <span class="text-gray-700 dark:text-gray-200">{{ option.label }}</span>
             </label>
@@ -3049,7 +3049,8 @@ const openAIEndpointCapabilityOptions = computed<Array<{
   label: string
 }>>(() => [
   { value: 'chat_completions', label: openAITextEndpointCapabilityLabel.value },
-  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') }
+  { value: 'embeddings', label: t('admin.accounts.openai.capabilityEmbeddings') },
+  { value: 'seedance', label: 'Seedance (Ark)' }
 ])
 const openAIWSModeOptions = computed(() => [
   { value: 'off', label: t('admin.accounts.openai.wsModeOff') },
@@ -3073,9 +3074,49 @@ const expiresAtInput = computed({
   get: () => formatDateTimeLocalInput(expiresAt.value),
   set: (value: string) => { expiresAt.value = parseDateTimeLocalInput(value) }
 })
-const openAITextGenerationEnabled = computed(() =>
+const openAITextGenerationCapabilityEnabled = computed(() =>
   openAIEndpointCapabilities.value.includes('chat_completions')
 )
+
+const normalizeOpenAIEndpointCapabilities = (values: OpenAIEndpointCapability[]) => {
+  const allowed: OpenAIEndpointCapability[] = ['chat_completions', 'embeddings', 'seedance']
+  const selected = allowed.filter((value) => values.includes(value))
+  return selected.length > 0
+    ? selected
+    : ['chat_completions', 'embeddings'] as OpenAIEndpointCapability[]
+}
+
+const toggleOpenAIEndpointCapability = (capability: OpenAIEndpointCapability, event?: Event) => {
+  if (openAIEndpointCapabilities.value.includes(capability)) {
+    if (openAIEndpointCapabilities.value.length <= 1) {
+      const input = event?.target as HTMLInputElement | null
+      if (input) input.checked = true
+      return
+    }
+    openAIEndpointCapabilities.value = openAIEndpointCapabilities.value.filter(
+      (value) => value !== capability
+    )
+    if (!openAITextGenerationCapabilityEnabled.value) {
+      openAIResponsesMode.value = 'auto'
+    }
+    return
+  }
+  openAIEndpointCapabilities.value = normalizeOpenAIEndpointCapabilities([
+    ...openAIEndpointCapabilities.value,
+    capability
+  ])
+}
+
+const applyOpenAIEndpointCapabilities = (credentials: Record<string, unknown>) => {
+  if (form.platform !== 'openai' || accountCategory.value !== 'apikey') return
+  const capabilities = normalizeOpenAIEndpointCapabilities(openAIEndpointCapabilities.value)
+  if (capabilities.length === 2 && !capabilities.includes('seedance')) {
+    delete credentials.openai_capabilities
+    return
+  }
+  credentials.openai_capabilities = capabilities
+}
+
 const presetMappings = computed(() =>
   getPresetMappingsByPlatform(accountCategory.value === 'bedrock' ? 'bedrock' : form.platform)
 )
@@ -3216,37 +3257,6 @@ async function handleVertexServiceAccountDrop(event: DragEvent) {
   applyVertexServiceAccountJson(await file.text())
 }
 
-function toggleEndpointCapability(capability: OpenAIEndpointCapability, event: Event) {
-  const target = event.target as HTMLInputElement
-  const checked = target.checked
-  if (checked) {
-    if (!openAIEndpointCapabilities.value.includes(capability)) {
-      openAIEndpointCapabilities.value = [...openAIEndpointCapabilities.value, capability]
-    }
-    return
-  }
-  if (openAIEndpointCapabilities.value.length <= 1) {
-    target.checked = true
-    return
-  }
-  openAIEndpointCapabilities.value = openAIEndpointCapabilities.value.filter(value => value !== capability)
-  if (!openAIEndpointCapabilities.value.includes('chat_completions')) openAIResponsesMode.value = 'auto'
-}
-
-// The backend treats an omitted `openai_capabilities` value as the legacy
-// all-endpoints default.  Persist a narrowed selection only when the operator
-// explicitly disables one of the two supported API-key endpoints.
-function applyOpenAIEndpointCapabilities(credentials: Record<string, unknown>) {
-  if (form.platform !== 'openai' || accountCategory.value !== 'apikey') return
-  const capabilities = ['chat_completions', 'embeddings']
-    .filter(value => openAIEndpointCapabilities.value.includes(value as OpenAIEndpointCapability))
-  if (capabilities.length === 2 || capabilities.length === 0) {
-    delete credentials.openai_capabilities
-  } else {
-    credentials.openai_capabilities = capabilities
-  }
-}
-
 function addCustomErrorCode() {
   const code = Number(customErrorCodeInput.value)
   if (!Number.isInteger(code) || code < 100 || code > 599) {
@@ -3372,7 +3382,7 @@ function buildOpenAIExtra(forImport = false): Record<string, unknown> | undefine
     extra.openai_long_context_billing_enabled = openAILongContextBillingEnabled.value
   }
   if (openAICompactMode.value !== 'auto') extra.openai_compact_mode = openAICompactMode.value
-  if (accountCategory.value === 'apikey' && openAITextGenerationEnabled.value && openAIResponsesMode.value !== 'auto') {
+  if (accountCategory.value === 'apikey' && openAITextGenerationCapabilityEnabled.value && openAIResponsesMode.value !== 'auto') {
     extra.openai_responses_mode = openAIResponsesMode.value
   }
   if (accountCategory.value === 'apikey' && openAIImagesUrlToB64JsonEnabled.value) {

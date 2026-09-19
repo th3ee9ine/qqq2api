@@ -1483,7 +1483,15 @@ func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *g
 	}
 	groupID := getOpenAIGroupIDFromContext(c)
 	ttl := s.openAIWSResponseStickyTTL()
-	if err := store.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl); err != nil {
+	// Response affinity is durable state. Detach it from a client that may have
+	// already cancelled while retaining a bounded Redis budget.
+	bindBaseCtx := context.Background()
+	if ctx != nil {
+		bindBaseCtx = context.WithoutCancel(ctx)
+	}
+	bindCtx, cancel := context.WithTimeout(bindBaseCtx, openAIWSStateStoreRedisTimeout)
+	defer cancel()
+	if err := store.BindResponseAccount(bindCtx, groupID, responseID, account.ID, ttl); err != nil {
 		logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, err)
 		return err
 	}
@@ -1495,7 +1503,7 @@ func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *g
 	if !ok || !validOwner || owner.userID <= 0 || owner.apiKeyID <= 0 {
 		return errors.New("HTTP response owner context is unavailable")
 	}
-	if err := s.BindOpenAIHTTPResponseOwner(ctx, groupID, responseID, owner.userID, owner.apiKeyID); err != nil {
+	if err := s.BindOpenAIHTTPResponseOwner(bindCtx, groupID, responseID, owner.userID, owner.apiKeyID); err != nil {
 		logger.L().Warn(
 			"openai.http_bind_response_owner_failed",
 			zap.Int64("group_id", groupID),
