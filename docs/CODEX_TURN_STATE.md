@@ -18,9 +18,9 @@ Turn State 按「账号 ID + 实际上游模型家族」管理。自动开关开
 
 ### 采集任务中心
 
-服务端会为手动、一键、业务请求自动采集、后台续期和管理员重试创建账号 / owner 模型级任务记录。独立管理页展示最近任务，对 `queued` 和 `running` 任务轮询进度；详情页展示账号、请求模型、真实 owner、来源、状态、阶段、百分比、计数、创建 / 启动 / 更新 / 结束时间、耗时、固定安全错误码和脱敏事件时间线。
+服务端会为手动、一键、业务请求自动采集、后台续期和管理员重试创建账号 / owner 模型级任务记录。独立管理页展示最近任务，未完成的 `queued` 和 `running` 任务始终排在所有终态任务前，两组内都按最新任务优先排列；页面只在存在未完成任务时轮询进度。详情页展示账号、请求模型、真实 owner、来源、状态、阶段、百分比、计数、创建 / 启动 / 更新 / 结束时间、耗时、固定安全错误码和脱敏事件时间线。
 
-任务 API 位于 `GET /api/v1/admin/accounts/codex-turn-state/tasks`、`GET /api/v1/admin/accounts/codex-turn-state/tasks/:task_id`、`POST /api/v1/admin/accounts/codex-turn-state/tasks/:task_id/cancel` 和 `POST /api/v1/admin/accounts/codex-turn-state/tasks/:task_id/retry`。列表响应只返回任务摘要，事件历史仅由详情 API 返回。排队或运行中的任务可取消；失败或已取消任务可以按原账号与模型快照创建来源为 `retry` 的新任务，原任务保留不变。
+任务 API 位于 `GET /api/v1/admin/accounts/codex-turn-state/tasks`、`GET /api/v1/admin/accounts/codex-turn-state/tasks/:task_id`、`POST /api/v1/admin/accounts/codex-turn-state/tasks/:task_id/cancel` 和 `POST /api/v1/admin/accounts/codex-turn-state/tasks/:task_id/retry`。列表响应只返回任务摘要，事件历史仅由详情 API 返回。排队或运行中的任务可从列表或详情页提前终止；终止会取消该任务的等待、上游请求或持久化 context，丢弃尚未发布的候选值，不会把管理员终止记录为上游采集失败。失败或已终止任务可以按原账号与模型快照创建来源为 `retry` 的新任务，原任务保留不变。
 
 任务注册表是当前进程内的有界诊断历史，不写入数据库，进程重启后不可恢复，也不代替持久化的 Turn State 模型槽状态。任务快照不包含账号凭据、代理 URL、完整 Turn State 或上游错误原文。
 

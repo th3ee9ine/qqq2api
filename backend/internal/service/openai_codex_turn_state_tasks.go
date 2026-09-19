@@ -491,7 +491,8 @@ func (s *OpenAIGatewayService) FailCodexTurnStateCollectionTask(taskID, errorCod
 	return s.finishCodexTurnStateCollectionTask(taskID, CodexTurnStateCollectionTaskStatusFailed, CodexTurnStateCollectionTaskStageFailed, errorCode)
 }
 
-// ListCodexTurnStateCollectionTasks returns detached snapshots newest-first.
+// ListCodexTurnStateCollectionTasks returns detached snapshots with unfinished
+// work first. Unfinished and terminal groups are each ordered newest-first.
 func (s *OpenAIGatewayService) ListCodexTurnStateCollectionTasks() []*CodexTurnStateCollectionTask {
 	registry := s.codexTurnStateCollectionTasks()
 	if registry == nil {
@@ -499,15 +500,20 @@ func (s *OpenAIGatewayService) ListCodexTurnStateCollectionTasks() []*CodexTurnS
 	}
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
-	result := make([]*CodexTurnStateCollectionTask, 0, len(registry.order))
+	unfinished := make([]*CodexTurnStateCollectionTask, 0, len(registry.order))
+	terminal := make([]*CodexTurnStateCollectionTask, 0, len(registry.order))
 	for index := len(registry.order) - 1; index >= 0; index-- {
 		if record := registry.tasks[registry.order[index]]; record != nil {
 			summary := cloneCodexTurnStateCollectionTask(&record.task)
 			summary.Events = nil
-			result = append(result, summary)
+			if codexTurnStateCollectionTaskTerminal(summary.Status) {
+				terminal = append(terminal, summary)
+				continue
+			}
+			unfinished = append(unfinished, summary)
 		}
 	}
-	return result
+	return append(unfinished, terminal...)
 }
 
 // GetCodexTurnStateCollectionTask returns a detached task snapshot.

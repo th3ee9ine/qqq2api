@@ -86,14 +86,28 @@
               <time class="task-time" :datetime="timestampISO(task.created_at_ms)">{{ formatTimestamp(task.created_at_ms) }}</time>
             </div>
 
-            <RouterLink
-              class="task-details-link"
-              :to="{ name: 'AdminCodexTurnStateTask', params: { taskId: task.id } }"
-              :aria-label="t('admin.codexTurnState.tasks.viewDetailsFor', { id: task.id })"
-            >
-              {{ t('admin.codexTurnState.tasks.viewDetails') }}
-              <Icon name="chevronRight" size="sm" />
-            </RouterLink>
+            <div class="task-row-actions">
+              <button
+                v-if="task.can_cancel && isActiveTask(task)"
+                type="button"
+                class="btn btn-danger btn-sm"
+                :disabled="cancelingTaskIds.has(task.id)"
+                :aria-label="t('admin.codexTurnState.tasks.cancelFor', { id: task.id })"
+                :data-testid="`turn-state-task-cancel-${task.id}`"
+                @click.stop="requestTaskCancellation(task)"
+              >
+                <Icon :name="cancelingTaskIds.has(task.id) ? 'refresh' : 'x'" size="sm" :class="{ 'animate-spin': cancelingTaskIds.has(task.id) }" />
+                {{ cancelingTaskIds.has(task.id) ? t('admin.codexTurnState.tasks.canceling') : t('admin.codexTurnState.tasks.cancel') }}
+              </button>
+              <RouterLink
+                class="task-details-link"
+                :to="{ name: 'AdminCodexTurnStateTask', params: { taskId: task.id } }"
+                :aria-label="t('admin.codexTurnState.tasks.viewDetailsFor', { id: task.id })"
+              >
+                {{ t('admin.codexTurnState.tasks.viewDetails') }}
+                <Icon name="chevronRight" size="sm" />
+              </RouterLink>
+            </div>
           </article>
         </div>
       </section>
@@ -341,6 +355,16 @@
           </article>
         </div>
       </section>
+
+      <ConfirmDialog
+        :show="cancelTaskTargetId !== null"
+        :title="t('admin.codexTurnState.tasks.cancelConfirmTitle')"
+        :message="t('admin.codexTurnState.tasks.cancelConfirmMessage')"
+        :confirm-text="t('admin.codexTurnState.tasks.cancel')"
+        danger
+        @cancel="closeTaskCancelConfirm"
+        @confirm="cancelSelectedTask"
+      />
     </div>
   </AppLayout>
 </template>
@@ -352,6 +376,7 @@ import { RouterLink } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AdminPageHeader from '@/components/admin/AdminPageHeader.vue'
 import AdminOverviewStrip from '@/components/admin/AdminOverviewStrip.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import CodexTurnStateProxyUrlEditor from '@/components/settings/CodexTurnStateProxyUrlEditor.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { adminAPI } from '@/api/admin'
@@ -466,9 +491,11 @@ const accountsError = ref('')
 const collectionTasks = ref<CodexTurnStateTask[]>([])
 const loadingTasks = ref(false)
 const tasksError = ref('')
+const cancelTaskTargetId = ref<string | null>(null)
 const accountSearch = ref('')
 const statusFilter = ref<StatusFilter>('all')
 const collectingIds = reactive(new Set<number>())
+const cancelingTaskIds = reactive(new Set<string>())
 const pollingIds = reactive(new Set<number>())
 const pollingTargets = reactive<Record<number, Array<{ model: string; owner: string }>>>({})
 const successfulModels = reactive<Record<number, string[]>>({})
@@ -532,7 +559,11 @@ const filteredAccounts = computed(() => {
 })
 
 const recentTasks = computed(() => [...collectionTasks.value]
-  .sort((left, right) => Number(right.created_at_ms || 0) - Number(left.created_at_ms || 0))
+  .sort((left, right) => {
+    const activeOrder = Number(isActiveTask(right)) - Number(isActiveTask(left))
+    if (activeOrder !== 0) return activeOrder
+    return Number(right.created_at_ms || 0) - Number(left.created_at_ms || 0)
+  })
   .slice(0, RECENT_TASK_LIMIT))
 
 const stateCounts = computed(() => {
@@ -610,6 +641,10 @@ async function loadRecentTasks({ background = false }: { background?: boolean } 
     const response = await adminAPI.accounts.listCodexTurnStateTasks()
     if (!componentActive || requestGeneration !== taskListRequestGeneration) return
     collectionTasks.value = Array.isArray(response) ? response : []
+    if (cancelTaskTargetId.value) {
+      const cancelTarget = collectionTasks.value.find(task => task.id === cancelTaskTargetId.value)
+      if (!cancelTarget?.can_cancel || !isActiveTask(cancelTarget)) cancelTaskTargetId.value = null
+    }
     tasksError.value = ''
   } catch (error) {
     if (componentActive && requestGeneration === taskListRequestGeneration && (!background || collectionTasks.value.length === 0)) {
@@ -620,6 +655,56 @@ async function loadRecentTasks({ background = false }: { background?: boolean } 
       loadingTasks.value = false
       scheduleRecentTaskPoll()
     }
+  }
+}
+
+function requestTaskCancellation(task: CodexTurnStateTask) {
+  if (!task.can_cancel || !isActiveTask(task) || cancelingTaskIds.has(task.id)) return
+  cancelTaskTargetId.value = task.id
+}
+
+function closeTaskCancelConfirm() {
+  cancelTaskTargetId.value = null
+}
+
+function replaceCollectionTask(nextTask: CodexTurnStateTask) {
+  const taskIndex = collectionTasks.value.findIndex(task => task.id === nextTask.id)
+  if (taskIndex < 0) {
+    collectionTasks.value = [nextTask, ...collectionTasks.value]
+    return
+  }
+  collectionTasks.value.splice(taskIndex, 1, {
+    ...collectionTasks.value[taskIndex],
+    ...nextTask,
+  })
+}
+
+async function cancelSelectedTask() {
+  const targetId = cancelTaskTargetId.value
+  cancelTaskTargetId.value = null
+  if (!targetId) return
+  const target = collectionTasks.value.find(task => task.id === targetId)
+  if (!target?.can_cancel || !isActiveTask(target) || cancelingTaskIds.has(targetId)) return
+
+  cancelingTaskIds.add(targetId)
+  if (taskPollTimer) clearTimeout(taskPollTimer)
+  taskPollTimer = undefined
+  taskListRequestGeneration += 1
+  loadingTasks.value = false
+
+  try {
+    const canceledTask = await adminAPI.accounts.cancelCodexTurnStateTask(targetId)
+    if (!componentActive) return
+    taskListRequestGeneration += 1
+    replaceCollectionTask(canceledTask)
+    appStore.showSuccess(t('admin.codexTurnState.tasks.cancelSucceeded'))
+  } catch (error) {
+    if (componentActive) {
+      appStore.showError(extractApiErrorMessage(error, t('admin.codexTurnState.tasks.cancelFailed')))
+    }
+  } finally {
+    cancelingTaskIds.delete(targetId)
+    if (componentActive) scheduleRecentTaskPoll()
   }
 }
 
@@ -1650,6 +1735,9 @@ onBeforeUnmount(() => {
 }
 .task-details-link {
   @apply inline-flex items-center justify-center gap-1 justify-self-start text-xs font-medium text-primary-700 hover:text-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 lg:justify-self-end dark:text-primary-400 dark:hover:text-primary-300;
+}
+.task-row-actions {
+  @apply flex flex-wrap items-center gap-3 justify-self-start lg:justify-self-end;
 }
 .bulk-progress {
   @apply border-b border-gray-100 bg-gray-50/60 px-5 py-4 text-xs text-gray-600 dark:border-dark-700 dark:bg-dark-800/30 dark:text-gray-300;

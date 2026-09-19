@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   getAccountById: vi.fn(),
   collectCodexTurnState: vi.fn(),
   listCodexTurnStateTasks: vi.fn(),
+  cancelCodexTurnStateTask: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn(),
 }))
@@ -25,6 +26,7 @@ vi.mock('@/api/admin', () => ({
       getById: mocks.getAccountById,
       collectCodexTurnState: mocks.collectCodexTurnState,
       listCodexTurnStateTasks: mocks.listCodexTurnStateTasks,
+      cancelCodexTurnStateTask: mocks.cancelCodexTurnStateTask,
     },
   },
 }))
@@ -113,6 +115,11 @@ function mountView() {
         AdminPageHeader: { template: '<header><slot /><slot name="actions" /></header>' },
         AdminOverviewStrip: { props: ['items'], template: '<div data-testid="overview">{{ JSON.stringify(items) }}</div>' },
         RouterLink: { props: ['to'], template: '<a data-testid="router-link"><slot /></a>' },
+        ConfirmDialog: {
+          props: ['show'],
+          emits: ['confirm', 'cancel'],
+          template: '<div v-if="show" data-testid="confirm-dialog"><button data-testid="confirm-dialog-confirm" @click="$emit(\'confirm\')">confirm</button></div>',
+        },
         Icon: true,
       },
     },
@@ -143,6 +150,7 @@ describe('CodexTurnStateView', () => {
     })
     mocks.getAccountById.mockResolvedValue(account(12))
     mocks.listCodexTurnStateTasks.mockResolvedValue([])
+    mocks.cancelCodexTurnStateTask.mockResolvedValue({})
     mocks.collectCodexTurnState.mockResolvedValue({
       status: 'queued',
       account_id: 12,
@@ -396,6 +404,174 @@ describe('CodexTurnStateView', () => {
     expect(row.text()).toContain('admin.codexTurnState.tasks.statuses.succeeded')
     expect(row.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
     expect(row.get('[data-testid="router-link"]').text()).toContain('admin.codexTurnState.tasks.viewDetails')
+    wrapper.unmount()
+  })
+
+  it('shows unfinished tasks before newer terminal tasks while preserving newest-first order within each group', async () => {
+    const task = (id: string, status: string, createdAt: number) => ({
+      id,
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6-sol',
+      source: 'manual',
+      status,
+      stage: status === 'queued' ? 'queued' : status === 'running' ? 'collecting' : status === 'succeeded' ? 'completed' : 'failed',
+      progress: status === 'succeeded' ? 100 : 20,
+      progress_current: status === 'succeeded' ? 1 : 0,
+      progress_total: 1,
+      created_at_ms: createdAt,
+      updated_at_ms: createdAt,
+      can_cancel: status === 'queued' || status === 'running',
+      can_retry: status === 'failed',
+    })
+    mocks.listCodexTurnStateTasks.mockResolvedValueOnce([
+      task('terminal-newest', 'succeeded', 400),
+      task('active-older', 'queued', 100),
+      task('terminal-older', 'failed', 300),
+      task('active-newer', 'running', 200),
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findAll('.task-row').map(row => row.attributes('data-testid'))).toEqual([
+      'turn-state-task-active-newer',
+      'turn-state-task-active-older',
+      'turn-state-task-terminal-newest',
+      'turn-state-task-terminal-older',
+    ])
+    wrapper.unmount()
+  })
+
+  it('confirms and terminates an unfinished task once, then updates its row', async () => {
+    let resolveCancellation!: (value: Record<string, unknown>) => void
+    const activeTask = {
+      id: 'task-running-1',
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6-sol',
+      source: 'manual',
+      status: 'running',
+      stage: 'collecting',
+      progress: 40,
+      progress_current: 2,
+      progress_total: 5,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    mocks.listCodexTurnStateTasks.mockResolvedValueOnce([activeTask])
+    mocks.cancelCodexTurnStateTask.mockReturnValueOnce(new Promise(resolve => {
+      resolveCancellation = resolve
+    }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    const terminateButton = wrapper.get('[data-testid="turn-state-task-cancel-task-running-1"]')
+    expect(terminateButton.element.closest('[data-testid="router-link"]')).toBeNull()
+    await terminateButton.trigger('click')
+    const confirmButton = wrapper.get('[data-testid="confirm-dialog-confirm"]')
+    const firstConfirm = confirmButton.trigger('click')
+    const duplicateConfirm = confirmButton.trigger('click')
+    await Promise.all([firstConfirm, duplicateConfirm])
+    expect(mocks.cancelCodexTurnStateTask).toHaveBeenCalledTimes(1)
+    expect(mocks.cancelCodexTurnStateTask).toHaveBeenCalledWith('task-running-1')
+    expect(wrapper.get('[data-testid="turn-state-task-cancel-task-running-1"]').attributes('disabled')).toBeDefined()
+
+    resolveCancellation({
+      ...activeTask,
+      status: 'canceled',
+      stage: 'canceled',
+      can_cancel: false,
+      can_retry: true,
+    })
+    await flushPromises()
+
+    const row = wrapper.get('[data-testid="turn-state-task-task-running-1"]')
+    expect(row.text()).toContain('admin.codexTurnState.tasks.statuses.canceled')
+    expect(row.find('[data-testid="turn-state-task-cancel-task-running-1"]').exists()).toBe(false)
+    expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexTurnState.tasks.cancelSucceeded')
+    wrapper.unmount()
+  })
+
+  it('keeps termination available and reports an API failure', async () => {
+    const activeTask = {
+      id: 'task-queued-1',
+      account_id: 12,
+      account_name: 'Account 12',
+      request_model: 'gpt-5.5',
+      owner_model: 'gpt-5.5',
+      source: 'bulk',
+      status: 'queued',
+      stage: 'queued',
+      progress: 0,
+      progress_current: 0,
+      progress_total: 1,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    mocks.listCodexTurnStateTasks.mockResolvedValueOnce([activeTask])
+    mocks.cancelCodexTurnStateTask.mockRejectedValueOnce({})
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-task-cancel-task-queued-1"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-dialog-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.showError).toHaveBeenCalledWith('admin.codexTurnState.tasks.cancelFailed')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-task-cancel-task-queued-1"]').element.disabled).toBe(false)
+    expect(wrapper.get('[data-testid="turn-state-task-task-queued-1"]').text()).toContain('admin.codexTurnState.tasks.statuses.queued')
+    wrapper.unmount()
+  })
+
+  it('closes a stale termination confirmation when the task reaches a terminal state', async () => {
+    const activeTask = {
+      id: 'task-finishes-during-confirm',
+      account_id: 12,
+      account_name: 'Account 12',
+      request_model: 'gpt-5.5',
+      owner_model: 'gpt-5.5',
+      source: 'automatic',
+      status: 'running',
+      stage: 'collecting',
+      progress: 60,
+      progress_current: 3,
+      progress_total: 5,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([activeTask])
+      .mockResolvedValueOnce([{
+        ...activeTask,
+        status: 'succeeded',
+        stage: 'completed',
+        progress: 100,
+        progress_current: 5,
+        can_cancel: false,
+      }])
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-task-cancel-task-finishes-during-confirm"]').trigger('click')
+    const confirmation = wrapper.getComponent('[data-testid="confirm-dialog"]')
+    expect(confirmation.props('show')).toBe(true)
+
+    await wrapper.get('[data-testid="turn-state-tasks-refresh"]').trigger('click')
+    await flushPromises()
+    expect(confirmation.props('show')).toBe(false)
+
+    confirmation.vm.$emit('confirm')
+    await flushPromises()
+    expect(mocks.cancelCodexTurnStateTask).not.toHaveBeenCalled()
+    expect(mocks.showError).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
