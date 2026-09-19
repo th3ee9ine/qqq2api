@@ -1141,12 +1141,12 @@ export interface CodexTurnStateCollectResult {
 }
 
 /** Queue manual Turn State probes for every model in the configured collection scope. */
-export async function collectCodexTurnState(id: number): Promise<CodexTurnStateCollectResult> {
+export async function collectCodexTurnState(id: number, signal?: AbortSignal): Promise<CodexTurnStateCollectResult> {
   try {
     const { data } = await apiClient.post<CodexTurnStateCollectResult>(
       `/admin/accounts/${id}/codex-turn-state/collect`,
       undefined,
-      { timeout: 120_000 },
+      { timeout: 120_000, ...(signal ? { signal } : {}) },
     )
     return data
   } catch (error: unknown) {

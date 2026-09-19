@@ -69,6 +69,7 @@ func TestSystemSettingsCodexTurnStateProxyURLsNormalize(t *testing.T) {
 		" socks5://user:" + secret + "@proxy.example:1080",
 		"socks5://user:" + secret + "@proxy.example:1080\r\n",
 		"socks5://user:p%09" + secret + "@proxy.example:1080",
+		"socks5://user:" + strings.Repeat("中", 225) + "@proxy.example:1080",
 	} {
 		_, normalizeErr := NormalizeOpenAICodexTurnStateProxyURLs([]string{raw})
 		require.Error(t, normalizeErr, raw)
@@ -87,6 +88,21 @@ func TestSystemSettingsCodexTurnStateProxyURLsNormalize(t *testing.T) {
 		require.Error(t, parseErr, raw)
 		require.NotContains(t, parseErr.Error(), "secret")
 	}
+}
+
+func TestSystemSettingsCodexTurnStateProxyURLCanonicalLengthBoundary(t *testing.T) {
+	// '!' is accepted in decoded userinfo but escaped to three bytes by net/url.
+	// Keep the raw input below the limit while exercising the canonical limit.
+	exact := "socks5://u:" + strings.Repeat("!", 672) + "aa@proxy.example:1080"
+	canonical, err := NormalizeOpenAICodexTurnStateProxyURLs([]string{exact})
+	require.NoError(t, err)
+	require.Len(t, canonical, 1)
+	require.Len(t, canonical[0], codexTurnStateProxyURLMaxLen)
+
+	over := "socks5://u:" + strings.Repeat("!", 673) + "@proxy.example:1080"
+	_, err = NormalizeOpenAICodexTurnStateProxyURLs([]string{over})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), over)
 }
 
 func TestSystemSettingsCodexTurnStateProxyURLsParseAndPersist(t *testing.T) {

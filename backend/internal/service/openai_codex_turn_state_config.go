@@ -218,7 +218,11 @@ func normalizeOpenAICodexTurnStateProxyURL(raw string) (string, error) {
 		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
 		User:   url.UserPassword(username, password),
 	}
-	return canonical.String(), nil
+	canonicalValue := canonical.String()
+	if len(canonicalValue) > codexTurnStateProxyURLMaxLen {
+		return "", errInvalidCodexTurnStateProbeProxy
+	}
+	return canonicalValue, nil
 }
 
 func openAICodexTurnStateProxyURLHasControl(value string) bool {

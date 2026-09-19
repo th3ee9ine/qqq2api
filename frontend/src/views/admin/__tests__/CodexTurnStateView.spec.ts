@@ -186,6 +186,45 @@ describe('CodexTurnStateView', () => {
     expect(mocks.updateSettings.mock.calls[0]?.[0]).not.toHaveProperty('openai_codex_turn_state_proxy_id')
   })
 
+  it('batch-appends through the real dialog and waits for the settings form submission to persist', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="codex-turn-state-proxy-url-batch-open"]').trigger('click')
+    await flushPromises()
+    const input = document.body.querySelector<HTMLTextAreaElement>('[data-testid="codex-turn-state-proxy-url-batch-input"]')
+    expect(input).not.toBeNull()
+    input!.value = [
+      'socks5://existing:secret@PROXY.EXAMPLE:1080',
+      'socks5://batch-one:secret@ONE.EXAMPLE:1081',
+      'socks5://batch-two:secret@two.example:1082',
+    ].join('\n')
+    input!.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+
+    const apply = document.body.querySelector<HTMLButtonElement>('[data-testid="codex-turn-state-proxy-url-batch-apply"]')
+    expect(apply?.disabled).toBe(false)
+    apply!.click()
+    await flushPromises()
+
+    expect(mocks.updateSettings).not.toHaveBeenCalled()
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="codex-turn-state-proxy-url-batch-input"]')).toBeNull()
+    })
+
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(mocks.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      openai_codex_turn_state_proxy_urls: [
+        'socks5://existing:secret@proxy.example:1080',
+        'socks5://batch-one:secret@one.example:1081',
+        'socks5://batch-two:secret@two.example:1082',
+      ],
+    }))
+
+    wrapper.unmount()
+  })
+
   it('rejects an automatic renewal interval outside the 1 to 60 minute range', async () => {
     const wrapper = mountView()
     await flushPromises()
@@ -285,6 +324,323 @@ describe('CodexTurnStateView', () => {
     }
   })
 
+  it('renders the independent expiry time reported by each collected model', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-19T00:00:00Z'))
+    const firstExpiry = Date.now() + 30 * 60_000
+    const secondExpiry = Date.now() + 90 * 60_000
+    mocks.listAccounts.mockResolvedValueOnce({
+      items: [account(60, {
+        codex_turn_state_auto: state({
+          collection_succeeded: true,
+          successful_models: ['model-first', 'model-second'],
+          models: {
+            'model-first': state({
+              collection_succeeded: true,
+              verified_model: 'model-first',
+              expires_at_ms: firstExpiry,
+            }),
+            'model-second': state({
+              collection_succeeded: true,
+              verified_model: 'model-second',
+              expires_at_ms: secondExpiry,
+            }),
+          },
+        }),
+      })],
+      pages: 1,
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const formatter = new Intl.DateTimeFormat('en', { dateStyle: 'short', timeStyle: 'short' })
+    const firstDetail = wrapper.get('[data-testid="turn-state-model-detail-60-0"]').text()
+    const secondDetail = wrapper.get('[data-testid="turn-state-model-detail-60-1"]').text()
+    expect(firstDetail).toContain(`admin.codexTurnState.accounts.details.validUntil ${formatter.format(new Date(firstExpiry))}`)
+    expect(secondDetail).toContain(`admin.codexTurnState.accounts.details.validUntil ${formatter.format(new Date(secondExpiry))}`)
+    expect(firstDetail).not.toBe(secondDetail)
+    wrapper.unmount()
+  })
+
+  it('collects every loaded eligible account even when search and status filters hide rows', async () => {
+    const expiredAt = Date.now() - 60_000
+    mocks.listAccounts.mockResolvedValueOnce({
+      items: [
+        account(61),
+        account(62, {
+          codex_turn_state_auto: state({ configured: false, due: true, expires_at_ms: undefined }),
+        }),
+        account(63, {
+          codex_turn_state_auto: state({
+            collection_succeeded: true,
+            verified_model: 'expired-model',
+            expires_at_ms: expiredAt,
+          }),
+        }),
+      ],
+      pages: 1,
+    })
+    mocks.collectCodexTurnState.mockImplementation(async (accountId: number) => {
+      const model = `model-${accountId}`
+      return {
+        status: 'already_valid',
+        account_id: accountId,
+        target_models: [model],
+        queued_models: [],
+        already_valid_models: [model],
+        model_targets: [{ model, owner: model }],
+        codex_turn_state_auto: state({
+          collection_succeeded: true,
+          successful_models: [model],
+          verified_model: model,
+        }),
+      }
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-account-search"]').setValue('Account 61')
+    await wrapper.get('[data-testid="turn-state-status-filter"]').setValue('valid')
+    expect(wrapper.find('[data-testid="turn-state-account-61"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="turn-state-account-62"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="turn-state-account-63"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId).sort()).toEqual([61, 62, 63])
+    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkAccounts 3 3')
+    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 3 0 0')
+    wrapper.unmount()
+  })
+
+  it('limits bulk collection to three active account rounds and waits for a terminal poll before starting another', async () => {
+    vi.useFakeTimers()
+    const accountIds = [70, 71, 72, 73, 74]
+    const finished = new Set<number>()
+    mocks.listAccounts.mockResolvedValueOnce({
+      items: accountIds.map(id => account(id)),
+      pages: 1,
+    })
+    mocks.collectCodexTurnState.mockImplementation(async (accountId: number) => {
+      const model = `model-${accountId}`
+      if (accountId >= 73) {
+        return {
+          status: 'already_valid',
+          account_id: accountId,
+          target_models: [model],
+          queued_models: [],
+          already_valid_models: [model],
+          model_targets: [{ model, owner: model }],
+          codex_turn_state_auto: state({
+            collection_succeeded: true,
+            successful_models: [model],
+            verified_model: model,
+          }),
+        }
+      }
+      return {
+        status: 'queued',
+        account_id: accountId,
+        target_models: [model],
+        queued_models: [model],
+        model_targets: [{ model, owner: model }],
+        codex_turn_state_auto: state({
+          configured: false,
+          due: true,
+          recovery_pending: true,
+          expires_at_ms: undefined,
+          collection_succeeded: false,
+        }),
+      }
+    })
+    mocks.getAccountById.mockImplementation(async (accountId: number) => {
+      const model = `model-${accountId}`
+      return account(accountId, {
+        codex_turn_state_auto: finished.has(accountId)
+          ? state({
+              collection_succeeded: true,
+              successful_models: [model],
+              verified_model: model,
+              verified_at_ms: Date.now(),
+            })
+          : state({
+              configured: false,
+              due: true,
+              recovery_pending: true,
+              expires_at_ms: undefined,
+              collection_succeeded: false,
+            }),
+      })
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual([70, 71, 72])
+    expect(wrapper.get('[data-testid="turn-state-account-progress-73"]').text()).toContain('admin.codexTurnState.accounts.progressQueued')
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(3)
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(3)
+
+    finished.add(70)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual([70, 71, 72, 73, 74])
+
+    finished.add(71)
+    finished.add(72)
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkAccounts 5 5')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('settles submitting workers when a refresh removes their accounts and does not count an unsubmitted skip', async () => {
+    const accountIds = [75, 76, 77, 78]
+    mocks.listAccounts
+      .mockResolvedValueOnce({ items: accountIds.map(id => account(id)), pages: 1 })
+      .mockResolvedValueOnce({ items: [], pages: 1 })
+    mocks.collectCodexTurnState.mockImplementation(() => new Promise(() => {}))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(3)
+    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkSubmitted 3 4')
+
+    await wrapper.get('[data-testid="turn-state-refresh"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(3)
+    const progress = wrapper.get('[data-testid="turn-state-bulk-progress"]')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkComplete')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkSubmitted 3 4')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkAccounts 4 4')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 0 0 4')
+    wrapper.unmount()
+  })
+
+  it('keeps a submission skipped when its API result wins the race immediately before refresh removal', async () => {
+    vi.useFakeTimers()
+    let resolveCollection!: (value: {
+      status: string
+      account_id: number
+      target_models: string[]
+      queued_models: string[]
+      model_targets: Array<{ model: string; owner: string }>
+      codex_turn_state_auto: CodexTurnStateAutoInfo
+    }) => void
+    let resolveRefresh!: (value: { items: AccountListItem[]; pages: number }) => void
+    mocks.listAccounts
+      .mockResolvedValueOnce({ items: [account(79)], pages: 1 })
+      .mockReturnValueOnce(new Promise((resolve) => {
+        resolveRefresh = resolve
+      }))
+    mocks.collectCodexTurnState.mockReturnValueOnce(new Promise((resolve) => {
+      resolveCollection = resolve
+    }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="turn-state-refresh"]').trigger('click')
+    expect(mocks.listAccounts).toHaveBeenCalledTimes(2)
+
+    resolveCollection({
+      status: 'queued',
+      account_id: 79,
+      target_models: ['model-race'],
+      queued_models: ['model-race'],
+      model_targets: [{ model: 'model-race', owner: 'model-race' }],
+      codex_turn_state_auto: state({
+        configured: false,
+        due: true,
+        recovery_pending: true,
+        expires_at_ms: undefined,
+        collection_succeeded: false,
+      }),
+    })
+    resolveRefresh({ items: [], pages: 1 })
+    await flushPromises()
+    await flushPromises()
+
+    const progress = wrapper.get('[data-testid="turn-state-bulk-progress"]')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkComplete')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 0 0 1')
+    expect(mocks.getAccountById).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(mocks.getAccountById).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps a completed bulk summary stable while one account is collected again', async () => {
+    const collected = state({
+      collection_succeeded: true,
+      successful_models: ['model-stable'],
+      verified_model: 'model-stable',
+    })
+    mocks.listAccounts.mockResolvedValueOnce({ items: [account(79)], pages: 1 })
+    mocks.collectCodexTurnState
+      .mockResolvedValueOnce({
+        status: 'already_valid',
+        account_id: 79,
+        target_models: ['model-stable'],
+        queued_models: [],
+        already_valid_models: ['model-stable'],
+        model_targets: [{ model: 'model-stable', owner: 'model-stable' }],
+        codex_turn_state_auto: collected,
+      })
+      .mockReturnValueOnce(new Promise(() => {}))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+    const progress = wrapper.get('[data-testid="turn-state-bulk-progress"]')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkAccounts 1 1')
+    expect(progress.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
+
+    await wrapper.get('[data-testid="turn-state-collect-79"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(2)
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkComplete')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkAccounts 1 1')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 1 0 0')
+    expect(progress.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
+    wrapper.unmount()
+  })
+
+  it('does not invent a model when the backend explicitly reports an empty target list', async () => {
+    mocks.listAccounts.mockResolvedValueOnce({ items: [account(80)], pages: 1 })
+    mocks.collectCodexTurnState.mockResolvedValueOnce({
+      status: 'rejected',
+      account_id: 80,
+      target_models: [],
+      queued_models: [],
+      codex_turn_state_auto: null,
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+
+    const progress = wrapper.get('[data-testid="turn-state-bulk-progress"]')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkModels 0 0')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 0 1 0')
+    wrapper.unmount()
+  })
+
   it('polls a queued collection and renders the backend verified model name', async () => {
     vi.useFakeTimers()
     mocks.collectCodexTurnState.mockResolvedValueOnce({
@@ -315,7 +671,7 @@ describe('CodexTurnStateView', () => {
     await wrapper.get('[data-testid="turn-state-collect-12"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-testid="turn-state-model-12"]').exists()).toBe(false)
-    expect(mocks.collectCodexTurnState).toHaveBeenCalledWith(12)
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledWith(12, expect.anything())
     expect(wrapper.get('[data-testid="turn-state-collect-12"]').text()).toContain('admin.codexTurnState.accounts.checking')
     expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-12"]').element.disabled).toBe(true)
 
@@ -365,6 +721,67 @@ describe('CodexTurnStateView', () => {
     expect(mocks.showSuccess).toHaveBeenLastCalledWith('admin.codexTurnState.accounts.collectSucceeded')
     expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-12"]').element.disabled).toBe(false)
     expect(wrapper.get('[data-testid="turn-state-model-results-12"]').text()).toContain('admin.codexTurnState.accounts.modelStates.success')
+    wrapper.unmount()
+  })
+
+  it('reports a transient bulk polling retry without incrementing the failed account total', async () => {
+    vi.useFakeTimers()
+    mocks.listAccounts.mockResolvedValueOnce({
+      items: [account(80, {
+        type: 'setup-token',
+        codex_turn_state_auto: state({ configured: false, due: true, expires_at_ms: undefined }),
+      })],
+      pages: 1,
+    })
+    mocks.collectCodexTurnState.mockResolvedValueOnce({
+      status: 'queued',
+      account_id: 80,
+      target_models: ['model-retry'],
+      queued_models: ['model-retry'],
+      model_targets: [{ model: 'model-retry', owner: 'model-retry' }],
+      codex_turn_state_auto: state({
+        configured: false,
+        due: true,
+        recovery_pending: true,
+        expires_at_ms: undefined,
+        collection_succeeded: false,
+      }),
+    })
+    mocks.getAccountById
+      .mockRejectedValueOnce(new Error('temporary https://private.example/retry?token=secret'))
+      .mockResolvedValueOnce(account(80, {
+        type: 'setup-token',
+        codex_turn_state_auto: state({
+          collection_succeeded: true,
+          successful_models: ['model-retry'],
+          verified_model: 'model-retry',
+          verified_at_ms: Date.now(),
+        }),
+      }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="turn-state-account-progress-80"]').text()).toContain('admin.codexTurnState.accounts.progressRetrying 1')
+    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 0 0 0')
+    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkAccounts 0 1')
+    expect(wrapper.text()).not.toContain('private.example')
+    expect(wrapper.text()).not.toContain('token=secret')
+    expect(mocks.showError).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 1 0 0')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(false)
     wrapper.unmount()
   })
 
@@ -641,6 +1058,109 @@ describe('CodexTurnStateView', () => {
     expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-12"]').element.disabled).toBe(false)
     expect(mocks.showError).toHaveBeenCalledWith('admin.codexTurnState.accounts.collectFailed')
     expect(wrapper.get('[data-testid="turn-state-model-results-12"]').text()).toContain('actual-model-b')
+    wrapper.unmount()
+  })
+
+  it('keeps a mixed model round active at partial progress until the remaining model fails', async () => {
+    vi.useFakeTimers()
+    const verifiedAt = Date.now()
+    const successfulModel = state({
+      collection_succeeded: true,
+      verified_model: 'model-success',
+      verified_at_ms: verifiedAt,
+    })
+    const pendingModel = state({
+      configured: false,
+      due: true,
+      recovery_pending: true,
+      expires_at_ms: undefined,
+      collection_succeeded: false,
+    })
+    const initial = state({
+      configured: false,
+      due: true,
+      recovery_pending: true,
+      expires_at_ms: undefined,
+      collection_succeeded: false,
+      models: {
+        'model-success': pendingModel,
+        'model-failure': pendingModel,
+      },
+    })
+    mocks.listAccounts.mockResolvedValueOnce({
+      items: [account(81, { type: 'setup-token', codex_turn_state_auto: initial })],
+      pages: 1,
+    })
+    mocks.collectCodexTurnState.mockResolvedValueOnce({
+      status: 'queued',
+      account_id: 81,
+      target_models: ['model-success', 'model-failure'],
+      queued_models: ['model-success', 'model-failure'],
+      model_targets: [
+        { model: 'model-success', owner: 'model-success' },
+        { model: 'model-failure', owner: 'model-failure' },
+      ],
+      codex_turn_state_auto: initial,
+    })
+    mocks.getAccountById
+      .mockResolvedValueOnce(account(81, {
+        type: 'setup-token',
+        codex_turn_state_auto: state({
+          configured: false,
+          recovery_pending: true,
+          expires_at_ms: undefined,
+          collection_succeeded: false,
+          successful_models: ['model-success'],
+          models: {
+            'model-success': successfulModel,
+            'model-failure': pendingModel,
+          },
+        }),
+      }))
+      .mockResolvedValueOnce(account(81, {
+        type: 'setup-token',
+        codex_turn_state_auto: state({
+          configured: false,
+          expires_at_ms: undefined,
+          collection_succeeded: false,
+          successful_models: ['model-success'],
+          models: {
+            'model-success': successfulModel,
+            'model-failure': state({
+              configured: false,
+              due: true,
+              expires_at_ms: undefined,
+              collection_succeeded: false,
+              last_error: 'https://private.example/token?authorization=secret',
+              probe_at_ms: Date.now(),
+            }),
+          },
+        }),
+      }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-81"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+
+    const progress = wrapper.get('[data-testid="turn-state-account-progress-81"]')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.progressModels 1 2')
+    expect(progress.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('50')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-81"]').element.disabled).toBe(true)
+    expect(mocks.showError).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.progressPartial')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.progressModels 2 2')
+    expect(progress.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-81"]').element.disabled).toBe(false)
+    expect(mocks.showError).toHaveBeenCalledWith('admin.codexTurnState.accounts.collectFailed')
+    expect(wrapper.text()).not.toContain('private.example')
+    expect(wrapper.text()).not.toContain('authorization=secret')
     wrapper.unmount()
   })
 

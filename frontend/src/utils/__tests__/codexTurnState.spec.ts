@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CODEX_TURN_STATE_PROXY_BATCH_MAX_BYTES,
+  CODEX_TURN_STATE_PROXY_BATCH_MAX_LINES,
   CODEX_TURN_STATE_PROXY_URL_LIMIT,
   isCodexTurnStateEligibleAccount,
   normalizeCodexTurnStateDefaultModel,
   normalizeCodexTurnStateModels,
   normalizeCodexTurnStateProxyUrls,
+  parseCodexTurnStateProxyUrlBatch,
   validateCodexTurnStateProxyUrl,
 } from '../codexTurnState'
 import type { AccountListItem } from '@/types'
@@ -98,6 +101,35 @@ describe('Codex Turn State system settings helpers', () => {
     expect(normalizeCodexTurnStateProxyUrls([])).toEqual([])
   })
 
+  it('matches backend credential encoding and deduplicates equivalent percent escapes', () => {
+    expect(validateCodexTurnStateProxyUrl('socks5://%75ser:p%2fss@PROXY.EXAMPLE:01080')).toEqual({
+      valid: true,
+      normalized: 'socks5://user:p%2Fss@proxy.example:1080',
+    })
+    expect(validateCodexTurnStateProxyUrl("socks5://u!$&'()*+,;=:p!$&'()*+,;=:@proxy.example:1080")).toEqual({
+      valid: true,
+      normalized: 'socks5://u%21$&%27%28%29%2A+,;=:p%21$&%27%28%29%2A+,;=%3A@proxy.example:1080',
+    })
+    expect(normalizeCodexTurnStateProxyUrls([
+      'socks5://%75ser:%70ass@proxy.example:1080',
+      'socks5://user:pass@PROXY.EXAMPLE:1080',
+    ])).toEqual(['socks5://user:pass@proxy.example:1080'])
+    expect(validateCodexTurnStateProxyUrl('socks5://user:pass@TÄST.example:1080')).toEqual({
+      valid: true,
+      normalized: 'socks5://user:pass@t%C3%A4st.example:1080',
+    })
+  })
+
+  it.each([
+    'socks5://collector:secret@foo%09bar:1080',
+    'socks5://collector:secret@foo%C2%85bar:1080',
+    'socks5://collector:secret@foo%C2%A0bar:1080',
+    'socks5://collector:secret@foo%E2%80%A8bar:1080',
+    'socks5://collector:secret@foo%2Ebar:1080',
+  ])('rejects a backend-invalid encoded host: %s', (value) => {
+    expect(validateCodexTurnStateProxyUrl(value)).toEqual({ valid: false, error: 'host' })
+  })
+
   it.each([
     '',
     'http://collector:secret@proxy.example:1080',
@@ -111,6 +143,13 @@ describe('Codex Turn State system settings helpers', () => {
     'socks5://collector:secret@proxy.example:1080?query=1',
     'socks5://collector:secret@proxy.example:1080#fragment',
     'socks5://collector:%0Asecret@proxy.example:1080',
+    'socks5://collector:%09secret@proxy.example:1080',
+    'socks5://collector:%01secret@proxy.example:1080',
+    'socks5://collector:%7Fsecret@proxy.example:1080',
+    'socks5://collector:%C2%85secret@proxy.example:1080',
+    'socks5://collector:sec\tret@proxy.example:1080',
+    'socks5://collector:secret@proxy\t.example:1080',
+    `socks5://collector:${'中'.repeat(225)}@proxy.example:1080`,
     ' socks5://collector:secret@proxy.example:1080',
   ])('rejects malformed dedicated proxy URL: %s', (value) => {
     expect(validateCodexTurnStateProxyUrl(value).valid).toBe(false)
@@ -123,6 +162,89 @@ describe('Codex Turn State system settings helpers', () => {
       (_, index) => `socks5://user:password@proxy-${index}.example:1080`,
     )
     expect(() => normalizeCodexTurnStateProxyUrls(values)).toThrow('invalid_proxy_urls')
+  })
+
+  it('parses, normalizes, and stably deduplicates a batch against the current pool', () => {
+    const result = parseCodexTurnStateProxyUrlBatch([
+      'socks5://existing:secret@PROXY.EXAMPLE:1080',
+      ' socks5://new:secret@NEW.EXAMPLE:1081 ',
+      'socks5://new:secret@new.example:1081',
+      '',
+      'http://invalid:secret@proxy.example:1080',
+      'socks5://missing-password@proxy.example:1080',
+    ].join('\r\n'), ['socks5://existing:secret@proxy.example:1080'])
+
+    expect(result).toEqual({
+      total: 5,
+      urls: ['socks5://new:secret@new.example:1081'],
+      duplicates: 2,
+      overflow: 0,
+      errors: [
+        { line: 5, error: 'scheme' },
+        { line: 6, error: 'credentials' },
+      ],
+    })
+  })
+
+  it('reports batch overflow without silently dropping valid URLs', () => {
+    const existing = Array.from(
+      { length: CODEX_TURN_STATE_PROXY_URL_LIMIT - 1 },
+      (_, index) => `socks5://user:password@existing-${index}.example:1080`,
+    )
+    const result = parseCodexTurnStateProxyUrlBatch([
+      'socks5://new:password@new-1.example:1080',
+      'socks5://new:password@new-2.example:1080',
+    ].join('\n'), existing)
+
+    expect(result.urls).toHaveLength(2)
+    expect(result.overflow).toBe(1)
+    expect(result.errors).toEqual([])
+  })
+
+  it('uses the canonical unique size of the current pool for batch capacity', () => {
+    const existing = Array.from(
+      { length: CODEX_TURN_STATE_PROXY_URL_LIMIT - 2 },
+      (_, index) => `socks5://user:password@existing-${index}.example:1080`,
+    )
+    existing.push('socks5://%75ser:password@EXISTING-0.EXAMPLE:1080')
+    const result = parseCodexTurnStateProxyUrlBatch([
+      'socks5://new:password@new-1.example:1080',
+      'socks5://new:password@new-2.example:1080',
+    ].join('\n'), existing)
+
+    expect(existing).toHaveLength(CODEX_TURN_STATE_PROXY_URL_LIMIT - 1)
+    expect(result.urls).toHaveLength(2)
+    expect(result.overflow).toBe(0)
+  })
+
+  it('rejects a batch with too many physical lines before per-line parsing', () => {
+    const result = parseCodexTurnStateProxyUrlBatch(
+      '\n'.repeat(CODEX_TURN_STATE_PROXY_BATCH_MAX_LINES),
+      [],
+    )
+
+    expect(result).toEqual({
+      total: 0,
+      urls: [],
+      duplicates: 0,
+      overflow: 0,
+      errors: [],
+      inputError: 'tooManyLines',
+    })
+  })
+
+  it('enforces the batch byte limit with UTF-8 byte length', () => {
+    const raw = '中'.repeat(Math.floor(CODEX_TURN_STATE_PROXY_BATCH_MAX_BYTES / 2))
+    expect(raw.length).toBeLessThan(CODEX_TURN_STATE_PROXY_BATCH_MAX_BYTES)
+
+    expect(parseCodexTurnStateProxyUrlBatch(raw, [])).toEqual({
+      total: 0,
+      urls: [],
+      duplicates: 0,
+      overflow: 0,
+      errors: [],
+      inputError: 'tooManyBytes',
+    })
   })
 
   it('keeps only currently schedulable OpenAI Codex accounts', () => {

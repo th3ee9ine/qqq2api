@@ -47,4 +47,17 @@ describe('admin account Codex Turn State API', () => {
 
     await expect(collectCodexTurnState(7)).resolves.toEqual(result)
   })
+
+  it('forwards an optional abort signal to the collection request', async () => {
+    const controller = new AbortController()
+    post.mockResolvedValueOnce({ data: { status: 'queued', account_id: 7 } })
+
+    await collectCodexTurnState(7, controller.signal)
+
+    expect(post).toHaveBeenCalledWith(
+      '/admin/accounts/7/codex-turn-state/collect',
+      undefined,
+      { timeout: 120_000, signal: controller.signal },
+    )
+  })
 })

@@ -101,7 +101,55 @@
             <h2 class="admin-section-heading">{{ t('admin.codexTurnState.accounts.title') }}</h2>
             <p class="section-description">{{ t('admin.codexTurnState.accounts.description') }}</p>
           </div>
-          <span class="account-count">{{ filteredAccounts.length }} / {{ accounts.length }}</span>
+          <div class="accounts-heading-actions">
+            <span class="account-count">{{ filteredAccounts.length }} / {{ accounts.length }}</span>
+            <button
+              type="button"
+              class="btn btn-primary"
+              :disabled="collectAllDisabled"
+              data-testid="turn-state-collect-all"
+              @click="collectAllAccounts"
+            >
+              <Icon :name="bulkCollectionActive ? 'refresh' : 'play'" size="sm" :class="{ 'animate-spin': bulkCollectionActive }" />
+              {{ bulkCollectionActive
+                ? t('admin.codexTurnState.accounts.collectAllRunning')
+                : t('admin.codexTurnState.accounts.collectAll', { count: accounts.length }) }}
+            </button>
+          </div>
+        </div>
+
+        <div
+          v-if="bulkAccountIds.length > 0"
+          class="bulk-progress"
+          role="status"
+          aria-live="polite"
+          data-testid="turn-state-bulk-progress"
+        >
+          <div class="bulk-progress-heading">
+            <span class="font-medium text-gray-800 dark:text-gray-200">
+              {{ bulkCollectionActive
+                ? t('admin.codexTurnState.accounts.bulkRunning')
+                : t('admin.codexTurnState.accounts.bulkComplete') }}
+            </span>
+            <span class="font-semibold text-gray-900 dark:text-white">{{ bulkProgress.percent }}%</span>
+          </div>
+          <div
+            class="bulk-progress-track"
+            role="progressbar"
+            :aria-valuenow="bulkProgress.percent"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            :aria-label="t('admin.codexTurnState.accounts.bulkProgressLabel', { percent: bulkProgress.percent })"
+            :aria-valuetext="`${t('admin.codexTurnState.accounts.bulkProgressLabel', { percent: bulkProgress.percent })}; ${t('admin.codexTurnState.accounts.bulkOutcomes', { succeeded: bulkProgress.succeededAccounts, failed: bulkProgress.failedAccounts, skipped: bulkProgress.skippedAccounts })}`"
+          >
+            <span :style="{ width: `${bulkProgress.percent}%` }" />
+          </div>
+          <div class="bulk-progress-metrics">
+            <span>{{ t('admin.codexTurnState.accounts.bulkSubmitted', { current: bulkProgress.submittedAccounts, total: bulkProgress.totalAccounts }) }}</span>
+            <span>{{ t('admin.codexTurnState.accounts.bulkAccounts', { current: bulkProgress.completedAccounts, total: bulkProgress.totalAccounts }) }}</span>
+            <span>{{ t('admin.codexTurnState.accounts.bulkModels', { current: bulkProgress.completedModels, total: bulkProgress.totalModels }) }}</span>
+            <span>{{ t('admin.codexTurnState.accounts.bulkOutcomes', { succeeded: bulkProgress.succeededAccounts, failed: bulkProgress.failedAccounts, skipped: bulkProgress.skippedAccounts }) }}</span>
+          </div>
         </div>
 
         <div class="accounts-toolbar">
@@ -133,7 +181,13 @@
           <button type="button" class="mt-3 text-xs font-medium text-primary-700 hover:underline dark:text-primary-400" @click="clearAccountFilters">{{ t('admin.codexTurnState.accounts.clearFilters') }}</button>
         </div>
         <div v-else class="account-list">
-          <article v-for="account in filteredAccounts" :key="account.id" class="account-row" :data-testid="`turn-state-account-${account.id}`">
+          <article
+            v-for="account in filteredAccounts"
+            :key="account.id"
+            class="account-row"
+            :aria-busy="isCollecting(account.id)"
+            :data-testid="`turn-state-account-${account.id}`"
+          >
             <div class="account-main">
               <div class="min-w-0 flex-1">
                 <div class="flex min-w-0 flex-wrap items-center gap-2">
@@ -147,8 +201,17 @@
                   class="model-results"
                   :data-testid="`turn-state-model-results-${account.id}`"
                 >
-                  <div v-for="result in modelResults(account)" :key="result.model" class="model-result-row">
-                    <span class="min-w-0 break-all font-mono text-xs text-gray-700 dark:text-gray-200">{{ result.model }}</span>
+                  <div v-for="(result, resultIndex) in modelResults(account)" :key="result.model" class="model-result-row">
+                    <div class="min-w-0">
+                      <span class="block break-all font-mono text-xs text-gray-700 dark:text-gray-200">{{ result.model }}</span>
+                      <span
+                        v-if="result.detail"
+                        class="model-result-detail"
+                        :data-testid="`turn-state-model-detail-${account.id}-${resultIndex}`"
+                      >
+                        {{ result.detail }}
+                      </span>
+                    </div>
                     <span class="state-badge" :class="`state-${result.kind}`">{{ result.label }}</span>
                   </div>
                 </div>
@@ -159,7 +222,7 @@
               </div>
             </div>
             <div class="collect-controls">
-              <button type="button" class="btn btn-secondary collect-button" :disabled="isCollecting(account.id)" :data-testid="`turn-state-collect-${account.id}`" @click="collectAccount(account)">
+              <button type="button" class="btn btn-secondary collect-button" :disabled="bulkCollectionActive || isCollecting(account.id)" :data-testid="`turn-state-collect-${account.id}`" @click="collectAccount(account)">
                 <Icon :name="isCollecting(account.id) ? 'refresh' : 'play'" size="sm" :class="{ 'animate-spin': isCollecting(account.id) }" />
                 {{ collectingIds.has(account.id)
                   ? t('admin.codexTurnState.accounts.collecting')
@@ -167,6 +230,31 @@
                     ? t('admin.codexTurnState.accounts.checking')
                     : t('admin.codexTurnState.accounts.collect') }}
               </button>
+              <div
+                v-if="accountCollectionRuns[account.id]"
+                class="account-progress"
+                :data-testid="`turn-state-account-progress-${account.id}`"
+              >
+                <div class="account-progress-meta">
+                  <span>{{ accountCollectionLabel(accountCollectionRuns[account.id]) }}</span>
+                  <span v-if="accountCollectionRuns[account.id].targets.length > 0">
+                    {{ t('admin.codexTurnState.accounts.progressModels', {
+                      current: completedTargetCount(accountCollectionRuns[account.id]),
+                      total: accountCollectionRuns[account.id].targets.length,
+                    }) }}
+                  </span>
+                </div>
+                <div
+                  class="account-progress-track"
+                  role="progressbar"
+                  :aria-valuenow="accountCollectionPercent(accountCollectionRuns[account.id])"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  :aria-label="accountCollectionLabel(accountCollectionRuns[account.id])"
+                >
+                  <span :style="{ width: `${accountCollectionPercent(accountCollectionRuns[account.id])}%` }" />
+                </div>
+              </div>
             </div>
           </article>
         </div>
@@ -192,6 +280,7 @@ import {
   normalizeCodexTurnStateModels,
   normalizeCodexTurnStateProxyUrls,
 } from '@/utils/codexTurnState'
+import type { CodexTurnStateCollectResult } from '@/api/admin/accounts'
 import type { AccountListItem, CodexTurnStateAutoInfo } from '@/types'
 
 type StateKind = 'valid' | 'renewal' | 'missing' | 'expired' | 'pending' | 'cooldown' | 'error'
@@ -209,6 +298,22 @@ interface ModelStateView extends AccountStateView {
 }
 
 type PollOutcome = 'pending' | 'success' | 'failure'
+type AccountCollectionOutcome = 'success' | 'failure' | 'skipped'
+type AccountCollectionPhase = 'queued' | 'submitting' | 'polling' | AccountCollectionOutcome
+type CollectionTargetStatus = 'pending' | AccountCollectionOutcome
+
+interface CollectionTargetProgress {
+  model: string
+  owner: string
+  status: CollectionTargetStatus
+}
+
+interface AccountCollectionRun {
+  phase: AccountCollectionPhase
+  targets: CollectionTargetProgress[]
+  transientFailures: number
+  submitted: boolean
+}
 
 interface PollBaseline {
   targets: Map<string, {
@@ -217,11 +322,34 @@ interface PollBaseline {
   }>
   outcomes: Map<string, Exclude<PollOutcome, 'pending'>>
   displayTargets: Array<{ model: string; owner: string }>
+  notify: boolean
+  complete: (outcome: AccountCollectionOutcome) => void
+  settled: boolean
+}
+
+interface CollectionSubmissionGate {
+  abort: () => void
+  complete: (outcome: AccountCollectionOutcome) => void
+  settled: boolean
+  outcome?: AccountCollectionOutcome
+}
+
+interface BulkCollectionProgress {
+  totalAccounts: number
+  submittedAccounts: number
+  completedAccounts: number
+  succeededAccounts: number
+  failedAccounts: number
+  skippedAccounts: number
+  totalModels: number
+  completedModels: number
+  percent: number
 }
 
 const POLL_INTERVAL_MS = 2_000
 const MAX_POLL_RETRY_DELAY_MS = 30_000
 const CLOCK_TICK_MS = 30_000
+const BULK_COLLECTION_CONCURRENCY = 3
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -241,8 +369,14 @@ const collectingIds = reactive(new Set<number>())
 const pollingIds = reactive(new Set<number>())
 const pollingTargets = reactive<Record<number, Array<{ model: string; owner: string }>>>({})
 const successfulModels = reactive<Record<number, string[]>>({})
+const accountCollectionRuns = reactive<Record<number, AccountCollectionRun>>({})
+const bulkAccountIds = ref<number[]>([])
+const bulkCollectionActive = ref(false)
+const bulkProgressSnapshot = ref<BulkCollectionProgress | null>(null)
 const clock = ref(Date.now())
 const pollTimers = new Map<number, ReturnType<typeof setTimeout>>()
+const pollBaselines = new Map<number, PollBaseline>()
+const collectionSubmissionGates = new Map<number, CollectionSubmissionGate>()
 const accountDetailVersions = new Map<number, number>()
 let clockTimer: ReturnType<typeof setInterval> | undefined
 let componentActive = true
@@ -251,6 +385,32 @@ let accountDetailGeneration = 0
 
 const loading = computed(() => loadingSettings.value || loadingAccounts.value)
 const proxyPoolConfigurationValid = computed(() => storedProxyPoolValid.value && proxyEditorValid.value)
+const collectAllDisabled = computed(() => loading.value
+  || accounts.value.length === 0
+  || bulkCollectionActive.value
+  || collectingIds.size > 0
+  || pollingIds.size > 0)
+
+const bulkProgress = computed(() => {
+  if (!bulkCollectionActive.value && bulkProgressSnapshot.value) return bulkProgressSnapshot.value
+  const runs = bulkAccountIds.value.map(accountId => accountCollectionRuns[accountId])
+  const terminal = runs.filter((run): run is AccountCollectionRun => Boolean(run && isTerminalCollectionPhase(run.phase)))
+  const targets = runs.flatMap(run => run?.targets || [])
+  const completedTargets = targets.filter(target => target.status !== 'pending')
+  const totalAccounts = bulkAccountIds.value.length
+  const completedAccounts = terminal.length
+  return {
+    totalAccounts,
+    submittedAccounts: runs.filter(run => run?.submitted).length,
+    completedAccounts,
+    succeededAccounts: terminal.filter(run => run.phase === 'success').length,
+    failedAccounts: terminal.filter(run => run.phase === 'failure').length,
+    skippedAccounts: terminal.filter(run => run.phase === 'skipped').length,
+    totalModels: targets.length,
+    completedModels: completedTargets.length,
+    percent: totalAccounts > 0 ? Math.round((completedAccounts / totalAccounts) * 100) : 0,
+  }
+})
 
 const statusOptions = computed(() => (['all', 'valid', 'renewal', 'missing', 'expired', 'pending', 'cooldown', 'error'] as StatusFilter[]).map((value) => ({
   value,
@@ -358,6 +518,10 @@ async function loadAccounts() {
       setSuccessfulModels(account.id, successfulModelsFromInfo(account.codex_turn_state_auto))
     }
     accounts.value = mergedAccounts
+    const activeCollectionIds = new Set([...collectionSubmissionGates.keys(), ...pollBaselines.keys()])
+    for (const accountId of activeCollectionIds) {
+      if (!mergedAccountIds.has(accountId)) stopPolling(accountId, 'skipped')
+    }
   } catch (error) {
     if (componentActive && requestGeneration === accountListRequestGeneration) {
       accountsError.value = extractApiErrorMessage(error, t('admin.codexTurnState.accounts.loadFailed'))
@@ -522,11 +686,24 @@ function classifyModelInfo(model: string, info: CodexTurnStateAutoInfo): ModelSt
   else if (Number(info.probe_not_before_ms) > clock.value) kind = 'cooldown'
   else if (info.collection_succeeded === true || (info.configured && (!info.expires_at_ms || Number(info.expires_at_ms) > clock.value))) kind = 'valid'
   else if (info.last_error) kind = 'error'
+  let detail = t('admin.codexTurnState.accounts.details.missing')
+  if (kind === 'pending') detail = t('admin.codexTurnState.accounts.details.pending')
+  else if (kind === 'expired') detail = t('admin.codexTurnState.accounts.details.expiredAt', { time: formatTimestamp(info.expires_at_ms) })
+  else if (kind === 'renewal') {
+    detail = info.expires_at_ms
+      ? t('admin.codexTurnState.accounts.details.renewalBefore', { time: formatTimestamp(info.expires_at_ms) })
+      : t('admin.codexTurnState.accounts.details.renewal')
+  } else if (kind === 'valid') {
+    detail = info.expires_at_ms
+      ? t('admin.codexTurnState.accounts.details.validUntil', { time: formatTimestamp(info.expires_at_ms) })
+      : t('admin.codexTurnState.accounts.details.configured')
+  } else if (kind === 'cooldown') detail = t('admin.codexTurnState.accounts.details.retryAt', { time: formatTimestamp(info.probe_not_before_ms) })
+  else if (kind === 'error') detail = t('admin.codexTurnState.accounts.details.error')
   return {
     kind,
     model,
     label: t(`admin.codexTurnState.accounts.modelStates.${kind === 'valid' ? 'success' : kind}`),
-    detail: '',
+    detail,
   }
 }
 
@@ -603,7 +780,7 @@ function modelResults(account: AccountListItem): ModelStateView[] {
     ...(successfulModels[account.id] || []),
   ]) {
     const existing = rows.get(model)
-    if (!existing || existing.kind === 'valid') {
+    if (!existing) {
       rows.set(model, {
         kind: 'valid',
         model,
@@ -625,7 +802,7 @@ function modelResults(account: AccountListItem): ModelStateView[] {
       kind: 'pending',
       model: target.model,
       label: t('admin.codexTurnState.accounts.modelStates.pending'),
-      detail: '',
+      detail: t('admin.codexTurnState.accounts.details.pending'),
     })
   }
   return [...rows.values()]
@@ -634,6 +811,121 @@ function modelResults(account: AccountListItem): ModelStateView[] {
 function formatTimestamp(value?: number): string {
   if (!value) return '-'
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+}
+
+function isTerminalCollectionPhase(phase: AccountCollectionPhase): boolean {
+  return phase === 'success' || phase === 'failure' || phase === 'skipped'
+}
+
+function completedTargetCount(run: AccountCollectionRun): number {
+  return run.targets.filter(target => target.status !== 'pending').length
+}
+
+function accountCollectionPercent(run: AccountCollectionRun): number {
+  if (run.targets.length === 0) return isTerminalCollectionPhase(run.phase) ? 100 : 0
+  return Math.round((completedTargetCount(run) / run.targets.length) * 100)
+}
+
+function accountCollectionLabel(run: AccountCollectionRun): string {
+  if (run.phase === 'queued') return t('admin.codexTurnState.accounts.progressQueued')
+  if (run.phase === 'submitting') return t('admin.codexTurnState.accounts.progressSubmitting')
+  if (run.phase === 'polling' && run.transientFailures > 0) {
+    return t('admin.codexTurnState.accounts.progressRetrying', { count: run.transientFailures })
+  }
+  if (run.phase === 'polling') return t('admin.codexTurnState.accounts.progressPolling')
+  if (run.phase === 'success') return t('admin.codexTurnState.accounts.progressSucceeded')
+  if (run.phase === 'skipped') return t('admin.codexTurnState.accounts.progressSkipped')
+  return run.targets.some(target => target.status === 'success')
+    ? t('admin.codexTurnState.accounts.progressPartial')
+    : t('admin.codexTurnState.accounts.progressFailed')
+}
+
+function beginAccountCollection(accountId: number, phase: 'queued' | 'submitting' = 'submitting') {
+  accountCollectionRuns[accountId] = {
+    phase,
+    targets: [],
+    transientFailures: 0,
+    submitted: false,
+  }
+}
+
+function markAccountCollectionSubmitted(accountId: number) {
+  const current = accountCollectionRuns[accountId]
+  if (!current) return
+  accountCollectionRuns[accountId] = { ...current, submitted: true }
+}
+
+function collectionTargetsFromResult(
+  result: CodexTurnStateCollectResult,
+  targetModels: string[],
+  queuedModels: string[],
+): CollectionTargetProgress[] {
+  const mapped = (result.model_targets || [])
+    .map(({ model, owner }) => ({ model: model.trim(), owner: owner.trim() }))
+    .filter(({ model, owner }) => Boolean(model && owner))
+  const fallbackModels = targetModels.length > 0 ? targetModels : queuedModels
+  const source = mapped.length > 0
+    ? mapped
+    : fallbackModels.map(model => ({ model, owner: model }))
+  const queuedOwners = new Set(queuedModels)
+  const failed = result.status === 'rejected' || result.status === 'error'
+  const seen = new Set<string>()
+  const targets: CollectionTargetProgress[] = []
+  for (const target of source) {
+    const key = `${target.model}\u0000${target.owner}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    targets.push({
+      ...target,
+      status: failed ? 'failure' : queuedOwners.has(target.owner) ? 'pending' : 'success',
+    })
+  }
+  return targets
+}
+
+function setAccountCollectionResult(
+  accountId: number,
+  result: CodexTurnStateCollectResult,
+  targetModels: string[],
+  queuedModels: string[],
+) {
+  const failed = result.status === 'rejected' || result.status === 'error'
+  accountCollectionRuns[accountId] = {
+    phase: failed ? 'failure' : queuedModels.length > 0 ? 'polling' : 'success',
+    targets: collectionTargetsFromResult(result, targetModels, queuedModels),
+    transientFailures: 0,
+    submitted: true,
+  }
+}
+
+function updateAccountCollectionFromBaseline(accountId: number, baseline: PollBaseline) {
+  const current = accountCollectionRuns[accountId]
+  if (!current) return
+  accountCollectionRuns[accountId] = {
+    ...current,
+    phase: 'polling',
+    transientFailures: 0,
+    targets: current.targets.map((target) => {
+      const outcome = baseline.outcomes.get(target.owner)
+      return outcome ? { ...target, status: outcome } : target
+    }),
+  }
+}
+
+function markAccountCollectionRetry(accountId: number, failures: number) {
+  const current = accountCollectionRuns[accountId]
+  if (!current || isTerminalCollectionPhase(current.phase)) return
+  accountCollectionRuns[accountId] = { ...current, phase: 'polling', transientFailures: failures }
+}
+
+function markAccountCollectionTerminal(accountId: number, outcome: AccountCollectionOutcome) {
+  const current = accountCollectionRuns[accountId] || { phase: 'submitting', targets: [], transientFailures: 0, submitted: false }
+  accountCollectionRuns[accountId] = {
+    ...current,
+    phase: outcome,
+    transientFailures: 0,
+    targets: current.targets.map(target => target.status === 'pending' ? { ...target, status: outcome } : target),
+  }
 }
 
 function clearAccountFilters() {
@@ -651,7 +943,7 @@ function removeAccountFromDetails(accountId: number) {
   const index = accounts.value.findIndex(account => account.id === accountId)
   if (index >= 0) accounts.value.splice(index, 1)
   delete successfulModels[accountId]
-  stopPolling(accountId)
+  stopPolling(accountId, 'skipped')
 }
 
 function replaceAccount(account: AccountListItem): boolean {
@@ -662,7 +954,7 @@ function replaceAccount(account: AccountListItem): boolean {
   if (!isCodexTurnStateEligibleAccount(next)) {
     accounts.value.splice(index, 1)
     delete successfulModels[account.id]
-    stopPolling(account.id)
+    stopPolling(account.id, 'skipped')
     return false
   }
   setSuccessfulModels(account.id, successfulModelsFromInfo(next.codex_turn_state_auto))
@@ -724,6 +1016,8 @@ function createPollBaseline(
   info: CodexTurnStateAutoInfo | null | undefined,
   targets: string[],
   displayTargets: Array<{ model: string; owner: string }>,
+  notify: boolean,
+  complete: (outcome: AccountCollectionOutcome) => void,
 ): PollBaseline {
   const allowAggregateFallback = targets.length === 1
   return {
@@ -736,6 +1030,9 @@ function createPollBaseline(
     })),
     outcomes: new Map(),
     displayTargets,
+    notify,
+    complete,
+    settled: false,
   }
 }
 
@@ -767,12 +1064,27 @@ function pollOutcome(info: CodexTurnStateAutoInfo | null | undefined, baseline: 
   return failed ? 'failure' : 'success'
 }
 
-function stopPolling(accountId: number) {
+function stopPolling(accountId: number, outcome: AccountCollectionOutcome) {
   const timer = pollTimers.get(accountId)
   if (timer) clearTimeout(timer)
   pollTimers.delete(accountId)
   pollingIds.delete(accountId)
   delete pollingTargets[accountId]
+  const baseline = pollBaselines.get(accountId)
+  pollBaselines.delete(accountId)
+  const submissionGate = collectionSubmissionGates.get(accountId)
+  collectionSubmissionGates.delete(accountId)
+  markAccountCollectionTerminal(accountId, outcome)
+  if (submissionGate && !submissionGate.settled) {
+    submissionGate.outcome = outcome
+    submissionGate.settled = true
+    submissionGate.abort()
+    submissionGate.complete(outcome)
+  }
+  if (baseline && !baseline.settled) {
+    baseline.settled = true
+    baseline.complete(outcome)
+  }
 }
 
 function pollingErrorStatus(error: unknown): number | undefined {
@@ -790,6 +1102,8 @@ function isTransientPollingError(error: unknown): boolean {
 }
 
 function schedulePoll(accountId: number, baseline: PollBaseline, transientFailureCount = 0) {
+  if (baseline.settled) return
+  pollBaselines.set(accountId, baseline)
   pollingIds.add(accountId)
   pollingTargets[accountId] = baseline.displayTargets
   const delay = transientFailureCount === 0
@@ -803,21 +1117,22 @@ function schedulePoll(accountId: number, baseline: PollBaseline, transientFailur
       if (!componentActive || !pollingIds.has(accountId)) return
       clock.value = Date.now()
       if (!replaceAccount(refreshed)) {
-        stopPolling(accountId)
+        stopPolling(accountId, 'skipped')
         return
       }
       const info = refreshed.codex_turn_state_auto
       const outcome = pollOutcome(info, baseline)
+      updateAccountCollectionFromBaseline(accountId, baseline)
       if (outcome === 'success') {
         const reportedSuccesses = successfulModelsFromInfo(info)
         addSuccessfulModels(accountId, reportedSuccesses.length > 0 ? reportedSuccesses : [...baseline.targets.keys()])
-        stopPolling(accountId)
-        appStore.showSuccess(t('admin.codexTurnState.accounts.collectSucceeded'))
+        stopPolling(accountId, 'success')
+        if (baseline.notify) appStore.showSuccess(t('admin.codexTurnState.accounts.collectSucceeded'))
         return
       }
       if (outcome === 'failure') {
-        stopPolling(accountId)
-        appStore.showError(t('admin.codexTurnState.accounts.collectFailed'))
+        stopPolling(accountId, 'failure')
+        if (baseline.notify) appStore.showError(t('admin.codexTurnState.accounts.collectFailed'))
         return
       }
       schedulePoll(accountId, baseline)
@@ -829,11 +1144,12 @@ function schedulePoll(accountId: number, baseline: PollBaseline, transientFailur
         return
       }
       if (isTransientPollingError(error)) {
+        markAccountCollectionRetry(accountId, transientFailureCount + 1)
         schedulePoll(accountId, baseline, transientFailureCount + 1)
         return
       }
-      stopPolling(accountId)
-      appStore.showError(extractApiErrorMessage(error, t('admin.codexTurnState.accounts.collectFailed')))
+      stopPolling(accountId, 'failure')
+      if (baseline.notify) appStore.showError(t('admin.codexTurnState.accounts.collectFailed'))
     }
   }, delay)
   pollTimers.set(accountId, timer)
@@ -843,26 +1159,48 @@ function isCollecting(accountId: number): boolean {
   return collectingIds.has(accountId) || pollingIds.has(accountId)
 }
 
-async function collectAccount(account: AccountListItem) {
-  if (isCollecting(account.id)) return
+async function collectAccount(
+  account: AccountListItem,
+  { notify = true }: { notify?: boolean } = {},
+): Promise<AccountCollectionOutcome> {
+  if (isCollecting(account.id)) return 'skipped'
+  beginAccountCollection(account.id)
+  markAccountCollectionSubmitted(account.id)
   collectingIds.add(account.id)
+  let submissionGate: CollectionSubmissionGate | undefined
   try {
-    const result = await adminAPI.accounts.collectCodexTurnState(account.id)
-    if (!componentActive) return
+    const controller = new AbortController()
+    let cancelSubmission!: (outcome: AccountCollectionOutcome) => void
+    const cancelled = new Promise<AccountCollectionOutcome>((complete) => {
+      cancelSubmission = complete
+    })
+    submissionGate = { abort: () => controller.abort(), complete: cancelSubmission, settled: false }
+    collectionSubmissionGates.set(account.id, submissionGate)
+    const response = await Promise.race([
+      adminAPI.accounts.collectCodexTurnState(account.id, controller.signal).then(result => ({ kind: 'result' as const, result })),
+      cancelled.then(outcome => ({ kind: 'cancelled' as const, outcome })),
+    ])
+    if (submissionGate.outcome) return submissionGate.outcome
+    submissionGate.settled = true
+    if (collectionSubmissionGates.get(account.id) === submissionGate) collectionSubmissionGates.delete(account.id)
+    collectingIds.delete(account.id)
+    if (response.kind === 'cancelled') return response.outcome
+    if (!componentActive) return 'skipped'
+    const result = response.result
     clock.value = Date.now()
     const targetModels = [...new Set(
-      (result.target_models?.length ? result.target_models : [result.model || settingsForm.defaultModel])
+      (Array.isArray(result.target_models) ? result.target_models : result.model ? [result.model] : [])
         .map(model => model?.trim())
         .filter((model): model is string => Boolean(model)),
     )]
     const modelTargets = (result.model_targets || [])
       .map(({ model, owner }) => ({ model: model.trim(), owner: owner.trim() }))
       .filter(({ model, owner }) => Boolean(model && owner))
-    const queuedModels = [...new Set(
+    const queuedModels = result.status === 'queued' ? [...new Set(
       (Array.isArray(result.queued_models) ? result.queued_models : targetModels)
         .map(model => model.trim())
         .filter(Boolean),
-    )]
+    )] : []
     const queuedOwners = new Set(queuedModels)
     const queuedDisplayTargets = modelTargets.length > 0
       ? modelTargets.filter(({ owner }) => queuedOwners.has(owner))
@@ -872,31 +1210,111 @@ async function collectAccount(account: AccountListItem) {
     } else if (result.codex_turn_state_auto) {
       replaceAccountState(account.id, result.codex_turn_state_auto)
     }
+    setAccountCollectionResult(account.id, result, targetModels, queuedModels)
     const reportedSuccesses = [
       ...(result.successful_models || []),
       ...successfulModelsFromInfo(result.codex_turn_state_auto),
     ]
     if (result.status === 'rejected' || result.status === 'error') {
-      appStore.showError(result.message || t('admin.codexTurnState.accounts.collectFailed'))
+      markAccountCollectionTerminal(account.id, 'failure')
+      if (notify) appStore.showError(result.message || t('admin.codexTurnState.accounts.collectFailed'))
+      return 'failure'
     } else if (result.status === 'already_valid') {
       addSuccessfulModels(account.id, reportedSuccesses.length > 0 ? reportedSuccesses : targetModels)
-      appStore.showSuccess(t('admin.codexTurnState.accounts.alreadyValid'))
+      markAccountCollectionTerminal(account.id, 'success')
+      if (notify) appStore.showSuccess(t('admin.codexTurnState.accounts.alreadyValid'))
+      return 'success'
     } else if (result.status === 'queued') {
-      appStore.showSuccess(result.message || t('admin.codexTurnState.accounts.collectQueued'))
+      if (notify) appStore.showSuccess(result.message || t('admin.codexTurnState.accounts.collectQueued'))
       if (queuedModels.length > 0) {
-        schedulePoll(account.id, createPollBaseline(result.codex_turn_state_auto, queuedModels, queuedDisplayTargets))
+        return await new Promise<AccountCollectionOutcome>((complete) => {
+          schedulePoll(account.id, createPollBaseline(
+            result.codex_turn_state_auto,
+            queuedModels,
+            queuedDisplayTargets,
+            notify,
+            complete,
+          ))
+        })
       }
     } else if (result.collection_succeeded === true || result.codex_turn_state_auto?.collection_succeeded === true) {
       addSuccessfulModels(account.id, reportedSuccesses.length > 0 ? reportedSuccesses : targetModels)
-      appStore.showSuccess(result.message || t('admin.codexTurnState.accounts.collectSucceeded'))
-    } else {
+      if (notify) appStore.showSuccess(result.message || t('admin.codexTurnState.accounts.collectSucceeded'))
+    } else if (notify) {
       appStore.showSuccess(result.message || t('admin.codexTurnState.accounts.collectSucceeded'))
     }
+    markAccountCollectionTerminal(account.id, 'success')
+    return 'success'
   } catch (error) {
-    if (!componentActive) return
-    appStore.showError(extractApiErrorMessage(error, t('admin.codexTurnState.accounts.collectFailed')))
+    if (submissionGate?.outcome) return submissionGate.outcome
+    if (!componentActive) return 'skipped'
+    markAccountCollectionTerminal(account.id, 'failure')
+    if (notify) appStore.showError(extractApiErrorMessage(error, t('admin.codexTurnState.accounts.collectFailed')))
+    return 'failure'
   } finally {
-    if (componentActive) collectingIds.delete(account.id)
+    if (submissionGate && collectionSubmissionGates.get(account.id) === submissionGate) {
+      submissionGate.settled = true
+      collectionSubmissionGates.delete(account.id)
+    }
+    collectingIds.delete(account.id)
+  }
+}
+
+async function collectAllAccounts() {
+  if (collectAllDisabled.value) return
+  const targetAccounts = accounts.value.filter(isCodexTurnStateEligibleAccount)
+  if (targetAccounts.length === 0) return
+
+  bulkAccountIds.value = targetAccounts.map(account => account.id)
+  bulkProgressSnapshot.value = null
+  bulkCollectionActive.value = true
+  for (const account of targetAccounts) beginAccountCollection(account.id, 'queued')
+
+  let cursor = 0
+  const worker = async () => {
+    while (componentActive) {
+      const index = cursor
+      cursor += 1
+      if (index >= targetAccounts.length) return
+      const snapshot = targetAccounts[index]
+      const current = accounts.value.find(account => account.id === snapshot.id)
+      if (!current || !isCodexTurnStateEligibleAccount(current)) {
+        markAccountCollectionTerminal(snapshot.id, 'skipped')
+        continue
+      }
+      try {
+        const outcome = await collectAccount(current, { notify: false })
+        // A skipped submitted round may still be winding down server-side.
+        // Retire this worker so its concurrency slot is not immediately reused.
+        if (outcome === 'skipped') return
+      } catch {
+        markAccountCollectionTerminal(current.id, 'failure')
+      }
+    }
+  }
+
+  const workerCount = Math.min(BULK_COLLECTION_CONCURRENCY, targetAccounts.length)
+  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+  if (!componentActive) return
+  for (const accountId of bulkAccountIds.value) {
+    const run = accountCollectionRuns[accountId]
+    if (run && !isTerminalCollectionPhase(run.phase)) markAccountCollectionTerminal(accountId, 'skipped')
+  }
+
+  const progress = { ...bulkProgress.value }
+  bulkProgressSnapshot.value = progress
+  bulkCollectionActive.value = false
+  if (progress.failedAccounts === 0 && progress.skippedAccounts === 0) {
+    appStore.showSuccess(t('admin.codexTurnState.accounts.bulkFinishedSuccess', {
+      accounts: progress.succeededAccounts,
+      models: progress.completedModels,
+    }))
+  } else {
+    appStore.showError(t('admin.codexTurnState.accounts.bulkFinishedWithFailures', {
+      succeeded: progress.succeededAccounts,
+      failed: progress.failedAccounts,
+      skipped: progress.skippedAccounts,
+    }))
   }
 }
 
@@ -912,8 +1330,12 @@ onBeforeUnmount(() => {
   accountListRequestGeneration += 1
   if (clockTimer) clearInterval(clockTimer)
   clockTimer = undefined
+  const activeCollectionIds = new Set([...collectionSubmissionGates.keys(), ...pollBaselines.keys()])
+  for (const accountId of activeCollectionIds) stopPolling(accountId, 'skipped')
   for (const timer of pollTimers.values()) clearTimeout(timer)
   pollTimers.clear()
+  pollBaselines.clear()
+  collectionSubmissionGates.clear()
   collectingIds.clear()
   pollingIds.clear()
   for (const accountId of Object.keys(pollingTargets).map(Number)) delete pollingTargets[accountId]
@@ -938,6 +1360,9 @@ onBeforeUnmount(() => {
 }
 .section-description {
   @apply mt-1.5 max-w-3xl text-xs leading-5 text-gray-500 dark:text-gray-400;
+}
+.accounts-heading-actions {
+  @apply flex w-full flex-wrap items-center justify-between gap-3 sm:w-auto sm:justify-end;
 }
 .settings-state,
 .account-count,
@@ -989,6 +1414,23 @@ onBeforeUnmount(() => {
 .settings-footer {
   @apply flex flex-wrap items-center justify-between gap-4 border-t border-gray-100 pt-5 dark:border-dark-700;
 }
+.bulk-progress {
+  @apply border-b border-gray-100 bg-gray-50/60 px-5 py-4 text-xs text-gray-600 dark:border-dark-700 dark:bg-dark-800/30 dark:text-gray-300;
+}
+.bulk-progress-heading {
+  @apply flex items-center justify-between gap-3;
+}
+.bulk-progress-track,
+.account-progress-track {
+  @apply mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600;
+}
+.bulk-progress-track > span,
+.account-progress-track > span {
+  @apply block h-full rounded-full bg-primary-600 transition-all duration-300 dark:bg-primary-500;
+}
+.bulk-progress-metrics {
+  @apply mt-3 grid gap-x-5 gap-y-1.5 sm:grid-cols-2 lg:grid-cols-4;
+}
 .accounts-toolbar {
   @apply flex flex-wrap gap-3 border-b border-gray-100 p-4 dark:border-dark-700;
 }
@@ -1016,11 +1458,20 @@ onBeforeUnmount(() => {
 .model-result-row {
   @apply flex min-w-0 items-center justify-between gap-3 rounded-md border border-gray-100 bg-gray-50/60 px-2.5 py-1.5 dark:border-dark-700 dark:bg-dark-800/40;
 }
+.model-result-detail {
+  @apply mt-0.5 block text-[11px] leading-4 text-gray-500 dark:text-gray-400;
+}
 .collect-controls {
-  @apply flex min-w-0 justify-end;
+  @apply flex min-w-0 flex-col items-stretch gap-2 sm:items-end;
 }
 .collect-button {
-  @apply shrink-0 justify-center whitespace-nowrap;
+  @apply w-full shrink-0 justify-center whitespace-nowrap sm:w-auto;
+}
+.account-progress {
+  @apply w-full min-w-0 text-[11px] text-gray-500 dark:text-gray-400 lg:max-w-sm;
+}
+.account-progress-meta {
+  @apply flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1;
 }
 .state-valid {
   @apply bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400;
