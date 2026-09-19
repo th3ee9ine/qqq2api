@@ -209,6 +209,9 @@ func TestCodexTurnStateAutoPassthroughEvidenceNeverPublishesWithoutReplay(t *tes
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, repo, account := newTurnStateAutoService(t)
+			settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+			settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-6*"
+			s.settingService.InvalidateOpenAICodexTurnStateCache()
 			seedAutomaticTurnState(account, "old-verified-astra", "gpt-6-astra")
 			repo.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
 
@@ -297,6 +300,9 @@ func TestCodexTurnStateAutoProbeRejectsLunaDespiteHTTP200(t *testing.T) {
 
 func TestCodexTurnStateAutoFailedLifecyclePreservesVerifiedCache(t *testing.T) {
 	s, repo, account := newTurnStateAutoService(t)
+	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+	settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-6*"
+	s.settingService.InvalidateOpenAICodexTurnStateCache()
 	seedAutomaticTurnState(account, "old-verified-astra", "gpt-6-astra")
 	repo.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
 
@@ -377,7 +383,10 @@ func TestCodexTurnStateUsageGatePublishesOnlyAfterNewUsageRow(t *testing.T) {
 	require.Same(t, usageLog, usageRepo.lastLog)
 	stored, err := repo.GetByID(context.Background(), account.ID)
 	require.NoError(t, err)
-	require.Equal(t, candidateState, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-6-astra")))
+	storedScope := codexTurnStateModelAccount(stored, "gpt-6-astra")
+	require.Equal(t, candidateState, codexTurnStateAutoToken(storedScope))
+	require.Equal(t, "gpt-6-astra-2026-09-18", storedScope.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey),
+		"automatic acceptance must persist the actual completed response model")
 	require.NotEqual(t, oldState, candidateState)
 	require.Equal(t, "gpt-6-astra-2026-09-18", optionalStringValue(usageRepo.lastLog.UpstreamResponseModel), "usage log keeps the raw response model variant")
 }
@@ -432,6 +441,7 @@ func TestCodexTurnStateManualCandidateCanBeVerifiedWhenAutomaticModeIsDisabled(t
 	s, _, account := newTurnStateAutoService(t)
 	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
 	settings.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "false"
+	settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-6*"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()
 
 	const model = "gpt-6-astra"

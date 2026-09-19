@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -113,8 +114,13 @@ func codexTurnStateModelAccount(account *Account, model string) *Account {
 	return &copy
 }
 
-func codexTurnStateScopedInfo(account *Account, now time.Time) *CodexTurnStateAutoInfo {
-	result := &CodexTurnStateAutoInfo{Due: true, Models: make(map[string]CodexTurnStateAutoInfo)}
+func codexTurnStateScopedInfoWithInterval(account *Account, now time.Time, intervalMinutes int) *CodexTurnStateAutoInfo {
+	result := &CodexTurnStateAutoInfo{
+		Due:              true,
+		Models:           make(map[string]CodexTurnStateAutoInfo),
+		SuccessfulModels: []string{},
+	}
+	successfulModels := make(map[string]struct{})
 	for key := range account.Extra {
 		if !strings.HasPrefix(key, CodexTurnStateModelExtraPrefix) {
 			continue
@@ -130,8 +136,21 @@ func codexTurnStateScopedInfo(account *Account, now time.Time) *CodexTurnStateAu
 		if _, err := NormalizeOpenAICodexTurnStateDefaultModel(model); err != nil {
 			continue
 		}
-		info := codexTurnStateAutoInfo(codexTurnStateModelAccount(account, model), now)
+		info := codexTurnStateAutoInfoWithInterval(codexTurnStateModelAccount(account, model), now, intervalMinutes)
+		info.CollectionSucceeded = info.CollectionSucceeded &&
+			codexTurnStateOwnerModel(info.VerifiedModel) == model &&
+			!info.RecoveryPending && info.ExpiresAtMS > now.UnixMilli() && info.LastError == ""
 		result.Models[model] = info
+		if info.CollectionSucceeded {
+			successfulModel := strings.TrimSpace(info.VerifiedModel)
+			if successfulModel == "" {
+				successfulModel = model
+			}
+			if _, exists := successfulModels[successfulModel]; !exists {
+				successfulModels[successfulModel] = struct{}{}
+				result.SuccessfulModels = append(result.SuccessfulModels, successfulModel)
+			}
+		}
 		result.Configured = result.Configured || info.Configured
 		result.RecoveryPending = result.RecoveryPending || info.RecoveryPending
 		if len(result.Models) == 1 {
@@ -161,7 +180,13 @@ func codexTurnStateScopedInfo(account *Account, now time.Time) *CodexTurnStateAu
 			result.ExpiresAtMS = info.ExpiresAtMS
 		}
 	}
+	sort.Strings(result.SuccessfulModels)
+	result.CollectionSucceeded = len(result.SuccessfulModels) > 0
 	return result
+}
+
+func codexTurnStateScopedInfo(account *Account, now time.Time) *CodexTurnStateAutoInfo {
+	return codexTurnStateScopedInfoWithInterval(account, now, OpenAICodexTurnStateDefaultAutoIntervalMinutes)
 }
 
 func (s *OpenAIGatewayService) rememberCodexTurnStateLocked(entry *codexTurnStateAutoEntry, now time.Time) {

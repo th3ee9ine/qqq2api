@@ -308,6 +308,69 @@ func TestPersistCodexTurnStateManualCASLossKeepsFreshProbeIntentWithoutRestoring
 	require.EqualValues(t, 1, repo.sourceCalls.Load())
 }
 
+func TestPersistCodexTurnStateManualCASLossUpgradesQueuedAutomaticProbeWhenWinnerHasError(t *testing.T) {
+	s, baseRepo, account := newTurnStateAutoService(t)
+	const model = "gpt-6-astra"
+	now := time.Now()
+	winnerState := testGlobalTurnStateToken(now.Add(-5*time.Minute), 10)
+	repo := &codexTurnStateCASWinnerRepo{
+		turnStateAutoRepo: baseRepo,
+		winner: codexTurnStateCASWinnerAccount(
+			account,
+			model,
+			winnerState,
+			now.Add(-5*time.Minute).UnixMilli(),
+			now.Add(-4*time.Minute).UnixMilli(),
+			now.Add(-3*time.Minute).UnixMilli(),
+			0,
+		),
+		updateStart:  make(chan struct{}),
+		updateResume: make(chan struct{}),
+	}
+	s.accountRepo = repo
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, model)
+	entry.token = "manual-terminal-loser"
+	entry.setAt = now.Add(-time.Minute).UnixMilli()
+	entry.verifiedAt = now.UnixMilli()
+	entry.verifiedModel = model
+	entry.lastError = "request_failed"
+	s.openaiTurnStateMu.Unlock()
+
+	result := make(chan error, 1)
+	go func() { result <- s.persistCodexTurnStateWithMode(account.ID, entry, true) }()
+	select {
+	case <-repo.updateStart:
+	case <-time.After(time.Second):
+		t.Fatal("manual terminal persistence did not reach the CAS")
+	}
+
+	// A normal request queues automatic work while the manual terminal write is
+	// blocked. The unresolved administrator action must dominate that coalesced
+	// task without discarding its model snapshot.
+	s.openaiTurnStateMu.Lock()
+	require.True(t, replaceCodexTurnStateProbeModelsLocked(entry, model, model))
+	entry.probe = true
+	entry.forceProbe = false
+	entry.manualProbe = false
+	s.openaiTurnStateMu.Unlock()
+	close(repo.updateResume)
+	require.NoError(t, <-result)
+
+	s.openaiTurnStateMu.Lock()
+	require.False(t, entry.reconciling)
+	require.Equal(t, winnerState, entry.token)
+	require.Equal(t, "http_429", entry.lastError, "a valid token with a latest collection error does not satisfy manual collection")
+	require.True(t, entry.probe)
+	require.True(t, entry.forceProbe)
+	require.True(t, entry.manualProbe, "the queued automatic task must retain the unresolved manual identity")
+	require.Equal(t, model, entry.requestModel)
+	s.openaiTurnStateMu.Unlock()
+	require.EqualValues(t, 1, repo.updateCalls.Load())
+	require.EqualValues(t, 1, repo.sourceCalls.Load())
+}
+
 func TestPersistCodexTurnStateCASWinnerReadFailureStaysFailClosed(t *testing.T) {
 	s, baseRepo, account := newTurnStateAutoService(t)
 	model := "gpt-6-astra"

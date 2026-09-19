@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
@@ -33,7 +32,7 @@ func (r *accountRepository) CompareAndSwapCodexTurnStateProbeBurstBudget(
 		budget.Version != expectedVersion+1 || budget.Generation < 0 || budget.StartedAtMS <= 0 ||
 		budget.Attempts < 1 || budget.Attempts > service.CodexTurnStateProbeBurstMaxAttempts ||
 		budget.InFlightUntilMS < 0 || budget.InFlightUntilMS > 0 &&
-		(budget.InFlightUntilMS <= budget.StartedAtMS || budget.InFlightUntilMS > budget.StartedAtMS+int64(time.Minute/time.Millisecond)) ||
+		(budget.InFlightUntilMS <= budget.StartedAtMS || budget.InFlightUntilMS-budget.StartedAtMS > service.CodexTurnStateProbeBurstMaxLeaseMS) ||
 		budget.CandidatePendingUntilMS < 0 || budget.CandidatePendingUntilMS > 0 && budget.CandidatePendingUntilMS <= budget.StartedAtMS ||
 		budget.InFlightUntilMS > 0 && budget.CandidatePendingUntilMS > 0 {
 		return false, errInvalidCodexTurnStateProbeBurstBudgetSlot

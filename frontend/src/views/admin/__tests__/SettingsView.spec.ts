@@ -773,6 +773,7 @@ describe("admin SettingsView", () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
       openai_codex_turn_state_auto_enabled: true,
+      openai_codex_turn_state_auto_interval_minutes: 30,
       openai_codex_turn_state_models: "gpt-5*",
       openai_codex_turn_state_default_model: "gpt-5.5",
       openai_codex_turn_state_proxy_ids: [7, 9],
@@ -782,6 +783,7 @@ describe("admin SettingsView", () => {
       ...baseSettingsResponse,
       ...payload,
       openai_codex_turn_state_auto_enabled: true,
+      openai_codex_turn_state_auto_interval_minutes: 30,
       openai_codex_turn_state_models: "gpt-5*",
       openai_codex_turn_state_default_model: "gpt-5.5",
       openai_codex_turn_state_proxy_ids: [7, 9],
@@ -799,6 +801,7 @@ describe("admin SettingsView", () => {
     const settingsForm = (wrapper.vm as unknown as { form: Record<string, unknown> }).form;
     for (const key of [
       "openai_codex_turn_state_auto_enabled",
+      "openai_codex_turn_state_auto_interval_minutes",
       "openai_codex_turn_state_models",
       "openai_codex_turn_state_default_model",
       "openai_codex_turn_state_proxy_ids",

@@ -713,13 +713,18 @@ const (
 	// collection, renewal and bounded upstream probes. It is opt-in because each
 	// probe is an extra upstream request and may consume model quota.
 	SettingKeyOpenAICodexTurnStateAutoEnabled = "openai_codex_turn_state_auto_enabled"
-	// SettingKeyOpenAICodexTurnStateProxyIDs selects the explicit proxy pool used
-	// by automatic and manually triggered Turn State collection. The JSON array
-	// is authoritative when non-empty; an empty array keeps legacy selection.
+	// SettingKeyOpenAICodexTurnStateAutoIntervalMinutes controls when a valid
+	// account/model state becomes due for request-driven automatic renewal.
+	SettingKeyOpenAICodexTurnStateAutoIntervalMinutes = "openai_codex_turn_state_auto_interval_minutes"
+	// SettingKeyOpenAICodexTurnStateProxyURLs is the independent SOCKS5 URL pool
+	// used by automatic and manually triggered Turn State collection. A non-empty
+	// value takes precedence; an empty pool falls back to global proxy management.
+	SettingKeyOpenAICodexTurnStateProxyURLs = "openai_codex_turn_state_proxy_urls"
+	// SettingKeyOpenAICodexTurnStateProxyIDs is retained only for mixed-version
+	// settings API compatibility. Turn State routing no longer reads it.
 	SettingKeyOpenAICodexTurnStateProxyIDs = "openai_codex_turn_state_proxy_ids"
-	// SettingKeyOpenAICodexTurnStateProxyID selects the dedicated proxy record
-	// used by older clients. New writes keep it synchronized with the first pool
-	// entry so rollback and mixed-version deployments retain a usable route.
+	// SettingKeyOpenAICodexTurnStateProxyID is the legacy single-record companion.
+	// It remains synchronized for rollback but is runtime-inert in this version.
 	SettingKeyOpenAICodexTurnStateProxyID = "openai_codex_turn_state_proxy_id"
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。
 	// 迁移后等价规则写入 SettingKeyCodexCLIOnlyWhitelist，不再参与运行时判定。

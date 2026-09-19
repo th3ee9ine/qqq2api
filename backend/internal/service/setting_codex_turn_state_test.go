@@ -15,12 +15,119 @@ func TestSystemSettingsCodexTurnStateDefaults(t *testing.T) {
 	settings, err := svc.GetAllSettings(context.Background())
 	require.NoError(t, err)
 	require.False(t, settings.OpenAICodexTurnStateAutoEnabled)
+	require.Equal(t, OpenAICodexTurnStateDefaultAutoIntervalMinutes, settings.OpenAICodexTurnStateAutoIntervalMinutes)
 	require.Empty(t, settings.OpenAICodexTurnStateModels)
 	require.Equal(t, "gpt-5.5", settings.OpenAICodexTurnStateDefaultModel)
+	require.NotNil(t, settings.OpenAICodexTurnStateProxyURLs)
+	require.Empty(t, settings.OpenAICodexTurnStateProxyURLs)
+	require.True(t, settings.OpenAICodexTurnStateProxyURLsValid)
+	require.False(t, settings.OpenAICodexTurnStateProxyPoolConfigured)
+	require.Zero(t, settings.OpenAICodexTurnStateProxyPoolCount)
 	require.NotNil(t, settings.OpenAICodexTurnStateProxyIDs)
 	require.Empty(t, settings.OpenAICodexTurnStateProxyIDs)
 	require.Zero(t, settings.OpenAICodexTurnStateProxyID)
 	require.True(t, settings.OpenAICodexTurnStateProxyIDsValid)
+}
+
+func TestSystemSettingsCodexTurnStateAutoIntervalNormalizeAndPersist(t *testing.T) {
+	preserveCodexTurnStateSettingGlobalCaches(t)
+	repo := &codexHeaderSettingRepoStub{values: map[string]string{}}
+	svc := NewSettingService(repo, &config.Config{})
+	settings := &SystemSettings{OpenAICodexTurnStateAutoIntervalMinutes: 7}
+	require.NoError(t, svc.UpdateSettings(context.Background(), settings))
+	require.Equal(t, "7", repo.values[SettingKeyOpenAICodexTurnStateAutoIntervalMinutes])
+
+	for _, invalid := range []int{-1, OpenAICodexTurnStateMaxAutoIntervalMinutes + 1} {
+		err := svc.UpdateSettings(context.Background(), &SystemSettings{OpenAICodexTurnStateAutoIntervalMinutes: invalid})
+		require.ErrorContains(t, err, "INVALID_OPENAI_CODEX_TURN_STATE_AUTO_INTERVAL")
+	}
+}
+
+func TestSystemSettingsCodexTurnStateProxyURLsNormalize(t *testing.T) {
+	got, err := NormalizeOpenAICodexTurnStateProxyURLs([]string{
+		"SOCKS5://user:p%40ss@PROXY.example:01080",
+		"socks5://user:p%40ss@proxy.example:1080",
+		"socks5://other:secret@[2001:DB8::1]:443",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"socks5://user:p%40ss@proxy.example:1080",
+		"socks5://other:secret@[2001:db8::1]:443",
+	}, got)
+
+	secret := "must-not-leak"
+	for _, raw := range []string{
+		"http://user:" + secret + "@proxy.example:1080",
+		"socks5://user@proxy.example:1080",
+		"socks5://:" + secret + "@proxy.example:1080",
+		"socks5://user:" + secret + "@proxy.example",
+		"socks5://user:" + secret + "@proxy.example:0",
+		"socks5://user:" + secret + "@proxy.example:65536",
+		"socks5://user:" + secret + "@proxy.example:1080/path",
+		"socks5://user:" + secret + "@proxy.example:1080?query",
+		"socks5://user:" + secret + "@proxy.example:1080#fragment",
+		" socks5://user:" + secret + "@proxy.example:1080",
+		"socks5://user:" + secret + "@proxy.example:1080\r\n",
+		"socks5://user:p%09" + secret + "@proxy.example:1080",
+	} {
+		_, normalizeErr := NormalizeOpenAICodexTurnStateProxyURLs([]string{raw})
+		require.Error(t, normalizeErr, raw)
+		require.NotContains(t, normalizeErr.Error(), secret)
+	}
+
+	tooMany := make([]string, codexTurnStateProxyURLsMaxSize+1)
+	for index := range tooMany {
+		tooMany[index] = "socks5://user:pass@proxy.example:1080"
+	}
+	_, err = NormalizeOpenAICodexTurnStateProxyURLs(tooMany)
+	require.ErrorContains(t, err, strconv.Itoa(codexTurnStateProxyURLsMaxSize))
+
+	for _, raw := range []string{"null", "{}", `"proxy"`, "[", " \t ", `["http://user:secret@proxy.example:80"]`} {
+		_, parseErr := ParseOpenAICodexTurnStateProxyURLs(raw)
+		require.Error(t, parseErr, raw)
+		require.NotContains(t, parseErr.Error(), "secret")
+	}
+}
+
+func TestSystemSettingsCodexTurnStateProxyURLsParseAndPersist(t *testing.T) {
+	svc := NewSettingService(&codexHeaderSettingRepoStub{values: map[string]string{}}, &config.Config{})
+	parsed := svc.parseSettings(map[string]string{
+		SettingKeyOpenAICodexTurnStateProxyURLs: `["socks5://user:pass@PROXY.example:1080","socks5://user:pass@proxy.example:1080"]`,
+	})
+	require.Equal(t, []string{"socks5://user:pass@proxy.example:1080"}, parsed.OpenAICodexTurnStateProxyURLs)
+	require.True(t, parsed.OpenAICodexTurnStateProxyURLsValid)
+	require.True(t, parsed.OpenAICodexTurnStateProxyPoolConfigured)
+	require.Equal(t, 1, parsed.OpenAICodexTurnStateProxyPoolCount)
+
+	malformed := svc.parseSettings(map[string]string{SettingKeyOpenAICodexTurnStateProxyURLs: "private-malformed-value"})
+	require.Empty(t, malformed.OpenAICodexTurnStateProxyURLs)
+	require.False(t, malformed.OpenAICodexTurnStateProxyURLsValid)
+	require.False(t, malformed.OpenAICodexTurnStateProxyPoolConfigured)
+	require.Zero(t, malformed.OpenAICodexTurnStateProxyPoolCount)
+
+	preserveCodexTurnStateSettingGlobalCaches(t)
+	repo := &codexHeaderSettingRepoStub{values: map[string]string{}}
+	updateSvc := NewSettingService(repo, &config.Config{})
+	settings := &SystemSettings{OpenAICodexTurnStateProxyURLs: []string{
+		"socks5://user:pass@PROXY.example:01080",
+		"socks5://user:pass@proxy.example:1080",
+	}}
+	require.NoError(t, updateSvc.UpdateSettings(context.Background(), settings))
+	require.Equal(t, `["socks5://user:pass@proxy.example:1080"]`, repo.values[SettingKeyOpenAICodexTurnStateProxyURLs])
+	require.Equal(t, []string{"socks5://user:pass@proxy.example:1080"}, settings.OpenAICodexTurnStateProxyURLs)
+	require.True(t, settings.OpenAICodexTurnStateProxyURLsValid)
+	require.True(t, settings.OpenAICodexTurnStateProxyPoolConfigured)
+	require.Equal(t, 1, settings.OpenAICodexTurnStateProxyPoolCount)
+}
+
+func TestSystemSettingsCodexTurnStateProxyURLsRejectInvalidWithoutWrite(t *testing.T) {
+	repo := &codexHeaderSettingRepoStub{values: map[string]string{SettingKeyOpenAICodexTurnStateProxyURLs: `["socks5://old:secret@old.example:1080"]`}}
+	svc := NewSettingService(repo, &config.Config{})
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{OpenAICodexTurnStateProxyURLs: []string{"http://new:must-not-leak@new.example:80"}})
+	require.ErrorContains(t, err, "INVALID_OPENAI_CODEX_TURN_STATE_PROXY_URLS")
+	require.NotContains(t, err.Error(), "must-not-leak")
+	require.Nil(t, repo.updates)
+	require.Equal(t, `["socks5://old:secret@old.example:1080"]`, repo.values[SettingKeyOpenAICodexTurnStateProxyURLs])
 }
 
 func preserveCodexTurnStateSettingGlobalCaches(t *testing.T) {

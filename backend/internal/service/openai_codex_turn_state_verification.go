@@ -47,6 +47,7 @@ const (
 // from a formal /v1/responses request can promote it to entry.token.
 type codexTurnStateUsageCandidate struct {
 	state                 string
+	verifiedModel         string
 	collectedAt           time.Time
 	recoveryGeneration    int64
 	manual                bool
@@ -245,8 +246,17 @@ func (s *OpenAIGatewayService) stageCodexTurnStateUsageCandidateWithModeLocked(e
 }
 
 func (s *OpenAIGatewayService) stageCodexTurnStateUsageCandidateWithScopeLocked(entry *codexTurnStateAutoEntry, state string, generation int64, now time.Time, manual bool, taskScopeModels []string) bool {
+	verifiedModel := ""
+	if entry != nil {
+		verifiedModel = entry.model
+	}
+	return s.stageCodexTurnStateUsageCandidateWithVerifiedModelLocked(entry, state, verifiedModel, generation, now, manual, taskScopeModels)
+}
+
+func canStageCodexTurnStateUsageCandidateLocked(entry *codexTurnStateAutoEntry, state, verifiedModel string, generation int64, now time.Time) bool {
+	verifiedModel = strings.TrimSpace(verifiedModel)
 	if entry == nil || entry.reconciling || strings.TrimSpace(state) == "" || generation != entry.recovery.InvalidatedAtMS ||
-		!entry.recovery.allows(state, now) {
+		verifiedModel == "" || codexTurnStateOwnerModel(verifiedModel) != entry.model || !entry.recovery.allows(state, now) {
 		return false
 	}
 	state = strings.TrimSpace(state)
@@ -257,6 +267,15 @@ func (s *OpenAIGatewayService) stageCodexTurnStateUsageCandidateWithScopeLocked(
 			}
 		}
 	}
+	return true
+}
+
+func (s *OpenAIGatewayService) stageCodexTurnStateUsageCandidateWithVerifiedModelLocked(entry *codexTurnStateAutoEntry, state, verifiedModel string, generation int64, now time.Time, manual bool, taskScopeModels []string) bool {
+	if !canStageCodexTurnStateUsageCandidateLocked(entry, state, verifiedModel, generation, now) {
+		return false
+	}
+	state = strings.TrimSpace(state)
+	verifiedModel = strings.TrimSpace(verifiedModel)
 	scopeModels := appendCodexTurnStateScopeModels(nil, taskScopeModels...)
 	if len(scopeModels) == 0 {
 		scopeModels = appendCodexTurnStateScopeModels(scopeModels, entry.requestModel, entry.model)
@@ -264,6 +283,7 @@ func (s *OpenAIGatewayService) stageCodexTurnStateUsageCandidateWithScopeLocked(
 	previousOwner := entry.candidate.pendingOwner
 	entry.candidate = codexTurnStateUsageCandidate{
 		state:                 state,
+		verifiedModel:         verifiedModel,
 		collectedAt:           now,
 		recoveryGeneration:    generation,
 		manual:                manual,
@@ -301,6 +321,10 @@ func (s *OpenAIGatewayService) publishManualCodexTurnStateCandidateLocked(entry 
 	}
 	previousToken := entry.token
 	s.setCodexTurnStateLocked(entry, candidate.state, now)
+	if entry.token == candidate.state && codexTurnStateOwnerModel(candidate.verifiedModel) == entry.model {
+		entry.verifiedModel = candidate.verifiedModel
+		entry.dirty = true
+	}
 	if entry.token == candidate.state && previousToken != candidate.state {
 		entry.setAt = candidate.collectedAt.UnixMilli()
 	}
@@ -536,6 +560,10 @@ func (s *OpenAIGatewayService) confirmCodexTurnStateUsageLog(input *OpenAIRecord
 		entry.pendingOwner = candidate.pendingOwner
 		previousToken := entry.token
 		s.setCodexTurnStateLocked(entry, candidate.state, now)
+		if entry.token == candidate.state && codexTurnStateOwnerModel(evidence.completedModel) == entry.model {
+			entry.verifiedModel = evidence.completedModel
+			entry.dirty = true
+		}
 		if entry.token == candidate.state && previousToken != candidate.state {
 			entry.setAt = candidate.collectedAt.UnixMilli()
 		}
@@ -626,7 +654,7 @@ func (s *OpenAIGatewayService) commitPendingCodexTurnStateObservation(c *gin.Con
 }
 
 func (s *OpenAIGatewayService) noteCodexTurnStateVerificationError(ctx context.Context, account *Account, model string, err error, models ...string) {
-	if s == nil || account == nil || err == nil || codexTurnStateManualVerification(ctx) || !codexTurnStateAutoEligible(account) {
+	if s == nil || account == nil || err == nil || codexTurnStateManualVerification(ctx) || !codexTurnStateCollectionEligible(account) {
 		return
 	}
 	cfg := s.codexTurnStateRuntimeConfig(ctx)

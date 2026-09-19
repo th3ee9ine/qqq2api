@@ -533,7 +533,7 @@ export default {
       recoverStateSuccess: 'Account state recovered successfully',
       recoverStateFailed: 'Failed to recover account state',
       codexTurnState: {
-        collect: 'Collect Turn State manually',
+        collect: 'Collect all Turn State models',
         status: 'Turn State status',
         missing: 'Not collected',
         expired: 'Expired',

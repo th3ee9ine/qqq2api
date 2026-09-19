@@ -623,7 +623,7 @@ export default {
       recoverStateSuccess: '账号状态已恢复',
       recoverStateFailed: '恢复账号状态失败',
       codexTurnState: {
-        collect: '手动采集 Turn State',
+        collect: '采集全部 Turn State 模型',
         status: 'Turn State 状态',
         missing: '未采集',
         expired: '已过期',

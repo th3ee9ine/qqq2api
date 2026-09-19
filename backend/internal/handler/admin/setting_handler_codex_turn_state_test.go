@@ -25,11 +25,109 @@ func assertCodexTurnStateAutomaticResponse(t *testing.T, rec *httptest.ResponseR
 	}
 	require.NotContains(t, rec.Body.String(), "private-turn-state")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_auto_enabled")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_auto_interval_minutes")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_models")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_default_model")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_urls")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_urls_valid")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_pool_configured")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_pool_count")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_ids")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_id")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_ids_valid")
+}
+
+func TestOpenAICodexTurnStateAutoIntervalRoundTripAndValidation(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{})
+	rec := doUpdateSettings(t, h, map[string]any{"openai_codex_turn_state_auto_interval_minutes": 7}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "7", repo.values[service.SettingKeyOpenAICodexTurnStateAutoIntervalMinutes])
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.EqualValues(t, 7, payload.Data["openai_codex_turn_state_auto_interval_minutes"])
+
+	for _, invalid := range []int{0, 61} {
+		invalidRec := doUpdateSettings(t, h, map[string]any{"openai_codex_turn_state_auto_interval_minutes": invalid}, nil)
+		require.Equal(t, http.StatusBadRequest, invalidRec.Code, invalidRec.Body.String())
+		require.Equal(t, "7", repo.values[service.SettingKeyOpenAICodexTurnStateAutoIntervalMinutes])
+	}
+}
+
+func TestOpenAICodexTurnStateProxyURLsRootSettingsRoundTrip(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{})
+	body := map[string]any{"openai_codex_turn_state_proxy_urls": []string{
+		"socks5://user:p%40ss@PROXY.example:01080",
+		"socks5://user:p%40ss@proxy.example:1080",
+		"socks5://second:secret@second.example:443",
+	}}
+	rec := doUpdateSettings(t, h, body, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, `["socks5://user:p%40ss@proxy.example:1080","socks5://second:secret@second.example:443"]`, repo.values[service.SettingKeyOpenAICodexTurnStateProxyURLs])
+
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, []any{"socks5://user:p%40ss@proxy.example:1080", "socks5://second:secret@second.example:443"}, payload.Data["openai_codex_turn_state_proxy_urls"])
+	require.Equal(t, true, payload.Data["openai_codex_turn_state_proxy_urls_valid"])
+	require.Equal(t, true, payload.Data["openai_codex_turn_state_proxy_pool_configured"])
+	require.EqualValues(t, 2, payload.Data["openai_codex_turn_state_proxy_pool_count"])
+}
+
+func TestOpenAICodexTurnStateProxyURLsOmittedNullAndClear(t *testing.T) {
+	const stored = `["socks5://user:private-secret@proxy.example:1080"]`
+	for _, body := range []map[string]any{
+		{"risk_control_enabled": true},
+		{"openai_codex_turn_state_proxy_urls": nil},
+	} {
+		h, repo := newStepUpSwitchTestHandler(t, map[string]string{service.SettingKeyOpenAICodexTurnStateProxyURLs: stored})
+		rec := doUpdateSettings(t, h, body, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.Equal(t, stored, repo.values[service.SettingKeyOpenAICodexTurnStateProxyURLs])
+	}
+
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{service.SettingKeyOpenAICodexTurnStateProxyURLs: stored})
+	rec := doUpdateSettings(t, h, map[string]any{"openai_codex_turn_state_proxy_urls": []string{}}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "[]", repo.values[service.SettingKeyOpenAICodexTurnStateProxyURLs])
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, []any{}, payload.Data["openai_codex_turn_state_proxy_urls"])
+	require.Equal(t, false, payload.Data["openai_codex_turn_state_proxy_pool_configured"])
+	require.EqualValues(t, 0, payload.Data["openai_codex_turn_state_proxy_pool_count"])
+}
+
+func TestOpenAICodexTurnStateMalformedProxyURLsRedactedAndInvalid(t *testing.T) {
+	const malformed = "private-malformed-proxy-secret"
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{service.SettingKeyOpenAICodexTurnStateProxyURLs: malformed})
+	rec := doUpdateSettings(t, h, map[string]any{"risk_control_enabled": true}, nil)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, malformed, repo.values[service.SettingKeyOpenAICodexTurnStateProxyURLs])
+	require.NotContains(t, rec.Body.String(), malformed)
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, []any{}, payload.Data["openai_codex_turn_state_proxy_urls"])
+	require.Equal(t, false, payload.Data["openai_codex_turn_state_proxy_urls_valid"])
+	require.Equal(t, false, payload.Data["openai_codex_turn_state_proxy_pool_configured"])
+	require.EqualValues(t, 0, payload.Data["openai_codex_turn_state_proxy_pool_count"])
+}
+
+func TestOpenAICodexTurnStateProxyURLsRejectWithoutCredentialLeakOrOverwrite(t *testing.T) {
+	const stored = `["socks5://old:old-secret@old.example:1080"]`
+	const submittedSecret = "submitted-secret-must-not-leak"
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{service.SettingKeyOpenAICodexTurnStateProxyURLs: stored})
+	rec := doUpdateSettings(t, h, map[string]any{
+		"openai_codex_turn_state_proxy_urls": []string{"http://user:" + submittedSecret + "@new.example:80"},
+	}, nil)
+	require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	require.NotContains(t, rec.Body.String(), submittedSecret)
+	require.Equal(t, stored, repo.values[service.SettingKeyOpenAICodexTurnStateProxyURLs])
 }
 
 func TestOpenAICodexTurnStateMalformedStoredProxyPoolIsRedactedAndMarkedInvalid(t *testing.T) {
@@ -75,14 +173,15 @@ func TestOpenAICodexTurnStateMalformedStoredLegacyProxyIsRedactedAndMarkedInvali
 }
 
 func TestOpenAICodexTurnStateAutomaticSettingsOmission(t *testing.T) {
-	for _, body := range []map[string]any{{"risk_control_enabled": true}, {"openai_codex_turn_state_auto_enabled": nil, "openai_codex_turn_state_models": nil}} {
+	for _, body := range []map[string]any{{"risk_control_enabled": true}, {"openai_codex_turn_state_auto_enabled": nil, "openai_codex_turn_state_auto_interval_minutes": nil, "openai_codex_turn_state_models": nil}} {
 		h, repo := newStepUpSwitchTestHandler(t, map[string]string{
 			service.SettingKeyOpenAICodexTurnState: "private-turn-state", service.SettingKeyOpenAICodexTurnStateEnabled: "true",
-			service.SettingKeyOpenAICodexTurnStateAutoEnabled: "true", service.SettingKeyOpenAICodexTurnStateModels: "gpt-5.*",
+			service.SettingKeyOpenAICodexTurnStateAutoEnabled: "true", service.SettingKeyOpenAICodexTurnStateAutoIntervalMinutes: "9", service.SettingKeyOpenAICodexTurnStateModels: "gpt-5.*",
 		})
 		rec := doUpdateSettings(t, h, body, nil)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		require.Equal(t, "true", repo.values[service.SettingKeyOpenAICodexTurnStateAutoEnabled])
+		require.Equal(t, "9", repo.values[service.SettingKeyOpenAICodexTurnStateAutoIntervalMinutes])
 		require.Equal(t, "gpt-5.*", repo.values[service.SettingKeyOpenAICodexTurnStateModels])
 		assertCodexTurnStateAutomaticResponse(t, rec)
 		getRec := httptest.NewRecorder()
@@ -117,10 +216,13 @@ func TestOpenAICodexTurnStateAutomaticSwitchAndScope(t *testing.T) {
 	}
 }
 func TestOpenAICodexTurnStateAutomaticSettingsAudit(t *testing.T) {
-	changed := diffSettings(&service.SystemSettings{}, &service.SystemSettings{OpenAICodexTurnStateAutoEnabled: true, OpenAICodexTurnStateModels: "gpt-5.*", OpenAICodexTurnStateDefaultModel: "custom/probe", OpenAICodexTurnStateProxyIDs: []int64{7, 9}, OpenAICodexTurnStateProxyID: 7}, nil, nil, UpdateSettingsRequest{})
+	changed := diffSettings(&service.SystemSettings{}, &service.SystemSettings{OpenAICodexTurnStateAutoEnabled: true, OpenAICodexTurnStateAutoIntervalMinutes: 7, OpenAICodexTurnStateModels: "gpt-5.*", OpenAICodexTurnStateDefaultModel: "custom/probe", OpenAICodexTurnStateProxyURLs: []string{"socks5://audit-secret:must-not-be-logged@proxy.example:1080"}, OpenAICodexTurnStateProxyIDs: []int64{7, 9}, OpenAICodexTurnStateProxyID: 7}, nil, nil, UpdateSettingsRequest{})
 	require.Contains(t, changed, "openai_codex_turn_state_auto_enabled")
+	require.Contains(t, changed, "openai_codex_turn_state_auto_interval_minutes")
 	require.Contains(t, changed, "openai_codex_turn_state_models")
 	require.Contains(t, changed, "openai_codex_turn_state_default_model")
+	require.Contains(t, changed, "openai_codex_turn_state_proxy_urls")
+	require.NotContains(t, strings.Join(changed, ","), "must-not-be-logged")
 	require.Contains(t, changed, "openai_codex_turn_state_proxy_ids")
 	require.Contains(t, changed, "openai_codex_turn_state_proxy_id")
 	require.NotContains(t, changed, "openai_codex_turn_state")

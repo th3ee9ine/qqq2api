@@ -16,6 +16,8 @@ func TestCodexTurnStateConfiguredModelAcrossLifecycle(t *testing.T) {
 			s, repo, account := newTurnStateAutoService(t)
 			settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
 			settings.values[SettingKeyOpenAICodexTurnStateDefaultModel] = "custom/probe-model"
+			settings.values[SettingKeyOpenAICodexTurnStateModels] = "custom/probe-model"
+			s.settingService.InvalidateOpenAICodexTurnStateCache()
 			if phase != "initial" {
 				at := time.Now().Add(-51 * time.Minute)
 				account.Extra = map[string]any{codexTurnStateModelExtraKey("custom/probe-model"): map[string]any{

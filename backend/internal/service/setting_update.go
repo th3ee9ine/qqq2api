@@ -531,6 +531,29 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyOpenAICodexTurnStateModels] = turnStateModels
 	updates[SettingKeyOpenAICodexTurnStateAutoEnabled] = strconv.FormatBool(settings.OpenAICodexTurnStateAutoEnabled)
+	turnStateAutoInterval := settings.OpenAICodexTurnStateAutoIntervalMinutes
+	if turnStateAutoInterval == 0 {
+		turnStateAutoInterval = OpenAICodexTurnStateDefaultAutoIntervalMinutes
+	}
+	turnStateAutoInterval, err = NormalizeOpenAICodexTurnStateAutoIntervalMinutes(turnStateAutoInterval)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_AUTO_INTERVAL", err.Error())
+	}
+	settings.OpenAICodexTurnStateAutoIntervalMinutes = turnStateAutoInterval
+	updates[SettingKeyOpenAICodexTurnStateAutoIntervalMinutes] = strconv.Itoa(turnStateAutoInterval)
+	turnStateProxyURLs, err := NormalizeOpenAICodexTurnStateProxyURLs(settings.OpenAICodexTurnStateProxyURLs)
+	if err != nil {
+		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_PROXY_URLS", err.Error())
+	}
+	encodedTurnStateProxyURLs, err := json.Marshal(turnStateProxyURLs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s: %w", SettingKeyOpenAICodexTurnStateProxyURLs, err)
+	}
+	settings.OpenAICodexTurnStateProxyURLs = append([]string{}, turnStateProxyURLs...)
+	settings.OpenAICodexTurnStateProxyURLsValid = true
+	settings.OpenAICodexTurnStateProxyPoolConfigured = len(turnStateProxyURLs) > 0
+	settings.OpenAICodexTurnStateProxyPoolCount = len(turnStateProxyURLs)
+	updates[SettingKeyOpenAICodexTurnStateProxyURLs] = string(encodedTurnStateProxyURLs)
 	turnStateProxyIDs := settings.OpenAICodexTurnStateProxyIDs
 	if turnStateProxyIDs == nil {
 		if settings.OpenAICodexTurnStateProxyID < 0 {

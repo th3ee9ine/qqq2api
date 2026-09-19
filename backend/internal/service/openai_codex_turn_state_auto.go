@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -28,7 +29,6 @@ const (
 	CodexTurnStateAutoProbeNotBeforeExtraKey = "codex_turn_state_auto_probe_not_before_ms"
 	codexTurnStateProbePrompt                = "Reply with exactly OK."
 	codexTurnStateAutoProbeInterval          = 5 * time.Minute
-	codexTurnStateAutoRenewBefore            = 10 * time.Minute
 	codexTurnStateAutoMaxBody                = 128 << 10
 	codexTurnStateProbePersistAttempts       = 3
 )
@@ -42,19 +42,21 @@ func (e codexTurnStateAutoError) Error() string { return string(e) }
 // CodexTurnStateAutoInfo contains no token. Expiry is a reference TTL, not an
 // upstream guarantee. Unknown envelopes age from their first collection time.
 type CodexTurnStateAutoInfo struct {
-	Models           map[string]CodexTurnStateAutoInfo `json:"models,omitempty"`
-	Configured       bool                              `json:"configured"`
-	SetAtMS          int64                             `json:"set_at_ms,omitempty"`
-	ProbeAtMS        int64                             `json:"probe_at_ms,omitempty"`
-	VerifiedAtMS     int64                             `json:"verified_at_ms,omitempty"`
-	VerifiedModel    string                            `json:"verified_model,omitempty"`
-	ProbeNotBeforeMS int64                             `json:"probe_not_before_ms,omitempty"`
-	StateLength      int                               `json:"state_length,omitempty"`
-	ExpiresAtMS      int64                             `json:"expires_at_ms,omitempty"`
-	Due              bool                              `json:"due"`
-	LastError        string                            `json:"last_error,omitempty"`
-	RecoveryPending  bool                              `json:"recovery_pending"`
-	InvalidatedAtMS  int64                             `json:"invalidated_at_ms,omitempty"`
+	Models              map[string]CodexTurnStateAutoInfo `json:"models,omitempty"`
+	SuccessfulModels    []string                          `json:"successful_models"`
+	CollectionSucceeded bool                              `json:"collection_succeeded"`
+	Configured          bool                              `json:"configured"`
+	SetAtMS             int64                             `json:"set_at_ms,omitempty"`
+	ProbeAtMS           int64                             `json:"probe_at_ms,omitempty"`
+	VerifiedAtMS        int64                             `json:"verified_at_ms,omitempty"`
+	VerifiedModel       string                            `json:"verified_model,omitempty"`
+	ProbeNotBeforeMS    int64                             `json:"probe_not_before_ms,omitempty"`
+	StateLength         int                               `json:"state_length,omitempty"`
+	ExpiresAtMS         int64                             `json:"expires_at_ms,omitempty"`
+	Due                 bool                              `json:"due"`
+	LastError           string                            `json:"last_error,omitempty"`
+	RecoveryPending     bool                              `json:"recovery_pending"`
+	InvalidatedAtMS     int64                             `json:"invalidated_at_ms,omitempty"`
 }
 
 type codexTurnStateAutoEntry struct {
@@ -82,8 +84,11 @@ type codexTurnStateAutoEntry struct {
 	// collection remains runnable when automatic injection is disabled, while
 	// retaining the same bounded worker and probe safeguards.
 	manualProbe bool
-	recovery    codexTurnStateRecovery
-	candidate   codexTurnStateUsageCandidate
+	// manualOutcomePending keeps terminal-write provenance separate from whether
+	// another upstream probe is queued, including across persistence retries.
+	manualOutcomePending bool
+	recovery             codexTurnStateRecovery
+	candidate            codexTurnStateUsageCandidate
 	// pendingOwner is retained after a candidate is promoted locally until the
 	// corresponding durable state write succeeds.
 	pendingOwner codexTurnStateProbeCandidatePendingOwner
@@ -146,15 +151,48 @@ func codexTurnStateAutoExpiry(token string, setAt int64, now time.Time) int64 {
 	}
 	return 0
 }
-func codexTurnStateAutoInfo(account *Account, now time.Time) CodexTurnStateAutoInfo {
+func codexTurnStateAutoInterval(minutes int) time.Duration {
+	if _, err := NormalizeOpenAICodexTurnStateAutoIntervalMinutes(minutes); err != nil {
+		minutes = OpenAICodexTurnStateDefaultAutoIntervalMinutes
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+func codexTurnStateAutomaticCollectionDue(token string, setAt, verifiedAt int64, now time.Time, intervalMinutes int) bool {
+	expiresAt := codexTurnStateAutoExpiry(token, setAt, now)
+	if token == "" || setAt <= 0 || expiresAt <= 0 {
+		return true
+	}
+	renewalBaseAt := setAt
+	if verifiedAt > renewalBaseAt {
+		renewalBaseAt = verifiedAt
+	}
+	dueAt := renewalBaseAt + codexTurnStateAutoInterval(intervalMinutes).Milliseconds()
+	if expiresAt < dueAt {
+		dueAt = expiresAt
+	}
+	return now.UnixMilli() >= dueAt
+}
+
+// The configurable interval controls successful renewal. This fixed backoff is
+// only for failed automatic rounds so request traffic cannot retry them in a
+// tight loop. Manual and forced recovery work bypass it.
+func codexTurnStateAutomaticFailureBackoffActive(entry *codexTurnStateAutoEntry, now time.Time) bool {
+	return entry != nil && entry.lastError != "" && entry.probeAt > 0 &&
+		now.Sub(time.UnixMilli(entry.probeAt)) < codexTurnStateAutoProbeInterval
+}
+
+func codexTurnStateAutoInfoWithInterval(account *Account, now time.Time, intervalMinutes int) CodexTurnStateAutoInfo {
 	token := codexTurnStateAutoToken(account)
 	info := CodexTurnStateAutoInfo{
-		Configured:       token != "",
-		SetAtMS:          codexTurnStateAutoInt64(account, CodexTurnStateAutoSetAtExtraKey),
-		ProbeAtMS:        codexTurnStateAutoInt64(account, CodexTurnStateAutoProbeAtExtraKey),
-		VerifiedAtMS:     codexTurnStateAutoInt64(account, CodexTurnStateAutoVerifiedAtExtraKey),
-		VerifiedModel:    strings.TrimSpace(account.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey)),
-		ProbeNotBeforeMS: codexTurnStateAutoInt64(account, CodexTurnStateAutoProbeNotBeforeExtraKey),
+		SuccessfulModels:    []string{},
+		CollectionSucceeded: token != "",
+		Configured:          token != "",
+		SetAtMS:             codexTurnStateAutoInt64(account, CodexTurnStateAutoSetAtExtraKey),
+		ProbeAtMS:           codexTurnStateAutoInt64(account, CodexTurnStateAutoProbeAtExtraKey),
+		VerifiedAtMS:        codexTurnStateAutoInt64(account, CodexTurnStateAutoVerifiedAtExtraKey),
+		VerifiedModel:       strings.TrimSpace(account.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey)),
+		ProbeNotBeforeMS:    codexTurnStateAutoInt64(account, CodexTurnStateAutoProbeNotBeforeExtraKey),
 	}
 	if token != "" {
 		info.StateLength = len(token)
@@ -162,23 +200,42 @@ func codexTurnStateAutoInfo(account *Account, now time.Time) CodexTurnStateAutoI
 	info.ExpiresAtMS = codexTurnStateAutoExpiry(token, info.SetAtMS, now)
 	recovery := codexTurnStateRecoveryFromAccount(account)
 	info.RecoveryPending, info.InvalidatedAtMS = recovery.Pending, recovery.InvalidatedAtMS
-	info.Due = recovery.Pending || !recovery.allows(token, now) || token == "" || info.ExpiresAtMS == 0 || now.Add(codexTurnStateAutoRenewBefore).UnixMilli() >= info.ExpiresAtMS
+	info.Due = recovery.Pending || !recovery.allows(token, now) || codexTurnStateAutomaticCollectionDue(token, info.SetAtMS, info.VerifiedAtMS, now, intervalMinutes)
 	if account != nil {
 		info.LastError = safeCodexTurnStateAutoError(account.GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
 	}
 	return info
 }
+
+func codexTurnStateAutoInfo(account *Account, now time.Time) CodexTurnStateAutoInfo {
+	return codexTurnStateAutoInfoWithInterval(account, now, OpenAICodexTurnStateDefaultAutoIntervalMinutes)
+}
 func CodexTurnStateAutoInfoForAccount(account *Account, now time.Time) *CodexTurnStateAutoInfo {
-	if !codexTurnStateAutoEligible(account) {
+	if !codexTurnStateCollectionEligible(account) {
 		return nil
 	}
 	return codexTurnStateScopedInfo(account, now)
+}
+
+// CodexTurnStateAutoInfoForAccount returns account diagnostics using the
+// currently effective renewal interval. The package-level helper remains for
+// callers without a gateway and uses the default interval for compatibility.
+func (s *OpenAIGatewayService) CodexTurnStateAutoInfoForAccount(ctx context.Context, account *Account, now time.Time) *CodexTurnStateAutoInfo {
+	if !codexTurnStateCollectionEligible(account) {
+		return nil
+	}
+	intervalMinutes := OpenAICodexTurnStateDefaultAutoIntervalMinutes
+	if s != nil {
+		intervalMinutes = s.codexTurnStateRuntimeConfig(ctx).AutoIntervalMinutes
+	}
+	return codexTurnStateScopedInfoWithInterval(account, now, intervalMinutes)
 }
 func safeCodexTurnStateAutoError(value string) string {
 	switch value {
 	case "state_312", "recovery_requires_new_292", "account_unavailable", "persistence_failed", "auth_failed", "transport_failed", "timeout", "missing_state", "invalid_state", "empty_response", "request_failed",
 		"response_model_mismatch", "response_model_missing", "response_not_completed", "response_failed", "state_replay_failed",
-		"probe_boundary_refresh_failed", "probe_burst_exhausted", "probe_burst_persistence_failed", "probe_burst_candidate_pending", "probe_burst_in_flight",
+		"probe_boundary_refresh_failed", "probe_pool_unavailable", "probe_burst_exhausted", "probe_burst_persistence_failed", "probe_burst_candidate_pending", "probe_burst_in_flight",
+		"account_not_schedulable", "model_scope_changed",
 		"usage_log_missing", "usage_request_id_mismatch", "usage_api_key_mismatch", "usage_account_mismatch", "usage_model_mismatch", "usage_state_mismatch", "usage_endpoint_mismatch",
 		codexTurnStateProbe429RetryAfterCode, codexTurnStateProbe429NoRetryAfterCode:
 		return value
@@ -192,6 +249,10 @@ func safeCodexTurnStateAutoError(value string) string {
 }
 func codexTurnStateAutoEligible(account *Account) bool {
 	return account != nil && account.ID > 0 && account.Platform == PlatformOpenAI && account.UsesOpenAICodexProtocol()
+}
+
+func codexTurnStateCollectionEligible(account *Account) bool {
+	return codexTurnStateAutoEligible(account) && account.IsSchedulable()
 }
 
 type CodexTurnStateAccountProbeBoundaryRepository interface {
@@ -277,10 +338,10 @@ func (s *OpenAIGatewayService) codexTurnStateAutoEnabled(ctx context.Context) bo
 
 func (s *OpenAIGatewayService) codexTurnStateRuntimeConfig(ctx context.Context) OpenAICodexTurnStateConfig {
 	if s == nil {
-		return OpenAICodexTurnStateConfig{}
+		return OpenAICodexTurnStateConfig{AutoIntervalMinutes: OpenAICodexTurnStateDefaultAutoIntervalMinutes}
 	}
 	if s.settingService == nil {
-		return OpenAICodexTurnStateConfig{ModelScopeValid: true}
+		return OpenAICodexTurnStateConfig{ModelScopeValid: true, AutoIntervalMinutes: OpenAICodexTurnStateDefaultAutoIntervalMinutes}
 	}
 	return s.settingService.GetOpenAICodexTurnState(ctx)
 }
@@ -372,6 +433,69 @@ func requeueCodexTurnStateManualTaskLocked(entry *codexTurnStateAutoEntry, task 
 	return true
 }
 
+// Caller must hold openaiTurnStateMu. A manual request that was reported as
+// queued must leave a new observable terminal result even when it stops before
+// reaching the upstream. The worker persists this dirty entry on its next loop.
+func markCodexTurnStateManualFailureLocked(entry *codexTurnStateAutoEntry, code string, now time.Time) {
+	if entry == nil {
+		return
+	}
+	code = safeCodexTurnStateAutoError(code)
+	if code == "" {
+		code = "request_failed"
+	}
+	probeAt := now.UnixMilli()
+	if probeAt <= entry.probeAt {
+		probeAt = entry.probeAt + 1
+	}
+	entry.probeAt = probeAt
+	entry.lastError = code
+	entry.probe = false
+	entry.forceProbe = false
+	entry.manualProbe = false
+	entry.manualOutcomePending = true
+	entry.probeRetryAfter = time.Time{}
+	entry.probeWakeAt = time.Time{}
+	entry.dirty = true
+	entry.retryAfter = time.Time{}
+	entry.retryWakeAt = time.Time{}
+}
+
+// Caller must hold openaiTurnStateMu. A concurrently published valid state can
+// satisfy the requested owner without another upstream call. Refresh only the
+// observable verification/probe clocks; never extend the state's original age.
+func markCodexTurnStateManualSatisfiedLocked(entry *codexTurnStateAutoEntry, now time.Time) {
+	if entry == nil {
+		return
+	}
+	probeAt := now.UnixMilli()
+	if probeAt <= entry.probeAt {
+		probeAt = entry.probeAt + 1
+	}
+	entry.probeAt = probeAt
+	if entry.verifiedAt < probeAt {
+		entry.verifiedAt = probeAt
+	}
+	entry.lastError = ""
+	entry.probe = false
+	entry.forceProbe = false
+	entry.manualProbe = false
+	entry.manualOutcomePending = true
+	entry.dirty = true
+	entry.retryAfter = time.Time{}
+	entry.retryWakeAt = time.Time{}
+}
+
+func (s *OpenAIGatewayService) lockCodexTurnStateManualAccount(accountID int64) func() {
+	if s == nil || accountID <= 0 {
+		return func() {}
+	}
+	value, _ := s.openaiTurnStateManualLocks.LoadOrStore(accountID, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
 // Caller must hold openaiTurnStateMu. This check may prune a separately staged
 // candidate but never mutates the queued task fields on entry.
 func (s *OpenAIGatewayService) enforceActiveCodexTurnStateProbeScopeLocked(cfg OpenAICodexTurnStateConfig, task codexTurnStateProbeTask, entry *codexTurnStateAutoEntry) bool {
@@ -390,9 +514,12 @@ func (s *OpenAIGatewayService) enforceCodexTurnStateScopeLocked(cfg OpenAICodexT
 	}
 	taskAllowed := codexTurnStateEntryScopeAllowed(cfg, entry)
 	if !taskAllowed {
-		entry.probe = false
-		entry.forceProbe = false
-		entry.manualProbe = false
+		if entry.manualProbe {
+			markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", time.Now())
+		} else {
+			entry.probe = false
+			entry.forceProbe = false
+		}
 	}
 	if entry.candidate.state != "" && !codexTurnStateUsageCandidateInScopeLocked(cfg, entry) {
 		s.discardCodexTurnStateCandidateLocked(entry)
@@ -407,6 +534,7 @@ func (s *OpenAIGatewayService) enforceCodexTurnStateScopeForAccount(cfg OpenAICo
 	s.openaiTurnStateMu.Lock()
 	if entry := s.openaiTurnStates[codexTurnStateKey{accountID: accountID, model: codexTurnStateOwnerModel(model)}]; entry != nil {
 		s.enforceCodexTurnStateScopeLocked(cfg, entry)
+		s.startCodexTurnStateWorkerLocked(accountID, entry)
 	}
 	s.openaiTurnStateMu.Unlock()
 }
@@ -434,6 +562,28 @@ func (s *OpenAIGatewayService) discardCodexTurnStateCandidateLocked(entry *codex
 	owner := entry.candidate.pendingOwner
 	entry.candidate = codexTurnStateUsageCandidate{}
 	s.releaseCodexTurnStateCandidateOwnerAsync(owner)
+}
+
+// Caller must hold openaiTurnStateMu. Once the account has been deleted there
+// is no durable target for queued writes or probes. Invalidate every local wake
+// and release only the exact durable candidate owners held by this process.
+func (s *OpenAIGatewayService) discardCodexTurnStateWorkForMissingAccountLocked(entry *codexTurnStateAutoEntry) {
+	if entry == nil {
+		return
+	}
+	pendingOwner := entry.pendingOwner
+	entry.pendingOwner = codexTurnStateProbeCandidatePendingOwner{}
+	s.releaseCodexTurnStateCandidateOwnerAsync(pendingOwner)
+	s.discardCodexTurnStateCandidateLocked(entry)
+	entry.dirty = false
+	entry.probe = false
+	entry.forceProbe = false
+	entry.manualProbe = false
+	entry.manualOutcomePending = false
+	entry.retryAfter = time.Time{}
+	entry.retryWakeAt = time.Time{}
+	entry.probeRetryAfter = time.Time{}
+	entry.probeWakeAt = time.Time{}
 }
 
 func (s *OpenAIGatewayService) finishCodexTurnStateCandidatePersistence(entry *codexTurnStateAutoEntry, owner codexTurnStateProbeCandidatePendingOwner) {
@@ -488,9 +638,9 @@ func (s *OpenAIGatewayService) codexTurnStateEntryLocked(account *Account, now t
 	}
 	setAt := codexTurnStateAutoInt64(account, CodexTurnStateAutoSetAtExtraKey)
 	verifiedAt := codexTurnStateAutoInt64(account, CodexTurnStateAutoVerifiedAtExtraKey)
-	verifiedModel := codexTurnStateOwnerModel(account.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey))
+	verifiedModel := strings.TrimSpace(account.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey))
 	token := codexTurnStateAutoToken(account)
-	if verifiedModel != model {
+	if codexTurnStateOwnerModel(verifiedModel) != model {
 		token = ""
 	}
 	if !entry.reconciling && !entry.dirty && (verifiedAt > entry.verifiedAt || setAt > entry.setAt && verifiedAt >= entry.verifiedAt || entry.token == "") && entry.recovery.allows(token, now) {
@@ -527,7 +677,7 @@ func (s *OpenAIGatewayService) codexTurnStateEntryLocked(account *Account, now t
 // including one that is inside the automatic renewal window.
 func codexTurnStateEntryHasValidStateLocked(entry *codexTurnStateAutoEntry, now time.Time) bool {
 	return entry != nil && !entry.reconciling && !entry.recovery.Pending &&
-		entry.token != "" && entry.verifiedModel == entry.model &&
+		entry.token != "" && codexTurnStateOwnerModel(entry.verifiedModel) == entry.model &&
 		entry.recovery.allows(entry.token, now) &&
 		codexTurnStateAutoExpiry(entry.token, entry.setAt, now) > now.UnixMilli()
 }
@@ -546,10 +696,18 @@ func (s *OpenAIGatewayService) codexTurnStateManualStateAlreadyValidLocked(entry
 		return false
 	}
 	token := codexTurnStateAutoToken(slot)
-	verifiedModel := codexTurnStateOwnerModel(slot.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey))
+	verifiedModel := strings.TrimSpace(slot.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey))
 	recovery := codexTurnStateRecoveryFromAccount(slot)
 	setAt := codexTurnStateAutoInt64(slot, CodexTurnStateAutoSetAtExtraKey)
-	if verifiedModel != entry.model || recovery.Pending || recovery.InvalidatedAtMS < entry.recovery.InvalidatedAtMS ||
+	lastError := safeCodexTurnStateAutoError(slot.GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
+	entry.lastError = lastError
+	// A persisted, redacted failure means the latest collection did not
+	// succeed. An administrator may explicitly retry even while the older token
+	// itself remains inside its local validity window.
+	if lastError != "" {
+		return false
+	}
+	if codexTurnStateOwnerModel(verifiedModel) != entry.model || recovery.Pending || recovery.InvalidatedAtMS < entry.recovery.InvalidatedAtMS ||
 		!recovery.allows(token, now) || codexTurnStateAutoExpiry(token, setAt, now) <= now.UnixMilli() {
 		return false
 	}
@@ -567,7 +725,6 @@ func (s *OpenAIGatewayService) codexTurnStateManualStateAlreadyValidLocked(entry
 	if probeNotBefore := codexTurnStateAutoInt64(slot, CodexTurnStateAutoProbeNotBeforeExtraKey); probeNotBefore > entry.probeNotBefore {
 		entry.probeNotBefore = probeNotBefore
 	}
-	entry.lastError = safeCodexTurnStateAutoError(slot.GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
 	entry.loadedAt = now
 	if entry.probeNotBefore > now.UnixMilli() {
 		entry.probeRetryAfter = time.UnixMilli(entry.probeNotBefore)
@@ -628,7 +785,7 @@ func (s *OpenAIGatewayService) loadCodexTurnStateProbeSnapshot(ctx context.Conte
 // Near-expiry values remain usable while renewal runs; expired automatic values
 // are omitted. No probe is awaited by the caller.
 func (s *OpenAIGatewayService) autoTurnStateForAccount(ctx context.Context, account *Account, models ...string) string {
-	if !codexTurnStateAutoEligible(account) || s == nil || s.settingService == nil {
+	if !codexTurnStateCollectionEligible(account) || s == nil || s.settingService == nil {
 		return ""
 	}
 	cfg := s.settingService.GetOpenAICodexTurnState(ctx)
@@ -664,9 +821,9 @@ func (s *OpenAIGatewayService) autoTurnStateForAccount(ctx context.Context, acco
 		entry.probe = false
 		entry.forceProbe = false
 	}
-	if !codexTurnStateManualVerification(ctx) && !candidatePending && (entry.recovery.Pending || entry.token == "" || expiry == 0 || now.Add(codexTurnStateAutoRenewBefore).UnixMilli() >= expiry) {
+	if !codexTurnStateManualVerification(ctx) && !candidatePending && (entry.recovery.Pending || codexTurnStateAutomaticCollectionDue(entry.token, entry.setAt, entry.verifiedAt, now, cfg.AutoIntervalMinutes)) {
 		currentTaskAllowed := codexTurnStateEntryScopeAllowed(cfg, entry)
-		if !now.Before(time.UnixMilli(entry.probeNotBefore)) && (!currentTaskAllowed || entry.forceProbe || entry.probeAt <= 0 || now.Sub(time.UnixMilli(entry.probeAt)) >= codexTurnStateAutoProbeInterval) {
+		if !now.Before(time.UnixMilli(entry.probeNotBefore)) && (!currentTaskAllowed || entry.forceProbe || !codexTurnStateAutomaticFailureBackoffActive(entry, now)) {
 			entry.probe = true
 			if !currentTaskAllowed {
 				entry.forceProbe = true
@@ -696,7 +853,6 @@ func (s *OpenAIGatewayService) setCodexTurnStateLocked(entry *codexTurnStateAuto
 	if entry == nil || entry.reconciling || !entry.recovery.allows(state, now) {
 		return
 	}
-	hadProbeBoundary := entry.probeNotBefore > 0
 	entry.recovery.Pending = false
 	if !entry.probe {
 		entry.forceProbe = false
@@ -708,11 +864,12 @@ func (s *OpenAIGatewayService) setCodexTurnStateLocked(entry *codexTurnStateAuto
 		entry.probeNotBefore = 0
 	}
 	if state == entry.token && entry.setAt > 0 {
-		// Successful reuse clears a previous failure without renewing token age.
-		if entry.lastError != "" || hadProbeBoundary {
-			entry.lastError = ""
-			entry.dirty = true
-		}
+		// Successful reuse does not renew token age, but it does provide fresh
+		// verification evidence for this collection round. Keeping verifiedAt
+		// current lets polling distinguish the success from an older result.
+		entry.verifiedAt = now.UnixMilli()
+		entry.lastError = ""
+		entry.dirty = true
 		return
 	}
 	oldIssued, _, oldOK := parseCodexTurnState(entry.token)
@@ -733,7 +890,7 @@ func (s *OpenAIGatewayService) startCodexTurnStateWorkerLocked(id int64, entry *
 	if entry.dirty && now.Before(entry.retryAfter) {
 		return
 	}
-	if !entry.dirty && entry.probe && now.Before(entry.probeRetryAfter) {
+	if !entry.dirty && entry.probe && !entry.manualProbe && now.Before(entry.probeRetryAfter) {
 		return
 	}
 	entry.running = true
@@ -806,7 +963,7 @@ func (s *OpenAIGatewayService) scheduleCodexTurnStateProbeRetryLocked(id int64, 
 			return
 		}
 		s.enforceCodexTurnStateScopeLocked(cfg, entry)
-		if cfg.AutoEnabled || entry.manualProbe {
+		if entry.dirty || cfg.AutoEnabled || entry.manualProbe {
 			s.startCodexTurnStateWorkerLocked(id, entry)
 		}
 		if entry.probe && entry.manualProbe && !entry.running && time.Now().Before(entry.probeRetryAfter) {
@@ -842,12 +999,16 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 		s.openaiTurnStateMu.Lock()
 		s.enforceCodexTurnStateScopeLocked(cfg, entry)
 		dirty, probe, manualRun := entry.dirty, entry.probe, entry.manualProbe
+		manualPersist := manualRun || entry.manualOutcomePending
 		task := codexTurnStateProbeTaskLocked(entry)
 		if !dirty && !cfg.AutoEnabled && !manualRun {
 			s.openaiTurnStateMu.Unlock()
 			return
 		}
 		entry.dirty = false
+		if dirty {
+			entry.manualOutcomePending = false
+		}
 		if cfg.AutoEnabled || manualRun {
 			entry.probe = false
 			entry.forceProbe = false
@@ -862,20 +1023,28 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 			return
 		}
 		if dirty {
-			err := s.persistCodexTurnStateWithMode(id, entry, manualRun)
+			err := s.persistCodexTurnStateWithMode(id, entry, manualPersist)
 			if err != nil {
 				s.openaiTurnStateMu.Lock()
+				if errors.Is(err, ErrAccountNotFound) {
+					s.discardCodexTurnStateWorkForMissingAccountLocked(entry)
+					s.openaiTurnStateMu.Unlock()
+					return
+				}
 				entry.dirty = true
+				if manualPersist {
+					entry.manualOutcomePending = true
+				}
 				newerQueued := entry.probe
 				if !newerQueued {
 					entry.probe = probe
-					if manualRun {
+					if manualPersist {
 						entry.forceProbe = true
 						entry.manualProbe = true
 					}
 				}
 				manualRetry := entry.manualProbe
-				if manualRun && !newerQueued {
+				if manualPersist && !newerQueued {
 					manualRetry = true
 				}
 				entry.manualProbe = manualRetry
@@ -943,9 +1112,11 @@ func (s *OpenAIGatewayService) persistCodexTurnStateWithMode(id int64, entry *co
 		}
 		if !updated {
 			s.openaiTurnStateMu.Lock()
-			// Restore the captured manual intent only when no newer task was queued
-			// during the CAS. Never upgrade a newer automatic task into manual work.
-			if manual && !entry.probe {
+			// The losing write belongs to an administrator request, so a concurrently
+			// queued automatic task for this owner must also carry that manual intent.
+			// Keep its newer request/scope snapshot, but do not let the observable
+			// manual outcome disappear behind the CAS winner.
+			if manual {
 				entry.probe = true
 				entry.forceProbe = true
 				entry.manualProbe = true
@@ -983,8 +1154,57 @@ func (s *OpenAIGatewayService) persistCodexTurnStateWithMode(id int64, entry *co
 // later request while the in-memory boundary continues to block probing.
 func (s *OpenAIGatewayService) persistCodexTurnStateProbeOutcome(id int64, entry *codexTurnStateAutoEntry, manual bool) bool {
 	for attempt := 0; attempt < codexTurnStateProbePersistAttempts; attempt++ {
-		if err := s.persistCodexTurnStateWithMode(id, entry, manual); err == nil {
+		err := s.persistCodexTurnStateWithMode(id, entry, manual)
+		if err == nil {
 			return true
+		}
+		if errors.Is(err, ErrAccountNotFound) {
+			s.openaiTurnStateMu.Lock()
+			s.discardCodexTurnStateWorkForMissingAccountLocked(entry)
+			s.openaiTurnStateMu.Unlock()
+			return false
+		}
+	}
+	s.openaiTurnStateMu.Lock()
+	entry.dirty = true
+	if manual {
+		entry.manualOutcomePending = true
+	}
+	entry.retryAfter = time.Now().Add(5 * time.Second)
+	s.scheduleCodexTurnStatePersistenceRetryLocked(id, entry, entry.retryAfter)
+	s.openaiTurnStateMu.Unlock()
+	return false
+}
+
+// A 429 observed mid-round must constrain later automatic rounds immediately,
+// without publishing a model-slot failure while the current route snapshot is
+// still being attempted. The terminal slot outcome is persisted only after the
+// full round fails (or is cleared by a later successful route).
+func (s *OpenAIGatewayService) persistCodexTurnStateProbeBoundary(id int64, entry *codexTurnStateAutoEntry, notBefore int64) bool {
+	if s == nil || s.accountRepo == nil || id <= 0 || notBefore <= 0 {
+		return false
+	}
+	for attempt := 0; attempt < codexTurnStateProbePersistAttempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		var err error
+		if repo, ok := s.accountRepo.(CodexTurnStateAccountProbeBoundaryRepository); ok {
+			err = repo.AdvanceCodexTurnStateProbeNotBefore(ctx, id, notBefore)
+		} else {
+			// Test and alternate repositories may not expose the monotonic helper.
+			// They still receive only the root boundary, never a model-slot outcome.
+			err = s.accountRepo.UpdateExtra(ctx, id, map[string]any{
+				CodexTurnStateAutoProbeNotBeforeExtraKey: notBefore,
+			})
+		}
+		cancel()
+		if err == nil {
+			return true
+		}
+		if errors.Is(err, ErrAccountNotFound) {
+			s.openaiTurnStateMu.Lock()
+			s.discardCodexTurnStateWorkForMissingAccountLocked(entry)
+			s.openaiTurnStateMu.Unlock()
+			return false
 		}
 	}
 	s.openaiTurnStateMu.Lock()
@@ -1048,9 +1268,9 @@ func (s *OpenAIGatewayService) finishCodexTurnStateCASReconciliationLocked(entry
 	if slot != nil {
 		entry.setAt = codexTurnStateAutoInt64(slot, CodexTurnStateAutoSetAtExtraKey)
 		entry.verifiedAt = codexTurnStateAutoInt64(slot, CodexTurnStateAutoVerifiedAtExtraKey)
-		entry.verifiedModel = codexTurnStateOwnerModel(slot.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey))
+		entry.verifiedModel = strings.TrimSpace(slot.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey))
 		entry.token = codexTurnStateAutoToken(slot)
-		if entry.verifiedModel != entry.model {
+		if codexTurnStateOwnerModel(entry.verifiedModel) != entry.model {
 			entry.token = ""
 		}
 		entry.recovery = codexTurnStateRecoveryFromAccount(slot)
@@ -1067,7 +1287,7 @@ func (s *OpenAIGatewayService) finishCodexTurnStateCASReconciliationLocked(entry
 	if entry.probeNotBefore > now.UnixMilli() {
 		entry.probeRetryAfter = time.UnixMilli(entry.probeNotBefore)
 	}
-	if codexTurnStateEntryHasValidStateLocked(entry, now) {
+	if codexTurnStateEntryHasValidStateLocked(entry, now) && entry.lastError == "" {
 		entry.probe = false
 		entry.forceProbe = false
 		entry.manualProbe = false
@@ -1079,10 +1299,9 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 }
 
 // runCodexTurnStateProbeWithMode performs the bounded maintenance probe. The
-// manual mode bypasses the automatic-enable gate. Protocol/account eligibility,
-// configured model scope, account-wide upstream cooldowns, response validation
-// and CAS publication are unchanged; schedulability, proxy record state and
-// serving concurrency are deliberately not consulted.
+// manual mode bypasses the automatic-enable gate and a previously persisted
+// probe cooldown. Protocol/account lifecycle eligibility, configured model
+// scope, response validation and CAS publication remain mandatory.
 func (s *OpenAIGatewayService) runCodexTurnStateProbeWithMode(id int64, entry *codexTurnStateAutoEntry, manual bool) {
 	s.openaiTurnStateMu.Lock()
 	task := codexTurnStateProbeTaskLocked(entry)
@@ -1091,12 +1310,54 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeWithMode(id int64, entry *c
 }
 
 func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entry *codexTurnStateAutoEntry, manual bool, task codexTurnStateProbeTask) {
+	if manual {
+		unlock := s.lockCodexTurnStateManualAccount(id)
+		defer unlock()
+	}
+	finishManualFailure := func(code string) {
+		if !manual {
+			return
+		}
+		s.openaiTurnStateMu.Lock()
+		markCodexTurnStateManualFailureLocked(entry, code, time.Now())
+		s.openaiTurnStateMu.Unlock()
+	}
+	finishManualStale := func() {
+		if !manual {
+			return
+		}
+		now := time.Now()
+		s.openaiTurnStateMu.Lock()
+		if codexTurnStateEntryHasValidStateLocked(entry, now) && entry.lastError == "" {
+			markCodexTurnStateManualSatisfiedLocked(entry, now)
+		} else {
+			markCodexTurnStateManualFailureLocked(entry, "request_failed", now)
+		}
+		s.openaiTurnStateMu.Unlock()
+	}
 	if s.httpUpstream == nil {
+		finishManualFailure("request_failed")
 		return
 	}
-	var pendingOwner codexTurnStateProbeCandidatePendingOwner
-	pendingOwnerOwned := false
+	var (
+		pendingOwner          codexTurnStateProbeCandidatePendingOwner
+		pendingOwnerOwned     bool
+		roundReservation      codexTurnStateProbeBurstReservation
+		roundReservationOwned bool
+		burstGeneration       int64
+		burstModel            string
+	)
+	releaseRoundReservation := func() error {
+		if !roundReservationOwned {
+			return nil
+		}
+		roundReservationOwned = false
+		releaseCtx, cancelRelease := context.WithTimeout(context.Background(), gatewayForwardingDBTimeout)
+		defer cancelRelease()
+		return s.releaseCodexTurnStateProbeBurstAttempt(releaseCtx, id, burstModel, burstGeneration, roundReservation)
+	}
 	defer func() {
+		_ = releaseRoundReservation()
 		if pendingOwnerOwned {
 			s.releaseCodexTurnStateCandidateOwnerAsync(pendingOwner)
 		}
@@ -1105,18 +1366,19 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 	account, err := s.accountRepo.GetByID(lookupCtx, id)
 	cancelLookup()
 	if err != nil {
-		s.openaiTurnStateMu.Lock()
-		manualIntent := manual
-		if manualIntent && !errors.Is(err, ErrAccountNotFound) {
-			if requeueCodexTurnStateManualTaskLocked(entry, task) {
-				entry.probeRetryAfter = time.Now().Add(5 * time.Second)
-				s.scheduleCodexTurnStateProbeRetryLocked(id, entry, entry.probeRetryAfter)
-			}
+		if errors.Is(err, ErrAccountNotFound) {
+			s.openaiTurnStateMu.Lock()
+			s.discardCodexTurnStateWorkForMissingAccountLocked(entry)
+			s.openaiTurnStateMu.Unlock()
+			return
 		}
-		s.openaiTurnStateMu.Unlock()
+		if manual {
+			finishManualFailure("account_unavailable")
+		}
 		return
 	}
-	if !codexTurnStateAutoEligible(account) {
+	if !codexTurnStateCollectionEligible(account) {
+		finishManualFailure("account_not_schedulable")
 		return
 	}
 	// Re-read persisted timestamps before spending upstream quota. This reduces
@@ -1126,6 +1388,9 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 	s.openaiTurnStateMu.Lock()
 	s.codexTurnStateEntryLocked(account, now, entry.model)
 	if !s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry) {
+		if manual {
+			markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", now)
+		}
 		s.openaiTurnStateMu.Unlock()
 		return
 	}
@@ -1133,6 +1398,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 	if manualIntent && s.codexTurnStateManualStateAlreadyValidLocked(entry, account, now) {
 		// A concurrent publisher won the exact account/model slot. Do not let
 		// forceProbe turn a satisfied manual request into another upstream call.
+		markCodexTurnStateManualSatisfiedLocked(entry, now)
 		s.openaiTurnStateMu.Unlock()
 		return
 	}
@@ -1140,50 +1406,84 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 		s.openaiTurnStateMu.Unlock()
 		return
 	}
-	// startCodexTurnStateWorkerLocked checks this boundary before launching a
-	// worker. Check it again here because a concurrent invalidation can enqueue a
-	// forced probe while the current worker is still handling the 429 response.
+	// Existing automatic cooldowns block a new round. An explicit administrator
+	// request bypasses both the durable boundary and local retry timer, but any
+	// new 429 it sees remains durable for later automatic rounds.
 	durableCooldown := now.Before(time.UnixMilli(entry.probeNotBefore))
-	if now.Before(entry.probeRetryAfter) || durableCooldown {
-		if manualIntent && !durableCooldown {
-			if requeueCodexTurnStateManualTaskLocked(entry, task) {
-				s.scheduleCodexTurnStateProbeRetryLocked(id, entry, entry.probeRetryAfter)
-			}
-		}
+	if !manualIntent && (now.Before(entry.probeRetryAfter) || durableCooldown) {
 		s.openaiTurnStateMu.Unlock()
 		return
 	}
-	expiry := codexTurnStateAutoExpiry(entry.token, entry.setAt, now)
-	if !manualIntent && !task.force && ((!entry.recovery.Pending && entry.token != "" && expiry > now.Add(codexTurnStateAutoRenewBefore).UnixMilli()) || (entry.probeAt > 0 && now.Sub(time.UnixMilli(entry.probeAt)) < codexTurnStateAutoProbeInterval)) {
+	if !manualIntent && !task.force && ((!entry.recovery.Pending && entry.token != "" && !codexTurnStateAutomaticCollectionDue(entry.token, entry.setAt, entry.verifiedAt, now, cfg.AutoIntervalMinutes)) || codexTurnStateAutomaticFailureBackoffActive(entry, now)) {
 		s.openaiTurnStateMu.Unlock()
 		return
 	}
 	entry.probeAt = now.UnixMilli()
+	if manualIntent {
+		// Make this round distinguishable from the previous terminal result. The
+		// cleared error is persisted with probeAt before the first upstream call.
+		entry.lastError = ""
+	}
 	generation := entry.recovery.InvalidatedAtMS
 	before := entry.token
-	// The durable burst budget limits background retries. An explicit
-	// administrator request bypasses that automatic budget; response evidence,
-	// account-wide 429 cooldowns and final CAS publication still apply.
+	// The durable burst budget limits background rounds. One reservation covers
+	// the complete route snapshot; individual IP failures never consume another
+	// attempt. Explicit administrator rounds bypass this automatic budget.
 	burst := !manualIntent && codexTurnStateProbeNeedsBurst(entry, now)
-	burstGeneration := codexTurnStateProbeBurstGeneration(entry)
-	burstModel := codexTurnStateProbeBurstOwnerModel(entry.model)
+	burstGeneration = codexTurnStateProbeBurstGeneration(entry)
+	burstModel = codexTurnStateProbeBurstOwnerModel(entry.model)
 	probeModel := task.requestModel
 	if probeModel == "" {
 		probeModel = entry.model
 	}
 	s.openaiTurnStateMu.Unlock()
-	totalTimeout := codexTurnStateProbeTotalTimeout
-	if burst {
-		totalTimeout = codexTurnStateProbeBurstWindow
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), totalTimeout)
+
+	// Capture the pool once. This defines one collection round: every selected
+	// route is attempted at most once, and a direct route is used only when the
+	// configured and fallback pools are both empty.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	routes, poolErr := s.codexTurnStatePoolRouteSnapshot(ctx, "")
+	if poolErr != nil {
+		cfg = s.codexTurnStateRuntimeConfig(ctx)
+		s.openaiTurnStateMu.Lock()
+		now = time.Now()
+		inScope := s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry)
+		stale := entry.token != before || entry.recovery.InvalidatedAtMS != generation
+		if !inScope || stale {
+			if manualIntent {
+				switch {
+				case !inScope:
+					markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", now)
+				case codexTurnStateEntryHasValidStateLocked(entry, now) && entry.lastError == "":
+					markCodexTurnStateManualSatisfiedLocked(entry, now)
+				default:
+					markCodexTurnStateManualFailureLocked(entry, "request_failed", now)
+				}
+			}
+			s.openaiTurnStateMu.Unlock()
+			return
+		}
+		entry.lastError = safeCodexTurnStateAutoError(poolErr.Error())
+		s.openaiTurnStateMu.Unlock()
+		if !s.persistCodexTurnStateProbeOutcome(id, entry, manualIntent) {
+			slog.Warn("openai_codex_turn_state_probe_persist_failed", "account_id", id, "code", "persistence_failed")
+		}
+		slog.Warn("openai_codex_turn_state_probe_failed", "account_id", id, "code", "probe_pool_unavailable")
+		return
+	}
+	if len(routes) == 0 {
+		routes = []string{""}
+	}
 	if !manual && !s.codexTurnStateAutoEnabled(ctx) {
 		return
 	}
 	cfg = s.codexTurnStateRuntimeConfig(ctx)
 	s.openaiTurnStateMu.Lock()
 	if !s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry) {
+		if manualIntent {
+			markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", time.Now())
+		}
 		s.openaiTurnStateMu.Unlock()
 		return
 	}
@@ -1199,62 +1499,88 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 		}
 		return
 	}
-	// A concurrent publisher can win while probe metadata is being persisted.
-	// Refresh the exact slot immediately before selecting the first upstream
-	// route; manual work fails closed if that authoritative read is unavailable.
-	stateSnapshot := account
-	manualIntent = manual
-	if manualIntent {
-		stateSnapshot, err = s.loadCodexTurnStateProbeSnapshot(ctx, id)
-		if err != nil || !codexTurnStateAutoEligible(stateSnapshot) {
-			s.openaiTurnStateMu.Lock()
-			if requeueCodexTurnStateManualTaskLocked(entry, task) {
-				entry.probeRetryAfter = time.Now().Add(5 * time.Second)
-				s.scheduleCodexTurnStateProbeRetryLocked(id, entry, entry.probeRetryAfter)
-			}
-			s.openaiTurnStateMu.Unlock()
-			return
-		}
-		cfg = s.codexTurnStateRuntimeConfig(ctx)
-		s.openaiTurnStateMu.Lock()
-		now = time.Now()
-		s.codexTurnStateEntryLocked(stateSnapshot, now, entry.model)
-		if !s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry) {
-			s.openaiTurnStateMu.Unlock()
-			return
-		}
-		manualIntent = manual
-		if manualIntent && s.codexTurnStateManualStateAlreadyValidLocked(entry, stateSnapshot, now) {
-			s.openaiTurnStateMu.Unlock()
-			return
-		}
-		if s.handleCodexTurnStateProbeCandidateLocked(cfg, entry, now, manualIntent) {
-			s.openaiTurnStateMu.Unlock()
-			return
+	// A concurrent publisher or lifecycle update can win while probe metadata is
+	// being persisted. Full account reads are mandatory here and before every
+	// real request; the narrow Turn State source does not contain schedulability.
+	stateSnapshot, err := s.loadCodexTurnStateCollectionAccount(ctx, id)
+	if err != nil {
+		finishManualFailure("account_unavailable")
+		return
+	}
+	account = stateSnapshot
+	cfg = s.codexTurnStateRuntimeConfig(ctx)
+	s.openaiTurnStateMu.Lock()
+	now = time.Now()
+	s.codexTurnStateEntryLocked(stateSnapshot, now, entry.model)
+	if !s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry) {
+		if manualIntent {
+			markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", now)
 		}
 		s.openaiTurnStateMu.Unlock()
+		return
 	}
-	// A dedicated route is preferred when configured. Collection is not blocked
-	// by proxy inventory or route shape: fall back to the account route, then
-	// direct transport when neither is available.
-	primaryRoute := codexTurnStateAccountProxy(account)
-	routes := s.codexTurnStatePoolRoutes(ctx, primaryRoute)
-	if len(routes) == 0 {
-		routes = []string{primaryRoute}
+	if manualIntent && codexTurnStateAutoToken(codexTurnStateModelAccount(stateSnapshot, entry.model)) != before &&
+		s.codexTurnStateManualStateAlreadyValidLocked(entry, stateSnapshot, now) {
+		markCodexTurnStateManualSatisfiedLocked(entry, now)
+		s.openaiTurnStateMu.Unlock()
+		return
 	}
-	for attempt := 0; attempt < len(routes); attempt++ {
+	if s.handleCodexTurnStateProbeCandidateLocked(cfg, entry, now, manualIntent) {
+		s.openaiTurnStateMu.Unlock()
+		return
+	}
+	s.openaiTurnStateMu.Unlock()
+
+	var roundErr error
+	attemptDeadline := time.Time{}
+	if burst {
+		var reserveErr error
+		roundReservation, reserveErr = s.reserveCodexTurnStateProbeRound(ctx, id, burstModel, burstGeneration)
+		if reserveErr != nil {
+			if errors.Is(reserveErr, errCodexTurnStateProbeBurstInFlight) || errors.Is(reserveErr, errCodexTurnStateProbeCandidatePending) {
+				return
+			}
+			roundErr = reserveErr
+		} else {
+			roundReservationOwned = true
+		}
+	}
+
+	roundReady := roundErr == nil
+	for attempt := 0; roundReady && attempt < len(routes); attempt++ {
+		if burst {
+			var renewErr error
+			roundReservation, renewErr = s.renewCodexTurnStateProbeBurstAttempt(ctx, id, burstModel, burstGeneration, roundReservation)
+			if renewErr != nil {
+				roundErr = renewErr
+				break
+			}
+			attemptDeadline = roundReservation.deadline
+		}
 		cfg = s.codexTurnStateRuntimeConfig(ctx)
 		if ctx.Err() != nil || !manual && !cfg.AutoEnabled {
 			return
 		}
+		latest, loadErr := s.loadCodexTurnStateCollectionAccount(ctx, id)
+		if loadErr != nil {
+			finishManualFailure("account_unavailable")
+			return
+		}
+		account, stateSnapshot = latest, latest
 		s.openaiTurnStateMu.Lock()
-		now := time.Now()
+		now = time.Now()
+		s.codexTurnStateEntryLocked(stateSnapshot, now, entry.model)
 		if !s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry) {
+			if manualIntent {
+				markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", now)
+			}
 			s.openaiTurnStateMu.Unlock()
 			return
 		}
 		manualIntent = manual
-		if manualIntent && s.codexTurnStateManualStateAlreadyValidLocked(entry, stateSnapshot, now) {
+		if manualIntent && codexTurnStateAutoToken(codexTurnStateModelAccount(stateSnapshot, entry.model)) != before &&
+			s.codexTurnStateManualStateAlreadyValidLocked(entry, stateSnapshot, now) {
+			markCodexTurnStateManualSatisfiedLocked(entry, now)
 			s.openaiTurnStateMu.Unlock()
 			return
 		}
@@ -1263,125 +1589,152 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 			return
 		}
 		stale := entry.token != before || entry.recovery.InvalidatedAtMS != generation
-		blocked := now.Before(time.UnixMilli(s.codexTurnStateAccountProbeNotBeforeLocked(id)))
 		s.openaiTurnStateMu.Unlock()
-		if stale || blocked {
+		if stale {
+			finishManualStale()
 			return
 		}
-		attemptBurst := burst && !manualIntent
-		attemptDeadline := time.Time{}
-		reservation := codexTurnStateProbeBurstReservation{}
-		if attemptBurst {
-			var reserveErr error
-			reservation, reserveErr = s.reserveCodexTurnStateProbeBurstAttempt(ctx, id, burstModel, burstGeneration)
-			if reserveErr != nil {
-				if errors.Is(reserveErr, errCodexTurnStateProbeBurstInFlight) || errors.Is(reserveErr, errCodexTurnStateProbeCandidatePending) {
-					return
-				}
-				err = reserveErr
-				break
-			}
-			attemptDeadline = reservation.deadline
-		}
-		// Reserving the durable burst lease can itself take long enough for an
+		// Reserving the durable round lease can itself take long enough for an
 		// administrator to narrow the model scope. Recheck immediately before the
-		// real upstream request and release only this attempt's lease on rejection.
+		// real upstream request; the deferred release owns the complete round.
 		cfg = s.codexTurnStateRuntimeConfig(ctx)
 		s.openaiTurnStateMu.Lock()
 		inScope := s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry)
+		if !inScope && manualIntent {
+			markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", time.Now())
+		}
 		s.openaiTurnStateMu.Unlock()
 		if !inScope {
-			if attemptBurst {
-				releaseCtx, cancelRelease := context.WithTimeout(context.Background(), gatewayForwardingDBTimeout)
-				_ = s.releaseCodexTurnStateProbeBurstAttempt(releaseCtx, id, burstModel, burstGeneration, reservation)
-				cancelRelease()
-			}
 			return
 		}
-		// Renewal and every IP retry must use the model that owns this state.
+		// Renewal and every IP in the round use the same requested model.
 		model := probeModel
 		attemptCtx, cancelAttempt := codexTurnStateProbeAttemptContext(ctx, attemptDeadline)
-		state, probeErr := s.probeOpenAICodexTurnStateViaProxy(attemptCtx, account, model, routes[attempt])
+		state, verifiedModel, probeErr := s.probeOpenAICodexTurnStateViaProxyWithModeEvidence(attemptCtx, account, model, routes[attempt], true)
 		cancelAttempt()
-		cfg = s.codexTurnStateRuntimeConfig(ctx)
-		s.openaiTurnStateMu.Lock()
-		inScope = s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry)
-		s.openaiTurnStateMu.Unlock()
-		if !inScope {
-			if attemptBurst {
-				releaseCtx, cancelRelease := context.WithTimeout(context.Background(), gatewayForwardingDBTimeout)
-				_ = s.releaseCodexTurnStateProbeBurstAttempt(releaseCtx, id, burstModel, burstGeneration, reservation)
-				cancelRelease()
-			}
+		if ctx.Err() != nil {
 			return
-		}
-		if errors.Is(probeErr, errCodexTurnStateAccountProbeCooldown) {
-			return
-		}
-		// The last same-route replay can overlap a 429 observed by another
-		// process. Refresh once more before staging so removal of the former daily
-		// route replay does not reopen that cross-instance race.
-		if probeErr == nil {
-			blocked, boundaryErr := s.refreshCodexTurnStateAccountProbeBoundary(ctx, id)
-			if boundaryErr != nil {
-				probeErr = boundaryErr
-			} else if blocked {
-				return
-			}
 		}
 		cfg = s.codexTurnStateRuntimeConfig(ctx)
 		s.openaiTurnStateMu.Lock()
 		inScope = s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry)
+		if !inScope && manualIntent {
+			markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", time.Now())
+		}
 		s.openaiTurnStateMu.Unlock()
 		if !inScope {
-			if attemptBurst {
-				releaseCtx, cancelRelease := context.WithTimeout(context.Background(), gatewayForwardingDBTimeout)
-				_ = s.releaseCodexTurnStateProbeBurstAttempt(releaseCtx, id, burstModel, burstGeneration, reservation)
-				cancelRelease()
-			}
+			return
+		}
+		if probeErr != nil && probeErr.Error() == "account_unavailable" {
+			finishManualFailure("account_unavailable")
+			return
+		}
+		cfg = s.codexTurnStateRuntimeConfig(ctx)
+		s.openaiTurnStateMu.Lock()
+		inScope = s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry)
+		if !inScope && manualIntent {
+			markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", time.Now())
+		}
+		s.openaiTurnStateMu.Unlock()
+		if !inScope {
 			return
 		}
 		if !manual && !s.codexTurnStateAutoEnabled(ctx) {
 			return
 		}
-		if probeErr == nil && attemptBurst {
-			// Recheck the local/account boundary before publishing the durable
-			// cross-instance stopper. A competing winner after this check is still
-			// resolved by the budget CAS below; only that winner may stage state.
-			s.openaiTurnStateMu.Lock()
-			now = time.Now()
-			stale = entry.token != before || entry.recovery.InvalidatedAtMS != generation
-			blocked = now.Before(time.UnixMilli(s.codexTurnStateAccountProbeNotBeforeLocked(id)))
-			s.openaiTurnStateMu.Unlock()
-			if stale || blocked {
+		if probeErr == nil {
+			latest, loadErr = s.loadCodexTurnStateCollectionAccount(ctx, id)
+			if loadErr != nil {
+				finishManualFailure("account_unavailable")
 				return
 			}
+			account, stateSnapshot = latest, latest
+			s.openaiTurnStateMu.Lock()
+			now = time.Now()
+			s.codexTurnStateEntryLocked(stateSnapshot, now, entry.model)
+			if !s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry) {
+				if manualIntent {
+					markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", now)
+				}
+				s.openaiTurnStateMu.Unlock()
+				return
+			}
+			if manualIntent && codexTurnStateAutoToken(codexTurnStateModelAccount(stateSnapshot, entry.model)) != before &&
+				s.codexTurnStateManualStateAlreadyValidLocked(entry, stateSnapshot, now) {
+				markCodexTurnStateManualSatisfiedLocked(entry, now)
+				s.openaiTurnStateMu.Unlock()
+				return
+			}
+			if s.handleCodexTurnStateProbeCandidateLocked(cfg, entry, now, manualIntent) {
+				s.openaiTurnStateMu.Unlock()
+				return
+			}
+			stale = entry.token != before || entry.recovery.InvalidatedAtMS != generation
+			candidateRejected := false
+			if !stale {
+				collectedAt := time.UnixMilli(entry.probeAt)
+				if collectedAt.IsZero() || collectedAt.After(now) {
+					collectedAt = now
+				}
+				candidateRejected = !canStageCodexTurnStateUsageCandidateLocked(entry, state, verifiedModel, generation, collectedAt)
+			}
+			s.openaiTurnStateMu.Unlock()
+			if stale {
+				finishManualStale()
+				return
+			}
+			if candidateRejected {
+				var previousHTTPError *codexTurnStateProbeHTTPError
+				if roundErr == nil || !errors.As(roundErr, &previousHTTPError) {
+					roundErr = codexTurnStateAutoError("invalid_state")
+				}
+				continue
+			}
+		}
+		if probeErr == nil && burst {
 			var won bool
 			var pendingErr error
-			won, pendingOwner, pendingErr = s.markCodexTurnStateProbeCandidatePendingOwned(ctx, id, burstModel, burstGeneration, reservation)
+			won, pendingOwner, pendingErr = s.markCodexTurnStateProbeCandidatePendingOwned(ctx, id, burstModel, burstGeneration, roundReservation)
 			if pendingErr != nil {
-				probeErr = pendingErr
+				roundErr = pendingErr
+				break
 			} else if !won {
 				// Another instance already staged the first valid candidate for this
 				// model/generation. Discard this opaque blob without persisting it.
 				return
 			}
+			roundReservationOwned = false
 			pendingOwnerOwned = true
+			latest, loadErr = s.loadCodexTurnStateCollectionAccount(ctx, id)
+			if loadErr != nil {
+				finishManualFailure("account_unavailable")
+				return
+			}
+			stateSnapshot = latest
 		}
 		cfg = s.codexTurnStateRuntimeConfig(ctx)
 		s.openaiTurnStateMu.Lock()
 		now = time.Now()
+		s.codexTurnStateEntryLocked(stateSnapshot, now, entry.model)
 		if !s.enforceActiveCodexTurnStateProbeScopeLocked(cfg, task, entry) {
+			if manualIntent {
+				markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", now)
+			}
 			s.openaiTurnStateMu.Unlock()
 			return
 		}
-		if entry.token != before || entry.recovery.InvalidatedAtMS != generation ||
-			now.Before(time.UnixMilli(s.codexTurnStateAccountProbeNotBeforeLocked(id))) {
+		if entry.token != before || entry.recovery.InvalidatedAtMS != generation {
+			if manualIntent {
+				if codexTurnStateEntryHasValidStateLocked(entry, now) && entry.lastError == "" {
+					markCodexTurnStateManualSatisfiedLocked(entry, now)
+				} else {
+					markCodexTurnStateManualFailureLocked(entry, "request_failed", now)
+				}
+			}
 			s.openaiTurnStateMu.Unlock()
 			return
 		}
-		err = probeErr
-		if err == nil {
+		if probeErr == nil {
 			// Automatic collection stages a candidate for its dedicated usage
 			// acceptance request. Manual collection promotes the same maintenance
 			// evidence immediately below, then persists through the same CAS path.
@@ -1390,7 +1743,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 			if collectedAt.IsZero() || collectedAt.After(now) {
 				collectedAt = now
 			}
-			staged := s.stageCodexTurnStateUsageCandidateWithScopeLocked(entry, state, generation, collectedAt, manualIntent, task.scopeModels)
+			staged := s.stageCodexTurnStateUsageCandidateWithVerifiedModelLocked(entry, state, verifiedModel, generation, collectedAt, manualIntent, task.scopeModels)
 			if staged && pendingOwnerOwned {
 				entry.candidate.pendingOwner = pendingOwner
 				pendingOwnerOwned = false
@@ -1400,16 +1753,37 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 				published = staged && s.publishManualCodexTurnStateCandidateLocked(entry, now)
 				if !published {
 					entry.lastError = "invalid_state"
-					entry.dirty = true
-					requeueCodexTurnStateManualTaskLocked(entry, task)
+					entry.dirty = false
+					entry.manualProbe = false
 					entry.retryAfter = time.Time{}
 				}
 			}
 			s.openaiTurnStateMu.Unlock()
-			return
+			if published {
+				return
+			}
+			var previousHTTPError *codexTurnStateProbeHTTPError
+			if roundErr == nil || !errors.As(roundErr, &previousHTTPError) {
+				roundErr = codexTurnStateAutoError("invalid_state")
+			}
+			if pendingOwnerOwned {
+				restoreCtx, cancelRestore := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+				restored, restoreErr := s.restoreCodexTurnStateProbeRound(restoreCtx, pendingOwner)
+				cancelRestore()
+				if restoreErr != nil {
+					roundErr = restoreErr
+					break
+				}
+				pendingOwnerOwned = false
+				roundReservation = restored
+				roundReservationOwned = true
+				attemptDeadline = restored.deadline
+			}
+			continue
 		}
 		var httpErr *codexTurnStateProbeHTTPError
-		if errors.As(err, &httpErr) {
+		var probeBoundary int64
+		if errors.As(probeErr, &httpErr) {
 			delay := httpErr.retryAfter
 			if delay <= 0 {
 				delay = codexTurnStateProbe429Fallback
@@ -1420,30 +1794,51 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 			if notBefore := now.Add(delay).UnixMilli(); notBefore > entry.probeNotBefore {
 				entry.probeNotBefore = notBefore
 			}
+			probeBoundary = entry.probeNotBefore
 		}
 		s.openaiTurnStateMu.Unlock()
-		// Authentication, quota and invalid payload failures are not route
-		// failures. Preserve the upstream rejection rather than rotate around it.
-		retryable := codexTurnStateProbeRetryable(err) && ctx.Err() == nil
-		if retryable && attemptBurst {
-			if releaseErr := s.releaseCodexTurnStateProbeBurstAttempt(ctx, id, burstModel, burstGeneration, reservation); releaseErr != nil {
-				err = releaseErr
-				retryable = false
-			}
+		if httpErr != nil {
+			// Persist only the account boundary, then continue this already-started
+			// round. A slot error here would expose a false terminal state to polling
+			// clients before the remaining IPs have been attempted.
+			_ = s.persistCodexTurnStateProbeBoundary(id, entry, probeBoundary)
 		}
-		if !retryable {
-			break
+		// Preserve a quota signal as the most meaningful exhausted-round error;
+		// otherwise the last route error is the diagnostic result.
+		var previousHTTPError *codexTurnStateProbeHTTPError
+		if roundErr == nil || errors.As(probeErr, &httpErr) || !errors.As(roundErr, &previousHTTPError) {
+			roundErr = probeErr
+		}
+	}
+	if releaseErr := releaseRoundReservation(); releaseErr != nil {
+		var quotaErr *codexTurnStateProbeHTTPError
+		if roundErr == nil || !errors.As(roundErr, &quotaErr) {
+			roundErr = releaseErr
 		}
 	}
 	cfg = s.codexTurnStateRuntimeConfig(context.Background())
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
-	if !codexTurnStateProbeTaskAllows(cfg, task) || entry.token != before || entry.recovery.InvalidatedAtMS != generation {
+	if !codexTurnStateProbeTaskAllows(cfg, task) {
+		if manual {
+			markCodexTurnStateManualFailureLocked(entry, "model_scope_changed", time.Now())
+		}
+		return
+	}
+	if entry.token != before || entry.recovery.InvalidatedAtMS != generation {
+		if manual {
+			now := time.Now()
+			if codexTurnStateEntryHasValidStateLocked(entry, now) && entry.lastError == "" {
+				markCodexTurnStateManualSatisfiedLocked(entry, now)
+			} else {
+				markCodexTurnStateManualFailureLocked(entry, "request_failed", now)
+			}
+		}
 		return
 	}
 	code := "request_failed"
-	if err != nil {
-		code = safeCodexTurnStateAutoError(err.Error())
+	if roundErr != nil {
+		code = safeCodexTurnStateAutoError(roundErr.Error())
 	}
 	if code == "" {
 		code = "request_failed"
@@ -1459,7 +1854,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithMode(id int64, entr
 }
 
 func (s *OpenAIGatewayService) probeOpenAICodexTurnState(ctx context.Context, account *Account, model string) (string, error) {
-	return s.probeOpenAICodexTurnStateViaProxy(ctx, account, model, codexTurnStateAccountProxy(account))
+	return s.probeOpenAICodexTurnStateViaProxy(ctx, account, model, "")
 }
 
 type codexTurnStateProbeHTTPError struct {
@@ -1480,44 +1875,85 @@ func (e *codexTurnStateProbeHTTPError) Error() string {
 }
 
 func (s *OpenAIGatewayService) probeOpenAICodexTurnStateViaProxy(ctx context.Context, account *Account, model, proxyURL string) (string, error) {
-	state, _, err := s.requestOpenAICodexTurnStateViaProxy(ctx, account, model, proxyURL, "", true)
+	return s.probeOpenAICodexTurnStateViaProxyWithMode(ctx, account, model, proxyURL, false)
+}
+
+func (s *OpenAIGatewayService) probeOpenAICodexTurnStateViaProxyWithMode(ctx context.Context, account *Account, model, proxyURL string, activeRound bool) (string, error) {
+	state, _, err := s.probeOpenAICodexTurnStateViaProxyWithModeEvidence(ctx, account, model, proxyURL, activeRound)
+	return state, err
+}
+
+// probeOpenAICodexTurnStateViaProxyWithModeEvidence returns the raw model from
+// the successful same-route replay. Ownership decisions still use the canonical
+// family, while diagnostics and persistence retain the actual upstream model.
+func (s *OpenAIGatewayService) probeOpenAICodexTurnStateViaProxyWithModeEvidence(ctx context.Context, account *Account, model, proxyURL string, activeRound bool) (string, string, error) {
+	state, _, err := s.requestOpenAICodexTurnStateViaProxyWithMode(ctx, account, model, proxyURL, "", true, activeRound)
 	if err != nil {
-		return state, err
+		return state, "", err
 	}
-	if s.codexTurnStateAccountProbeBlocked(account.ID, time.Now()) {
-		return "", errCodexTurnStateAccountProbeCooldown
+	if !activeRound && s.codexTurnStateAccountProbeBlocked(account.ID, time.Now()) {
+		return "", "", errCodexTurnStateAccountProbeCooldown
 	}
 	// The candidate is not cacheable until the exact blob succeeds in a new
 	// request on the same sticky route with the same account and model.
-	if _, _, err = s.requestOpenAICodexTurnStateViaProxy(ctx, account, model, proxyURL, state, false); err != nil {
+	_, replayObserver, err := s.requestOpenAICodexTurnStateViaProxyWithMode(ctx, account, model, proxyURL, state, false, activeRound)
+	if err != nil {
 		if errors.Is(err, errCodexTurnStateAccountProbeCooldown) || errors.Is(err, errCodexTurnStateProbeBoundaryRefresh) {
-			return "", err
+			return "", "", err
 		}
 		var httpErr *codexTurnStateProbeHTTPError
 		if errors.As(err, &httpErr) {
 			// A replay can itself be rate limited. Preserve the typed 429 so the
-			// worker stops route rotation and installs the upstream retry boundary.
-			return "", httpErr
+			// worker installs the boundary for later automatic rounds while the
+			// current round remains free to try its next IP.
+			return "", "", httpErr
 		}
 		if errors.Is(err, errCodexTurnStateResponseModelMismatch) || errors.Is(err, errCodexTurnStateResponseModelMissing) ||
 			errors.Is(err, errCodexTurnStateResponseNotCompleted) || errors.Is(err, errCodexTurnStateResponseFailed) {
-			return "", err
+			return "", "", err
 		}
-		return "", codexTurnStateAutoError("state_replay_failed")
+		return "", "", codexTurnStateAutoError("state_replay_failed")
 	}
-	return state, nil
+	_, completedModel, _ := replayObserver.CodexTurnStateEvidence()
+	return state, strings.TrimSpace(completedModel), nil
 }
 
 func (s *OpenAIGatewayService) requestOpenAICodexTurnStateViaProxy(ctx context.Context, account *Account, model, proxyURL, sentState string, requireState bool) (string, *upstreamResponseModelObserver, error) {
-	if s == nil || s.httpUpstream == nil || !codexTurnStateAutoEligible(account) {
+	return s.requestOpenAICodexTurnStateViaProxyWithMode(ctx, account, model, proxyURL, sentState, requireState, false)
+}
+
+func (s *OpenAIGatewayService) loadCodexTurnStateCollectionAccount(ctx context.Context, accountID int64) (*Account, error) {
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return nil, codexTurnStateAutoError("account_unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dbCtx, cancel := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+	defer cancel()
+	account, err := s.accountRepo.GetByID(dbCtx, accountID)
+	if err != nil || account == nil || account.ID != accountID || !codexTurnStateCollectionEligible(account) {
+		return nil, codexTurnStateAutoError("account_unavailable")
+	}
+	return account, nil
+}
+
+func (s *OpenAIGatewayService) requestOpenAICodexTurnStateViaProxyWithMode(ctx context.Context, account *Account, model, proxyURL, sentState string, requireState, activeRound bool) (string, *upstreamResponseModelObserver, error) {
+	if s == nil || s.httpUpstream == nil || account == nil {
 		return "", nil, codexTurnStateAutoError("account_unavailable")
 	}
-	blocked, err := s.refreshCodexTurnStateAccountProbeBoundary(ctx, account.ID)
+	account, err := s.loadCodexTurnStateCollectionAccount(ctx, account.ID)
 	if err != nil {
 		return "", nil, err
 	}
-	if blocked {
-		return "", nil, errCodexTurnStateAccountProbeCooldown
+	if !activeRound {
+		blocked, boundaryErr := s.refreshCodexTurnStateAccountProbeBoundary(ctx, account.ID)
+		if boundaryErr != nil {
+			return "", nil, boundaryErr
+		}
+		if blocked {
+			return "", nil, errCodexTurnStateAccountProbeCooldown
+		}
 	}
 	if strings.TrimSpace(model) == "" {
 		model = s.settingService.GetOpenAICodexTurnState(ctx).DefaultModel

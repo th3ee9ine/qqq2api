@@ -252,6 +252,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexTurnStateDefaultModel:                   openai.DefaultTestModel,
 		SettingKeyOpenAICodexTurnStateModels:                         "",
 		SettingKeyOpenAICodexTurnStateAutoEnabled:                    "false",
+		SettingKeyOpenAICodexTurnStateAutoIntervalMinutes:            strconv.Itoa(OpenAICodexTurnStateDefaultAutoIntervalMinutes),
+		SettingKeyOpenAICodexTurnStateProxyURLs:                      "[]",
 		SettingKeyOpenAICodexTurnStateProxyIDs:                       "[]",
 		SettingKeyOpenAICodexTurnStateProxyID:                        "0",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
@@ -925,6 +927,23 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.OpenAICodexTurnStateModels = strings.TrimSpace(rawTurnStateModels)
 	}
 	result.OpenAICodexTurnStateAutoEnabled = settings[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"
+	result.OpenAICodexTurnStateAutoIntervalMinutes = OpenAICodexTurnStateDefaultAutoIntervalMinutes
+	if interval, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyOpenAICodexTurnStateAutoIntervalMinutes])); err == nil {
+		if normalized, normalizeErr := NormalizeOpenAICodexTurnStateAutoIntervalMinutes(interval); normalizeErr == nil {
+			result.OpenAICodexTurnStateAutoIntervalMinutes = normalized
+		}
+	}
+	result.OpenAICodexTurnStateProxyURLs = []string{}
+	result.OpenAICodexTurnStateProxyURLsValid = true
+	rawTurnStateProxyURLs := settings[SettingKeyOpenAICodexTurnStateProxyURLs]
+	if proxyURLs, err := ParseOpenAICodexTurnStateProxyURLs(rawTurnStateProxyURLs); err == nil {
+		result.OpenAICodexTurnStateProxyURLs = proxyURLs
+		result.OpenAICodexTurnStateProxyPoolCount = len(proxyURLs)
+		result.OpenAICodexTurnStateProxyPoolConfigured = len(proxyURLs) > 0
+	} else if rawTurnStateProxyURLs != "" {
+		// Do not reflect malformed credential-bearing storage through the API.
+		result.OpenAICodexTurnStateProxyURLsValid = false
+	}
 	result.OpenAICodexTurnStateProxyIDs = []int64{}
 	result.OpenAICodexTurnStateProxyID = 0
 	result.OpenAICodexTurnStateProxyIDsValid = true

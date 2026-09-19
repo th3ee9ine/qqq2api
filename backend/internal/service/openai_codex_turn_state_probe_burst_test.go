@@ -104,9 +104,10 @@ func TestCodexTurnStateProbeBurstOnlyStartsWithoutValidVerifiedState(t *testing.
 		})
 	}
 
-	// A missing/expired state gets one non-sliding minute budget with at most
-	// three fresh routes; this is a bounded burst, not a periodic retry loop.
-	require.Equal(t, time.Minute, codexTurnStateProbeBurstWindow)
+	// A missing/expired state gets a bounded budget of three full-pool rounds.
+	// Each route renews the same short lease instead of extending one lock to the
+	// size of the captured pool.
+	require.EqualValues(t, time.Minute.Milliseconds(), CodexTurnStateProbeBurstMaxLeaseMS)
 	require.Equal(t, 3, codexTurnStateProbeBurstMaxAttempts)
 	variant := &codexTurnStateAutoEntry{
 		model: "gpt-6-astra", token: valid, setAt: now.UnixMilli(),
@@ -127,7 +128,7 @@ func TestReserveCodexTurnStateProbeBurstAttemptBoundsAttemptsAndWindow(t *testin
 		if attempt == 1 {
 			firstDeadline = reservation.deadline
 		} else {
-			require.Equal(t, firstDeadline, reservation.deadline, "all attempts must share one non-sliding window")
+			require.WithinDuration(t, firstDeadline, reservation.deadline, time.Second)
 		}
 		require.NoError(t, s.releaseCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, reservation))
 	}
@@ -141,16 +142,42 @@ func TestReserveCodexTurnStateProbeBurstAttemptBoundsAttemptsAndWindow(t *testin
 	require.Equal(t, codexTurnStateProbeBurstMaxAttempts, budget.Attempts)
 	require.EqualValues(t, codexTurnStateProbeBurstMaxAttempts*2, budget.Version)
 	require.Zero(t, budget.InFlightUntilMS)
-	require.WithinDuration(t, time.Now().Add(codexTurnStateProbeBurstWindow), firstDeadline, 2*time.Second)
+	require.WithinDuration(t, time.Now().Add(time.Minute), firstDeadline, 2*time.Second)
 }
 
-func TestReserveCodexTurnStateProbeBurstAttemptDoesNotRollElapsedWindow(t *testing.T) {
+func TestRenewCodexTurnStateProbeBurstAttemptKeepsOneRoundAndAdvancesOwnership(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	model := "gpt-6-astra"
+	reservation, err := s.reserveCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0)
+	require.NoError(t, err)
+
+	for range codexTurnStateProxyURLsMaxSize + 44 {
+		stale := reservation
+		reservation, err = s.renewCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, reservation)
+		require.NoError(t, err)
+		require.Equal(t, 1, reservation.attempt)
+		require.Equal(t, stale.version+1, reservation.version)
+		require.WithinDuration(t, time.Now().Add(time.Minute), reservation.deadline, 2*time.Second)
+		require.ErrorIs(t, s.releaseCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, stale), errCodexTurnStateProbeBurstPersistence)
+	}
+
+	stored, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	budget, err := codexTurnStateProbeBurstBudgetFromAccount(stored, codexTurnStateProbeBurstBudgetExtraKey(model))
+	require.NoError(t, err)
+	require.Equal(t, 1, budget.Attempts, "renewing every route must still count as one collection round")
+	require.Equal(t, reservation.version, budget.Version)
+	require.Equal(t, reservation.deadline.UnixMilli(), budget.InFlightUntilMS)
+	require.NoError(t, s.releaseCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, reservation))
+}
+
+func TestReserveCodexTurnStateProbeBurstAttemptDoesNotRollExhaustedGeneration(t *testing.T) {
 	s, repo, account := newTurnStateAutoService(t)
 	model := "gpt-6-astra"
 	slot := codexTurnStateProbeBurstBudgetExtraKey(model)
 	original := CodexTurnStateProbeBurstBudget{
 		Version: 4, Generation: 7, Model: model,
-		StartedAtMS: time.Now().Add(-codexTurnStateProbeBurstWindow - time.Second).UnixMilli(), Attempts: 1,
+		StartedAtMS: time.Now().Add(-time.Hour).UnixMilli(), Attempts: codexTurnStateProbeBurstMaxAttempts,
 	}
 	repo.mu.Lock()
 	repo.accounts[account.ID].Extra = map[string]any{slot: original}
@@ -162,7 +189,7 @@ func TestReserveCodexTurnStateProbeBurstAttemptDoesNotRollElapsedWindow(t *testi
 	require.NoError(t, err)
 	unchanged, err := codexTurnStateProbeBurstBudgetFromAccount(stored, slot)
 	require.NoError(t, err)
-	require.Equal(t, original, unchanged, "elapsed wall time must not create a new collection budget")
+	require.Equal(t, original, unchanged, "elapsed wall time must not reopen an exhausted generation")
 
 	reservation, err := s.reserveCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, original.Generation+1)
 	require.NoError(t, err, "a strictly newer verified/recovery generation may open one new burst")
@@ -236,6 +263,33 @@ func TestReserveCodexTurnStateProbeBurstAttemptAcrossInstancesIsSingleInFlight(t
 	require.Equal(t, thirdReservation.deadline.UnixMilli(), budget.InFlightUntilMS)
 }
 
+func TestExpiredCodexTurnStateProbeBurstLeaseAllowsNextRoundButRejectsOldOwner(t *testing.T) {
+	first, repo, account := newTurnStateAutoService(t)
+	second := &OpenAIGatewayService{accountRepo: repo}
+	model := "gpt-6-astra"
+	firstReservation, err := first.reserveCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0)
+	require.NoError(t, err)
+
+	slot := codexTurnStateProbeBurstBudgetExtraKey(model)
+	repo.mu.Lock()
+	budget := repo.accounts[account.ID].Extra[slot].(CodexTurnStateProbeBurstBudget)
+	budget.StartedAtMS = time.Now().Add(-2 * time.Second).UnixMilli()
+	budget.InFlightUntilMS = time.Now().Add(-time.Second).UnixMilli()
+	repo.accounts[account.ID].Extra[slot] = budget
+	repo.mu.Unlock()
+
+	secondReservation, err := second.reserveCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0)
+	require.NoError(t, err)
+	require.Equal(t, 2, secondReservation.attempt, "a crashed round's expired lease permits the next complete round")
+	require.Greater(t, secondReservation.version, firstReservation.version)
+	_, err = first.renewCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, firstReservation)
+	require.ErrorIs(t, err, errCodexTurnStateProbeBurstPersistence)
+	require.ErrorIs(t, first.releaseCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, firstReservation), errCodexTurnStateProbeBurstPersistence)
+	_, _, err = first.markCodexTurnStateProbeCandidatePendingOwned(context.Background(), account.ID, model, 0, firstReservation)
+	require.ErrorIs(t, err, errCodexTurnStateProbeBurstPersistence)
+	require.NoError(t, second.releaseCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, secondReservation))
+}
+
 func TestCodexTurnStateProbeCandidatePendingIsDurableAcrossInstances(t *testing.T) {
 	first, repo, account := newTurnStateAutoService(t)
 	second := &OpenAIGatewayService{accountRepo: repo}
@@ -264,6 +318,49 @@ func TestCodexTurnStateProbeCandidatePendingIsDurableAcrossInstances(t *testing.
 	payload, err := json.Marshal(budget)
 	require.NoError(t, err)
 	require.NotContains(t, string(payload), "opaque-candidate-state")
+}
+
+func TestRestoreCodexTurnStateProbeRoundKeepsOneAttemptAndReturnsLiveLease(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	const model = "gpt-6-astra"
+
+	initial, err := s.reserveCodexTurnStateProbeRound(context.Background(), account.ID, model, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, initial.attempt)
+	won, owner, err := s.markCodexTurnStateProbeCandidatePendingOwned(context.Background(), account.ID, model, 0, initial)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	restored, err := s.restoreCodexTurnStateProbeRound(context.Background(), owner)
+	require.NoError(t, err)
+	require.Equal(t, 1, restored.attempt, "restoring after a rejected candidate stays in the same pool round")
+	require.Equal(t, owner.version+1, restored.version)
+	require.WithinDuration(t, time.Now().Add(time.Minute), restored.deadline, 2*time.Second)
+
+	stored, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	budget, err := codexTurnStateProbeBurstBudgetFromAccount(stored, codexTurnStateProbeBurstBudgetExtraKey(model))
+	require.NoError(t, err)
+	require.Equal(t, 1, budget.Attempts)
+	require.Equal(t, restored.version, budget.Version)
+	require.Equal(t, restored.deadline.UnixMilli(), budget.InFlightUntilMS)
+	require.Zero(t, budget.CandidatePendingUntilMS)
+
+	_, err = s.renewCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, initial)
+	require.ErrorIs(t, err, errCodexTurnStateProbeBurstPersistence, "the pre-candidate lease must remain stale")
+	renewed, err := s.renewCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, restored)
+	require.NoError(t, err)
+	require.Equal(t, 1, renewed.attempt)
+	require.Equal(t, restored.version+1, renewed.version)
+	require.NoError(t, s.releaseCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0, renewed))
+
+	stored, err = repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	budget, err = codexTurnStateProbeBurstBudgetFromAccount(stored, codexTurnStateProbeBurstBudgetExtraKey(model))
+	require.NoError(t, err)
+	require.Equal(t, 1, budget.Attempts)
+	require.Zero(t, budget.InFlightUntilMS)
+	require.Zero(t, budget.CandidatePendingUntilMS)
 }
 
 func TestClearCodexTurnStateProbeCandidatePendingRequiresExactOwner(t *testing.T) {
@@ -396,11 +493,12 @@ func TestCodexTurnStateProbeBurstFamilyVariantsShareBudget(t *testing.T) {
 	require.Equal(t, 1, review.attempt)
 }
 
-func TestCodexTurnStateProbeBurstStopsAfterThreeRealRoutesAcrossRestart(t *testing.T) {
+func TestCodexTurnStateProbeBurstCountsFullRouteRoundAcrossRestart(t *testing.T) {
 	s, repo, account := newTurnStateAutoService(t)
 	model := "gpt-6-astra"
 	enableCodexTurnStateCASModel(s, model)
 	s.proxyRepo = &turnStateProxyRepo{proxies: []Proxy{turnStateDedicatedTemplateProxy()}}
+	require.Len(t, s.codexTurnStatePoolRoutes(context.Background(), ""), codexTurnStateProbePoolSize)
 	var calls atomic.Int32
 	upstream := &turnStateRawUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
 		calls.Add(1)
@@ -415,11 +513,11 @@ func TestCodexTurnStateProbeBurstStopsAfterThreeRealRoutesAcrossRestart(t *testi
 	require.NoError(t, err)
 	budget, err := codexTurnStateProbeBurstBudgetFromAccount(stored, codexTurnStateProbeBurstBudgetExtraKey(model))
 	require.NoError(t, err)
-	require.Equal(t, codexTurnStateProbeBurstMaxAttempts, budget.Attempts)
+	require.Equal(t, 1, budget.Attempts, "all three routes belong to one durable round")
 	require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, model)))
 
 	// Simulate the ordinary five-minute scheduler boundary and a process restart.
-	// The durable exhausted budget must still block a fourth new exit.
+	// A new full-pool round consumes the second durable attempt.
 	scope := codexTurnStateModelAccount(stored, model)
 	scope.Extra[CodexTurnStateAutoProbeAtExtraKey] = time.Now().Add(-6 * time.Minute).UnixMilli()
 	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), time.Second)
@@ -435,10 +533,13 @@ func TestCodexTurnStateProbeBurstStopsAfterThreeRealRoutesAcrossRestart(t *testi
 	}
 	require.Empty(t, restarted.autoTurnStateForAccount(context.Background(), stored, model))
 	waitTurnStateAutoIdle(t, restarted)
-	require.EqualValues(t, codexTurnStateProbeBurstMaxAttempts, calls.Load(), "an exhausted generation must not contact a fourth route")
+	require.EqualValues(t, codexTurnStateProbeBurstMaxAttempts*2, calls.Load())
 	stored, err = repo.GetByID(context.Background(), account.ID)
 	require.NoError(t, err)
-	require.Equal(t, "probe_burst_exhausted", codexTurnStateModelAccount(stored, model).GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
+	budget, err = codexTurnStateProbeBurstBudgetFromAccount(stored, codexTurnStateProbeBurstBudgetExtraKey(model))
+	require.NoError(t, err)
+	require.Equal(t, 2, budget.Attempts)
+	require.Equal(t, "response_model_mismatch", codexTurnStateModelAccount(stored, model).GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
 }
 
 func TestCodexTurnStateProbeCandidatePendingStopsSecondWorker(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 
 func TestAccountCodexTurnStateAutoRedactedAndDiagnosticsSafe(t *testing.T) {
 	now := time.Now().UnixMilli()
-	a := &service.Account{ID: 10, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Extra: map[string]any{
+	a := &service.Account{ID: 10, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true, Extra: map[string]any{
 		service.CodexTurnStateAutoExtraKey: "private-token", service.CodexTurnStateAutoSetAtExtraKey: now,
 		service.CodexTurnStateAutoLastErrorExtraKey: "private-provider-error", "note": "public",
 		service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{"invalidated_at_ms": now, "pending": true, "rejected": []string{"private-digest"}, "legacy_token": "private-token"},
@@ -38,4 +38,14 @@ func TestAccountCodexTurnStateAutoRedactedAndDiagnosticsSafe(t *testing.T) {
 		require.Contains(t, string(data), `"note":"public"`)
 	}
 	require.Equal(t, "private-token", a.Extra[service.CodexTurnStateAutoExtraKey])
+}
+
+func TestIneligibleAccountCodexTurnStateAutoSerializesAsNull(t *testing.T) {
+	account := &service.Account{ID: 11, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusDisabled}
+	detail := AccountFromService(account)
+	for _, projection := range []any{detail, AccountListItemFromAccount(detail)} {
+		data, err := json.Marshal(projection)
+		require.NoError(t, err)
+		require.Contains(t, string(data), `"codex_turn_state_auto":null`, "refresh responses must explicitly invalidate stale frontend eligibility")
+	}
 }

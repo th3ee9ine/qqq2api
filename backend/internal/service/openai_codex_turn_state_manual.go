@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -15,39 +16,162 @@ const (
 	CodexTurnStateManualStatusRejected     = "rejected"
 )
 
-// CodexTurnStateManualCollectionResult is the redacted result returned by an
-// administrator-triggered collection request. It never contains the opaque
-// Turn State itself.
-type CodexTurnStateManualCollectionResult struct {
-	AccountID          int64                   `json:"account_id"`
-	Model              string                  `json:"model"`
-	Status             string                  `json:"status"`
-	Reason             string                  `json:"reason,omitempty"`
-	Message            string                  `json:"message,omitempty"`
-	RetryAtMS          int64                   `json:"retry_at_ms,omitempty"`
-	CodexTurnStateAuto *CodexTurnStateAutoInfo `json:"codex_turn_state_auto,omitempty"`
+type CodexTurnStateManualModelTarget struct {
+	Model string `json:"model"`
+	Owner string `json:"owner"`
 }
 
-func newCodexTurnStateManualResult(account *Account, model, status, reason, message string, now time.Time) *CodexTurnStateManualCollectionResult {
+// CodexTurnStateManualCollectionResult is the redacted result returned by an
+// administrator-triggered collection request. It never contains the opaque
+// Turn State itself. TargetModels retains concrete configured/catalog IDs,
+// while queued/already-valid lists use the canonical owner keys exposed by the
+// per-model diagnostics map.
+type CodexTurnStateManualCollectionResult struct {
+	AccountID           int64                             `json:"account_id"`
+	Model               string                            `json:"model"`
+	TargetModels        []string                          `json:"target_models"`
+	ModelTargets        []CodexTurnStateManualModelTarget `json:"model_targets"`
+	QueuedModels        []string                          `json:"queued_models"`
+	AlreadyValidModels  []string                          `json:"already_valid_models"`
+	SuccessfulModels    []string                          `json:"successful_models"`
+	CollectionSucceeded bool                              `json:"collection_succeeded"`
+	Status              string                            `json:"status"`
+	Reason              string                            `json:"reason,omitempty"`
+	Message             string                            `json:"message,omitempty"`
+	RetryAtMS           int64                             `json:"retry_at_ms,omitempty"`
+	CodexTurnStateAuto  *CodexTurnStateAutoInfo           `json:"codex_turn_state_auto"`
+}
+
+func (s *OpenAIGatewayService) newCodexTurnStateManualResult(ctx context.Context, account *Account, model, status, reason, message string, now time.Time) *CodexTurnStateManualCollectionResult {
 	result := &CodexTurnStateManualCollectionResult{
-		Model:   model,
-		Status:  status,
-		Reason:  reason,
-		Message: message,
+		Model:              model,
+		TargetModels:       []string{},
+		ModelTargets:       []CodexTurnStateManualModelTarget{},
+		QueuedModels:       []string{},
+		AlreadyValidModels: []string{},
+		SuccessfulModels:   []string{},
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
 	}
 	if account != nil {
 		result.AccountID = account.ID
-		result.CodexTurnStateAuto = CodexTurnStateAutoInfoForAccount(account, now)
+		result.CodexTurnStateAuto = s.CodexTurnStateAutoInfoForAccount(ctx, account, now)
+		if result.CodexTurnStateAuto != nil {
+			result.SuccessfulModels = append(result.SuccessfulModels, result.CodexTurnStateAuto.SuccessfulModels...)
+			result.CollectionSucceeded = result.CodexTurnStateAuto.CollectionSucceeded
+		}
 	}
 	return result
 }
 
-// RequestCodexTurnStateCollection schedules one bounded maintenance probe for
-// an account. Manual collection is independent of the automatic injection
-// switch and is not gated by schedulability, proxy availability, or the
-// account's serving concurrency. The configured model scope still applies, and
-// only a missing or already-expired verified state may start a new probe.
-func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Context, account *Account, requestedModel string) (*CodexTurnStateManualCollectionResult, error) {
+func applyCodexTurnStateManualTargets(result *CodexTurnStateManualCollectionResult, targets []CodexTurnStateManualModelTarget) {
+	if result == nil {
+		return
+	}
+	result.ModelTargets = append(result.ModelTargets[:0], targets...)
+	result.TargetModels = result.TargetModels[:0]
+	for _, target := range targets {
+		result.TargetModels = append(result.TargetModels, target.Model)
+	}
+	if len(targets) > 0 {
+		result.Model = targets[0].Model
+	}
+}
+
+func appendCodexTurnStateManualTarget(targets []CodexTurnStateManualModelTarget, seen map[string]struct{}, model string) []CodexTurnStateManualModelTarget {
+	model = strings.TrimSpace(model)
+	if model == "" || strings.Contains(model, "*") || isCodexDedicatedMediaModel(model) {
+		return targets
+	}
+	if normalized, err := NormalizeOpenAICodexTurnStateDefaultModel(model); err != nil || normalized != model {
+		return targets
+	}
+	key := strings.ToLower(model)
+	if _, exists := seen[key]; exists {
+		return targets
+	}
+	seen[key] = struct{}{}
+	return append(targets, CodexTurnStateManualModelTarget{Model: model, Owner: codexTurnStateOwnerModel(model)})
+}
+
+// resolveCodexTurnStateManualTargets expands wildcard or allow-all scopes from
+// the selected account's authoritative model catalog. Exact configured IDs are
+// retained even when the catalog does not list them. A catalog failure is
+// returned to the caller so a broad scope can never silently degrade to only
+// the default model.
+func (s *OpenAIGatewayService) resolveCodexTurnStateManualTargets(ctx context.Context, account *Account, cfg OpenAICodexTurnStateConfig) ([]CodexTurnStateManualModelTarget, error) {
+	if !cfg.ModelScopeValid {
+		return nil, codexTurnStateAutoError("model_scope_invalid")
+	}
+	patterns := []string{}
+	if cfg.Models != "" {
+		patterns = strings.Split(cfg.Models, ",")
+	}
+	seen := make(map[string]struct{})
+	targets := make([]CodexTurnStateManualModelTarget, 0, len(patterns))
+	needsCatalog := len(patterns) == 0
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if strings.HasSuffix(pattern, "*") {
+			needsCatalog = true
+			continue
+		}
+		targets = appendCodexTurnStateManualTarget(targets, seen, pattern)
+	}
+	if !needsCatalog {
+		return targets, nil
+	}
+
+	response, err := s.FetchOpenAIModelsList(ctx, account)
+	if err != nil || response == nil {
+		return nil, codexTurnStateAutoError("model_catalog_unavailable")
+	}
+	_, entries, err := modelCatalogEntries(response.Body, "data")
+	if err != nil {
+		return nil, codexTurnStateAutoError("model_catalog_unavailable")
+	}
+	for _, raw := range entries {
+		var item struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, codexTurnStateAutoError("model_catalog_unavailable")
+		}
+		model := strings.TrimSpace(item.ID)
+		if model == "" || !codexTurnStateModelMatches(cfg.Models, model) {
+			continue
+		}
+		targets = appendCodexTurnStateManualTarget(targets, seen, model)
+	}
+	return targets, nil
+}
+
+func codexTurnStateManualOwnerPlans(targets []CodexTurnStateManualModelTarget) []CodexTurnStateManualModelTarget {
+	plans := make([]CodexTurnStateManualModelTarget, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		owner := strings.TrimSpace(target.Owner)
+		if owner == "" {
+			continue
+		}
+		key := strings.ToLower(owner)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		plans = append(plans, target)
+	}
+	return plans
+}
+
+// RequestCodexTurnStateCollection schedules one bounded maintenance round for
+// every concrete model in the configured scope. The legacy requestedModel
+// argument is intentionally ignored: the server-side scope and account catalog
+// are authoritative. Manual collection remains independent of the automatic
+// switch and bypasses existing cooldowns, while normal account lifecycle state
+// and model scope still apply.
+func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Context, account *Account, _ string) (*CodexTurnStateManualCollectionResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -58,9 +182,6 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 		return nil, infraerrors.New(http.StatusBadRequest, "INVALID_ACCOUNT", "invalid account")
 	}
 
-	// Always re-read the credential/proxy snapshot before deciding whether a
-	// collection is allowed. The admin list can be stale while another process
-	// has just published a valid state.
 	current, err := s.accountRepo.GetByID(ctx, account.ID)
 	if err != nil || current == nil || current.ID != account.ID {
 		return nil, infraerrors.New(http.StatusNotFound, "ACCOUNT_NOT_FOUND", "account not found")
@@ -68,141 +189,144 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 	account = current
 	now := time.Now()
 	if !codexTurnStateAutoEligible(account) {
-		return newCodexTurnStateManualResult(account, "", CodexTurnStateManualStatusRejected, "account_not_eligible", "account does not support Codex Turn State", now), nil
+		return s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, "account_not_eligible", "account does not support Codex Turn State", now), nil
 	}
+	if !account.IsSchedulable() {
+		return s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, "account_not_schedulable", "account is not currently schedulable", now), nil
+	}
+
 	cfg := OpenAICodexTurnStateConfig{ModelScopeValid: true}
 	if s.settingService != nil {
 		cfg = s.settingService.GetOpenAICodexTurnState(ctx)
 	}
-	model := strings.TrimSpace(requestedModel)
-	if model == "" {
-		model = strings.TrimSpace(cfg.DefaultModel)
+	targets, resolveErr := s.resolveCodexTurnStateManualTargets(ctx, account, cfg)
+	if resolveErr != nil {
+		reason := safeCodexTurnStateManualResolutionError(resolveErr)
+		return s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, reason, "failed to resolve configured Turn State models", now), nil
 	}
-	normalized, normalizeErr := NormalizeOpenAICodexTurnStateDefaultModel(model)
-	if normalizeErr != nil {
-		return newCodexTurnStateManualResult(account, model, CodexTurnStateManualStatusRejected, "invalid_model", "invalid Turn State collection model", now), nil
+	if len(targets) == 0 {
+		return s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, "model_scope_empty", "configured Turn State model scope contains no available models", now), nil
 	}
-	model = normalized
-	if !cfg.ModelScopeValid || !codexTurnStateModelMatches(cfg.Models, model) {
-		s.enforceCodexTurnStateScopeForAccount(cfg, account.ID, model)
-		return newCodexTurnStateManualResult(account, model, CodexTurnStateManualStatusRejected, "model_out_of_scope", "model is outside the configured Turn State model scope", now), nil
-	}
-	// Refresh the account-scoped cache from the authoritative source before the
-	// strict missing/expired check. This also serializes with a concurrent
-	// publication on another gateway process.
-	if err := s.refreshCodexTurnStateSource(ctx, account, model, true); err != nil {
-		return nil, infraerrors.New(http.StatusServiceUnavailable, "CODEX_TURN_STATE_LOOKUP_FAILED", "failed to load account Turn State")
-	}
-	now = time.Now()
-	// Scope can change while the authoritative account slot is being loaded.
-	// Recheck immediately before an existing candidate can be promoted or new
-	// worker intent can be recorded.
-	if s.settingService != nil {
-		cfg = s.settingService.GetOpenAICodexTurnState(ctx)
-	}
-	if !cfg.ModelScopeValid || !codexTurnStateModelMatches(cfg.Models, model) {
-		s.enforceCodexTurnStateScopeForAccount(cfg, account.ID, model)
-		return newCodexTurnStateManualResult(account, model, CodexTurnStateManualStatusRejected, "model_out_of_scope", "model is outside the configured Turn State model scope", now), nil
-	}
+	plans := codexTurnStateManualOwnerPlans(targets)
 
-	s.openaiTurnStateMu.Lock()
-	entry := s.codexTurnStateEntryLocked(account, now, model)
-	info := newCodexTurnStateManualResult(account, model, CodexTurnStateManualStatusRejected, "", "", now)
-	info.CodexTurnStateAuto = CodexTurnStateAutoInfoForAccount(account, now)
-	if s.codexTurnStateManualStateAlreadyValidLocked(entry, account, now) {
-		s.openaiTurnStateMu.Unlock()
-		info.Status = CodexTurnStateManualStatusAlreadyValid
-		info.Reason = "state_still_valid"
-		info.Message = "account already has a valid Turn State"
-		return info, nil
-	}
-	if candidatePending := s.codexTurnStateUsageCandidateActiveLocked(entry, now); candidatePending && !codexTurnStateUsageCandidateInScopeLocked(cfg, entry) {
-		s.discardCodexTurnStateCandidateLocked(entry)
-	} else if candidatePending {
-		// The candidate already passed collection and same-route replay. An explicit
-		// admin request adopts and publishes it through the ordinary CAS persistence
-		// worker, without depending on later schedulable API traffic.
-		entry.candidate.manual = true
-		published := s.publishManualCodexTurnStateCandidateLocked(entry, now)
-		if !published {
-			// Manual collection has one explicit effective model. Replace the queued
-			// task only when this request actually needs another probe.
-			if !entry.probe {
-				replaceCodexTurnStateProbeModelsLocked(entry, model, model)
-				entry.probe = true
-				entry.forceProbe = true
-				entry.manualProbe = true
-			}
+	// Refresh every owner slot before making the batch decision. No work is
+	// queued until all authoritative reads have completed.
+	for _, plan := range plans {
+		if err := s.refreshCodexTurnStateSource(ctx, account, plan.Owner, true); err != nil {
+			return nil, infraerrors.New(http.StatusServiceUnavailable, "CODEX_TURN_STATE_LOOKUP_FAILED", "failed to load account Turn State")
 		}
-		s.startCodexTurnStateWorkerLocked(account.ID, entry)
-		s.openaiTurnStateMu.Unlock()
-		info.Status = CodexTurnStateManualStatusQueued
-		info.Reason = "collection_in_flight"
-		info.Message = "an existing Turn State candidate has been accepted for publication"
-		return info, nil
 	}
-	if entry.reconciling {
-		// Reconciliation owns the slot until its CAS winner has been loaded. Keep
-		// the manual intent on the entry; the reconciliation finisher will retain a
-		// forced probe only when the authoritative winner is still missing/expired.
-		replaceCodexTurnStateProbeModelsLocked(entry, model, model)
-		entry.probe = true
-		entry.forceProbe = true
-		entry.manualProbe = true
-		s.openaiTurnStateMu.Unlock()
-		info.Status = CodexTurnStateManualStatusQueued
-		info.Reason = "state_reconciliation_in_flight"
-		info.Message = "account state reconciliation is in progress"
-		return info, nil
+	current, err = s.accountRepo.GetByID(ctx, account.ID)
+	if err != nil || current == nil || current.ID != account.ID {
+		return nil, infraerrors.New(http.StatusNotFound, "ACCOUNT_NOT_FOUND", "account not found")
 	}
-	if notBefore := s.codexTurnStateAccountProbeNotBeforeLocked(account.ID); notBefore > now.UnixMilli() {
-		s.openaiTurnStateMu.Unlock()
-		info.Reason = "probe_cooldown"
-		info.Message = "upstream probe cooldown is active"
-		info.RetryAtMS = notBefore
-		return info, nil
+	account = current
+	now = time.Now()
+	if !codexTurnStateCollectionEligible(account) {
+		result := s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, "account_not_schedulable", "account is not currently schedulable", now)
+		applyCodexTurnStateManualTargets(result, targets)
+		return result, nil
 	}
-	// A new explicit request may retry a local lookup/transport deferral
-	// immediately. Durable account-wide 429 cooldowns were handled above and are
-	// never cleared here.
-	entry.probeRetryAfter = time.Time{}
-	entry.probeWakeAt = time.Time{}
+	if s.settingService != nil {
+		latest := s.settingService.GetOpenAICodexTurnState(ctx)
+		if !latest.ModelScopeValid || latest.Models != cfg.Models {
+			result := s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, "model_scope_changed", "Turn State model scope changed; retry collection", now)
+			applyCodexTurnStateManualTargets(result, targets)
+			return result, nil
+		}
+		cfg = latest
+	}
 
-	missing := entry.token == ""
-	if entry.running || entry.dirty || entry.probe || entry.manualProbe {
-		// Upgrade existing automatic work to a manual request. In particular, an
-		// automatic worker that observes the feature being disabled must leave this
-		// forced probe for its next iteration instead of returning a false queued
-		// result with no runnable work.
-		replaceCodexTurnStateProbeModelsLocked(entry, model, model)
+	result := s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, "", "", now)
+	applyCodexTurnStateManualTargets(result, targets)
+	s.openaiTurnStateMu.Lock()
+	type queuedOwner struct {
+		plan  CodexTurnStateManualModelTarget
+		entry *codexTurnStateAutoEntry
+	}
+	queued := make([]queuedOwner, 0, len(plans))
+	busy := false
+	scopeChanged := false
+	for _, plan := range plans {
+		entry := s.codexTurnStateEntryLocked(account, now, plan.Model)
+		if !codexTurnStateScopeAllows(cfg, plan.Model, plan.Owner) {
+			scopeChanged = true
+			break
+		}
+		candidatePending := s.codexTurnStateUsageCandidateActiveLocked(entry, now)
+		if entry.running || entry.reconciling || entry.dirty || entry.probe || entry.manualProbe || candidatePending {
+			busy = true
+			break
+		}
+		if s.codexTurnStateManualStateAlreadyValidLocked(entry, account, now) {
+			result.AlreadyValidModels = append(result.AlreadyValidModels, plan.Owner)
+			continue
+		}
+		queued = append(queued, queuedOwner{plan: plan, entry: entry})
+	}
+	if scopeChanged {
+		s.openaiTurnStateMu.Unlock()
+		result.Status = CodexTurnStateManualStatusRejected
+		result.Reason = "model_scope_changed"
+		result.Message = "Turn State model scope changed; retry collection"
+		return result, nil
+	}
+	if busy {
+		s.openaiTurnStateMu.Unlock()
+		result.Status = CodexTurnStateManualStatusRejected
+		result.Reason = "collection_already_in_flight"
+		result.Message = "another Turn State collection is already in progress; retry after it finishes"
+		return result, nil
+	}
+
+	// Record every owner before starting any worker. A second manual request sees
+	// the complete batch as busy, and all workers serialize on the account-level
+	// manual lock so a broad model scope cannot create unbounded upstream load.
+	for _, item := range queued {
+		plan, entry := item.plan, item.entry
+		// Every explicit batch may retry immediately. The durable account-wide
+		// boundary remains stored for later automatic work.
+		entry.probeRetryAfter = time.Time{}
+		entry.probeWakeAt = time.Time{}
+		replaceCodexTurnStateProbeModelsLocked(entry, plan.Model, plan.Model, plan.Owner)
 		entry.probe = true
 		entry.forceProbe = true
 		entry.manualProbe = true
 		entry.retryAfter = time.Time{}
 		entry.retryWakeAt = time.Time{}
-		s.startCodexTurnStateWorkerLocked(account.ID, entry)
-		s.openaiTurnStateMu.Unlock()
-		info.Status = CodexTurnStateManualStatusQueued
-		info.Reason = "collection_in_flight"
-		info.Message = "Turn State collection is already in progress"
-		return info, nil
+		result.QueuedModels = append(result.QueuedModels, plan.Owner)
 	}
-
-	replaceCodexTurnStateProbeModelsLocked(entry, model, model)
-	entry.probe = true
-	entry.forceProbe = true
-	entry.manualProbe = true
-	entry.retryAfter = time.Time{}
-	entry.retryWakeAt = time.Time{}
-	s.startCodexTurnStateWorkerLocked(account.ID, entry)
+	for _, item := range queued {
+		s.startCodexTurnStateWorkerLocked(account.ID, item.entry)
+	}
 	s.openaiTurnStateMu.Unlock()
 
-	info.Status = CodexTurnStateManualStatusQueued
-	if missing {
-		info.Reason = "state_missing"
-	} else {
-		info.Reason = "state_expired"
+	if len(result.QueuedModels) > 0 {
+		result.Status = CodexTurnStateManualStatusQueued
+		result.Reason = "collection_in_flight"
+		result.Message = "Turn State collection has been queued for all configured models"
+		return result, nil
 	}
-	info.Message = "Turn State collection has been queued"
-	return info, nil
+	if len(result.AlreadyValidModels) == len(plans) {
+		result.Status = CodexTurnStateManualStatusAlreadyValid
+		result.Reason = "state_still_valid"
+		result.Message = "all configured models already have a valid Turn State"
+		return result, nil
+	}
+	result.Status = CodexTurnStateManualStatusRejected
+	result.Reason = "model_scope_changed"
+	result.Message = "Turn State model scope changed; retry collection"
+	return result, nil
+}
+
+func safeCodexTurnStateManualResolutionError(err error) string {
+	if err == nil {
+		return "model_catalog_unavailable"
+	}
+	switch err.Error() {
+	case "model_scope_invalid", "model_catalog_unavailable":
+		return err.Error()
+	default:
+		return "model_catalog_unavailable"
+	}
 }

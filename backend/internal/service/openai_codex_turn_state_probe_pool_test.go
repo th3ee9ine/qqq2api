@@ -18,12 +18,22 @@ import (
 
 type turnStateProxyRepo struct {
 	ProxyRepository
-	proxies       []Proxy
-	calls         atomic.Int32
-	getCalls      atomic.Int32
-	listByIDCalls atomic.Int32
-	selectedMu    sync.Mutex
-	selectedIDs   []int64
+	proxies              []Proxy
+	fallbackErr          error
+	calls                atomic.Int32
+	getCalls             atomic.Int32
+	listByIDCalls        atomic.Int32
+	fallbackDeadlineSeen atomic.Bool
+	selectedMu           sync.Mutex
+	selectedIDs          []int64
+}
+
+type turnStateFailingSettingRepo struct {
+	SettingRepository
+}
+
+func (turnStateFailingSettingRepo) GetMultiple(context.Context, []string) (map[string]string, error) {
+	return nil, errors.New("settings unavailable")
 }
 
 func (r *turnStateProxyRepo) GetByID(_ context.Context, id int64) (*Proxy, error) {
@@ -67,9 +77,12 @@ func (r *turnStateProxyRepo) ListActive(context.Context) ([]Proxy, error) {
 	return r.proxies, nil
 }
 
-func (r *turnStateProxyRepo) ListAllForFallback(context.Context) ([]Proxy, error) {
+func (r *turnStateProxyRepo) ListAllForFallback(ctx context.Context) ([]Proxy, error) {
 	r.calls.Add(1)
-	return append([]Proxy(nil), r.proxies...), nil
+	if _, ok := ctx.Deadline(); ok {
+		r.fallbackDeadlineSeen.Store(true)
+	}
+	return append([]Proxy(nil), r.proxies...), r.fallbackErr
 }
 
 type turnStateProbeSequenceUpstream struct {
@@ -216,7 +229,7 @@ func TestCodexTurnStateProbePoolRetriesModelMismatchWithUniqueRoutes(t *testing.
 	require.Nil(t, stored.ProxyID, "maintenance must not change the account route")
 }
 
-func TestCodexTurnStateProbePoolBoundsAndStops(t *testing.T) {
+func TestCodexTurnStateProbePoolBoundsAndVisitsEveryFailedRoute(t *testing.T) {
 	for _, tc := range []struct {
 		name                     string
 		state                    string
@@ -228,10 +241,10 @@ func TestCodexTurnStateProbePoolBoundsAndStops(t *testing.T) {
 		{"312-length-is-diagnostic", testGlobalTurnStateToken(time.Now(), 11), 200, 1, 1},
 		{"356-length-is-diagnostic", testGlobalTurnStateToken(time.Now(), 13), 200, 1, 1},
 		{"invalid-retries-three-unique-routes", "bad\nstate", 200, 3, 1},
-		{"auth-stops", "", 401, 1, 1},
-		{"access-denied-stops", "", 403, 1, 1},
-		{"quota-stops", "", 429, 1, 1},
-		{"quota-with-state-stops", testGlobalTurnStateToken(time.Now(), 11), 429, 1, 1},
+		{"auth-visits-three-unique-routes", "", 401, 3, 1},
+		{"access-denied-visits-three-unique-routes", "", 403, 3, 1},
+		{"quota-visits-three-unique-routes", "", 429, 3, 1},
+		{"quota-with-state-visits-three-unique-routes", testGlobalTurnStateToken(time.Now(), 11), 429, 3, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, account := newTurnStateAutoService(t)
@@ -254,7 +267,7 @@ func TestCodexTurnStateProbePoolBoundsAndStops(t *testing.T) {
 	}
 }
 
-func TestCodexTurnStateProbePoolValidatesAddressesAndCapsRoutes(t *testing.T) {
+func TestCodexTurnStateProbePoolValidatesAddressesAndKeepsEveryFixedRoute(t *testing.T) {
 	expired := time.Now().Add(-time.Hour)
 	proxies := []Proxy{
 		// Names do not gate whether a syntactically valid 1024Proxy record can
@@ -270,7 +283,7 @@ func TestCodexTurnStateProbePoolValidatesAddressesAndCapsRoutes(t *testing.T) {
 	primaryTemplate, err := parseCodexTurnStateProbeProxyTemplate("socks5://testacct-region-US-sid-SESSION04-t-5:test-secret@us.1024proxy.io:3000")
 	require.NoError(t, err)
 	routes := s.codexTurnStatePoolRoutes(context.Background(), primaryTemplate.route("SESSION04"))
-	require.Len(t, routes, 3)
+	require.Len(t, routes, 4)
 	sessions := map[string]bool{}
 	for _, route := range routes {
 		username := requireDedicatedTurnStateRoute(t, route)
@@ -282,7 +295,7 @@ func TestCodexTurnStateProbePoolValidatesAddressesAndCapsRoutes(t *testing.T) {
 		}, username)
 		sessions[username] = true
 	}
-	require.Len(t, sessions, 3)
+	require.Len(t, sessions, 4)
 }
 
 func TestCodexTurnStateProbePoolUsesInactiveAndExpiredStaticRecordsWhenDynamicIsAbsent(t *testing.T) {
@@ -305,7 +318,7 @@ func TestCodexTurnStateProbePoolUsesInactiveAndExpiredStaticRecordsWhenDynamicIs
 	s := &OpenAIGatewayService{proxyRepo: repo}
 
 	routes := s.codexTurnStatePoolRoutes(context.Background(), primary.URL())
-	require.Len(t, routes, codexTurnStateProbePoolSize)
+	require.Len(t, routes, 7)
 	require.EqualValues(t, 1, repo.calls.Load())
 	allowedHosts := map[string]bool{
 		"pool-a.example": true, "pool-b.example": true, "pool-c.example": true,
@@ -319,7 +332,7 @@ func TestCodexTurnStateProbePoolUsesInactiveAndExpiredStaticRecordsWhenDynamicIs
 		require.True(t, allowedHosts[parsed.Hostname()], "unexpected fallback route host %q", parsed.Hostname())
 		seen[route] = true
 	}
-	require.Len(t, seen, codexTurnStateProbePoolSize)
+	require.Len(t, seen, 7)
 }
 
 func TestCodexTurnStateProbePoolCombinesDynamicRecordsAndOrdinaryIPPool(t *testing.T) {
@@ -424,7 +437,7 @@ func TestCodexTurnStateProbePoolSkipsInvalidDedicatedAndFallsBackBestEffort(t *t
 		s := &OpenAIGatewayService{proxyRepo: &turnStateProxyRepo{proxies: []Proxy{dynamic, invalid}}}
 
 		routes := s.codexTurnStatePoolRoutes(context.Background(), "")
-		require.Len(t, routes, codexTurnStateProbePoolSize)
+		require.Len(t, routes, codexTurnStateProbePoolSize+1)
 		for _, route := range routes {
 			require.NotEqual(t, dynamic.URL(), route, "bare dynamic templates must never be dialed directly")
 			parsed, err := url.Parse(route)
@@ -465,147 +478,157 @@ func TestCodexTurnStateProbePoolSkipsInvalidDedicatedAndFallsBackBestEffort(t *t
 	})
 }
 
-func TestCodexTurnStateConfiguredProxyIgnoresStatusExpiryVendorAndName(t *testing.T) {
-	expired := time.Now().Add(-time.Hour)
-	for _, tc := range []struct {
-		name        string
-		proxy       Proxy
-		wantDynamic bool
-	}{
-		{
-			name: "inactive dynamic template",
-			proxy: func() Proxy {
-				proxy := turnStateDedicatedTemplateProxy()
-				proxy.Status = "disabled"
-				return proxy
-			}(),
-			wantDynamic: true,
-		},
-		{
-			name: "expired dynamic template",
-			proxy: func() Proxy {
-				proxy := turnStateDedicatedTemplateProxy()
-				proxy.ExpiresAt = &expired
-				return proxy
-			}(),
-			wantDynamic: true,
-		},
-		{
-			name: "generic proxy record",
-			proxy: Proxy{
-				Name: "ordinary-vendor-proxy", Protocol: "http", Host: "generic-vendor.example", Port: 8080,
-				Status: StatusActive,
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			const configuredProxyID int64 = 41
-			tc.proxy.ID = configuredProxyID
-			settings, settingRepo := turnStateTestSettings("", "")
-			settingRepo.values[SettingKeyOpenAICodexTurnStateProxyID] = "41"
-			proxyRepo := &turnStateProxyRepo{proxies: []Proxy{tc.proxy}}
-			s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
-
-			routes := s.codexTurnStatePoolRoutes(context.Background(), "")
-			if tc.wantDynamic {
-				require.Len(t, routes, codexTurnStateProbePoolSize)
-				for _, route := range routes {
-					require.Regexp(t, `^testacct-region-US-sid-[A-Za-z0-9]{8}-t-5$`, requireDedicatedTurnStateRoute(t, route))
-				}
-			} else {
-				require.Equal(t, []string{tc.proxy.URL()}, routes)
-			}
-			require.EqualValues(t, 1, proxyRepo.listByIDCalls.Load())
-			require.Equal(t, []int64{configuredProxyID}, proxyRepo.lastSelectedIDs())
-			require.Zero(t, proxyRepo.getCalls.Load())
-			require.Zero(t, proxyRepo.calls.Load(), "configured proxy lookup must not depend on the active proxy list")
-		})
+func TestCodexTurnStateDedicatedURLPoolTakesExclusivePrecedenceAndKeepsAllRoutes(t *testing.T) {
+	settings, settingRepo := turnStateTestSettings("", "")
+	dedicated := []string{
+		"socks5://user-a:secret-a@dedicated-a.example:1080",
+		"socks5://user-b:secret-b@dedicated-b.example:1081",
+		"socks5://user-c:secret-c@dedicated-c.example:1082",
+		"socks5://user-d:secret-d@dedicated-d.example:1083",
+		"socks5://user-e:secret-e@dedicated-e.example:1084",
 	}
+	encoded, err := json.Marshal(dedicated)
+	require.NoError(t, err)
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyURLs] = string(encoded)
+	// Legacy selections must be inert even when they point at valid records.
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[99]"
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyID] = "99"
+	proxyRepo := &turnStateProxyRepo{proxies: []Proxy{{ID: 99, Protocol: "http", Host: "global-must-not-run.example", Port: 8080}}}
+	s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
+
+	routes, snapshotErr := s.codexTurnStatePoolRouteSnapshot(context.Background(), "")
+	require.NoError(t, snapshotErr)
+	require.Equal(t, dedicated, routes)
+	require.Len(t, routes, 5, "the complete dedicated pool must not be capped at three")
+	require.Zero(t, proxyRepo.calls.Load(), "a non-empty dedicated pool must not query the global pool")
+	require.Zero(t, proxyRepo.listByIDCalls.Load(), "legacy proxy IDs are runtime-inert")
 }
 
-func TestCodexTurnStateConfiguredProxyPoolUsesOnlySelectedIDs(t *testing.T) {
+func TestCodexTurnStateEmptyDedicatedURLPoolFallsBackToCompleteGlobalPool(t *testing.T) {
 	settings, settingRepo := turnStateTestSettings("", "")
-	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[1,3]"
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyURLs] = "[]"
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[1]"
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyID] = "1"
 	proxies := []Proxy{
-		{ID: 1, Protocol: "http", Host: "selected-a.example", Port: 8080},
-		{ID: 2, Protocol: "http", Host: "not-selected.example", Port: 8080},
-		{ID: 3, Protocol: "socks5", Host: "selected-b.example", Port: 1080},
+		{ID: 1, Protocol: "http", Host: "global-a.example", Port: 8080},
+		{ID: 2, Protocol: "socks5", Host: "global-b.example", Port: 1080, Username: "b", Password: "secret-b"},
+		{ID: 3, Protocol: "https", Host: "global-c.example", Port: 8443},
+		{ID: 4, Protocol: "socks5h", Host: "global-d.example", Port: 1081, Username: "d", Password: "secret-d"},
+		{ID: 5, Protocol: "socks5", Host: "global-e.example", Port: 1082, Username: "e", Password: "secret-e"},
 	}
 	proxyRepo := &turnStateProxyRepo{proxies: proxies}
 	s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
 
-	routes := s.codexTurnStatePoolRoutes(context.Background(), "")
-	require.ElementsMatch(t, []string{proxies[0].URL(), proxies[2].URL()}, routes)
-	require.Equal(t, []int64{1, 3}, proxyRepo.lastSelectedIDs())
-	require.EqualValues(t, 1, proxyRepo.listByIDCalls.Load())
-	require.Zero(t, proxyRepo.calls.Load(), "an explicit pool must never widen to all proxy records")
-}
-
-func TestCodexTurnStateConfiguredProxyPoolMissingOrUnusableDoesNotWiden(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		proxies []Proxy
-	}{
-		{name: "missing", proxies: []Proxy{{ID: 2, Protocol: "http", Host: "not-selected.example", Port: 8080}}},
-		{name: "unusable", proxies: []Proxy{{ID: 99, Protocol: "ftp", Host: "selected.example", Port: 21}}},
-		{name: "malformed dedicated template", proxies: []Proxy{{
-			ID: 99, Protocol: "socks5", Host: codexTurnState1024ProxyHost, Port: codexTurnState1024ProxyPort,
-			Username: "testacct-region-Rand", Password: "test-secret",
-		}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			settings, settingRepo := turnStateTestSettings("", "")
-			settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[99]"
-			proxyRepo := &turnStateProxyRepo{proxies: tc.proxies}
-			s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
-
-			require.Empty(t, s.codexTurnStatePoolRoutes(context.Background(), ""))
-			require.EqualValues(t, 1, proxyRepo.listByIDCalls.Load())
-			require.Zero(t, proxyRepo.calls.Load())
-		})
+	want := make([]string, 0, len(proxies))
+	for index := range proxies {
+		want = append(want, proxies[index].URL())
 	}
+	routes, snapshotErr := s.codexTurnStatePoolRouteSnapshot(context.Background(), "")
+	require.NoError(t, snapshotErr)
+	require.Equal(t, want, routes)
+	require.EqualValues(t, 1, proxyRepo.calls.Load())
+	require.True(t, proxyRepo.fallbackDeadlineSeen.Load(), "the global inventory query must have a finite deadline")
+	require.Zero(t, proxyRepo.listByIDCalls.Load(), "legacy ID pools must never be resolved")
 }
 
-func TestCodexTurnStateMalformedLegacyProxySelectionDoesNotWiden(t *testing.T) {
+func TestCodexTurnStateMissingDedicatedSettingFallsBackAndEmptySourcesReturnDirectSignal(t *testing.T) {
+	settings, _ := turnStateTestSettings("", "")
+	global := Proxy{Protocol: "http", Host: "global.example", Port: 8080}
+	proxyRepo := &turnStateProxyRepo{proxies: []Proxy{global}}
+	s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
+	require.Equal(t, []string{global.URL()}, s.codexTurnStatePoolRoutes(context.Background(), ""))
+
+	emptyRepo := &turnStateProxyRepo{}
+	s.proxyRepo = emptyRepo
+	routes, err := s.codexTurnStatePoolRouteSnapshot(context.Background(), "")
+	require.NoError(t, err)
+	require.Empty(t, routes, "two explicitly empty pools signal the worker to use direct transport")
+	require.EqualValues(t, 1, emptyRepo.calls.Load())
+	require.True(t, emptyRepo.fallbackDeadlineSeen.Load())
+}
+
+func TestCodexTurnStateMalformedNonEmptyDedicatedPoolDoesNotWidenToGlobal(t *testing.T) {
 	settings, settingRepo := turnStateTestSettings("", "")
-	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[]"
-	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyID] = "malformed-private-value"
-	proxyRepo := &turnStateProxyRepo{proxies: []Proxy{{ID: 1, Protocol: "http", Host: "must-not-be-selected.example", Port: 8080}}}
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyURLs] = `["http://user:private-secret@invalid.example:80"]`
+	proxyRepo := &turnStateProxyRepo{proxies: []Proxy{{Protocol: "http", Host: "global-must-not-run.example", Port: 8080}}}
 	s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
 
-	require.Empty(t, s.codexTurnStatePoolRoutes(context.Background(), ""))
-	require.Zero(t, proxyRepo.listByIDCalls.Load())
-	require.Zero(t, proxyRepo.calls.Load(), "a malformed legacy selection must not widen to all proxy records")
+	routes, err := s.codexTurnStatePoolRouteSnapshot(context.Background(), "")
+	require.Empty(t, routes)
+	require.ErrorIs(t, err, errCodexTurnStateProbePoolUnavailable)
+	require.Empty(t, s.codexTurnStatePoolRoutes(context.Background(), ""), "the legacy wrapper must continue to collapse errors to an empty slice")
+	require.Zero(t, proxyRepo.calls.Load(), "a malformed non-empty dedicated value must fail closed")
 }
 
-func TestCodexTurnStateConfiguredMixedProxyPoolGeneratesAndCapsRoutes(t *testing.T) {
-	dynamic := turnStateDedicatedTemplateProxy()
-	dynamic.ID = 1
-	ordinary := []Proxy{
-		{ID: 2, Protocol: "http", Host: "selected-a.example", Port: 8080},
-		{ID: 3, Protocol: "socks5", Host: "selected-b.example", Port: 1080},
-		{ID: 4, Protocol: "https", Host: "selected-c.example", Port: 8443},
-	}
-	settings, settingRepo := turnStateTestSettings("", "")
-	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[1,2,3,4]"
-	proxyRepo := &turnStateProxyRepo{proxies: append([]Proxy{dynamic}, ordinary...)}
+func TestCodexTurnStateDedicatedPoolReadFailureDoesNotWidenToGlobal(t *testing.T) {
+	settings := NewSettingService(turnStateFailingSettingRepo{}, nil)
+	proxyRepo := &turnStateProxyRepo{proxies: []Proxy{{Protocol: "http", Host: "global-must-not-run.example", Port: 8080}}}
 	s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
 
-	routes := s.codexTurnStatePoolRoutes(context.Background(), "")
-	require.Len(t, routes, codexTurnStateProbePoolSize)
-	require.NotContains(t, routes, dynamic.URL(), "bare dynamic templates must be expanded into sticky sessions")
-	allowedStatic := map[string]bool{}
-	for _, proxy := range ordinary {
-		allowedStatic[proxy.URL()] = true
+	routes, err := s.codexTurnStatePoolRouteSnapshot(context.Background(), "")
+	require.Empty(t, routes)
+	require.ErrorIs(t, err, errCodexTurnStateProbePoolUnavailable)
+	require.Zero(t, proxyRepo.calls.Load(), "a settings read failure must not be mistaken for an empty dedicated pool")
+}
+
+func TestCodexTurnStatePoolRouteSnapshotRejectsUnavailableGlobalPool(t *testing.T) {
+	t.Run("query failure", func(t *testing.T) {
+		privateErr := errors.New("private repository detail")
+		repo := &turnStateProxyRepo{fallbackErr: privateErr}
+		s := &OpenAIGatewayService{proxyRepo: repo}
+
+		routes, err := s.codexTurnStatePoolRouteSnapshot(context.Background(), "")
+		require.Empty(t, routes)
+		require.ErrorIs(t, err, errCodexTurnStateProbePoolUnavailable)
+		require.NotErrorIs(t, err, privateErr, "repository details must not escape the pool boundary")
+		require.True(t, repo.fallbackDeadlineSeen.Load())
+	})
+
+	t.Run("nonempty but unusable", func(t *testing.T) {
+		repo := &turnStateProxyRepo{proxies: []Proxy{{Protocol: "ftp", Host: "invalid.example", Port: 21}}}
+		s := &OpenAIGatewayService{proxyRepo: repo}
+
+		routes, err := s.codexTurnStatePoolRouteSnapshot(context.Background(), "")
+		require.Empty(t, routes)
+		require.ErrorIs(t, err, errCodexTurnStateProbePoolUnavailable)
+		require.True(t, repo.fallbackDeadlineSeen.Load())
+	})
+
+	t.Run("missing repository", func(t *testing.T) {
+		routes, err := (&OpenAIGatewayService{}).codexTurnStatePoolRouteSnapshot(context.Background(), "")
+		require.Empty(t, routes)
+		require.ErrorIs(t, err, errCodexTurnStateProbePoolUnavailable)
+	})
+}
+
+func TestCodexTurnStateOrdinary1024ProxyURLsRemainStaticRoutes(t *testing.T) {
+	ordinary := []string{
+		"socks5://ordinary-user:ordinary-secret@us.1024proxy.io:3000",
+		"socks5://foo-region-bar:ordinary-secret@us.1024proxy.io:3000",
 	}
-	for _, route := range routes {
-		if allowedStatic[route] {
-			continue
-		}
-		require.Regexp(t, `^testacct-region-US-sid-[A-Za-z0-9]{8}-t-5$`, requireDedicatedTurnStateRoute(t, route))
+	settings, settingRepo := turnStateTestSettings("", "")
+	encoded, err := json.Marshal(ordinary)
+	require.NoError(t, err)
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyURLs] = string(encoded)
+	global := &turnStateProxyRepo{proxies: []Proxy{{Protocol: "http", Host: "must-not-run.example", Port: 8080}}}
+	s := &OpenAIGatewayService{settingService: settings, proxyRepo: global}
+
+	routes, snapshotErr := s.codexTurnStatePoolRouteSnapshot(context.Background(), "")
+	require.NoError(t, snapshotErr)
+	require.Equal(t, ordinary, routes)
+	require.Zero(t, global.calls.Load(), "the valid ordinary URL belongs to the exclusive dedicated pool")
+}
+
+func TestCodexTurnStateFixedDedicatedSessionsAreNeverTruncated(t *testing.T) {
+	proxies := make([]Proxy, 0, 5)
+	for _, sessionID := range []string{"SESSION01", "SESSION02", "SESSION03", "SESSION04", "SESSION05"} {
+		proxies = append(proxies, turnStateDedicatedSessionProxy(sessionID))
 	}
-	require.Equal(t, []int64{1, 2, 3, 4}, proxyRepo.lastSelectedIDs())
-	require.Zero(t, proxyRepo.calls.Load())
+	routes := codexTurnStateRoutesFromProxies(proxies, "")
+	require.Len(t, routes, len(proxies))
+	for index, route := range routes {
+		require.Equal(t, proxies[index].URL(), route)
+	}
 }
 
 func TestCodexTurnStateLiveProxyParserPreservesFixedCountryStickySessionsAndCapsAtThree(t *testing.T) {
@@ -702,22 +725,22 @@ func TestCodexTurnStateProbe429DiagnosticStopsRotation(t *testing.T) {
 	require.Zero(t, delay)
 }
 
-func TestCodexTurnStateProbe429StopsWorkerAndSetsRetryBoundary(t *testing.T) {
+func TestCodexTurnStateProbe429ContinuesRoundAndSetsNextRoundBoundary(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		rateLimitCall int
 		retryAfter    string
-		wantCode      string
 		wantDelay     time.Duration
+		wantCalls     int
 		wantRoutes    int
 	}{
 		{
 			name: "collection_obeys_delta", rateLimitCall: 1, retryAfter: "3600",
-			wantCode: codexTurnStateProbe429RetryAfterCode, wantDelay: time.Hour, wantRoutes: 1,
+			wantDelay: time.Hour, wantCalls: 3, wantRoutes: 2,
 		},
 		{
 			name: "same_route_replay_uses_missing_header_fallback", rateLimitCall: 2,
-			wantCode: codexTurnStateProbe429NoRetryAfterCode, wantDelay: codexTurnStateProbe429Fallback, wantRoutes: 1,
+			wantDelay: codexTurnStateProbe429Fallback, wantCalls: 4, wantRoutes: 2,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -735,13 +758,14 @@ func TestCodexTurnStateProbe429StopsWorkerAndSetsRetryBoundary(t *testing.T) {
 			s.proxyRepo = pool
 			candidate := "same-account-same-model-candidate"
 			calls := 0
-			routes := make([]string, 0, tc.rateLimitCall)
+			routes := make([]string, 0, tc.wantCalls)
 			s.httpUpstream = &turnStateProbeSequenceUpstream{call: func(req *http.Request, route string, _ int64) (*http.Response, error) {
 				calls++
 				routes = append(routes, route)
 				if calls == tc.rateLimitCall {
 					// Simulate a concurrent invalidation queuing forced work while this
-					// request is in flight. The worker must not issue it after the 429.
+					// request is in flight. The active round may finish, but the queued
+					// work must remain blocked behind the new account boundary.
 					s.openaiTurnStateMu.Lock()
 					entry := s.openaiTurnStates[codexTurnStateKey{account.ID, model}]
 					entry.probe, entry.forceProbe = true, true
@@ -763,7 +787,7 @@ func TestCodexTurnStateProbe429StopsWorkerAndSetsRetryBoundary(t *testing.T) {
 			started := time.Now()
 			require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), account, model))
 			waitTurnStateAutoIdle(t, s)
-			require.Equal(t, tc.rateLimitCall, calls, "429 must stop the current route round and queued forced work")
+			require.Equal(t, tc.wantCalls, calls, "429 must continue the current route round without starting queued work")
 			require.EqualValues(t, 1, pool.calls.Load())
 			uniqueRoutes := make(map[string]struct{}, len(routes))
 			for _, route := range routes {
@@ -774,9 +798,7 @@ func TestCodexTurnStateProbe429StopsWorkerAndSetsRetryBoundary(t *testing.T) {
 			s.openaiTurnStateMu.Lock()
 			entry := s.openaiTurnStates[codexTurnStateKey{account.ID, model}]
 			retryAt := entry.probeRetryAfter
-			forceProbe := entry.forceProbe
 			s.openaiTurnStateMu.Unlock()
-			require.True(t, forceProbe, "blocked forced work must remain pending for a later request")
 			require.GreaterOrEqual(t, retryAt.Sub(started), tc.wantDelay-time.Second)
 			require.Less(t, retryAt.Sub(started), tc.wantDelay+5*time.Second)
 
@@ -784,8 +806,9 @@ func TestCodexTurnStateProbe429StopsWorkerAndSetsRetryBoundary(t *testing.T) {
 			require.NoError(t, err)
 			storedScope := codexTurnStateModelAccount(stored, model)
 			require.Equal(t, old, codexTurnStateAutoToken(storedScope), "429 must not replace the last verified state")
-			require.Equal(t, tc.wantCode, storedScope.GetExtraString(CodexTurnStateAutoLastErrorExtraKey))
-			persistedNotBefore := codexTurnStateAutoInt64(storedScope, CodexTurnStateAutoProbeNotBeforeExtraKey)
+			require.Empty(t, storedScope.GetExtraString(CodexTurnStateAutoLastErrorExtraKey),
+				"a later successful route must prevent the 429 from becoming the terminal slot outcome")
+			persistedNotBefore := codexTurnStateAutoInt64(stored, CodexTurnStateAutoProbeNotBeforeExtraKey)
 			require.GreaterOrEqual(t, persistedNotBefore, started.Add(tc.wantDelay-time.Second).UnixMilli())
 
 			// A process restart must reload the upstream boundary rather than fall
@@ -805,13 +828,13 @@ func TestCodexTurnStateProbe429StopsWorkerAndSetsRetryBoundary(t *testing.T) {
 			}
 			require.Equal(t, old, restarted.autoTurnStateForAccount(context.Background(), stored, model))
 			waitTurnStateAutoIdle(t, restarted)
-			require.Equal(t, tc.rateLimitCall, calls, "persisted Retry-After must survive a process restart")
+			require.Equal(t, tc.wantCalls, calls, "persisted Retry-After must survive a process restart")
 
 			for range 10 {
 				s.autoTurnStateForAccount(context.Background(), account, model)
 			}
 			waitTurnStateAutoIdle(t, s)
-			require.Equal(t, tc.rateLimitCall, calls, "requests before retry boundary must not reschedule the probe")
+			require.Equal(t, tc.wantCalls, calls, "requests before retry boundary must not reschedule the probe")
 
 			// The upstream probe boundary must not block persistence after the
 			// durable acceptance gate has independently verified a candidate.
@@ -821,7 +844,7 @@ func TestCodexTurnStateProbe429StopsWorkerAndSetsRetryBoundary(t *testing.T) {
 			stored, err = repo.GetByID(context.Background(), account.ID)
 			require.NoError(t, err)
 			require.Equal(t, native, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, model)))
-			require.Equal(t, tc.rateLimitCall, calls, "state persistence must not bypass the probe boundary")
+			require.Equal(t, tc.wantCalls, calls, "state persistence must not bypass the probe boundary")
 		})
 	}
 }
@@ -918,8 +941,8 @@ func TestCodexTurnStateProbe429CooldownIsSharedAcrossAccountModels(t *testing.T)
 			waitTurnStateAutoIdle(t, s)
 
 			callsMu.Lock()
-			require.Equal(t, 1, calls[tc.limitedModel], "the 429 route must not rotate")
-			require.Equal(t, 1, calls[tc.heldModel], "the concurrent model must stop before same-route replay")
+			require.Equal(t, 3, calls[tc.limitedModel], "the active 429 round must visit every route once")
+			require.Equal(t, 2, calls[tc.heldModel], "a concurrently active round must finish collection and replay")
 			callsMu.Unlock()
 
 			stored, err := repo.GetByID(context.Background(), account.ID)
@@ -945,13 +968,13 @@ func TestCodexTurnStateProbe429CooldownIsSharedAcrossAccountModels(t *testing.T)
 			restarted.autoTurnStateForAccount(context.Background(), stored, tc.heldModel)
 			waitTurnStateAutoIdle(t, restarted)
 			callsMu.Lock()
-			require.Equal(t, 1, calls[tc.heldModel], "neither later traffic nor a restarted process may bypass the other model's 429")
+			require.Equal(t, 2, calls[tc.heldModel], "neither later traffic nor a restarted process may bypass the other model's 429")
 			callsMu.Unlock()
 		})
 	}
 }
 
-func TestCodexTurnStateProbe429BoundaryPersistenceRetriesWithoutReprobing(t *testing.T) {
+func TestCodexTurnStateProbe429BoundaryPersistenceRetriesWithoutRepeatingRoutes(t *testing.T) {
 	s, baseRepo, account := newTurnStateAutoService(t)
 	repo := &turnStateDurableBoundaryRepo{turnStateAutoRepo: baseRepo, boundaryErr: errors.New("temporary database failure")}
 	s.accountRepo = repo
@@ -969,8 +992,10 @@ func TestCodexTurnStateProbe429BoundaryPersistenceRetriesWithoutReprobing(t *tes
 
 	s.autoTurnStateForAccount(context.Background(), account, model)
 	waitTurnStateAutoIdle(t, s)
-	require.Equal(t, 1, upstreamCalls, "database retries must never issue another upstream probe")
-	require.Equal(t, codexTurnStateProbePersistAttempts, repo.boundaryCallCount())
+	const routeCalls = 3
+	require.Equal(t, routeCalls, upstreamCalls, "the round must visit each route once despite boundary write failures")
+	require.Equal(t, (routeCalls+1)*codexTurnStateProbePersistAttempts, repo.boundaryCallCount(),
+		"each 429 boundary write and the terminal outcome write must remain bounded")
 
 	s.openaiTurnStateMu.Lock()
 	entry := s.openaiTurnStates[codexTurnStateKey{account.ID, model}]
@@ -984,22 +1009,22 @@ func TestCodexTurnStateProbe429BoundaryPersistenceRetriesWithoutReprobing(t *tes
 	s.openaiTurnStateMu.Unlock()
 	waitTurnStateAutoIdle(t, s)
 
-	require.Equal(t, 1, upstreamCalls, "a later successful database retry must still be persistence-only")
-	require.Equal(t, codexTurnStateProbePersistAttempts+1, repo.boundaryCallCount())
+	require.Equal(t, routeCalls, upstreamCalls, "a later successful database retry must still be persistence-only")
+	require.Equal(t, (routeCalls+1)*codexTurnStateProbePersistAttempts+1, repo.boundaryCallCount())
 	stored, err := repo.GetByID(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.Greater(t, codexTurnStateAutoInt64(stored, CodexTurnStateAutoProbeNotBeforeExtraKey), time.Now().UnixMilli())
 }
 
-func TestCodexTurnStateProbeRefreshesDurableBoundaryBeforeEveryStage(t *testing.T) {
+func TestCodexTurnStateActiveRoundIgnoresNewDurableBoundaryButNextRoundStops(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		installAfterCall int
 		transportFailure bool
 		wantCalls        int
 	}{
-		{name: "next_exit", installAfterCall: 1, transportFailure: true, wantCalls: 1},
-		{name: "same_exit_replay", installAfterCall: 1, wantCalls: 1},
+		{name: "next_exit", installAfterCall: 1, transportFailure: true, wantCalls: 3},
+		{name: "same_exit_replay", installAfterCall: 1, wantCalls: 2},
 		{name: "candidate_stage", installAfterCall: 2, wantCalls: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1043,14 +1068,22 @@ func TestCodexTurnStateProbeRefreshesDurableBoundaryBeforeEveryStage(t *testing.
 			b.openaiTurnStateMu.Unlock()
 			b.runCodexTurnStateProbe(account.ID, entry)
 
-			require.Equal(t, tc.wantCalls, calls, "instance B must stop before the next upstream stage")
+			require.Equal(t, tc.wantCalls, calls, "the already-started round must ignore a newly installed boundary")
 			b.openaiTurnStateMu.Lock()
 			require.Greater(t, b.codexTurnStateAccountProbeNotBeforeLocked(account.ID), time.Now().UnixMilli())
 			b.openaiTurnStateMu.Unlock()
-			repo.statsMu.Lock()
-			sourceCalls := repo.sourceCalls
-			repo.statsMu.Unlock()
-			require.GreaterOrEqual(t, sourceCalls, tc.wantCalls+1, "each attempted stage must refresh the shared durable boundary")
+
+			stored, err := repo.GetByID(context.Background(), account.ID)
+			require.NoError(t, err)
+			restarted := &OpenAIGatewayService{
+				settingService: b.settingService,
+				accountRepo:    repo,
+				httpUpstream:   b.httpUpstream,
+				proxyRepo:      b.proxyRepo,
+			}
+			restarted.autoTurnStateForAccount(context.Background(), stored, model)
+			waitTurnStateAutoIdle(t, restarted)
+			require.Equal(t, tc.wantCalls, calls, "the durable boundary must stop the next automatic round")
 		})
 	}
 }

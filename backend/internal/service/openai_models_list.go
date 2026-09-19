@@ -23,7 +23,7 @@ func (s *OpenAIGatewayService) FetchOpenAIModelsList(ctx context.Context, accoun
 	if err != nil {
 		return nil, fmt.Errorf("resolve model list credentials: %w", err)
 	}
-	if credentialAccount.IsOpenAIOAuth() {
+	if credentialAccount.IsOpenAIOAuthLike() {
 		clientVersion := CodexCanonicalClientVersion()
 		if s.settingService != nil {
 			clientVersion = s.settingService.GetOpenAICodexClientVersion(ctx)

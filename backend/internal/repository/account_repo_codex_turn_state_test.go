@@ -33,3 +33,20 @@ func TestCodexTurnStateSourceProjection(t *testing.T) {
 	require.Contains(t, query, "deleted_at")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestCodexTurnStateSourceTranslatesNotFound(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+	repo := newAccountRepositoryWithSQL(client, db, nil)
+	mock.ExpectQuery(`SELECT .* FROM "accounts"`).WithArgs(int64(13)).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "platform", "type", "extra"}),
+	)
+
+	row, err := repo.GetCodexTurnStateSource(context.Background(), 13)
+	require.Nil(t, row)
+	require.ErrorIs(t, err, service.ErrAccountNotFound)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

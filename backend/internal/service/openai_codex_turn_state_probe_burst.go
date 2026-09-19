@@ -5,9 +5,7 @@ import (
 	"time"
 )
 
-const (
-	codexTurnStateProbeBurstCASLimit = 4
-)
+const codexTurnStateProbeBurstCASLimit = 4
 
 var (
 	errCodexTurnStateProbeBurstExhausted   = codexTurnStateAutoError("probe_burst_exhausted")
@@ -75,7 +73,7 @@ func codexTurnStateProbeBurstOwnerModel(model string) string {
 }
 
 // Each fresh collection route gets at most the normal sticky-session timeout,
-// additionally capped by the durable burst deadline. The same-route replay
+// additionally capped by the current short durable lease. The same-route replay
 // reuses the parent context and does not consume another burst attempt.
 func codexTurnStateProbeAttemptContext(parent context.Context, burstDeadline time.Time) (context.Context, context.CancelFunc) {
 	return codexTurnStateProbeBoundedContext(parent, codexTurnStateProbeSessionTimeout, burstDeadline)
@@ -96,11 +94,22 @@ func codexTurnStateProbeBoundedContext(parent context.Context, timeout time.Dura
 	return context.WithDeadline(parent, deadline)
 }
 
-// reserveCodexTurnStateProbeBurstAttempt performs a durable reservation before
-// a new exit is contacted. CAS loss is retried from the authoritative account
-// row; database/interface failure is fail-closed and never falls back to an
-// in-process counter that another service instance could bypass.
+// reserveCodexTurnStateProbeBurstAttempt is the compatibility form used by
+// direct callers. One reservation consumes one complete pool round; production
+// workers renew its short lease before each route without incrementing Attempts.
 func (s *OpenAIGatewayService) reserveCodexTurnStateProbeBurstAttempt(
+	ctx context.Context,
+	accountID int64,
+	model string,
+	generation int64,
+) (codexTurnStateProbeBurstReservation, error) {
+	return s.reserveCodexTurnStateProbeRound(ctx, accountID, model, generation)
+}
+
+// reserveCodexTurnStateProbeRound consumes one durable attempt for a complete
+// route-pool round, not for one IP. CAS loss is retried from the authoritative
+// account row; repository failure remains fail-closed across service instances.
+func (s *OpenAIGatewayService) reserveCodexTurnStateProbeRound(
 	ctx context.Context,
 	accountID int64,
 	model string,
@@ -151,11 +160,10 @@ func (s *OpenAIGatewayService) reserveCodexTurnStateProbeBurstAttempt(
 			return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstExhausted
 		}
 
-		deadline := time.UnixMilli(budget.StartedAtMS).Add(codexTurnStateProbeBurstWindow)
 		if budget.CandidatePendingUntilMS > now.UnixMilli() {
 			return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeCandidatePending
 		}
-		if budget.StartedAtMS <= 0 || !now.Before(deadline) || budget.Attempts >= codexTurnStateProbeBurstMaxAttempts {
+		if budget.Attempts >= codexTurnStateProbeBurstMaxAttempts {
 			return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstExhausted
 		}
 		if budget.InFlightUntilMS > now.UnixMilli() {
@@ -167,7 +175,9 @@ func (s *OpenAIGatewayService) reserveCodexTurnStateProbeBurstAttempt(
 		budget.CandidatePendingUntilMS = 0
 		budget.Attempts++
 		budget.Version = expectedVersion + 1
-		budget.InFlightUntilMS = deadline.UnixMilli()
+		budget.StartedAtMS = now.UnixMilli()
+		leaseDeadline := now.Add(time.Duration(CodexTurnStateProbeBurstMaxLeaseMS) * time.Millisecond)
+		budget.InFlightUntilMS = leaseDeadline.UnixMilli()
 
 		writeCtx, cancelWrite := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
 		updated, updateErr := repository.CompareAndSwapCodexTurnStateProbeBurstBudget(
@@ -178,10 +188,61 @@ func (s *OpenAIGatewayService) reserveCodexTurnStateProbeBurstAttempt(
 			return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
 		}
 		if updated {
-			return codexTurnStateProbeBurstReservation{deadline: deadline, attempt: budget.Attempts, version: budget.Version}, nil
+			return codexTurnStateProbeBurstReservation{deadline: leaseDeadline, attempt: budget.Attempts, version: budget.Version}, nil
 		}
 	}
 	return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+}
+
+// renewCodexTurnStateProbeBurstAttempt extends only the caller's live lease.
+// It advances the CAS version but deliberately does not consume another full
+// pool attempt. A lost or expired lease is never revived by its former owner.
+func (s *OpenAIGatewayService) renewCodexTurnStateProbeBurstAttempt(
+	ctx context.Context,
+	accountID int64,
+	model string,
+	generation int64,
+	reservation codexTurnStateProbeBurstReservation,
+) (codexTurnStateProbeBurstReservation, error) {
+	model = codexTurnStateProbeBurstOwnerModel(model)
+	if s == nil || s.accountRepo == nil || accountID <= 0 || model == "" || generation < 0 || reservation.version <= 0 {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	source, sourceOK := s.accountRepo.(CodexTurnStateSourceRepository)
+	repository, repositoryOK := s.accountRepo.(CodexTurnStateProbeBurstBudgetRepository)
+	if !sourceOK || !repositoryOK {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	slot := codexTurnStateProbeBurstBudgetExtraKey(model)
+	loadCtx, cancelLoad := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+	account, loadErr := source.GetCodexTurnStateSource(loadCtx, accountID)
+	cancelLoad()
+	if loadErr != nil || account == nil || account.ID != accountID {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	budget, parseErr := codexTurnStateProbeBurstBudgetFromAccount(account, slot)
+	now := time.Now()
+	if parseErr != nil || budget.Version != reservation.version || budget.Model != model || budget.Generation != generation ||
+		budget.Attempts != reservation.attempt || budget.InFlightUntilMS <= now.UnixMilli() || budget.CandidatePendingUntilMS != 0 {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	expectedVersion := budget.Version
+	budget.Version++
+	budget.StartedAtMS = now.UnixMilli()
+	leaseDeadline := now.Add(time.Duration(CodexTurnStateProbeBurstMaxLeaseMS) * time.Millisecond)
+	budget.InFlightUntilMS = leaseDeadline.UnixMilli()
+	writeCtx, cancelWrite := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+	updated, updateErr := repository.CompareAndSwapCodexTurnStateProbeBurstBudget(
+		writeCtx, accountID, slot, expectedVersion, budget,
+	)
+	cancelWrite()
+	if updateErr != nil || !updated {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	return codexTurnStateProbeBurstReservation{deadline: leaseDeadline, attempt: budget.Attempts, version: budget.Version}, nil
 }
 
 // releaseCodexTurnStateProbeBurstAttempt releases only the caller's own lease.
@@ -285,11 +346,8 @@ func (s *OpenAIGatewayService) markCodexTurnStateProbeCandidatePendingOwned(
 		if budget.CandidatePendingUntilMS > now.UnixMilli() {
 			return false, codexTurnStateProbeCandidatePendingOwner{}, nil
 		}
-		if budget.Version != reservation.version || budget.InFlightUntilMS <= 0 {
+		if budget.Version != reservation.version || budget.InFlightUntilMS <= now.UnixMilli() {
 			return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstPersistence
-		}
-		if !now.Before(time.UnixMilli(budget.StartedAtMS).Add(codexTurnStateProbeBurstWindow)) {
-			return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstExhausted
 		}
 		expectedVersion := budget.Version
 		budget.Version++
@@ -358,4 +416,57 @@ func (s *OpenAIGatewayService) clearCodexTurnStateProbeCandidatePending(ctx cont
 	}
 	// A CAS loss means ownership changed; do not retry against the new version.
 	return nil
+}
+
+// restoreCodexTurnStateProbeRound converts this worker's rejected candidate
+// marker back into a live lease for the same pool round. Attempts is preserved:
+// trying the next IP is still part of the already-counted collection attempt.
+func (s *OpenAIGatewayService) restoreCodexTurnStateProbeRound(
+	ctx context.Context,
+	owner codexTurnStateProbeCandidatePendingOwner,
+) (codexTurnStateProbeBurstReservation, error) {
+	model := codexTurnStateProbeBurstOwnerModel(owner.model)
+	if s == nil || s.accountRepo == nil || owner.accountID <= 0 || model == "" || owner.generation < 0 || owner.version <= 0 || owner.untilMS <= 0 {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	source, sourceOK := s.accountRepo.(CodexTurnStateSourceRepository)
+	repository, repositoryOK := s.accountRepo.(CodexTurnStateProbeBurstBudgetRepository)
+	if !sourceOK || !repositoryOK {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	slot := codexTurnStateProbeBurstBudgetExtraKey(model)
+	loadCtx, cancelLoad := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+	account, loadErr := source.GetCodexTurnStateSource(loadCtx, owner.accountID)
+	cancelLoad()
+	if loadErr != nil || account == nil || account.ID != owner.accountID {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	budget, parseErr := codexTurnStateProbeBurstBudgetFromAccount(account, slot)
+	if parseErr != nil || budget.Version != owner.version || budget.Model != model || budget.Generation != owner.generation ||
+		budget.InFlightUntilMS != 0 || budget.CandidatePendingUntilMS != owner.untilMS {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	now := time.Now()
+	expectedVersion := budget.Version
+	budget.Version++
+	budget.StartedAtMS = now.UnixMilli()
+	deadline := now.Add(time.Duration(CodexTurnStateProbeBurstMaxLeaseMS) * time.Millisecond)
+	budget.InFlightUntilMS = deadline.UnixMilli()
+	budget.CandidatePendingUntilMS = 0
+	writeCtx, cancelWrite := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+	updated, updateErr := repository.CompareAndSwapCodexTurnStateProbeBurstBudget(
+		writeCtx, owner.accountID, slot, expectedVersion, budget,
+	)
+	cancelWrite()
+	if updateErr != nil || !updated {
+		return codexTurnStateProbeBurstReservation{}, errCodexTurnStateProbeBurstPersistence
+	}
+	return codexTurnStateProbeBurstReservation{
+		deadline: deadline,
+		attempt:  budget.Attempts,
+		version:  budget.Version,
+	}, nil
 }

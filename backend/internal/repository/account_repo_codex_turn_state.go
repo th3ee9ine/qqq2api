@@ -78,7 +78,7 @@ func (r *accountRepository) UpdateCodexTurnState(ctx context.Context, accountID 
 func (r *accountRepository) GetCodexTurnStateSource(ctx context.Context, id int64) (*service.Account, error) {
 	row, err := r.client.Account.Query().Where(dbaccount.IDEQ(id)).Select(dbaccount.FieldID, dbaccount.FieldPlatform, dbaccount.FieldType, dbaccount.FieldExtra).Only(ctx)
 	if err != nil {
-		return nil, err
+		return nil, translatePersistenceError(err, service.ErrAccountNotFound, nil)
 	}
 	return &service.Account{ID: row.ID, Platform: row.Platform, Type: row.Type, Extra: row.Extra}, nil
 }

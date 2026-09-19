@@ -5,7 +5,6 @@ import (
 	cryptorand "crypto/rand"
 	"errors"
 	"io"
-	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,7 +29,10 @@ const (
 	codexTurnStateProbe429NoRetryAfterCode = "http_429_no_retry_after"
 )
 
-var errInvalidCodexTurnStateProbeProxy = errors.New("invalid dedicated Turn State probe proxy")
+var (
+	errInvalidCodexTurnStateProbeProxy    = errors.New("invalid dedicated Turn State probe proxy")
+	errCodexTurnStateProbePoolUnavailable = codexTurnStateAutoError("probe_pool_unavailable")
+)
 
 type codexTurnStateProbeProxyTemplate struct {
 	protocol  string
@@ -44,8 +46,9 @@ type codexTurnStateProbeProxyTemplate struct {
 }
 
 // parseCodexTurnStateProbeProxyTemplate accepts the 1024Proxy dashboard's
-// host:port:username:password form and ordinary proxy URLs. It never includes
-// the input or credentials in returned errors.
+// template in host:port:username:password or URL form. Ordinary URLs that do
+// not match this optional template are retained as static routes by the caller.
+// Errors never include the input or credentials.
 func parseCodexTurnStateProbeProxyTemplate(raw string) (codexTurnStateProbeProxyTemplate, error) {
 	if raw == "" || strings.TrimSpace(raw) != raw || strings.ContainsAny(raw, "\r\n\x00") {
 		return codexTurnStateProbeProxyTemplate{}, errInvalidCodexTurnStateProbeProxy
@@ -212,7 +215,8 @@ func buildCodexTurnStateProbeRoutes(templates []codexTurnStateProbeProxyTemplate
 	}
 	primary = canonicalCodexTurnStateDedicatedRoute(primary)
 	base := templates[0]
-	sessions := make(map[string]struct{}, codexTurnStateProbePoolSize)
+	sessions := make(map[string]struct{}, len(templates)+codexTurnStateProbePoolSize)
+	sessionIDs := make([]string, 0, len(templates)+codexTurnStateProbePoolSize)
 	dynamic := false
 	for _, template := range templates {
 		if template.protocol != base.protocol || template.host != base.host || template.port != base.port ||
@@ -223,14 +227,12 @@ func buildCodexTurnStateProbeRoutes(templates []codexTurnStateProbeProxyTemplate
 			dynamic = true
 			continue
 		}
+		if _, exists := sessions[template.sessionID]; exists {
+			continue
+		}
 		sessions[template.sessionID] = struct{}{}
+		sessionIDs = append(sessionIDs, template.sessionID)
 	}
-
-	sessionIDs := make([]string, 0, len(sessions))
-	for sessionID := range sessions {
-		sessionIDs = append(sessionIDs, sessionID)
-	}
-	rand.Shuffle(len(sessionIDs), func(i, j int) { sessionIDs[i], sessionIDs[j] = sessionIDs[j], sessionIDs[i] })
 
 	// A bare fixed-country template fills the remaining slots with fresh sticky
 	// sessions. Explicit values retain their exact supplied SID. The region in
@@ -248,7 +250,7 @@ func buildCodexTurnStateProbeRoutes(templates []codexTurnStateProbeProxyTemplate
 	}
 
 	seenRoutes := map[string]struct{}{primary: {}}
-	routes := make([]string, 0, codexTurnStateProbePoolSize)
+	routes := make([]string, 0, len(sessionIDs))
 	for _, sessionID := range sessionIDs {
 		route := base.route(sessionID)
 		if _, exists := seenRoutes[route]; exists {
@@ -256,18 +258,8 @@ func buildCodexTurnStateProbeRoutes(templates []codexTurnStateProbeProxyTemplate
 		}
 		seenRoutes[route] = struct{}{}
 		routes = append(routes, route)
-		if len(routes) == codexTurnStateProbePoolSize {
-			break
-		}
 	}
 	return routes
-}
-
-func codexTurnStateAccountProxy(account *Account) string {
-	if account != nil && account.ProxyID != nil && account.Proxy != nil {
-		return account.Proxy.URL()
-	}
-	return ""
 }
 
 func codexTurnStateFreshNormal(state string, now time.Time) bool {
@@ -325,9 +317,9 @@ func codexTurnStateProbeRetryAfter(header http.Header, now time.Time) (time.Dura
 }
 
 // codexTurnStateProbe429Diagnostic classifies a 429 without exposing
-// upstream/proxy details. A 429 is never a route-failover signal: the caller
-// must stop rotating identities. Missing or malformed Retry-After values use a
-// finite local backoff so a busy worker cannot immediately retry the limit.
+// upstream/proxy details. The boundary constrains later automatic rounds; an
+// already-started full-pool round still visits its remaining routes. Missing or
+// malformed Retry-After values use a finite local backoff.
 func codexTurnStateProbe429Diagnostic(statusCode int, header http.Header, now time.Time) (code string, retryAfter time.Duration) {
 	if statusCode != http.StatusTooManyRequests {
 		return "", 0
@@ -355,13 +347,8 @@ func codexTurnStateProxyAddressUsable(proxy Proxy) bool {
 
 func codexTurnStateProxyRoute(proxy Proxy) string {
 	proxy.Protocol = strings.ToLower(strings.TrimSpace(proxy.Protocol))
-	proxy.Host = strings.TrimSpace(proxy.Host)
+	proxy.Host = strings.ToLower(strings.TrimSpace(proxy.Host))
 	return proxy.URL()
-}
-
-func codexTurnStateDedicatedProxyEndpoint(proxy Proxy) bool {
-	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(proxy.Host)), ".")
-	return host == codexTurnState1024ProxyHost && proxy.Port == codexTurnState1024ProxyPort
 }
 
 func canonicalCodexTurnStateDedicatedRoute(route string) string {
@@ -406,12 +393,9 @@ func codexTurnStateRoutesFromProxies(proxies []Proxy, primary string) []string {
 		}
 		template, err := codexTurnStateProbeProxyTemplateFromRecord(proxy)
 		if err != nil {
-			// An exact 1024Proxy endpoint is not an ordinary static route. If its
-			// country/sticky credentials are malformed, dialing the raw record would
-			// bypass the fixed-country and same-session guarantees above.
-			if codexTurnStateDedicatedProxyEndpoint(proxy) {
-				continue
-			}
+			// Template syntax is an optional expansion mode, not a validity gate.
+			// Any otherwise usable proxy record remains available as a static route,
+			// including ordinary credentials at us.1024proxy.io:3000.
 			appendRoute(codexTurnStateProxyRoute(proxy))
 			continue
 		}
@@ -436,45 +420,84 @@ func codexTurnStateRoutesFromProxies(proxies []Proxy, primary string) []string {
 		}
 	}
 
-	// Spread concurrent accounts over all selected route types without repeating
-	// an exit in the same maintenance run. A worker performs at most one
-	// collection plus same-route replay per returned route.
-	rand.Shuffle(len(routes), func(i, j int) { routes[i], routes[j] = routes[j], routes[i] })
-	if len(routes) > codexTurnStateProbePoolSize {
-		routes = routes[:codexTurnStateProbePoolSize]
-	}
+	// Preserve every unique usable route. One maintenance round visits each route
+	// at most once and stops early only after a successful collection.
 	return routes
 }
 
-// Pool routes are used only for maintenance probes. An explicit configured
-// pool takes precedence without imposing status, expiry, provider, or naming
-// policy and is resolved strictly through ListByIDs. A valid 1024Proxy dynamic
-// template still expands into fresh sticky sessions; malformed records at that
-// dedicated endpoint are skipped, while other syntactically usable records are
-// used as-is. Legacy installations with no configured pool retain the all-record
-// compatibility behavior. The caller falls back to the account route or direct
-// transport when this function returns no routes.
-// Never log URLs.
-func (s *OpenAIGatewayService) codexTurnStatePoolRoutes(ctx context.Context, primary string) []string {
-	if s == nil || s.proxyRepo == nil {
-		return nil
+func codexTurnStateRoutesFromURLs(values []string, primary string) []string {
+	proxies := make([]Proxy, 0, len(values))
+	for _, value := range values {
+		canonical, err := normalizeOpenAICodexTurnStateProxyURL(value)
+		if err != nil {
+			continue
+		}
+		parsed, err := url.Parse(canonical)
+		if err != nil || parsed.User == nil {
+			continue
+		}
+		password, ok := parsed.User.Password()
+		port, portErr := strconv.Atoi(parsed.Port())
+		if !ok || portErr != nil {
+			continue
+		}
+		proxies = append(proxies, Proxy{
+			Protocol: parsed.Scheme,
+			Host:     parsed.Hostname(),
+			Port:     port,
+			Username: parsed.User.Username(),
+			Password: password,
+		})
+	}
+	return codexTurnStateRoutesFromProxies(proxies, primary)
+}
+
+// codexTurnStatePoolRouteSnapshot resolves one immutable maintenance round.
+// A non-empty dedicated URL pool is exclusive. A missing or empty dedicated
+// pool falls back to the global proxy inventory, never to account.Proxy. An
+// empty result with no error is the sole direct-transport signal and therefore
+// requires the global inventory query itself to succeed and return no records.
+// Never wrap or log repository errors here because they may contain URLs.
+func (s *OpenAIGatewayService) codexTurnStatePoolRouteSnapshot(ctx context.Context, primary string) ([]string, error) {
+	if s == nil {
+		return nil, errCodexTurnStateProbePoolUnavailable
 	}
 	if s.settingService != nil {
 		config := s.settingService.GetOpenAICodexTurnState(ctx)
 		if config.ProxyPoolConfigured {
-			if len(config.ProxyIDs) == 0 {
-				return nil
+			routes := codexTurnStateRoutesFromURLs(config.ProxyURLs, primary)
+			if len(routes) == 0 {
+				return nil, errCodexTurnStateProbePoolUnavailable
 			}
-			proxies, err := s.proxyRepo.ListByIDs(ctx, config.ProxyIDs)
-			if err != nil {
-				return nil
-			}
-			return codexTurnStateRoutesFromProxies(proxies, primary)
+			return routes, nil
 		}
 	}
-	proxies, err := s.proxyRepo.ListAllForFallback(ctx)
-	if err != nil {
-		return nil
+	if s.proxyRepo == nil {
+		return nil, errCodexTurnStateProbePoolUnavailable
 	}
-	return codexTurnStateRoutesFromProxies(proxies, primary)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	queryCtx, cancel := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+	defer cancel()
+	proxies, err := s.proxyRepo.ListAllForFallback(queryCtx)
+	if err != nil {
+		return nil, errCodexTurnStateProbePoolUnavailable
+	}
+	if len(proxies) == 0 {
+		return nil, nil
+	}
+	routes := codexTurnStateRoutesFromProxies(proxies, primary)
+	if len(routes) == 0 {
+		return nil, errCodexTurnStateProbePoolUnavailable
+	}
+	return routes, nil
+}
+
+// codexTurnStatePoolRoutes is retained for parser/unit-test compatibility.
+// Production collection must use codexTurnStatePoolRouteSnapshot so a failed
+// pool read can never be confused with an explicitly empty direct route.
+func (s *OpenAIGatewayService) codexTurnStatePoolRoutes(ctx context.Context, primary string) []string {
+	routes, _ := s.codexTurnStatePoolRouteSnapshot(ctx, primary)
+	return routes
 }

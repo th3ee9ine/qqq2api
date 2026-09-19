@@ -75,6 +75,18 @@ func TestFetchOpenAIModelsListOAuthSharesManifestCache(t *testing.T) {
 	require.EqualValues(t, 1, calls.Load())
 }
 
+func TestFetchOpenAIModelsListSetupTokenUsesCodexManifest(t *testing.T) {
+	_, calls := newCodexModelsOAuthCacheServer(t, `{"models":[{"slug":"gpt-5.6-sol"}]}`)
+	s := &OpenAIGatewayService{}
+	account := newCodexModelsTestAccount()
+	account.Type = AccountTypeSetupToken
+
+	response, err := s.FetchOpenAIModelsList(context.Background(), account)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"object":"list","data":[{"id":"gpt-5.6-sol","object":"model","created":0,"owned_by":"openai"}]}`, string(response.Body))
+	require.EqualValues(t, 1, calls.Load())
+}
+
 func TestFetchOpenAIModelsListCacheWindowsAndSingleflight(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan int32, 3)

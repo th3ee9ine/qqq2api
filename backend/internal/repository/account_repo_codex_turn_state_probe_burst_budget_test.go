@@ -60,6 +60,24 @@ func TestCompareAndSwapCodexTurnStateProbeBurstBudgetReportsCASLoss(t *testing.T
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestCompareAndSwapCodexTurnStateProbeBurstBudgetAcceptsShortRenewableLease(t *testing.T) {
+	repo, mock, _ := newCodexTurnStateAtomicRepository(t)
+	model := "gpt-6-astra"
+	slot := service.CodexTurnStateProbeBurstBudgetExtraKey(model)
+	budget := service.CodexTurnStateProbeBurstBudget{
+		Version: 1, Model: model, StartedAtMS: 2_000, Attempts: 1,
+		InFlightUntilMS: 62_000,
+	}
+	mock.ExpectExec(`(?s)UPDATE accounts.*WHERE id = \$3 AND deleted_at IS NULL`).
+		WithArgs(slot, sqlmock.AnyArg(), int64(3), int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	updated, err := repo.CompareAndSwapCodexTurnStateProbeBurstBudget(context.Background(), 3, slot, 0, budget)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestCompareAndSwapCodexTurnStateProbeBurstBudgetPropagatesStorageFailures(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -109,7 +127,11 @@ func TestCompareAndSwapCodexTurnStateProbeBurstBudgetRejectsInvalidMetadataBefor
 		{name: "attempt four", account: 3, slot: validSlot, budget: func() service.CodexTurnStateProbeBurstBudget { b := valid; b.Attempts = 4; return b }()},
 		{name: "negative in flight", account: 3, slot: validSlot, budget: func() service.CodexTurnStateProbeBurstBudget { b := valid; b.InFlightUntilMS = -1; return b }()},
 		{name: "in flight before start", account: 3, slot: validSlot, budget: func() service.CodexTurnStateProbeBurstBudget { b := valid; b.InFlightUntilMS = 999; return b }()},
-		{name: "in flight beyond window", account: 3, slot: validSlot, budget: func() service.CodexTurnStateProbeBurstBudget { b := valid; b.InFlightUntilMS = 61_001; return b }()},
+		{name: "in flight beyond maximum lease", account: 3, slot: validSlot, budget: func() service.CodexTurnStateProbeBurstBudget {
+			b := valid
+			b.InFlightUntilMS = b.StartedAtMS + service.CodexTurnStateProbeBurstMaxLeaseMS + 1
+			return b
+		}()},
 		{name: "in flight with pending", account: 3, slot: validSlot, budget: func() service.CodexTurnStateProbeBurstBudget {
 			b := valid
 			b.InFlightUntilMS = 2_000

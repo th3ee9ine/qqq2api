@@ -1121,23 +1121,31 @@ export type CodexTurnStateCollectStatus = 'queued' | 'already_valid' | 'rejected
 export interface CodexTurnStateCollectResult {
   status: CodexTurnStateCollectStatus
   account_id: number
+  /** Exact model targets resolved by the backend for this manual collection round. */
+  target_models?: string[]
+  /** Owner/slot keys queued by this round; these map directly to diagnostics.models. */
+  queued_models?: string[]
+  /** Owner/slot keys that were already valid when this round started. */
+  already_valid_models?: string[]
+  /** Concrete target to persisted owner mapping, including model-family de-duplication. */
+  model_targets?: Array<{ model: string; owner: string }>
+  /** Compatibility with older deployments that collected only one model. */
   model?: string
   codex_turn_state_auto?: CodexTurnStateAutoInfo | null
+  /** Compatibility with deployments that expose aggregate success at the response root. */
+  successful_models?: string[]
+  collection_succeeded?: boolean
   reason?: string
   retry_at_ms?: number
   message?: string
 }
 
-/** Queue a manual Turn State probe for an account whose state is missing or expired. */
-export async function collectCodexTurnState(
-  id: number,
-  model?: string,
-): Promise<CodexTurnStateCollectResult> {
-  const payload = model?.trim() ? { model: model.trim() } : undefined
+/** Queue manual Turn State probes for every model in the configured collection scope. */
+export async function collectCodexTurnState(id: number): Promise<CodexTurnStateCollectResult> {
   try {
     const { data } = await apiClient.post<CodexTurnStateCollectResult>(
       `/admin/accounts/${id}/codex-turn-state/collect`,
-      payload,
+      undefined,
       { timeout: 120_000 },
     )
     return data
@@ -1153,7 +1161,6 @@ export async function collectCodexTurnState(
       return {
         status: 'rejected',
         account_id: id,
-        model: payload?.model,
         reason: rejected.reason,
         message: rejected.message,
       }

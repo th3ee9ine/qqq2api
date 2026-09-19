@@ -43,7 +43,7 @@ func TestCodexTurnStateProbeBurstBudgetFromAccountRejectsCorruptOrCrossModelPayl
 		{name: "attempt four", value: copyBurstBudgetMap(valid, "attempts", 4)},
 		{name: "negative in flight", value: copyBurstBudgetMap(valid, "in_flight_until_ms", -1)},
 		{name: "in flight not after start", value: copyBurstBudgetMap(valid, "in_flight_until_ms", 1000)},
-		{name: "in flight beyond window", value: copyBurstBudgetMap(valid, "in_flight_until_ms", 61_001)},
+		{name: "in flight beyond maximum lease", value: copyBurstBudgetMap(valid, "in_flight_until_ms", int64(1000)+CodexTurnStateProbeBurstMaxLeaseMS+1)},
 		{name: "in flight and candidate pending", value: func() map[string]any {
 			value := copyBurstBudgetMap(valid, "in_flight_until_ms", 2_000)
 			return copyBurstBudgetMap(value, "candidate_pending_until_ms", 3_000)

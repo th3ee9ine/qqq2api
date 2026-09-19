@@ -16,14 +16,19 @@ const (
 	// accounts.extra. The payload never contains a proxy URL or credential.
 	CodexTurnStateProbeBurstBudgetExtraPrefix = "codex_turn_state_auto_probe_burst:"
 	CodexTurnStateProbeBurstMaxAttempts       = 3
-	codexTurnStateProbeBurstMaxAttempts       = CodexTurnStateProbeBurstMaxAttempts
-	codexTurnStateProbeBurstWindow            = time.Minute
+	// CodexTurnStateProbeBurstMaxLeaseMS is shared with repository adapters so
+	// each per-route lease is validated identically before and after persistence.
+	// A complete pool round renews this short lease without consuming another
+	// attempt, so a crashed worker cannot lock the slot for the whole pool size.
+	CodexTurnStateProbeBurstMaxLeaseMS  = int64(time.Minute / time.Millisecond)
+	codexTurnStateProbeBurstMaxAttempts = CodexTurnStateProbeBurstMaxAttempts
 )
 
 // CodexTurnStateProbeBurstBudget is a model-scoped, account-owned reservation
-// counter. A missing/expired state may consume at most three reservations in
-// one non-sliding minute window. A window that has elapsed stays closed; only a
-// strictly newer generation may start another burst.
+// counter. A missing/expired state may consume at most three full-pool round
+// reservations for one state generation. StartedAtMS is the start of the
+// current short lease (or the most recent reservation after release), not a
+// whole-round deadline; only a strictly newer generation resets Attempts.
 type CodexTurnStateProbeBurstBudget struct {
 	Version                 int64  `json:"version"`
 	Generation              int64  `json:"generation"`
@@ -75,7 +80,7 @@ func codexTurnStateProbeBurstBudgetFromAccount(account *Account, slot string) (C
 	if result.Version <= 0 || result.Generation < 0 || result.Model != model || model == "" ||
 		result.StartedAtMS <= 0 || result.Attempts < 1 || result.Attempts > codexTurnStateProbeBurstMaxAttempts ||
 		result.InFlightUntilMS < 0 || result.InFlightUntilMS > 0 &&
-		(result.InFlightUntilMS <= result.StartedAtMS || result.InFlightUntilMS > result.StartedAtMS+codexTurnStateProbeBurstWindow.Milliseconds()) ||
+		(result.InFlightUntilMS <= result.StartedAtMS || result.InFlightUntilMS-result.StartedAtMS > CodexTurnStateProbeBurstMaxLeaseMS) ||
 		result.CandidatePendingUntilMS < 0 || result.CandidatePendingUntilMS > 0 && result.CandidatePendingUntilMS <= result.StartedAtMS ||
 		result.InFlightUntilMS > 0 && result.CandidatePendingUntilMS > 0 ||
 		slot != codexTurnStateProbeBurstBudgetExtraKey(model) {

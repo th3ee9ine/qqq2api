@@ -544,6 +544,7 @@ type OpenAIGatewayService struct {
 	openaiTurnStateWorkers      int
 	openaiTurnStateSweep        time.Time
 	openaiTurnStateLoads        codexTurnStateSourceLoads
+	openaiTurnStateManualLocks  sync.Map // key: int64(accountID), value: *sync.Mutex
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

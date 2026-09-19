@@ -939,6 +939,10 @@ export type OAuthAddMethod = 'oauth' | 'setup-token'
 /** Redacted diagnostics for account-scoped Codex Turn State slots. Tokens are never returned. */
 export interface CodexTurnStateAutoInfo {
   models?: Record<string, CodexTurnStateAutoInfo>
+  /** Models whose persisted state passed the backend's verification checks. */
+  successful_models?: string[]
+  /** True only when this model or aggregate contains a verified persisted state. */
+  collection_succeeded?: boolean
   configured: boolean
   set_at_ms?: number
   probe_at_ms?: number

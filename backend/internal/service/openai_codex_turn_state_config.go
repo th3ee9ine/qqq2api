@@ -8,20 +8,35 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 )
 
 const (
-	codexTurnStateModelsMaxLen    = 1024
-	codexTurnStateMaxLength       = 4096
-	codexTurnStateProxyIDsMaxSize = 256
-	codexTurnStateTTL             = time.Hour
+	codexTurnStateModelsMaxLen                     = 1024
+	codexTurnStateMaxLength                        = 4096
+	codexTurnStateProxyIDsMaxSize                  = 256
+	codexTurnStateProxyURLsMaxSize                 = 256
+	codexTurnStateProxyURLMaxLen                   = 2048
+	codexTurnStateTTL                              = time.Hour
+	OpenAICodexTurnStateDefaultAutoIntervalMinutes = 50
+	OpenAICodexTurnStateMinAutoIntervalMinutes     = 1
+	OpenAICodexTurnStateMaxAutoIntervalMinutes     = 60
 )
+
+func NormalizeOpenAICodexTurnStateAutoIntervalMinutes(value int) (int, error) {
+	if value < OpenAICodexTurnStateMinAutoIntervalMinutes || value > OpenAICodexTurnStateMaxAutoIntervalMinutes {
+		return 0, fmt.Errorf("openai_codex_turn_state_auto_interval_minutes must be between %d and %d", OpenAICodexTurnStateMinAutoIntervalMinutes, OpenAICodexTurnStateMaxAutoIntervalMinutes)
+	}
+	return value, nil
+}
 
 // Only the HTTP representation is validated. Envelope heuristics are diagnostics,
 // not signature verification, and do not prove quality or resource availability.
@@ -153,6 +168,77 @@ func ParseOpenAICodexTurnStateProxyIDs(raw string) ([]int64, error) {
 	return NormalizeOpenAICodexTurnStateProxyIDs(ids)
 }
 
+// NormalizeOpenAICodexTurnStateProxyURLs validates and canonicalizes the
+// credential-bearing, Turn-State-only proxy pool. Errors deliberately identify
+// only the field/index and never include the submitted URL or credentials.
+func NormalizeOpenAICodexTurnStateProxyURLs(values []string) ([]string, error) {
+	if len(values) > codexTurnStateProxyURLsMaxSize {
+		return nil, fmt.Errorf("openai_codex_turn_state_proxy_urls must contain at most %d URLs", codexTurnStateProxyURLsMaxSize)
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for index, raw := range values {
+		canonical, err := normalizeOpenAICodexTurnStateProxyURL(raw)
+		if err != nil {
+			return nil, fmt.Errorf("openai_codex_turn_state_proxy_urls[%d] must be a socks5 URL with username, password, host, and port", index)
+		}
+		if _, exists := seen[canonical]; exists {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		result = append(result, canonical)
+	}
+	return result, nil
+}
+
+func normalizeOpenAICodexTurnStateProxyURL(raw string) (string, error) {
+	if raw == "" || len(raw) > codexTurnStateProxyURLMaxLen || strings.TrimSpace(raw) != raw || strings.ContainsAny(raw, "\r\n\x00") {
+		return "", errInvalidCodexTurnStateProbeProxy
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "socks5") || parsed.Opaque != "" || parsed.User == nil ||
+		parsed.Path != "" || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawFragment != "" {
+		return "", errInvalidCodexTurnStateProbeProxy
+	}
+	username := parsed.User.Username()
+	password, passwordSet := parsed.User.Password()
+	if username == "" || !passwordSet || password == "" || openAICodexTurnStateProxyURLHasControl(username) || openAICodexTurnStateProxyURLHasControl(password) {
+		return "", errInvalidCodexTurnStateProbeProxy
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" || len(host) > 253 || strings.IndexFunc(host, func(r rune) bool { return unicode.IsControl(r) || unicode.IsSpace(r) }) >= 0 {
+		return "", errInvalidCodexTurnStateProbeProxy
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port <= 0 || port > 65535 {
+		return "", errInvalidCodexTurnStateProbeProxy
+	}
+	canonical := &url.URL{
+		Scheme: "socks5",
+		Host:   net.JoinHostPort(host, strconv.Itoa(port)),
+		User:   url.UserPassword(username, password),
+	}
+	return canonical.String(), nil
+}
+
+func openAICodexTurnStateProxyURLHasControl(value string) bool {
+	return strings.IndexFunc(value, unicode.IsControl) >= 0
+}
+
+func ParseOpenAICodexTurnStateProxyURLs(raw string) ([]string, error) {
+	if raw == "" {
+		return []string{}, nil
+	}
+	if strings.TrimSpace(raw) != raw {
+		return nil, fmt.Errorf("openai_codex_turn_state_proxy_urls must be a JSON array of socks5 URLs")
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil || values == nil {
+		return nil, fmt.Errorf("openai_codex_turn_state_proxy_urls must be a JSON array of socks5 URLs")
+	}
+	return NormalizeOpenAICodexTurnStateProxyURLs(values)
+}
+
 // Only account-scoped lifecycle settings are read. Legacy global manual tokens
 // remain inert. ModelScopeValid keeps malformed historical values fail-closed
 // without discarding an independently valid default model or dedicated proxy.
@@ -161,7 +247,8 @@ type OpenAICodexTurnStateConfig struct {
 	Models              string
 	ModelScopeValid     bool
 	AutoEnabled         bool
-	ProxyIDs            []int64
+	AutoIntervalMinutes int
+	ProxyURLs           []string
 	ProxyPoolConfigured bool
 }
 type cachedOpenAICodexTurnState struct {
@@ -174,7 +261,7 @@ type cachedOpenAICodexTurnState struct {
 // load cannot overwrite an administrator's newly disabled setting.
 func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICodexTurnStateConfig {
 	if s == nil || s.settingRepo == nil {
-		return OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel, ModelScopeValid: true}
+		return OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel, ModelScopeValid: true, AutoIntervalMinutes: OpenAICodexTurnStateDefaultAutoIntervalMinutes}
 	}
 	if cached, ok := s.openAICodexTurnStateCache.Load().(*cachedOpenAICodexTurnState); ok && cached != nil && time.Now().Before(cached.expiresAt) {
 		return cached.config
@@ -189,10 +276,17 @@ func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICode
 	}
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
 	defer cancel()
-	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateDefaultModel, SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled, SettingKeyOpenAICodexTurnStateProxyIDs, SettingKeyOpenAICodexTurnStateProxyID})
+	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateDefaultModel, SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled, SettingKeyOpenAICodexTurnStateAutoIntervalMinutes, SettingKeyOpenAICodexTurnStateProxyURLs})
 	// A repository read failure cannot prove that the stored scope is empty. Keep
 	// both automatic and manual collection fail-closed until a later cache fill.
-	config := OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel}
+	config := OpenAICodexTurnStateConfig{
+		DefaultModel:        openai.DefaultTestModel,
+		AutoIntervalMinutes: OpenAICodexTurnStateDefaultAutoIntervalMinutes,
+		// A failed settings read cannot prove that the dedicated pool is empty.
+		// Treat it like a configured-but-unusable pool so routing cannot widen to
+		// the global inventory until a later successful cache fill.
+		ProxyPoolConfigured: err != nil,
+	}
 	ttl := gatewayForwardingCacheTTL
 	if err == nil {
 		if models, modelsErr := NormalizeOpenAICodexTurnStateModels(values[SettingKeyOpenAICodexTurnStateModels]); modelsErr == nil {
@@ -202,28 +296,22 @@ func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICode
 		if defaultModel, modelErr := NormalizeOpenAICodexTurnStateDefaultModel(values[SettingKeyOpenAICodexTurnStateDefaultModel]); modelErr == nil {
 			config.DefaultModel = defaultModel
 		}
-		rawProxyIDs := values[SettingKeyOpenAICodexTurnStateProxyIDs]
-		if proxyIDs, proxyIDsErr := ParseOpenAICodexTurnStateProxyIDs(rawProxyIDs); proxyIDsErr == nil && len(proxyIDs) > 0 {
-			config.ProxyIDs = proxyIDs
+		rawProxyURLs := values[SettingKeyOpenAICodexTurnStateProxyURLs]
+		if proxyURLs, proxyURLsErr := ParseOpenAICodexTurnStateProxyURLs(rawProxyURLs); proxyURLsErr == nil && len(proxyURLs) > 0 {
+			config.ProxyURLs = proxyURLs
 			config.ProxyPoolConfigured = true
-		} else if proxyIDsErr != nil && rawProxyIDs != "" {
+		} else if proxyURLsErr != nil && rawProxyURLs != "" {
 			// A malformed explicit pool must not silently widen collection to every
-			// proxy record. Keep the pool configured but empty so routing fails closed
-			// to the account proxy/direct fallback.
+			// managed proxy record. Keep it configured but empty so routing fails
+			// closed to direct transport.
 			config.ProxyPoolConfigured = true
-		}
-		if !config.ProxyPoolConfigured {
-			rawProxyID := values[SettingKeyOpenAICodexTurnStateProxyID]
-			if proxyID, proxyIDErr := NormalizeOpenAICodexTurnStateProxyID(rawProxyID); proxyIDErr == nil && proxyID > 0 {
-				config.ProxyIDs = []int64{proxyID}
-				config.ProxyPoolConfigured = true
-			} else if proxyIDErr != nil && strings.TrimSpace(rawProxyID) != "" {
-				// A malformed legacy selection is still an explicit stored value. Do
-				// not reinterpret it as the all-proxy compatibility pool.
-				config.ProxyPoolConfigured = true
-			}
 		}
 		config.AutoEnabled = config.ModelScopeValid && values[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"
+		if interval, parseErr := strconv.Atoi(strings.TrimSpace(values[SettingKeyOpenAICodexTurnStateAutoIntervalMinutes])); parseErr == nil {
+			if normalized, intervalErr := NormalizeOpenAICodexTurnStateAutoIntervalMinutes(interval); intervalErr == nil {
+				config.AutoIntervalMinutes = normalized
+			}
+		}
 	} else {
 		ttl = gatewayForwardingErrorTTL
 	}
