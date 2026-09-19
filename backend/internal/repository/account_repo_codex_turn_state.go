@@ -35,42 +35,120 @@ func (r *accountRepository) AdvanceCodexTurnStateProbeNotBefore(ctx context.Cont
 	return err
 }
 
-// Each account/model slot is replaced in one UPDATE. Older collection or
-// verification snapshots and pre-revocation workers cannot overwrite a newer
-// verified value, including across application instances.
+// Each account/model slot is merged while holding the account row lock. A newer
+// recovery generation replaces the complete slot. Within one generation, probe
+// outcome and verified state advance independently so a slower, earlier probe
+// can still publish a credential without overwriting a newer probe's outcome.
 func (r *accountRepository) UpdateCodexTurnState(ctx context.Context, accountID int64, slot string, value map[string]any) (bool, error) {
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return false, err
 	}
-	result, err := r.sql.ExecContext(ctx, `
-			UPDATE accounts SET extra = jsonb_set(
-				jsonb_set(COALESCE(extra, '{}'::jsonb), ARRAY[$1]::text[],
-					$2::jsonb || jsonb_build_object(
-						'codex_turn_state_auto_probe_not_before_ms', GREATEST(COALESCE((extra -> $1 ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0), COALESCE(($2::jsonb ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0)),
-						'codex_turn_state_auto_probe_at_ms', GREATEST(COALESCE((extra -> $1 ->> 'codex_turn_state_auto_probe_at_ms')::bigint, 0), COALESCE(($2::jsonb ->> 'codex_turn_state_auto_probe_at_ms')::bigint, 0))
-					), true),
+	var fullyWon bool
+	err = scanSingleRow(ctx, r.sql, `
+		WITH locked AS (
+			SELECT
+				id,
+				COALESCE(extra, '{}'::jsonb) AS old_extra,
+				CASE
+					WHEN jsonb_typeof(COALESCE(extra, '{}'::jsonb) -> $1) = 'object'
+					THEN COALESCE(extra, '{}'::jsonb) -> $1
+					ELSE '{}'::jsonb
+				END AS old_slot,
+				$2::jsonb AS incoming_slot
+			FROM accounts
+			WHERE id = $3 AND deleted_at IS NULL
+			FOR UPDATE
+		), versions AS (
+			SELECT
+				locked.*,
+				COALESCE((old_slot -> 'codex_turn_state_auto_recovery' ->> 'invalidated_at_ms')::bigint, 0) AS old_epoch,
+				COALESCE((incoming_slot -> 'codex_turn_state_auto_recovery' ->> 'invalidated_at_ms')::bigint, 0) AS incoming_epoch,
+				COALESCE((old_slot ->> 'codex_turn_state_auto_probe_at_ms')::bigint, 0) AS old_probe_at,
+				COALESCE((incoming_slot ->> 'codex_turn_state_auto_probe_at_ms')::bigint, 0) AS incoming_probe_at,
+				COALESCE((old_slot ->> 'codex_turn_state_auto_probe_completed_at_ms')::bigint, 0) AS old_probe_completed_at,
+				COALESCE((incoming_slot ->> 'codex_turn_state_auto_probe_completed_at_ms')::bigint, 0) AS incoming_probe_completed_at,
+				COALESCE((old_slot ->> 'codex_turn_state_auto_verified_at_ms')::bigint, 0) AS old_verified_at,
+				COALESCE((incoming_slot ->> 'codex_turn_state_auto_verified_at_ms')::bigint, 0) AS incoming_verified_at,
+				COALESCE((old_slot ->> 'codex_turn_state_auto_set_at_ms')::bigint, 0) AS old_set_at,
+				COALESCE((incoming_slot ->> 'codex_turn_state_auto_set_at_ms')::bigint, 0) AS incoming_set_at,
+				GREATEST(
+					COALESCE((old_extra ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0),
+					COALESCE((old_slot ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0),
+					COALESCE((incoming_slot ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0)
+				) AS probe_not_before
+			FROM locked
+		), decisions AS (
+			SELECT
+				versions.*,
+				incoming_epoch > old_epoch AS generation_wins,
+				incoming_epoch = old_epoch AND
+					ROW(old_probe_at, old_probe_completed_at) <= ROW(incoming_probe_at, incoming_probe_completed_at) AS outcome_wins,
+				incoming_epoch = old_epoch AND
+					ROW(old_verified_at, old_set_at) <= ROW(incoming_verified_at, incoming_set_at) AS state_wins,
+				incoming_verified_at > 0 AND incoming_set_at > 0 AND
+					NULLIF(BTRIM(incoming_slot ->> 'codex_turn_state_auto'), '') IS NOT NULL AND
+					NULLIF(BTRIM(incoming_slot ->> 'codex_turn_state_auto_verified_model'), '') IS NOT NULL AS successful_state
+			FROM versions
+		), merged AS (
+			SELECT
+				id,
+				old_extra,
+				probe_not_before,
+				generation_wins OR (incoming_epoch = old_epoch AND outcome_wins AND state_wins) AS fully_won,
+				generation_wins OR
+					(incoming_epoch = old_epoch AND (outcome_wins OR state_wins)) OR
+					probe_not_before > COALESCE((old_extra ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0) OR
+					probe_not_before > COALESCE((old_slot ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0) AS should_update,
+				(
+					CASE
+						WHEN generation_wins THEN incoming_slot
+						WHEN incoming_epoch < old_epoch THEN old_slot
+						ELSE old_slot ||
+							CASE WHEN outcome_wins THEN jsonb_build_object(
+								'codex_turn_state_auto_probe_at_ms', incoming_slot -> 'codex_turn_state_auto_probe_at_ms',
+								'codex_turn_state_auto_probe_completed_at_ms', incoming_slot -> 'codex_turn_state_auto_probe_completed_at_ms',
+								'codex_turn_state_auto_last_error', incoming_slot -> 'codex_turn_state_auto_last_error',
+								'codex_turn_state_auto_probe_model', incoming_slot -> 'codex_turn_state_auto_probe_model'
+							) ELSE '{}'::jsonb END ||
+							CASE WHEN state_wins THEN jsonb_build_object(
+								'codex_turn_state_auto', incoming_slot -> 'codex_turn_state_auto',
+								'codex_turn_state_auto_set_at_ms', incoming_slot -> 'codex_turn_state_auto_set_at_ms',
+								'codex_turn_state_auto_verified_at_ms', incoming_slot -> 'codex_turn_state_auto_verified_at_ms',
+								'codex_turn_state_auto_verified_model', incoming_slot -> 'codex_turn_state_auto_verified_model'
+							) ELSE '{}'::jsonb END ||
+							CASE WHEN state_wins AND successful_state THEN jsonb_build_object(
+								'codex_turn_state_auto_recovery', jsonb_set(
+									CASE
+										WHEN jsonb_typeof(old_slot -> 'codex_turn_state_auto_recovery') = 'object'
+										THEN old_slot -> 'codex_turn_state_auto_recovery'
+										ELSE jsonb_build_object('invalidated_at_ms', incoming_epoch)
+									END,
+									ARRAY['pending']::text[],
+									'false'::jsonb,
+									true
+								)
+							) ELSE '{}'::jsonb END
+					END
+				) || jsonb_build_object(
+					'codex_turn_state_auto_probe_not_before_ms', probe_not_before
+				) AS merged_slot
+			FROM decisions
+		), updated AS (
+			UPDATE accounts AS account
+			SET extra = jsonb_set(
+				jsonb_set(old_extra, ARRAY[$1]::text[], merged_slot, true),
 				ARRAY['codex_turn_state_auto_probe_not_before_ms']::text[],
-				to_jsonb(GREATEST(
-					COALESCE((extra ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0),
-					COALESCE(($2::jsonb ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0)
-				)), true
+				to_jsonb(probe_not_before),
+				true
 			), updated_at = NOW()
-		WHERE id = $3 AND deleted_at IS NULL
-		AND COALESCE((extra -> $1 -> 'codex_turn_state_auto_recovery' ->> 'invalidated_at_ms')::bigint, 0) <= COALESCE(($2::jsonb -> 'codex_turn_state_auto_recovery' ->> 'invalidated_at_ms')::bigint, 0)
-		AND (
-			COALESCE((extra -> $1 -> 'codex_turn_state_auto_recovery' ->> 'invalidated_at_ms')::bigint, 0) < COALESCE(($2::jsonb -> 'codex_turn_state_auto_recovery' ->> 'invalidated_at_ms')::bigint, 0)
-			OR (
-				COALESCE((extra -> $1 ->> 'codex_turn_state_auto_set_at_ms')::bigint, 0) <= COALESCE(($2::jsonb ->> 'codex_turn_state_auto_set_at_ms')::bigint, 0)
-				AND COALESCE((extra -> $1 ->> 'codex_turn_state_auto_verified_at_ms')::bigint, 0) <= COALESCE(($2::jsonb ->> 'codex_turn_state_auto_verified_at_ms')::bigint, 0)
-			)
+			FROM merged
+			WHERE account.id = merged.id AND merged.should_update
+			RETURNING merged.fully_won
 		)
-	`, slot, string(payload), accountID)
-	if err != nil {
-		return false, err
-	}
-	rows, err := result.RowsAffected()
-	return rows == 1, err
+		SELECT COALESCE((SELECT fully_won FROM updated), false)
+	`, []any{slot, string(payload), accountID}, &fullyWon)
+	return fullyWon, err
 }
 
 // Refresh just the selected account's managed states, without credentials,

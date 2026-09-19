@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,12 +29,15 @@ func newCodexTurnStateAtomicRepository(t *testing.T) (*accountRepository, sqlmoc
 
 func codexTurnStateAtomicTestValue() map[string]any {
 	return map[string]any{
-		service.CodexTurnStateAutoExtraKey:               "opaque-atomic-test-state",
-		service.CodexTurnStateAutoSetAtExtraKey:          int64(1_000),
-		service.CodexTurnStateAutoVerifiedAtExtraKey:     int64(2_000),
-		service.CodexTurnStateAutoVerifiedModelExtraKey:  "gpt-6-astra",
-		service.CodexTurnStateAutoProbeAtExtraKey:        int64(3_000),
-		service.CodexTurnStateAutoProbeNotBeforeExtraKey: int64(4_000),
+		service.CodexTurnStateAutoExtraKey:                 "opaque-atomic-test-state",
+		service.CodexTurnStateAutoSetAtExtraKey:            int64(1_000),
+		service.CodexTurnStateAutoVerifiedAtExtraKey:       int64(2_000),
+		service.CodexTurnStateAutoVerifiedModelExtraKey:    "gpt-6-astra",
+		service.CodexTurnStateAutoProbeAtExtraKey:          int64(3_000),
+		service.CodexTurnStateAutoProbeCompletedAtExtraKey: int64(3_500),
+		service.CodexTurnStateAutoLastErrorExtraKey:        "",
+		service.CodexTurnStateAutoProbeModelExtraKey:       "gpt-6-astra",
+		service.CodexTurnStateAutoProbeNotBeforeExtraKey:   int64(4_000),
 		service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{
 			"invalidated_at_ms": int64(500),
 			"pending":           false,
@@ -66,9 +68,9 @@ func TestUpdateCodexTurnStateAtomicVersionConditionsAndProbeBoundaries(t *testin
 	value := codexTurnStateAtomicTestValue()
 	payload, err := json.Marshal(value)
 	require.NoError(t, err)
-	mock.ExpectExec(`(?s)UPDATE accounts.*WHERE id = \$3 AND deleted_at IS NULL`).
+	mock.ExpectQuery(`(?s)WITH locked AS.*UPDATE accounts AS account.*RETURNING merged\.fully_won`).
 		WithArgs(slot, string(payload), int64(3)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"fully_won"}).AddRow(true))
 
 	updated, err := repo.UpdateCodexTurnState(context.Background(), 3, slot, value)
 	require.NoError(t, err)
@@ -76,42 +78,57 @@ func TestUpdateCodexTurnStateAtomicVersionConditionsAndProbeBoundaries(t *testin
 	require.NoError(t, mock.ExpectationsWereMet())
 
 	sqlText := strings.TrimSpace(regexp.MustCompile(`\s+`).ReplaceAllString(*query, " "))
+	require.Contains(t, sqlText, "WHERE id = $3 AND deleted_at IS NULL FOR UPDATE")
 	require.Contains(t, sqlText, "ARRAY[$1]::text[]")
-	require.Contains(t, sqlText, "$2::jsonb || jsonb_build_object(")
+	require.Contains(t, sqlText, "$2::jsonb AS incoming_slot")
 	require.NotContains(t, sqlText, value[service.CodexTurnStateAutoExtraKey])
-	oldTime := func(key string) string { return "COALESCE((extra -> $1 ->> '" + key + "')::bigint, 0)" }
-	newTime := func(key string) string { return "COALESCE(($2::jsonb ->> '" + key + "')::bigint, 0)" }
-	for _, key := range []string{service.CodexTurnStateAutoProbeAtExtraKey, service.CodexTurnStateAutoProbeNotBeforeExtraKey} {
-		require.Contains(t, sqlText, "'"+key+"', GREATEST("+oldTime(key)+", "+newTime(key)+")")
+	require.Contains(t, sqlText, "incoming_epoch > old_epoch AS generation_wins")
+	require.Contains(t, sqlText, "ROW(old_probe_at, old_probe_completed_at) <= ROW(incoming_probe_at, incoming_probe_completed_at) AS outcome_wins")
+	require.Contains(t, sqlText, "ROW(old_verified_at, old_set_at) <= ROW(incoming_verified_at, incoming_set_at) AS state_wins")
+	require.Contains(t, sqlText, "generation_wins OR (incoming_epoch = old_epoch AND outcome_wins AND state_wins) AS fully_won")
+
+	for _, key := range []string{
+		service.CodexTurnStateAutoProbeAtExtraKey,
+		service.CodexTurnStateAutoProbeCompletedAtExtraKey,
+		service.CodexTurnStateAutoLastErrorExtraKey,
+		service.CodexTurnStateAutoProbeModelExtraKey,
+	} {
+		require.Contains(t, sqlText, "'"+key+"', incoming_slot -> '"+key+"'", "outcome field must advance as one versioned group")
 	}
-	accountBoundary := service.CodexTurnStateAutoProbeNotBeforeExtraKey
-	require.Contains(t, sqlText, "ARRAY['"+accountBoundary+"']::text[]")
-	require.Contains(t, sqlText, "to_jsonb(GREATEST( COALESCE((extra ->> '"+accountBoundary+"')::bigint, 0), "+newTime(accountBoundary)+" ))")
-	oldEpoch := "COALESCE((extra -> $1 -> '" + service.CodexTurnStateAutoRecoveryExtraKey + "' ->> 'invalidated_at_ms')::bigint, 0)"
-	newEpoch := "COALESCE(($2::jsonb -> '" + service.CodexTurnStateAutoRecoveryExtraKey + "' ->> 'invalidated_at_ms')::bigint, 0)"
-	require.Contains(t, sqlText, "AND "+oldEpoch+" <= "+newEpoch)
-	versionBranch := "AND ( " + oldEpoch + " < " + newEpoch + " OR ( " +
-		oldTime(service.CodexTurnStateAutoSetAtExtraKey) + " <= " + newTime(service.CodexTurnStateAutoSetAtExtraKey) + " AND " +
-		oldTime(service.CodexTurnStateAutoVerifiedAtExtraKey) + " <= " + newTime(service.CodexTurnStateAutoVerifiedAtExtraKey) + " ) )"
-	require.Contains(t, sqlText, versionBranch)
+	for _, key := range []string{
+		service.CodexTurnStateAutoExtraKey,
+		service.CodexTurnStateAutoSetAtExtraKey,
+		service.CodexTurnStateAutoVerifiedAtExtraKey,
+		service.CodexTurnStateAutoVerifiedModelExtraKey,
+	} {
+		require.Contains(t, sqlText, "'"+key+"', incoming_slot -> '"+key+"'", "verified state field must advance as one versioned group")
+	}
+	require.Contains(t, sqlText, "CASE WHEN state_wins AND successful_state THEN jsonb_build_object( '"+service.CodexTurnStateAutoRecoveryExtraKey+"', jsonb_set(")
+	require.Contains(t, sqlText, "ARRAY['pending']::text[], 'false'::jsonb", "only a successful state winner clears recovery pending")
+
+	boundary := service.CodexTurnStateAutoProbeNotBeforeExtraKey
+	require.Contains(t, sqlText, "GREATEST( COALESCE((old_extra ->> '"+boundary+"')::bigint, 0), COALESCE((old_slot ->> '"+boundary+"')::bigint, 0), COALESCE((incoming_slot ->> '"+boundary+"')::bigint, 0) ) AS probe_not_before")
+	require.Contains(t, sqlText, "'"+boundary+"', probe_not_before")
+	require.Contains(t, sqlText, "ARRAY['"+boundary+"']::text[]")
+	require.Contains(t, sqlText, "SELECT COALESCE((SELECT fully_won FROM updated), false)")
 }
 
-func TestUpdateCodexTurnStateAtomicRowsAffectedAndDatabaseErrors(t *testing.T) {
+func TestUpdateCodexTurnStateAtomicWinnerResultAndDatabaseErrors(t *testing.T) {
 	databaseErr := errors.New("atomic update database failure")
-	rowsErr := errors.New("atomic update affected-row failure")
+	returnedRowErr := errors.New("atomic update returned-row failure")
 	for _, tc := range []struct {
 		name       string
-		result     sql.Result
-		execErr    error
+		queryErr   error
+		rowErr     error
 		wantErr    error
 		updated    bool
 		revocation bool
 	}{
-		{name: "successful replacement", result: sqlmock.NewResult(0, 1), updated: true},
-		{name: "stale snapshot rejected", result: sqlmock.NewResult(0, 0)},
-		{name: "new revocation clears state", result: sqlmock.NewResult(0, 1), updated: true, revocation: true},
-		{name: "database failure", execErr: databaseErr, wantErr: databaseErr},
-		{name: "affected-row failure", result: sqlmock.NewErrorResult(rowsErr), wantErr: rowsErr},
+		{name: "complete snapshot wins", updated: true},
+		{name: "partial merge requires reconciliation"},
+		{name: "new recovery generation wins completely", updated: true, revocation: true},
+		{name: "database failure", queryErr: databaseErr, wantErr: databaseErr},
+		{name: "returned row failure", rowErr: returnedRowErr, wantErr: returnedRowErr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo, mock, _ := newCodexTurnStateAtomicRepository(t)
@@ -125,11 +142,15 @@ func TestUpdateCodexTurnStateAtomicRowsAffectedAndDatabaseErrors(t *testing.T) {
 			}
 			payload, err := json.Marshal(value)
 			require.NoError(t, err)
-			expected := mock.ExpectExec(`(?s)UPDATE accounts.*WHERE id = \$3 AND deleted_at IS NULL`).WithArgs(slot, string(payload), int64(3))
-			if tc.execErr != nil {
-				expected.WillReturnError(tc.execErr)
+			expected := mock.ExpectQuery(`(?s)WITH locked AS.*UPDATE accounts AS account.*RETURNING merged\.fully_won`).WithArgs(slot, string(payload), int64(3))
+			if tc.queryErr != nil {
+				expected.WillReturnError(tc.queryErr)
 			} else {
-				expected.WillReturnResult(tc.result)
+				rows := sqlmock.NewRows([]string{"fully_won"}).AddRow(tc.updated)
+				if tc.rowErr != nil {
+					rows.RowError(0, tc.rowErr)
+				}
+				expected.WillReturnRows(rows)
 			}
 
 			updated, err := repo.UpdateCodexTurnState(context.Background(), 3, slot, value)

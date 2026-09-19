@@ -298,6 +298,12 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/upstream-billing-probe/batch", h.Admin.Account.ProbeUpstreamBillingBatch)
 		accounts.GET("/ollama-cloud-usage/settings", h.Admin.Account.GetOllamaCloudUsageSettings)
 		accounts.PUT("/ollama-cloud-usage/settings", h.Admin.Account.UpdateOllamaCloudUsageSettings)
+		// Keep task-center routes before /:id so the static
+		// "codex-turn-state" segment is never treated as an account ID.
+		accounts.GET("/codex-turn-state/tasks", h.Admin.Account.ListCodexTurnStateCollectionTasks)
+		accounts.GET("/codex-turn-state/tasks/:task_id", h.Admin.Account.GetCodexTurnStateCollectionTask)
+		accounts.POST("/codex-turn-state/tasks/:task_id/cancel", h.Admin.Account.CancelCodexTurnStateCollectionTask)
+		accounts.POST("/codex-turn-state/tasks/:task_id/retry", h.Admin.Account.RetryCodexTurnStateCollectionTask)
 		accounts.GET("/:id", h.Admin.Account.GetByID)
 		accounts.POST("", h.Admin.Account.Create)
 		accounts.POST("/:id/duplicate", h.Admin.Account.Duplicate)

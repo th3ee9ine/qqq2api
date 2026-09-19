@@ -13,8 +13,16 @@ import (
 func TestAccountCodexTurnStateAutoRedactedAndDiagnosticsSafe(t *testing.T) {
 	now := time.Now().UnixMilli()
 	a := &service.Account{ID: 10, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth, Status: service.StatusActive, Schedulable: true, Extra: map[string]any{
-		service.CodexTurnStateAutoExtraKey: "private-token", service.CodexTurnStateAutoSetAtExtraKey: now,
-		service.CodexTurnStateAutoLastErrorExtraKey: "private-provider-error", "note": "public",
+		service.CodexTurnStateAutoExtraKey:                 "private-token",
+		service.CodexTurnStateAutoSetAtExtraKey:            now,
+		service.CodexTurnStateAutoProbeAtExtraKey:          now,
+		service.CodexTurnStateAutoProbeCompletedAtExtraKey: now,
+		service.CodexTurnStateAutoLastErrorExtraKey:        "private-provider-error",
+		service.CodexTurnStateAutoVerifiedAtExtraKey:       now,
+		service.CodexTurnStateAutoVerifiedModelExtraKey:    "private-verified-model",
+		service.CodexTurnStateAutoProbeModelExtraKey:       "private-probe-model",
+		service.CodexTurnStateAutoProbeNotBeforeExtraKey:   now,
+		"note": "public",
 		service.CodexTurnStateAutoRecoveryExtraKey: map[string]any{"invalidated_at_ms": now, "pending": true, "rejected": []string{"private-digest"}, "legacy_token": "private-token"},
 	}}
 	a.Extra[service.CodexTurnStateModelExtraPrefix+base64.RawURLEncoding.EncodeToString([]byte("gpt-5.5"))] = map[string]any{
@@ -26,6 +34,8 @@ func TestAccountCodexTurnStateAutoRedactedAndDiagnosticsSafe(t *testing.T) {
 		Version: 1, Model: "gpt-5.5", StartedAtMS: now, Attempts: 1,
 	}
 	dto := AccountFromService(a)
+	require.Equal(t, map[string]any{"note": "public"}, dto.Extra)
+	require.Equal(t, dto.Extra, AccountListItemFromAccount(dto).Extra)
 	for _, projection := range []any{dto, AccountListItemFromAccount(dto)} {
 		data, err := json.Marshal(projection)
 		require.NoError(t, err)

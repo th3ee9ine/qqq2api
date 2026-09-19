@@ -215,6 +215,62 @@ func TestPersistCodexTurnStateCASLossStillPersistsAccountProbeBoundary(t *testin
 	require.EqualValues(t, 1, repo.sourceCalls.Load(), "a lost CAS must reconcile with the database winner")
 }
 
+func TestCodexTurnStateWorkerCompletesTaskAfterCASReconciliationLoadsValidOlderWinner(t *testing.T) {
+	s, baseRepo, account := newTurnStateAutoService(t)
+	const model = "gpt-6-astra"
+	enableCodexTurnStateCASModel(s, model)
+	now := time.Now()
+	winnerState := testGlobalTurnStateToken(now.Add(-10*time.Minute), 10)
+	winner := *account
+	winner.Extra = map[string]any{codexTurnStateModelExtraKey(model): map[string]any{
+		CodexTurnStateAutoExtraKey:                 winnerState,
+		CodexTurnStateAutoSetAtExtraKey:            now.Add(-10 * time.Minute).UnixMilli(),
+		CodexTurnStateAutoVerifiedAtExtraKey:       now.Add(-9 * time.Minute).UnixMilli(),
+		CodexTurnStateAutoVerifiedModelExtraKey:    model,
+		CodexTurnStateAutoProbeAtExtraKey:          now.Add(-8 * time.Minute).UnixMilli(),
+		CodexTurnStateAutoProbeCompletedAtExtraKey: now.Add(-8 * time.Minute).UnixMilli(),
+	}}
+	s.accountRepo = &codexTurnStateCASWinnerRepo{turnStateAutoRepo: baseRepo, winner: &winner}
+
+	task, taskCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: model,
+		OwnerModel:   model,
+		Source:       CodexTurnStateCollectionSourceManual,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, task)
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, model)
+	entry.token = testGlobalTurnStateToken(now, 10)
+	entry.setAt = now.UnixMilli()
+	entry.verifiedAt = now.UnixMilli()
+	entry.verifiedModel = model
+	entry.probeAt = now.UnixMilli()
+	entry.probeCompletedAt = now.UnixMilli()
+	entry.dirty = true
+	entry.running = true
+	entry.collectionTaskProbeAt = entry.probeAt
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, task.ID, taskCtx))
+	s.openaiTurnStateWorkers = 1
+	s.openaiTurnStateMu.Unlock()
+
+	s.runCodexTurnStateWorker(account.ID, entry)
+
+	finished, ok := s.GetCodexTurnStateCollectionTask(task.ID)
+	require.True(t, ok)
+	require.Equal(t, CodexTurnStateCollectionTaskStatusSucceeded, finished.Status)
+	require.Equal(t, CodexTurnStateCollectionTaskStageCompleted, finished.Stage)
+	require.Equal(t, 100, finished.Progress)
+	s.openaiTurnStateMu.Lock()
+	require.Equal(t, winnerState, entry.token, "the valid database winner satisfies the task even when it is older than the losing local value")
+	require.Empty(t, entry.collectionTaskID, "a reconciled task must not remain attached forever")
+	require.False(t, entry.running)
+	s.openaiTurnStateMu.Unlock()
+}
+
 func TestCodexTurnStateCASReconciliationBlocksFinalHeaderInjection(t *testing.T) {
 	s, _, account := newTurnStateAutoService(t)
 	model := "gpt-6-astra"

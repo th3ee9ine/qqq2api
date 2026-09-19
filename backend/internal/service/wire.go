@@ -224,6 +224,7 @@ func ProvideOpenAIGatewayService(
 		userPlatformQuotaRepo,
 	)
 	svc.proxyRepo = proxyRepo
+	svc.StartOpenAICodexTurnStateRenewal()
 	return svc
 }
 

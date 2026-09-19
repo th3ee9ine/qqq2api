@@ -1117,6 +1117,58 @@ export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<U
 }
 
 export type CodexTurnStateCollectStatus = 'queued' | 'already_valid' | 'rejected' | 'error' | string
+export type CodexTurnStateCollectSource = 'manual' | 'bulk'
+export type CodexTurnStateTaskSource = 'manual' | 'bulk' | 'automatic' | 'renewal' | 'retry'
+export type CodexTurnStateTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
+export type CodexTurnStateTaskStage =
+  | 'queued'
+  | 'preparing'
+  | 'loading_account'
+  | 'resolving_routes'
+  | 'collecting'
+  | 'verifying'
+  | 'persisting'
+  | 'retry_wait'
+  | 'completed'
+  | 'failed'
+  | 'canceled'
+
+export interface CodexTurnStateTaskEvent {
+  at_ms: number
+  stage: CodexTurnStateTaskStage | string
+  status: CodexTurnStateTaskStatus | string
+  progress: number
+  error?: string
+  /** Compatibility with task snapshots created before the registry contract was finalized. */
+  timestamp_ms?: number
+  message?: string
+}
+
+export interface CodexTurnStateTask {
+  id: string
+  account_id: number
+  account_name: string
+  request_model: string
+  owner_model: string
+  source: CodexTurnStateTaskSource | string
+  status: CodexTurnStateTaskStatus | string
+  stage: CodexTurnStateTaskStage | string
+  progress: number
+  progress_current: number
+  progress_total: number
+  created_at_ms: number
+  started_at_ms?: number
+  updated_at_ms?: number
+  finished_at_ms?: number
+  /** Compatibility with early task DTOs. */
+  completed_at_ms?: number
+  error?: string
+  retry_of?: string
+  can_cancel: boolean
+  can_retry: boolean
+  /** Present on task details; list responses intentionally omit event history. */
+  events?: CodexTurnStateTaskEvent[]
+}
 
 export interface CodexTurnStateCollectResult {
   status: CodexTurnStateCollectStatus
@@ -1140,12 +1192,18 @@ export interface CodexTurnStateCollectResult {
   message?: string
 }
 
-/** Queue manual Turn State probes for every model in the configured collection scope. */
-export async function collectCodexTurnState(id: number, signal?: AbortSignal): Promise<CodexTurnStateCollectResult> {
+/** Queue Turn State probes for every model in the configured collection scope. */
+export async function collectCodexTurnState(
+  id: number,
+  sourceOrSignal?: CodexTurnStateCollectSource | AbortSignal,
+  requestSignal?: AbortSignal,
+): Promise<CodexTurnStateCollectResult> {
+  const source = typeof sourceOrSignal === 'string' ? sourceOrSignal : undefined
+  const signal = typeof sourceOrSignal === 'string' ? requestSignal : sourceOrSignal
   try {
     const { data } = await apiClient.post<CodexTurnStateCollectResult>(
       `/admin/accounts/${id}/codex-turn-state/collect`,
-      undefined,
+      source ? { source } : undefined,
       { timeout: 120_000, ...(signal ? { signal } : {}) },
     )
     return data
@@ -1167,6 +1225,34 @@ export async function collectCodexTurnState(id: number, signal?: AbortSignal): P
     }
     throw error
   }
+}
+
+export async function listCodexTurnStateTasks(): Promise<CodexTurnStateTask[]> {
+  const { data } = await apiClient.get<CodexTurnStateTask[]>(
+    '/admin/accounts/codex-turn-state/tasks',
+  )
+  return Array.isArray(data) ? data : []
+}
+
+export async function getCodexTurnStateTask(taskId: string): Promise<CodexTurnStateTask> {
+  const { data } = await apiClient.get<CodexTurnStateTask>(
+    `/admin/accounts/codex-turn-state/tasks/${encodeURIComponent(taskId)}`,
+  )
+  return data
+}
+
+export async function cancelCodexTurnStateTask(taskId: string): Promise<CodexTurnStateTask> {
+  const { data } = await apiClient.post<CodexTurnStateTask>(
+    `/admin/accounts/codex-turn-state/tasks/${encodeURIComponent(taskId)}/cancel`,
+  )
+  return data
+}
+
+export async function retryCodexTurnStateTask(taskId: string): Promise<CodexTurnStateTask> {
+  const { data } = await apiClient.post<CodexTurnStateTask>(
+    `/admin/accounts/codex-turn-state/tasks/${encodeURIComponent(taskId)}/retry`,
+  )
+  return data
 }
 
 export async function getOllamaCloudUsageSettings(): Promise<OllamaCloudUsageSettings> {
@@ -1278,6 +1364,10 @@ export const accountsAPI = {
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
   collectCodexTurnState,
+  listCodexTurnStateTasks,
+  getCodexTurnStateTask,
+  cancelCodexTurnStateTask,
+  retryCodexTurnStateTask,
   getOllamaCloudUsageSettings,
   updateOllamaCloudUsageSettings,
   getOllamaCloudUsage,

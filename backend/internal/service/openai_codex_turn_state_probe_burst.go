@@ -40,6 +40,12 @@ func codexTurnStateProbeNeedsBurst(entry *codexTurnStateAutoEntry, now time.Time
 	if entry == nil {
 		return true
 	}
+	// A failed collection is a fresh-collection retry even when an older state
+	// remains locally usable. Put that retry behind the same durable budget so
+	// idle scanners on multiple instances cannot all spend upstream quota.
+	if entry.lastError != "" && entry.probeAt > 0 {
+		return true
+	}
 	model := codexTurnStateOwnerModel(entry.model)
 	verifiedModel := codexTurnStateOwnerModel(entry.verifiedModel)
 	if entry.recovery.Pending || entry.token == "" || entry.verifiedAt <= 0 || model == "" || verifiedModel != model || !entry.recovery.allows(entry.token, now) {

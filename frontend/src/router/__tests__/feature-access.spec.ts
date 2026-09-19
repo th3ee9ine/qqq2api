@@ -167,6 +167,26 @@ describe('feature route guard', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
+  it('registers Codex Turn State task details as an administrator-only route', async () => {
+    const route = routerHarness.routes.find((item) => item.path === '/admin/codex-turn-state/tasks/:taskId')
+
+    expect(route).toMatchObject({
+      name: 'AdminCodexTurnStateTask',
+      meta: {
+        requiresAuth: true,
+        requiresAdmin: true,
+        titleKey: 'admin.codexTurnState.tasks.detailTitle',
+        descriptionKey: 'admin.codexTurnState.tasks.detailPageDescription',
+      },
+    })
+
+    const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/codex-turn-state/tasks/task-1')
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith()
+  })
+
   it('rejects account administrators from the Codex Turn State route', async () => {
     authStore.isAdmin = false
     authStore.isAccountAdmin = true
@@ -174,6 +194,19 @@ describe('feature route guard', () => {
     authStore.user = { role: 'account_admin' }
 
     const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/codex-turn-state')
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/admin/accounts')
+  })
+
+  it('rejects account administrators from Codex Turn State task details', async () => {
+    authStore.isAdmin = false
+    authStore.isAccountAdmin = true
+    authStore.panelHomePath = '/admin/accounts'
+    authStore.user = { role: 'account_admin' }
+
+    const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/codex-turn-state/tasks/task-1')
     await navigation
 
     expect(next).toHaveBeenCalledOnce()

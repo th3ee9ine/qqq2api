@@ -211,6 +211,46 @@ func TestCodexTurnStateAutoExpiryAndSafeDiagnostics(t *testing.T) {
 	}
 }
 
+func TestCodexTurnStateCacheAdoptsSameRoundTerminalOutcome(t *testing.T) {
+	const (
+		accountID = int64(10)
+		model     = "gpt-5"
+		probeAt   = int64(10_000)
+	)
+	for _, tc := range []struct {
+		name         string
+		pendingError string
+		finalError   string
+	}{
+		{name: "failure becomes visible", finalError: "transport_failed"},
+		{name: "success clears previous failure", pendingError: "transport_failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &OpenAIGatewayService{}
+			snapshot := func(completedAt int64, lastError string) *Account {
+				return &Account{ID: accountID, Extra: map[string]any{
+					codexTurnStateModelExtraKey(model): map[string]any{
+						CodexTurnStateAutoProbeAtExtraKey:          probeAt,
+						CodexTurnStateAutoProbeCompletedAtExtraKey: completedAt,
+						CodexTurnStateAutoLastErrorExtraKey:        lastError,
+					},
+				}}
+			}
+
+			s.openaiTurnStateMu.Lock()
+			entry := s.codexTurnStateEntryLocked(snapshot(0, tc.pendingError), time.Now(), model)
+			require.Equal(t, tc.pendingError, entry.lastError)
+			entry = s.codexTurnStateEntryLocked(snapshot(probeAt+1, tc.finalError), time.Now(), model)
+			require.Equal(t, probeAt+1, entry.probeCompletedAt)
+			require.Equal(t, tc.finalError, entry.lastError)
+			entry = s.codexTurnStateEntryLocked(snapshot(0, tc.pendingError), time.Now(), model)
+			require.Equal(t, probeAt+1, entry.probeCompletedAt)
+			require.Equal(t, tc.finalError, entry.lastError, "a stale pre-probe snapshot must not roll back the terminal outcome")
+			s.openaiTurnStateMu.Unlock()
+		})
+	}
+}
+
 func TestCodexTurnStateAutomaticIntervalControlsRenewalScheduling(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
@@ -481,11 +521,13 @@ func TestCodexTurnStateAutoLegacyIgnoredDisableAndWSRefresh(t *testing.T) {
 func TestCodexTurnStateAutoManagedExtraPreservedAndNotImported(t *testing.T) {
 	burstKey := codexTurnStateProbeBurstBudgetExtraKey("gpt-5.5")
 	source := map[string]any{
-		codexTurnStateModelExtraKey("gpt-5.5"): map[string]any{CodexTurnStateAutoExtraKey: "private-scoped"},
-		burstKey:                               CodexTurnStateProbeBurstBudget{Version: 1, Model: "gpt-5.5", StartedAtMS: 123, Attempts: 1},
-		CodexTurnStateAutoExtraKey:             "private-state",
-		CodexTurnStateAutoSetAtExtraKey:        int64(123),
-		"note":                                 "keep",
+		codexTurnStateModelExtraKey("gpt-5.5"):     map[string]any{CodexTurnStateAutoExtraKey: "private-scoped"},
+		burstKey:                                   CodexTurnStateProbeBurstBudget{Version: 1, Model: "gpt-5.5", StartedAtMS: 123, Attempts: 1},
+		CodexTurnStateAutoExtraKey:                 "private-state",
+		CodexTurnStateAutoSetAtExtraKey:            int64(123),
+		CodexTurnStateAutoProbeModelExtraKey:       "private-probe-model",
+		CodexTurnStateAutoProbeCompletedAtExtraKey: int64(456),
+		"note": "keep",
 	}
 	stripped := StripCodexTurnStateAutoExtra(source)
 	require.Equal(t, map[string]any{"note": "keep"}, stripped)

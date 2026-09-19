@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   getAccountById: vi.fn(),
   collectCodexTurnState: vi.fn(),
+  listCodexTurnStateTasks: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn(),
 }))
@@ -23,6 +24,7 @@ vi.mock('@/api/admin', () => ({
       list: mocks.listAccounts,
       getById: mocks.getAccountById,
       collectCodexTurnState: mocks.collectCodexTurnState,
+      listCodexTurnStateTasks: mocks.listCodexTurnStateTasks,
     },
   },
 }))
@@ -110,6 +112,7 @@ function mountView() {
         AppLayout: { template: '<main><slot /></main>' },
         AdminPageHeader: { template: '<header><slot /><slot name="actions" /></header>' },
         AdminOverviewStrip: { props: ['items'], template: '<div data-testid="overview">{{ JSON.stringify(items) }}</div>' },
+        RouterLink: { props: ['to'], template: '<a data-testid="router-link"><slot /></a>' },
         Icon: true,
       },
     },
@@ -139,6 +142,7 @@ describe('CodexTurnStateView', () => {
       pages: 1,
     })
     mocks.getAccountById.mockResolvedValue(account(12))
+    mocks.listCodexTurnStateTasks.mockResolvedValue([])
     mocks.collectCodexTurnState.mockResolvedValue({
       status: 'queued',
       account_id: 12,
@@ -362,6 +366,39 @@ describe('CodexTurnStateView', () => {
     wrapper.unmount()
   })
 
+  it('renders recent task status, progress, source, and details navigation', async () => {
+    mocks.listCodexTurnStateTasks.mockResolvedValueOnce([{
+      id: 'task-recent-1',
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6',
+      source: 'bulk',
+      status: 'succeeded',
+      stage: 'completed',
+      progress: 100,
+      progress_current: 4,
+      progress_total: 4,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      finished_at_ms: Date.now(),
+      can_cancel: false,
+      can_retry: false,
+    }])
+    const wrapper = mountView()
+    await flushPromises()
+
+    const row = wrapper.get('[data-testid="turn-state-task-task-recent-1"]')
+    expect(row.text()).toContain('Account 11')
+    expect(row.text()).toContain('gpt-5.6-sol')
+    expect(row.text()).toContain('gpt-5.6')
+    expect(row.text()).toContain('admin.codexTurnState.tasks.sources.bulk')
+    expect(row.text()).toContain('admin.codexTurnState.tasks.statuses.succeeded')
+    expect(row.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
+    expect(row.get('[data-testid="router-link"]').text()).toContain('admin.codexTurnState.tasks.viewDetails')
+    wrapper.unmount()
+  })
+
   it('collects every loaded eligible account even when search and status filters hide rows', async () => {
     const expiredAt = Date.now() - 60_000
     mocks.listAccounts.mockResolvedValueOnce({
@@ -409,6 +446,7 @@ describe('CodexTurnStateView', () => {
     await flushPromises()
 
     expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId).sort()).toEqual([61, 62, 63])
+    expect(mocks.collectCodexTurnState.mock.calls.every(([, source]) => source === 'bulk')).toBe(true)
     expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkAccounts 3 3')
     expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 3 0 0')
     wrapper.unmount()
@@ -671,7 +709,7 @@ describe('CodexTurnStateView', () => {
     await wrapper.get('[data-testid="turn-state-collect-12"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-testid="turn-state-model-12"]').exists()).toBe(false)
-    expect(mocks.collectCodexTurnState).toHaveBeenCalledWith(12, expect.anything())
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledWith(12, 'manual', expect.anything())
     expect(wrapper.get('[data-testid="turn-state-collect-12"]').text()).toContain('admin.codexTurnState.accounts.checking')
     expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-12"]').element.disabled).toBe(true)
 

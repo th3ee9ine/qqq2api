@@ -437,6 +437,58 @@ func TestCodexTurnStateUsageCandidateRequiresDedicatedMarkedRequest(t *testing.T
 	s.openaiTurnStateMu.Unlock()
 }
 
+func TestCanceledCodexTurnStateVerifyingTaskDropsCandidateAndAllowsImmediateReplacement(t *testing.T) {
+	s, _, account := newTurnStateAutoService(t)
+	const model = "gpt-6-astra"
+	now := time.Now()
+
+	task, taskCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: model,
+		OwnerModel:   model,
+		Source:       CodexTurnStateCollectionSourceAutomatic,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	_, started := s.StartCodexTurnStateCollectionTask(task.ID, CodexTurnStateCollectionTaskStageVerifying, 100)
+	require.True(t, started)
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, model)
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, task.ID, taskCtx))
+	require.True(t, s.stageCodexTurnStateUsageCandidateLocked(entry, recoveryTestToken(now, 12, 31), entry.recovery.InvalidatedAtMS, now))
+	s.openaiTurnStateMu.Unlock()
+
+	canceled, err := s.CancelCodexTurnStateCollectionTask(task.ID)
+	require.NoError(t, err)
+	require.Equal(t, CodexTurnStateCollectionTaskStatusCanceled, canceled.Status)
+
+	verificationCtx := context.WithValue(context.Background(), ctxkey.RequestID, "canceled-verification")
+	verificationCtx = WithOpenAICodexTurnStateUsageVerification(verificationCtx, 701)
+	s.openaiTurnStateMu.Lock()
+	require.Empty(t, s.codexTurnStateUsageCandidateForRequestLocked(verificationCtx, entry, model, now), "a canceled verifying task must never inject its staged candidate")
+	require.Empty(t, entry.candidate)
+	require.Empty(t, entry.collectionTaskID)
+	require.Nil(t, entry.collectionTaskContext)
+	s.openaiTurnStateMu.Unlock()
+
+	replacement, replacementCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: model,
+		OwnerModel:   model,
+		Source:       CodexTurnStateCollectionSourceRetry,
+		RetryOf:      task.ID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, replacement)
+	s.openaiTurnStateMu.Lock()
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, replacement.ID, replacementCtx), "cancellation cleanup must make the owner immediately available for recollection")
+	require.Equal(t, replacement.ID, entry.collectionTaskID)
+	s.openaiTurnStateMu.Unlock()
+}
+
 func TestCodexTurnStateManualCandidateCanBeVerifiedWhenAutomaticModeIsDisabled(t *testing.T) {
 	s, _, account := newTurnStateAutoService(t)
 	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)

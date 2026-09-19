@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
@@ -20,7 +21,8 @@ func (h *AccountHandler) SetCodexTurnStateService(gateway *service.OpenAIGateway
 }
 
 type collectCodexTurnStateRequest struct {
-	Model string `json:"model"`
+	Model  string `json:"model"`
+	Source string `json:"source"`
 }
 
 // CollectCodexTurnState queues a bounded maintenance collection for an
@@ -58,13 +60,22 @@ func (h *AccountHandler) CollectCodexTurnState(c *gin.Context) {
 			}
 		}
 	}
+	source := strings.ToLower(strings.TrimSpace(req.Source))
+	if source == "" {
+		source = "manual"
+	}
+	if source != "manual" && source != "bulk" {
+		response.BadRequest(c, "source must be manual or bulk")
+		return
+	}
 
 	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
 	if err != nil || account == nil {
 		response.NotFound(c, "Account not found")
 		return
 	}
-	result, err := h.codexTurnStateService.RequestCodexTurnStateCollection(c.Request.Context(), account, req.Model)
+	collectionCtx := service.WithCodexTurnStateCollectionSource(c.Request.Context(), source)
+	result, err := h.codexTurnStateService.RequestCodexTurnStateCollection(collectionCtx, account, req.Model)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -89,4 +100,78 @@ func (h *AccountHandler) CollectCodexTurnState(c *gin.Context) {
 			Data:    result,
 		})
 	}
+}
+
+// ListCodexTurnStateCollectionTasks returns the bounded in-memory history of
+// background collection and renewal work.
+// GET /api/v1/admin/accounts/codex-turn-state/tasks
+func (h *AccountHandler) ListCodexTurnStateCollectionTasks(c *gin.Context) {
+	if h.codexTurnStateService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Codex Turn State collection service is unavailable")
+		return
+	}
+	response.Success(c, h.codexTurnStateService.ListCodexTurnStateCollectionTasks())
+}
+
+// GetCodexTurnStateCollectionTask returns one task with its progress and
+// redacted event history.
+// GET /api/v1/admin/accounts/codex-turn-state/tasks/:task_id
+func (h *AccountHandler) GetCodexTurnStateCollectionTask(c *gin.Context) {
+	if h.codexTurnStateService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Codex Turn State collection service is unavailable")
+		return
+	}
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	if taskID == "" {
+		response.BadRequest(c, "Invalid task ID")
+		return
+	}
+	task, ok := h.codexTurnStateService.GetCodexTurnStateCollectionTask(taskID)
+	if !ok || task == nil {
+		response.NotFound(c, "Codex Turn State collection task not found")
+		return
+	}
+	response.Success(c, task)
+}
+
+// CancelCodexTurnStateCollectionTask requests cancellation of queued or
+// running work. Completed tasks are rejected by the service with a conflict.
+// POST /api/v1/admin/accounts/codex-turn-state/tasks/:task_id/cancel
+func (h *AccountHandler) CancelCodexTurnStateCollectionTask(c *gin.Context) {
+	if h.codexTurnStateService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Codex Turn State collection service is unavailable")
+		return
+	}
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	if taskID == "" {
+		response.BadRequest(c, "Invalid task ID")
+		return
+	}
+	task, err := h.codexTurnStateService.CancelCodexTurnStateCollectionTask(taskID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, task)
+}
+
+// RetryCodexTurnStateCollectionTask submits a new task from a failed or
+// canceled task's immutable account/model snapshot.
+// POST /api/v1/admin/accounts/codex-turn-state/tasks/:task_id/retry
+func (h *AccountHandler) RetryCodexTurnStateCollectionTask(c *gin.Context) {
+	if h.codexTurnStateService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Codex Turn State collection service is unavailable")
+		return
+	}
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	if taskID == "" {
+		response.BadRequest(c, "Invalid task ID")
+		return
+	}
+	task, err := h.codexTurnStateService.RetryCodexTurnStateCollectionTask(c.Request.Context(), taskID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Accepted(c, task)
 }

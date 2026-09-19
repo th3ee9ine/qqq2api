@@ -269,6 +269,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/codex-turn-state/tasks/:taskId',
+    name: 'AdminCodexTurnStateTask',
+    component: () => import('@/views/admin/CodexTurnStateTaskView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Codex Turn State Task',
+      titleKey: 'admin.codexTurnState.tasks.detailTitle',
+      descriptionKey: 'admin.codexTurnState.tasks.detailPageDescription'
+    }
+  },
+  {
     path: '/admin/debug-workbench',
     name: 'AdminDebugWorkbench',
     component: () => import('@/views/admin/DebugWorkbenchView.vue'),

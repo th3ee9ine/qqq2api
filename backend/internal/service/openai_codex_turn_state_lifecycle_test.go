@@ -170,6 +170,49 @@ func TestCodexTurnStateWorkerDropsDeletedAccountWithoutRetry(t *testing.T) {
 	require.EqualValues(t, 1, repo.sourceCalls.Load())
 }
 
+func TestCodexTurnStateCacheSweepRetainsEntriesWithTaskCandidateOrWake(t *testing.T) {
+	s, _, account := newTurnStateAutoService(t)
+	now := time.Now()
+	stale := now.Add(-3 * time.Hour)
+
+	taskKey := codexTurnStateKey{accountID: account.ID, model: "task-owner"}
+	candidateKey := codexTurnStateKey{accountID: account.ID, model: "candidate-owner"}
+	retryWakeKey := codexTurnStateKey{accountID: account.ID, model: "retry-owner"}
+	idleKey := codexTurnStateKey{accountID: account.ID, model: "idle-owner"}
+
+	s.openaiTurnStateMu.Lock()
+	s.openaiTurnStates = map[codexTurnStateKey]*codexTurnStateAutoEntry{
+		taskKey: {
+			model:            taskKey.model,
+			collectionTaskID: "cts_bound_task",
+			lastUsed:         stale,
+		},
+		candidateKey: {
+			model:     candidateKey.model,
+			candidate: codexTurnStateUsageCandidate{state: "staged-candidate"},
+			lastUsed:  stale,
+		},
+		retryWakeKey: {
+			model:       retryWakeKey.model,
+			retryWakeAt: now.Add(time.Hour),
+			lastUsed:    stale,
+		},
+		idleKey: {
+			model:    idleKey.model,
+			lastUsed: stale,
+		},
+	}
+	s.openaiTurnStateSweep = now.Add(-time.Hour)
+	trigger := &Account{ID: account.ID + 1, Extra: map[string]any{}}
+	s.codexTurnStateEntryLocked(trigger, now, "trigger-owner")
+
+	require.Contains(t, s.openaiTurnStates, taskKey, "a bound background task must keep its cache entry")
+	require.Contains(t, s.openaiTurnStates, candidateKey, "a staged verification candidate must keep its cache entry")
+	require.Contains(t, s.openaiTurnStates, retryWakeKey, "a scheduled persistence retry must keep its cache entry")
+	require.NotContains(t, s.openaiTurnStates, idleKey, "a truly idle stale entry remains eligible for eviction")
+	s.openaiTurnStateMu.Unlock()
+}
+
 func TestCodexTurnStateRestoreFailureClearsOwnedPendingMarker(t *testing.T) {
 	s, baseRepo, account := newTurnStateAutoService(t)
 	const model = "gpt-5"

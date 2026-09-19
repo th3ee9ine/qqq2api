@@ -16,6 +16,88 @@
 
       <AdminOverviewStrip :items="overviewItems" :loading="loadingAccounts" />
 
+      <section class="admin-surface tasks-panel" :aria-busy="loadingTasks">
+        <div class="section-heading-row">
+          <div class="min-w-0">
+            <h2 class="admin-section-heading">{{ t('admin.codexTurnState.tasks.title') }}</h2>
+            <p class="section-description">{{ t('admin.codexTurnState.tasks.description') }}</p>
+          </div>
+          <button
+            type="button"
+            class="btn btn-secondary"
+            :disabled="loadingTasks"
+            data-testid="turn-state-tasks-refresh"
+            @click="loadRecentTasks()"
+          >
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': loadingTasks }" />
+            {{ t('admin.codexTurnState.tasks.refresh') }}
+          </button>
+        </div>
+
+        <div v-if="tasksError" class="task-empty" role="alert">
+          <Icon name="exclamationCircle" size="lg" class="mb-3 text-red-400" />
+          <p>{{ tasksError }}</p>
+          <button type="button" class="btn btn-secondary mt-4" @click="loadRecentTasks()">{{ t('common.retry') }}</button>
+        </div>
+        <div v-else-if="loadingTasks && recentTasks.length === 0" class="task-empty" role="status">
+          <Icon name="refresh" size="lg" class="mb-3 animate-spin text-primary-600" />
+          <p>{{ t('common.loading') }}</p>
+        </div>
+        <div v-else-if="recentTasks.length === 0" class="task-empty">
+          <Icon name="clock" size="lg" class="mb-3 text-gray-300 dark:text-gray-600" />
+          <p>{{ t('admin.codexTurnState.tasks.empty') }}</p>
+        </div>
+        <div v-else class="task-list" data-testid="turn-state-task-list">
+          <article v-for="task in recentTasks" :key="task.id" class="task-row" :data-testid="`turn-state-task-${task.id}`">
+            <div class="task-identity">
+              <div class="flex min-w-0 flex-wrap items-center gap-2">
+                <span class="task-status" :class="`task-status-${task.status}`">{{ taskStatusLabel(task.status) }}</span>
+                <span class="task-source">{{ taskSourceLabel(task.source) }}</span>
+                <span class="font-mono text-[11px] text-gray-400">{{ task.id }}</span>
+              </div>
+              <p class="mt-2 truncate text-sm font-medium text-gray-900 dark:text-gray-100" :title="taskAccountName(task)">
+                {{ taskAccountName(task) }}
+                <span class="font-mono text-xs font-normal text-gray-400">#{{ task.account_id }}</span>
+              </p>
+              <div class="task-models">
+                <span>{{ task.request_model || '-' }}</span>
+                <template v-if="task.owner_model && task.owner_model !== task.request_model">
+                  <Icon name="arrowRight" size="xs" aria-hidden="true" />
+                  <span>{{ task.owner_model }}</span>
+                </template>
+              </div>
+            </div>
+
+            <div class="task-progress-summary">
+              <div class="task-progress-meta">
+                <span>{{ taskStageLabel(task.stage) }}</span>
+                <span>{{ taskProgress(task) }}%</span>
+              </div>
+              <div
+                class="task-progress-track"
+                role="progressbar"
+                :aria-valuenow="taskProgress(task)"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                :aria-label="t('admin.codexTurnState.tasks.progressLabel', { percent: taskProgress(task) })"
+              >
+                <span :style="{ width: `${taskProgress(task)}%` }" />
+              </div>
+              <time class="task-time" :datetime="timestampISO(task.created_at_ms)">{{ formatTimestamp(task.created_at_ms) }}</time>
+            </div>
+
+            <RouterLink
+              class="task-details-link"
+              :to="{ name: 'AdminCodexTurnStateTask', params: { taskId: task.id } }"
+              :aria-label="t('admin.codexTurnState.tasks.viewDetailsFor', { id: task.id })"
+            >
+              {{ t('admin.codexTurnState.tasks.viewDetails') }}
+              <Icon name="chevronRight" size="sm" />
+            </RouterLink>
+          </article>
+        </div>
+      </section>
+
       <section class="admin-surface settings-panel" :aria-busy="loadingSettings || savingSettings">
         <div class="section-heading-row">
           <div class="min-w-0">
@@ -266,6 +348,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RouterLink } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AdminPageHeader from '@/components/admin/AdminPageHeader.vue'
 import AdminOverviewStrip from '@/components/admin/AdminOverviewStrip.vue'
@@ -280,7 +363,7 @@ import {
   normalizeCodexTurnStateModels,
   normalizeCodexTurnStateProxyUrls,
 } from '@/utils/codexTurnState'
-import type { CodexTurnStateCollectResult } from '@/api/admin/accounts'
+import type { CodexTurnStateCollectResult, CodexTurnStateCollectSource, CodexTurnStateTask } from '@/api/admin/accounts'
 import type { AccountListItem, CodexTurnStateAutoInfo } from '@/types'
 
 type StateKind = 'valid' | 'renewal' | 'missing' | 'expired' | 'pending' | 'cooldown' | 'error'
@@ -350,6 +433,23 @@ const POLL_INTERVAL_MS = 2_000
 const MAX_POLL_RETRY_DELAY_MS = 30_000
 const CLOCK_TICK_MS = 30_000
 const BULK_COLLECTION_CONCURRENCY = 3
+const TASK_POLL_INTERVAL_MS = 2_000
+const RECENT_TASK_LIMIT = 10
+const TASK_SOURCES = new Set(['manual', 'bulk', 'automatic', 'renewal', 'retry'])
+const TASK_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'canceled'])
+const TASK_STAGES = new Set([
+  'queued',
+  'preparing',
+  'loading_account',
+  'resolving_routes',
+  'collecting',
+  'verifying',
+  'persisting',
+  'retry_wait',
+  'completed',
+  'failed',
+  'canceled',
+])
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
@@ -363,6 +463,9 @@ const loadingAccounts = ref(false)
 const savingSettings = ref(false)
 const settingsError = ref('')
 const accountsError = ref('')
+const collectionTasks = ref<CodexTurnStateTask[]>([])
+const loadingTasks = ref(false)
+const tasksError = ref('')
 const accountSearch = ref('')
 const statusFilter = ref<StatusFilter>('all')
 const collectingIds = reactive(new Set<number>())
@@ -379,11 +482,13 @@ const pollBaselines = new Map<number, PollBaseline>()
 const collectionSubmissionGates = new Map<number, CollectionSubmissionGate>()
 const accountDetailVersions = new Map<number, number>()
 let clockTimer: ReturnType<typeof setInterval> | undefined
+let taskPollTimer: ReturnType<typeof setTimeout> | undefined
 let componentActive = true
 let accountListRequestGeneration = 0
 let accountDetailGeneration = 0
+let taskListRequestGeneration = 0
 
-const loading = computed(() => loadingSettings.value || loadingAccounts.value)
+const loading = computed(() => loadingSettings.value || loadingAccounts.value || loadingTasks.value)
 const proxyPoolConfigurationValid = computed(() => storedProxyPoolValid.value && proxyEditorValid.value)
 const collectAllDisabled = computed(() => loading.value
   || accounts.value.length === 0
@@ -426,6 +531,10 @@ const filteredAccounts = computed(() => {
   })
 })
 
+const recentTasks = computed(() => [...collectionTasks.value]
+  .sort((left, right) => Number(right.created_at_ms || 0) - Number(left.created_at_ms || 0))
+  .slice(0, RECENT_TASK_LIMIT))
+
 const stateCounts = computed(() => {
   const counts: Record<StateKind, number> = { valid: 0, renewal: 0, missing: 0, expired: 0, pending: 0, cooldown: 0, error: 0 }
   for (const account of accounts.value) counts[classifyAccount(account).kind] += 1
@@ -444,6 +553,75 @@ const overviewItems = computed(() => [
     tone: proxyPoolConfigurationValid.value ? undefined : 'warning' as const,
   },
 ])
+
+function isActiveTask(task: CodexTurnStateTask): boolean {
+  return task.status === 'queued' || task.status === 'running'
+}
+
+function taskProgress(task: CodexTurnStateTask): number {
+  const progress = Number(task.progress)
+  if (!Number.isFinite(progress)) return 0
+  return Math.min(100, Math.max(0, Math.round(progress)))
+}
+
+function taskAccountName(task: CodexTurnStateTask): string {
+  const name = task.account_name?.trim() || accounts.value.find(account => account.id === task.account_id)?.name?.trim()
+  return name || t('admin.codexTurnState.tasks.unknownAccount')
+}
+
+function taskStatusLabel(status: string): string {
+  if (TASK_STATUSES.has(status)) return t(`admin.codexTurnState.tasks.statuses.${status}`)
+  return t('admin.codexTurnState.tasks.unknownValue', { value: status || '-' })
+}
+
+function taskSourceLabel(source: string): string {
+  if (TASK_SOURCES.has(source)) return t(`admin.codexTurnState.tasks.sources.${source}`)
+  return t('admin.codexTurnState.tasks.unknownValue', { value: source || '-' })
+}
+
+function taskStageLabel(stage: string): string {
+  if (TASK_STAGES.has(stage)) return t(`admin.codexTurnState.tasks.stages.${stage}`)
+  return t('admin.codexTurnState.tasks.unknownValue', { value: stage || '-' })
+}
+
+function timestampISO(value?: number): string {
+  if (!value || !Number.isFinite(value)) return ''
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString()
+}
+
+function scheduleRecentTaskPoll() {
+  if (taskPollTimer) clearTimeout(taskPollTimer)
+  taskPollTimer = undefined
+  if (!componentActive || !collectionTasks.value.some(isActiveTask)) return
+  taskPollTimer = setTimeout(() => {
+    taskPollTimer = undefined
+    void loadRecentTasks({ background: true })
+  }, TASK_POLL_INTERVAL_MS)
+}
+
+async function loadRecentTasks({ background = false }: { background?: boolean } = {}) {
+  if (taskPollTimer) clearTimeout(taskPollTimer)
+  taskPollTimer = undefined
+  const requestGeneration = ++taskListRequestGeneration
+  if (!background) loadingTasks.value = true
+  if (!background || collectionTasks.value.length === 0) tasksError.value = ''
+  try {
+    const response = await adminAPI.accounts.listCodexTurnStateTasks()
+    if (!componentActive || requestGeneration !== taskListRequestGeneration) return
+    collectionTasks.value = Array.isArray(response) ? response : []
+    tasksError.value = ''
+  } catch (error) {
+    if (componentActive && requestGeneration === taskListRequestGeneration && (!background || collectionTasks.value.length === 0)) {
+      tasksError.value = extractApiErrorMessage(error, t('admin.codexTurnState.tasks.loadFailed'))
+    }
+  } finally {
+    if (componentActive && requestGeneration === taskListRequestGeneration) {
+      loadingTasks.value = false
+      scheduleRecentTaskPoll()
+    }
+  }
+}
 
 async function loadTurnStateSettings() {
   loadingSettings.value = true
@@ -534,7 +712,7 @@ async function loadAccounts() {
 }
 
 async function loadAll() {
-  await Promise.all([loadTurnStateSettings(), loadAccounts()])
+  await Promise.all([loadTurnStateSettings(), loadAccounts(), loadRecentTasks()])
 }
 
 async function saveSettings() {
@@ -809,8 +987,10 @@ function modelResults(account: AccountListItem): ModelStateView[] {
 }
 
 function formatTimestamp(value?: number): string {
-  if (!value) return '-'
-  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+  if (!value || !Number.isFinite(value)) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'short', timeStyle: 'short' }).format(date)
 }
 
 function isTerminalCollectionPhase(phase: AccountCollectionPhase): boolean {
@@ -1161,7 +1341,7 @@ function isCollecting(accountId: number): boolean {
 
 async function collectAccount(
   account: AccountListItem,
-  { notify = true }: { notify?: boolean } = {},
+  { notify = true, source = 'manual' }: { notify?: boolean; source?: CodexTurnStateCollectSource } = {},
 ): Promise<AccountCollectionOutcome> {
   if (isCollecting(account.id)) return 'skipped'
   beginAccountCollection(account.id)
@@ -1177,7 +1357,7 @@ async function collectAccount(
     submissionGate = { abort: () => controller.abort(), complete: cancelSubmission, settled: false }
     collectionSubmissionGates.set(account.id, submissionGate)
     const response = await Promise.race([
-      adminAPI.accounts.collectCodexTurnState(account.id, controller.signal).then(result => ({ kind: 'result' as const, result })),
+      adminAPI.accounts.collectCodexTurnState(account.id, source, controller.signal).then(result => ({ kind: 'result' as const, result })),
       cancelled.then(outcome => ({ kind: 'cancelled' as const, outcome })),
     ])
     if (submissionGate.outcome) return submissionGate.outcome
@@ -1187,6 +1367,7 @@ async function collectAccount(
     if (response.kind === 'cancelled') return response.outcome
     if (!componentActive) return 'skipped'
     const result = response.result
+    void loadRecentTasks({ background: true })
     clock.value = Date.now()
     const targetModels = [...new Set(
       (Array.isArray(result.target_models) ? result.target_models : result.model ? [result.model] : [])
@@ -1283,7 +1464,7 @@ async function collectAllAccounts() {
         continue
       }
       try {
-        const outcome = await collectAccount(current, { notify: false })
+        const outcome = await collectAccount(current, { notify: false, source: 'bulk' })
         // A skipped submitted round may still be winding down server-side.
         // Retire this worker so its concurrency slot is not immediately reused.
         if (outcome === 'skipped') return
@@ -1316,6 +1497,7 @@ async function collectAllAccounts() {
       skipped: progress.skippedAccounts,
     }))
   }
+  void loadRecentTasks({ background: true })
 }
 
 onMounted(() => {
@@ -1328,8 +1510,11 @@ onMounted(() => {
 onBeforeUnmount(() => {
   componentActive = false
   accountListRequestGeneration += 1
+  taskListRequestGeneration += 1
   if (clockTimer) clearInterval(clockTimer)
   clockTimer = undefined
+  if (taskPollTimer) clearTimeout(taskPollTimer)
+  taskPollTimer = undefined
   const activeCollectionIds = new Set([...collectionSubmissionGates.keys(), ...pollBaselines.keys()])
   for (const accountId of activeCollectionIds) stopPolling(accountId, 'skipped')
   for (const timer of pollTimers.values()) clearTimeout(timer)
@@ -1347,6 +1532,7 @@ onBeforeUnmount(() => {
   @apply space-y-5;
 }
 .settings-panel,
+.tasks-panel,
 .accounts-panel {
   @apply min-w-0 overflow-hidden;
   border-radius: 0.5rem;
@@ -1413,6 +1599,57 @@ onBeforeUnmount(() => {
 }
 .settings-footer {
   @apply flex flex-wrap items-center justify-between gap-4 border-t border-gray-100 pt-5 dark:border-dark-700;
+}
+.task-empty {
+  @apply flex min-h-40 flex-col items-center justify-center px-5 py-8 text-center text-sm text-gray-500 dark:text-gray-400;
+}
+.task-list {
+  @apply divide-y divide-gray-100 dark:divide-dark-700;
+}
+.task-row {
+  @apply grid min-w-0 items-center gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(12rem,0.75fr)_auto];
+}
+.task-identity,
+.task-progress-summary {
+  @apply min-w-0;
+}
+.task-status,
+.task-source {
+  @apply inline-flex shrink-0 items-center rounded-md px-2 py-1 text-[11px] font-medium;
+}
+.task-source {
+  @apply bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300;
+}
+.task-status-queued,
+.task-status-running {
+  @apply bg-blue-50 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400;
+}
+.task-status-succeeded {
+  @apply bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400;
+}
+.task-status-failed {
+  @apply bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400;
+}
+.task-status-canceled {
+  @apply bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300;
+}
+.task-models {
+  @apply mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5 break-all font-mono text-xs text-gray-500 dark:text-gray-400;
+}
+.task-progress-meta {
+  @apply flex items-center justify-between gap-3 text-xs text-gray-600 dark:text-gray-300;
+}
+.task-progress-track {
+  @apply mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-dark-600;
+}
+.task-progress-track > span {
+  @apply block h-full rounded-full bg-primary-600 transition-all duration-300 dark:bg-primary-500;
+}
+.task-time {
+  @apply mt-2 block text-[11px] text-gray-400 dark:text-gray-500;
+}
+.task-details-link {
+  @apply inline-flex items-center justify-center gap-1 justify-self-start text-xs font-medium text-primary-700 hover:text-primary-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 lg:justify-self-end dark:text-primary-400 dark:hover:text-primary-300;
 }
 .bulk-progress {
   @apply border-b border-gray-100 bg-gray-50/60 px-5 py-4 text-xs text-gray-600 dark:border-dark-700 dark:bg-dark-800/30 dark:text-gray-300;

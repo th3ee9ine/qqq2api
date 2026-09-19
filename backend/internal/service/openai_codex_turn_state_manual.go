@@ -166,12 +166,13 @@ func codexTurnStateManualOwnerPlans(targets []CodexTurnStateManualModelTarget) [
 }
 
 // RequestCodexTurnStateCollection schedules one bounded maintenance round for
-// every concrete model in the configured scope. The legacy requestedModel
-// argument is intentionally ignored: the server-side scope and account catalog
-// are authoritative. Manual collection remains independent of the automatic
-// switch and bypasses existing cooldowns, while normal account lifecycle state
-// and model scope still apply.
-func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Context, account *Account, _ string) (*CodexTurnStateManualCollectionResult, error) {
+// every concrete model in the configured scope. A normal manual/bulk call uses
+// the authoritative server-side scope and account catalog. A task-center retry
+// carries an existing task ID and is deliberately limited to that task's exact
+// owner model. Manual collection remains independent of the automatic switch
+// and bypasses existing cooldowns, while normal account lifecycle state and
+// model scope still apply.
+func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Context, account *Account, requestedModel string) (*CodexTurnStateManualCollectionResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -199,10 +200,32 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 	if s.settingService != nil {
 		cfg = s.settingService.GetOpenAICodexTurnState(ctx)
 	}
-	targets, resolveErr := s.resolveCodexTurnStateManualTargets(ctx, account, cfg)
-	if resolveErr != nil {
-		reason := safeCodexTurnStateManualResolutionError(resolveErr)
-		return s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, reason, "failed to resolve configured Turn State models", now), nil
+	retryTaskID := CodexTurnStateCollectionTaskIDFromContext(ctx)
+	var retryTask *CodexTurnStateCollectionTask
+	if retryTaskID != "" {
+		var ok bool
+		retryTask, ok = s.GetCodexTurnStateCollectionTask(retryTaskID)
+		if !ok || retryTask == nil || retryTask.Source != CodexTurnStateCollectionSourceRetry || retryTask.AccountID != account.ID || retryTask.Status != CodexTurnStateCollectionTaskStatusQueued {
+			return nil, infraerrors.New(http.StatusConflict, "CODEX_TURN_STATE_TASK_RETRY_REJECTED", "Codex Turn State task retry was rejected")
+		}
+		requestedModel = retryTask.RequestModel
+	}
+
+	var targets []CodexTurnStateManualModelTarget
+	if retryTask != nil {
+		seen := make(map[string]struct{}, 1)
+		targets = appendCodexTurnStateManualTarget(nil, seen, strings.TrimSpace(requestedModel))
+		if len(targets) != 1 || !strings.EqualFold(targets[0].Owner, retryTask.OwnerModel) ||
+			!codexTurnStateScopeAllows(cfg, targets[0].Model, targets[0].Owner) {
+			return s.newCodexTurnStateManualResult(ctx, account, requestedModel, CodexTurnStateManualStatusRejected, "model_scope_changed", "Turn State model scope changed; retry collection", now), nil
+		}
+	} else {
+		var resolveErr error
+		targets, resolveErr = s.resolveCodexTurnStateManualTargets(ctx, account, cfg)
+		if resolveErr != nil {
+			reason := safeCodexTurnStateManualResolutionError(resolveErr)
+			return s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, reason, "failed to resolve configured Turn State models", now), nil
+		}
 	}
 	if len(targets) == 0 {
 		return s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, "model_scope_empty", "configured Turn State model scope contains no available models", now), nil
@@ -253,8 +276,9 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 			scopeChanged = true
 			break
 		}
+		s.discardCanceledCodexTurnStateCollectionTaskLocked(entry)
 		candidatePending := s.codexTurnStateUsageCandidateActiveLocked(entry, now)
-		if entry.running || entry.reconciling || entry.dirty || entry.probe || entry.manualProbe || candidatePending {
+		if entry.running || entry.reconciling || entry.dirty || entry.probe || entry.manualProbe || entry.collectionTaskID != "" || candidatePending {
 			busy = true
 			break
 		}
@@ -282,8 +306,57 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 	// Record every owner before starting any worker. A second manual request sees
 	// the complete batch as busy, and all workers serialize on the account-level
 	// manual lock so a broad model scope cannot create unbounded upstream load.
+	source := CodexTurnStateCollectionSourceFromContext(ctx)
+	if source == "" {
+		source = CodexTurnStateCollectionSourceManual
+	}
+	createdTaskIDs := make([]string, 0, len(queued))
+	rollbackCreatedTasks := func() {
+		for _, queuedItem := range queued {
+			for _, createdTaskID := range createdTaskIDs {
+				if queuedItem.entry.collectionTaskID != createdTaskID {
+					continue
+				}
+				s.clearCodexTurnStateCollectionTaskLocked(queuedItem.entry)
+				queuedItem.entry.probe = false
+				queuedItem.entry.forceProbe = false
+				queuedItem.entry.manualProbe = false
+				queuedItem.entry.renewalProbe = false
+			}
+		}
+		for _, createdTaskID := range createdTaskIDs {
+			_, _ = s.CancelCodexTurnStateCollectionTask(createdTaskID)
+		}
+		result.QueuedModels = result.QueuedModels[:0]
+	}
 	for _, item := range queued {
 		plan, entry := item.plan, item.entry
+		var taskID string
+		var taskCtx context.Context
+		if retryTask != nil {
+			taskID = retryTask.ID
+			taskCtx = ctx
+		} else {
+			created, createdCtx, createErr := s.CreateCodexTurnStateCollectionTask(ctx, CodexTurnStateCollectionTaskInput{
+				AccountID:    account.ID,
+				AccountName:  account.Name,
+				RequestModel: plan.Model,
+				OwnerModel:   plan.Owner,
+				Source:       source,
+			})
+			if createErr != nil {
+				rollbackCreatedTasks()
+				s.openaiTurnStateMu.Unlock()
+				return nil, createErr
+			}
+			taskID, taskCtx = created.ID, createdCtx
+			createdTaskIDs = append(createdTaskIDs, created.ID)
+		}
+		if !s.bindCodexTurnStateCollectionTaskLocked(entry, taskID, taskCtx) {
+			rollbackCreatedTasks()
+			s.openaiTurnStateMu.Unlock()
+			return nil, infraerrors.New(http.StatusConflict, "CODEX_TURN_STATE_COLLECTION_IN_FLIGHT", "another Turn State collection is already in progress")
+		}
 		// Every explicit batch may retry immediately. The durable account-wide
 		// boundary remains stored for later automatic work.
 		entry.probeRetryAfter = time.Time{}
@@ -292,6 +365,7 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 		entry.probe = true
 		entry.forceProbe = true
 		entry.manualProbe = true
+		entry.renewalProbe = false
 		entry.retryAfter = time.Time{}
 		entry.retryWakeAt = time.Time{}
 		result.QueuedModels = append(result.QueuedModels, plan.Owner)

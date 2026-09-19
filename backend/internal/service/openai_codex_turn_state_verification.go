@@ -313,6 +313,7 @@ func (s *OpenAIGatewayService) publishManualCodexTurnStateCandidateLocked(entry 
 		s.releaseCodexTurnStateCandidateOwnerAsync(entry.pendingOwner)
 		entry.pendingOwner = codexTurnStateProbeCandidatePendingOwner{}
 		entry.lastError = "invalid_state"
+		markCodexTurnStateProbeCompletedLocked(entry, now)
 		entry.dirty = true
 		entry.manualProbe = true
 		entry.retryAfter = time.Time{}
@@ -333,6 +334,7 @@ func (s *OpenAIGatewayService) publishManualCodexTurnStateCandidateLocked(entry 
 		s.releaseCodexTurnStateCandidateOwnerAsync(entry.pendingOwner)
 		entry.pendingOwner = codexTurnStateProbeCandidatePendingOwner{}
 		entry.lastError = "invalid_state"
+		markCodexTurnStateProbeCompletedLocked(entry, now)
 		entry.dirty = true
 	}
 	if !queuedTask {
@@ -353,7 +355,13 @@ func firstCodexTurnStateRequestModel(fallback string, models ...string) string {
 }
 
 func (s *OpenAIGatewayService) codexTurnStateUsageCandidateActiveLocked(entry *codexTurnStateAutoEntry, now time.Time) bool {
-	if entry == nil || entry.reconciling || entry.candidate.state == "" {
+	if entry == nil {
+		return false
+	}
+	if s.discardCanceledCodexTurnStateCollectionTaskLocked(entry) {
+		return false
+	}
+	if entry.reconciling || entry.candidate.state == "" {
 		return false
 	}
 	candidate := &entry.candidate
@@ -508,6 +516,7 @@ func (s *OpenAIGatewayService) noteCodexTurnStateUsageCandidateErrorLocked(accou
 	entry.candidate = codexTurnStateUsageCandidate{}
 	s.releaseCodexTurnStateCandidateOwnerAsync(owner)
 	entry.lastError = err.Error()
+	markCodexTurnStateProbeCompletedLocked(entry, time.Now())
 	entry.dirty = true
 	if manual && !entry.probe {
 		entry.manualProbe = true
@@ -515,6 +524,9 @@ func (s *OpenAIGatewayService) noteCodexTurnStateUsageCandidateErrorLocked(accou
 	if manual {
 		entry.retryAfter = time.Time{}
 		entry.retryWakeAt = time.Time{}
+	}
+	if entry.collectionTaskID != "" {
+		s.UpdateCodexTurnStateCollectionTask(entry.collectionTaskID, CodexTurnStateCollectionTaskStagePersisting, 85, 100)
 	}
 	s.startCodexTurnStateWorkerLocked(accountID, entry)
 }
@@ -541,6 +553,11 @@ func (s *OpenAIGatewayService) confirmCodexTurnStateUsageLog(input *OpenAIRecord
 		candidate := entry.candidate
 		if !codexTurnStateUsageCandidateInScopeLocked(cfg, entry) {
 			s.discardCodexTurnStateCandidateLocked(entry)
+			markCodexTurnStateBackgroundFailureLocked(entry, "model_scope_changed", now)
+			if entry.collectionTaskID != "" {
+				s.UpdateCodexTurnStateCollectionTask(entry.collectionTaskID, CodexTurnStateCollectionTaskStagePersisting, 85, 100)
+			}
+			s.startCodexTurnStateWorkerLocked(key.accountID, entry)
 			return
 		}
 		if !inserted {
@@ -573,6 +590,9 @@ func (s *OpenAIGatewayService) confirmCodexTurnStateUsageLog(input *OpenAIRecord
 		if candidate.manual {
 			entry.retryAfter = time.Time{}
 			entry.retryWakeAt = time.Time{}
+		}
+		if entry.collectionTaskID != "" {
+			s.UpdateCodexTurnStateCollectionTask(entry.collectionTaskID, CodexTurnStateCollectionTaskStagePersisting, 85, 100)
 		}
 		s.startCodexTurnStateWorkerLocked(key.accountID, entry)
 		return
@@ -671,9 +691,14 @@ func (s *OpenAIGatewayService) noteCodexTurnStateVerificationError(ctx context.C
 	s.openaiTurnStateMu.Lock()
 	entry := s.codexTurnStateEntryLocked(account, now, model)
 	entry.lastError = code
+	markCodexTurnStateProbeCompletedLocked(entry, now)
 	entry.dirty = true
+	failureAt := entry.probeCompletedAt
+	if failureAt < entry.probeAt {
+		failureAt = entry.probeAt
+	}
 	if !now.Before(time.UnixMilli(entry.probeNotBefore)) &&
-		(entry.probeAt <= 0 || now.Sub(time.UnixMilli(entry.probeAt)) >= codexTurnStateAutoProbeInterval) {
+		(failureAt <= 0 || now.Sub(time.UnixMilli(failureAt)) >= codexTurnStateAutoProbeInterval) {
 		// This verification failure creates a new maintenance task. Its scope is
 		// the current actual model, not the union of aliases seen by older tasks.
 		replaceCodexTurnStateProbeModelsLocked(entry, model, scopeModels...)

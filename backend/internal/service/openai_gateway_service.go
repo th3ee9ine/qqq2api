@@ -542,9 +542,21 @@ type OpenAIGatewayService struct {
 	openaiTurnStateMu           sync.Mutex
 	openaiTurnStates            map[codexTurnStateKey]*codexTurnStateAutoEntry
 	openaiTurnStateWorkers      int
+	openaiTurnStateStopping     bool
+	openaiTurnStateWorkersWG    sync.WaitGroup
 	openaiTurnStateSweep        time.Time
 	openaiTurnStateLoads        codexTurnStateSourceLoads
-	openaiTurnStateManualLocks  sync.Map // key: int64(accountID), value: *sync.Mutex
+	openaiTurnStateManualLocks  sync.Map // key: int64(accountID), value: *codexTurnStateAccountLock
+	openaiTurnStateRenewalMu    sync.Mutex
+	openaiTurnStateRenewalStop  context.CancelFunc
+	openaiTurnStateRenewalDone  chan struct{}
+	openaiTurnStateRenewalWG    sync.WaitGroup
+	// The remaining renewal fields are guarded by openaiTurnStateMu.
+	openaiTurnStateRenewalWorkers  int
+	openaiTurnStateRenewalAccounts map[int64]struct{}
+	openaiTurnStateRenewalCursor   codexTurnStateKey
+	openaiTurnStateTasksOnce       sync.Once
+	openaiTurnStateTasks           *codexTurnStateCollectionTaskRegistry
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -614,6 +626,7 @@ func NewOpenAIGatewayService(
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
+		openaiTurnStateTasks:  newCodexTurnStateCollectionTaskRegistry(codexTurnStateCollectionTaskLimit),
 	}
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
@@ -731,10 +744,16 @@ func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 	}
 }
 
-// CloseOpenAIWSPool 关闭 OpenAI WebSocket 连接池的后台 worker 和空闲连接。
-// 应在应用优雅关闭时调用。
+// CloseOpenAIWSPool stops OpenAI gateway-owned background resources and closes
+// idle WebSocket connections. It is called during graceful application shutdown.
 func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
-	if s != nil && s.openaiWSPool != nil {
+	if s == nil {
+		return
+	}
+	s.StopCodexTurnStateCollectionTasks()
+	s.StopOpenAICodexTurnStateRenewal()
+	s.openaiTurnStateWorkersWG.Wait()
+	if s.openaiWSPool != nil {
 		s.openaiWSPool.Close()
 	}
 }

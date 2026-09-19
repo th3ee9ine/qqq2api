@@ -376,6 +376,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 		if autoEnabled {
 			auto = s.autoTurnStateForAccount(ctx, account, models...)
 		} else {
+			s.enforceCodexTurnStateScopeForAccount(current, account.ID, model)
 			return nil
 		}
 	}
@@ -383,6 +384,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 	s.openaiTurnStateMu.Lock()
 	now := time.Now()
 	entry := s.codexTurnStateEntryLocked(account, now, model)
+	s.discardCanceledCodexTurnStateCollectionTaskLocked(entry)
 	// Re-evaluate under the same lock as revocation/collection. The automatic
 	// result obtained before acquiring this lock may already have been revoked.
 	auto = ""
@@ -398,6 +400,11 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 	candidateInScope := entry.candidate.state == "" || codexTurnStateUsageCandidateInScopeLocked(cfg, entry)
 	if !candidateInScope {
 		s.discardCodexTurnStateCandidateLocked(entry)
+		markCodexTurnStateBackgroundFailureLocked(entry, "model_scope_changed", now)
+		if entry.collectionTaskID != "" {
+			s.UpdateCodexTurnStateCollectionTask(entry.collectionTaskID, CodexTurnStateCollectionTaskStagePersisting, 85, 100)
+		}
+		s.startCodexTurnStateWorkerLocked(account.ID, entry)
 	}
 	if candidateInScope && !nativeAllowed && !codexTurnStateManualVerification(ctx) && (autoEnabled || entry.candidate.manual) {
 		candidate = s.codexTurnStateUsageCandidateForRequestLocked(
