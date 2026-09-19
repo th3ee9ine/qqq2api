@@ -20,6 +20,8 @@ func NewContentModerationHandler(svc *service.ContentModerationService) *Content
 }
 
 type contentModerationConfigRequest struct {
+	Engine        *string                                               `json:"engine"`
+	EngineConfigs map[string]service.UpdateContentModerationEngineInput `json:"engine_configs"`
 	Enabled  *bool   `json:"enabled"`
 	Mode     *string `json:"mode"`
 	BaseURL  *string `json:"base_url"`
@@ -53,6 +55,8 @@ type contentModerationConfigRequest struct {
 }
 
 type contentModerationAPIKeyTestRequest struct {
+	Engine     string              `json:"engine"`
+	Thresholds *map[string]float64 `json:"thresholds"`
 	APIKeys   []string `json:"api_keys"`
 	BaseURL   string   `json:"base_url"`
 	Model     string   `json:"model"`
@@ -83,6 +87,8 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		return
 	}
 	cfg, err := h.service.UpdateConfig(c.Request.Context(), service.UpdateContentModerationConfigInput{
+		Engine:              req.Engine,
+		EngineConfigs:       req.EngineConfigs,
 		Enabled:             req.Enabled,
 		Mode:                req.Mode,
 		BaseURL:             req.BaseURL,
@@ -127,6 +133,8 @@ func (h *ContentModerationHandler) TestAPIKeys(c *gin.Context) {
 		return
 	}
 	result, err := h.service.TestAPIKeys(c.Request.Context(), service.TestContentModerationAPIKeysInput{
+		Engine:    req.Engine,
+		Thresholds: req.Thresholds,
 		APIKeys:   req.APIKeys,
 		BaseURL:   req.BaseURL,
 		Model:     req.Model,

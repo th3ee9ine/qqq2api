@@ -170,6 +170,8 @@ func ContentModerationCategories() []string {
 }
 
 type ContentModerationConfig struct {
+	Engine   string                         `json:"engine,omitempty"`
+	TypeSafe *ContentModerationEngineConfig `json:"typesafe,omitempty"`
 	Enabled  bool   `json:"enabled"`
 	Mode     string `json:"mode"`
 	BaseURL  string `json:"base_url"`
@@ -207,6 +209,8 @@ type ContentModerationConfig struct {
 }
 
 type ContentModerationConfigView struct {
+	Engine                         string                                  `json:"engine"`
+	EngineConfigs                  map[string]*ContentModerationConfigView `json:"engine_configs,omitempty"`
 	Enabled                        bool                            `json:"enabled"`
 	Mode                           string                          `json:"mode"`
 	BaseURL                        string                          `json:"base_url"`
@@ -273,6 +277,8 @@ type ContentModerationAPIKeyLoad struct {
 }
 
 type TestContentModerationAPIKeysInput struct {
+	Engine     string              `json:"engine"`
+	Thresholds *map[string]float64 `json:"thresholds"`
 	APIKeys   []string `json:"api_keys"`
 	BaseURL   string   `json:"base_url"`
 	Model     string   `json:"model"`
@@ -291,6 +297,7 @@ type TestContentModerationAPIKeysResult struct {
 }
 
 type ContentModerationTestAuditResult struct {
+	EngineMeta      *ContentModerationEngineMeta `json:"engine_meta,omitempty"`
 	Flagged         bool               `json:"flagged"`
 	HighestCategory string             `json:"highest_category"`
 	HighestScore    float64            `json:"highest_score"`
@@ -300,6 +307,8 @@ type ContentModerationTestAuditResult struct {
 }
 
 type UpdateContentModerationConfigInput struct {
+	Engine        *string                                       `json:"engine"`
+	EngineConfigs map[string]UpdateContentModerationEngineInput `json:"engine_configs"`
 	Enabled  *bool   `json:"enabled"`
 	Mode     *string `json:"mode"`
 	BaseURL  *string `json:"base_url"`
@@ -421,6 +430,7 @@ type ContentModerationDecision struct {
 }
 
 type ContentModerationLog struct {
+	EngineMeta        *ContentModerationEngineMeta `json:"engine_meta,omitempty"`
 	ID                int64              `json:"id"`
 	RequestID         string             `json:"request_id"`
 	UserID            *int64             `json:"-"`
@@ -468,6 +478,7 @@ type ContentModerationCleanupResult struct {
 }
 
 type ContentModerationRuntimeStatus struct {
+	Engine                       string                          `json:"engine"`
 	Enabled                      bool                            `json:"enabled"`
 	RiskControlEnabled           bool                            `json:"risk_control_enabled"`
 	Mode                         string                          `json:"mode"`
@@ -643,13 +654,20 @@ func (s *ContentModerationService) GetConfig(ctx context.Context) (*ContentModer
 	if err != nil {
 		return nil, err
 	}
-	return s.configView(cfg), nil
+	return s.engineConfigView(cfg), nil
 }
 
 func (s *ContentModerationService) UpdateConfig(ctx context.Context, input UpdateContentModerationConfigInput) (*ContentModerationConfigView, error) {
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return nil, err
+	}
+	legacyOpenAI := cfg.engineProfile(ContentModerationEngineOpenAI)
+	if input.Engine != nil {
+		if !validModerationEngine(*input.Engine) {
+			return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_ENGINE", "内容审计引擎无效")
+		}
+		cfg.Engine = *input.Engine
 	}
 	if input.Enabled != nil {
 		cfg.Enabled = *input.Enabled
@@ -753,10 +771,34 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 			cfg.APIKey = ""
 		}
 	}
+	// Keep the legacy flat fields compatible while storing an independent
+	// profile for the selected engine and any explicitly supplied profiles.
+	selectedEngine := moderationEngine(cfg.Engine)
+	if selectedEngine == ContentModerationEngineTypeSafe {
+		// The legacy fields above describe the OpenAI profile. Restore that
+		// profile before applying the TypeSafe profile so the two remain isolated.
+		cfg.applyEngineProfile(legacyOpenAI)
+	}
+	if err := s.updateEngineProfile(ctx, cfg, selectedEngine, UpdateContentModerationEngineInput{
+		BaseURL: input.BaseURL, Model: input.Model, ProxyID: input.ProxyID,
+		APIKey: input.APIKey, APIKeys: input.APIKeys, APIKeysMode: input.APIKeysMode,
+		DeleteAPIKeyHashes: input.DeleteAPIKeyHashes, ClearAPIKey: input.ClearAPIKey,
+		TimeoutMS: input.TimeoutMS, RetryCount: input.RetryCount, Thresholds: input.Thresholds,
+	}); err != nil {
+		return nil, err
+	}
+	for engine, profile := range input.EngineConfigs {
+		if err := s.updateEngineProfile(ctx, cfg, engine, profile); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.validateConfig(ctx, cfg); err != nil {
 		return nil, err
 	}
 	cfg.normalize()
+	if !validModerationEngine(cfg.Engine) {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_ENGINE", "内容审计引擎无效")
+	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("marshal content moderation config: %w", err)
@@ -767,13 +809,24 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	s.replaceRuntimeConfig(cfg, raw)
 	// 代理选择可能已变化，丢弃已解析的代理 URL 缓存，下次调用即时生效。
 	s.moderationProxyCache.Store(nil)
-	return s.configView(cfg), nil
+	return s.engineConfigView(cfg), nil
 }
 
 func (s *ContentModerationService) TestAPIKeys(ctx context.Context, input TestContentModerationAPIKeysInput) (*TestContentModerationAPIKeysResult, error) {
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return nil, err
+	}
+	engine := moderationEngine(input.Engine)
+	if input.Engine == "" {
+		engine = moderationEngine(cfg.Engine)
+	}
+	if !validModerationEngine(engine) {
+		return nil, infraerrors.BadRequest("INVALID_CONTENT_MODERATION_ENGINE", "内容审计引擎无效")
+	}
+	cfg = cfg.effectiveEngine(engine)
+	if input.Thresholds != nil {
+		cfg.Thresholds = mergeContentModerationThresholds(moderationEngineDefaults(engine).Thresholds, *input.Thresholds)
 	}
 	keys := normalizeModerationAPIKeys(input.APIKeys)
 	configured := false
@@ -814,7 +867,7 @@ func (s *ContentModerationService) TestAPIKeys(ctx context.Context, input TestCo
 		key, ok := s.nextUsableAPIKey(cfg)
 		if !ok {
 			return &TestContentModerationAPIKeysResult{
-				Items:      s.apiKeyStatuses(keys),
+				Items:      s.apiKeyStatuses(keys, engine),
 				ImageCount: imageCount,
 			}, nil
 		}
@@ -830,11 +883,11 @@ func (s *ContentModerationService) TestAPIKeys(ctx context.Context, input TestCo
 		httpStatus := 0
 		result, err := s.callModerationOnceWithInput(ctx, cfg, key, testInput, &httpStatus)
 		latency := int(time.Since(start).Milliseconds())
-		keyHash := moderationAPIKeyHash(key)
+		keyHash := scopedModerationKeyHash(key, engine)
 		if err != nil {
-			s.markAPIKeyError(key, err.Error(), latency, httpStatus)
+			s.markAPIKeyError(key, err.Error(), latency, httpStatus, engine)
 		} else {
-			s.markAPIKeySuccess(key, latency, httpStatus)
+			s.markAPIKeySuccess(key, latency, httpStatus, engine)
 			if auditResult == nil {
 				auditResult = buildContentModerationTestAuditResult(result, cfg.Thresholds)
 			}
@@ -1451,6 +1504,7 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		lastCleanupAt = &t
 	}
 	return &ContentModerationRuntimeStatus{
+		Engine:                       cfg.Engine,
 		Enabled:                      cfg.Enabled,
 		RiskControlEnabled:           riskEnabled,
 		Mode:                         cfg.Mode,
@@ -1737,7 +1791,7 @@ func (s *ContentModerationService) callModeration(ctx context.Context, cfg *Cont
 			break
 		}
 		if trackLoad {
-			s.beginModerationAPIKeyCall(key)
+				s.beginModerationAPIKeyCall(key, cfg.Engine)
 		}
 		start := time.Now()
 		httpStatus := 0
@@ -1745,15 +1799,15 @@ func (s *ContentModerationService) callModeration(ctx context.Context, cfg *Cont
 		latency := int(time.Since(start).Milliseconds())
 		if err == nil {
 			if trackLoad {
-				s.finishModerationAPIKeyCall(key, latency, true)
+				s.finishModerationAPIKeyCall(key, latency, true, cfg.Engine)
 			}
-			s.markAPIKeySuccess(key, latency, httpStatus)
+			s.markAPIKeySuccess(key, latency, httpStatus, cfg.Engine)
 			return result, nil
 		}
 		if trackLoad {
-			s.finishModerationAPIKeyCall(key, latency, false)
+			s.finishModerationAPIKeyCall(key, latency, false, cfg.Engine)
 		}
-		s.markAPIKeyError(key, err.Error(), latency, httpStatus)
+		s.markAPIKeyError(key, err.Error(), latency, httpStatus, cfg.Engine)
 		lastErr = err
 		if httpStatus == http.StatusBadRequest {
 			break
@@ -1774,6 +1828,9 @@ func (s *ContentModerationService) callModeration(ctx context.Context, cfg *Cont
 func (s *ContentModerationService) callModerationOnceWithInput(ctx context.Context, cfg *ContentModerationConfig, apiKey string, input any, httpStatus *int) (*moderationAPIResult, error) {
 	if cfg == nil {
 		return nil, errors.New("content moderation config is nil")
+	}
+	if cfg.Engine == ContentModerationEngineTypeSafe {
+		return s.callTypeSafeModeration(ctx, cfg, apiKey, input, httpStatus)
 	}
 	// Normalize here as well as at config load/update boundaries. This keeps
 	// direct callers (including API-key probes and tests) compatible with
@@ -1913,6 +1970,7 @@ func (s *ContentModerationService) buildLog(input ContentModerationCheckInput, c
 		apiKeyID = &input.APIKeyID
 	}
 	return &ContentModerationLog{
+		EngineMeta:        moderationAttemptMeta(cfg, ContentModerationInput{}),
 		RequestID:         input.RequestID,
 		UserID:            userID,
 		UserEmail:         input.UserEmail,
@@ -2145,6 +2203,9 @@ func cloneContentModerationConfig(cfg *ContentModerationConfig) *ContentModerati
 		return nil
 	}
 	clone := *cfg
+	if cfg.TypeSafe != nil {
+		clone.TypeSafe = cfg.engineProfile(ContentModerationEngineTypeSafe)
+	}
 	clone.ProxyID = cloneInt64Ptr(cfg.ProxyID)
 	clone.APIKeys = append([]string(nil), cfg.APIKeys...)
 	clone.GroupIDs = append([]int64(nil), cfg.GroupIDs...)
@@ -2158,6 +2219,7 @@ func cloneContentModerationConfig(cfg *ContentModerationConfig) *ContentModerati
 }
 
 func (cfg *ContentModerationConfig) normalize() {
+	cfg.Engine = moderationEngine(cfg.Engine)
 	// Kept in persisted/config response schemas for backwards compatibility,
 	// but per-user auto-ban is not a valid operation for global API Keys.
 	cfg.AutoBanEnabled = false
@@ -2333,15 +2395,15 @@ func (s *ContentModerationService) nextUsableAPIKey(cfg *ContentModerationConfig
 	for i := 0; i < len(keys); i++ {
 		idx := int(s.apiKeyCursor.Add(1)-1) % len(keys)
 		key := keys[idx]
-		if !s.isAPIKeyFrozen(key, now) {
+		if !s.isAPIKeyFrozen(key, now, cfg.Engine) {
 			return key, true
 		}
 	}
 	return "", false
 }
 
-func (s *ContentModerationService) isAPIKeyFrozen(key string, now time.Time) bool {
-	hash := moderationAPIKeyHash(key)
+func (s *ContentModerationService) isAPIKeyFrozen(key string, now time.Time, engine ...string) bool {
+	hash := scopedModerationKeyHash(key, engine...)
 	if hash == "" || s == nil {
 		return false
 	}
@@ -2351,8 +2413,8 @@ func (s *ContentModerationService) isAPIKeyFrozen(key string, now time.Time) boo
 	return state != nil && state.FrozenUntil.After(now)
 }
 
-func (s *ContentModerationService) beginModerationAPIKeyCall(key string) {
-	hash := moderationAPIKeyHash(key)
+func (s *ContentModerationService) beginModerationAPIKeyCall(key string, engine ...string) {
+	hash := scopedModerationKeyHash(key, engine...)
 	if hash == "" || s == nil {
 		return
 	}
@@ -2362,8 +2424,8 @@ func (s *ContentModerationService) beginModerationAPIKeyCall(key string) {
 	state.SyncActive++
 }
 
-func (s *ContentModerationService) finishModerationAPIKeyCall(key string, latencyMS int, success bool) {
-	hash := moderationAPIKeyHash(key)
+func (s *ContentModerationService) finishModerationAPIKeyCall(key string, latencyMS int, success bool, engine ...string) {
+	hash := scopedModerationKeyHash(key, engine...)
 	if hash == "" || s == nil {
 		return
 	}
@@ -2385,8 +2447,8 @@ func (s *ContentModerationService) finishModerationAPIKeyCall(key string, latenc
 	state.SyncErrors++
 }
 
-func (s *ContentModerationService) markAPIKeySuccess(key string, latencyMS int, httpStatus int) {
-	hash := moderationAPIKeyHash(key)
+func (s *ContentModerationService) markAPIKeySuccess(key string, latencyMS int, httpStatus int, engine ...string) {
+	hash := scopedModerationKeyHash(key, engine...)
 	if hash == "" || s == nil {
 		return
 	}
@@ -2403,8 +2465,8 @@ func (s *ContentModerationService) markAPIKeySuccess(key string, latencyMS int, 
 	state.LastTested = true
 }
 
-func (s *ContentModerationService) markAPIKeyError(key string, errText string, latencyMS int, httpStatus int) {
-	hash := moderationAPIKeyHash(key)
+func (s *ContentModerationService) markAPIKeyError(key string, errText string, latencyMS int, httpStatus int, engine ...string) {
+	hash := scopedModerationKeyHash(key, engine...)
 	if hash == "" || s == nil {
 		return
 	}
@@ -2463,6 +2525,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		apiKeyMasked = masks[0]
 	}
 	return &ContentModerationConfigView{
+		Engine:                          cfg.Engine,
 		Enabled:                        cfg.Enabled,
 		Mode:                           cfg.Mode,
 		BaseURL:                        cfg.BaseURL,
@@ -2499,35 +2562,35 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 	}
 }
 
-func (s *ContentModerationService) apiKeyStatuses(keys []string) []ContentModerationAPIKeyStatus {
+func (s *ContentModerationService) apiKeyStatuses(keys []string, engine ...string) []ContentModerationAPIKeyStatus {
 	out := make([]ContentModerationAPIKeyStatus, 0, len(keys))
 	for idx, key := range keys {
-		out = append(out, s.apiKeyStatusForHash(idx, moderationAPIKeyHash(key), maskSecretTail(key), true))
+		out = append(out, s.apiKeyStatusForHash(idx, scopedModerationKeyHash(key, engine...), maskSecretTail(key), true))
 	}
 	return out
 }
 
-func (s *ContentModerationService) preBlockAPIKeyLoads(keys []string) []ContentModerationAPIKeyLoad {
+func (s *ContentModerationService) preBlockAPIKeyLoads(keys []string, engine ...string) []ContentModerationAPIKeyLoad {
 	out := make([]ContentModerationAPIKeyLoad, 0, len(keys))
 	for idx, key := range keys {
-		out = append(out, s.preBlockAPIKeyLoadForHash(idx, moderationAPIKeyHash(key), maskSecretTail(key)))
+		out = append(out, s.preBlockAPIKeyLoadForHash(idx, scopedModerationKeyHash(key, engine...), maskSecretTail(key)))
 	}
 	return out
 }
 
-func (s *ContentModerationService) preBlockAPIKeyActive(keys []string) int64 {
+func (s *ContentModerationService) preBlockAPIKeyActive(keys []string, engine ...string) int64 {
 	var total int64
-	for _, item := range s.preBlockAPIKeyLoads(keys) {
+	for _, item := range s.preBlockAPIKeyLoads(keys, engine...) {
 		total += item.Active
 	}
 	return total
 }
 
-func (s *ContentModerationService) preBlockAPIKeyAvailableCount(keys []string) int64 {
+func (s *ContentModerationService) preBlockAPIKeyAvailableCount(keys []string, engine ...string) int64 {
 	now := time.Now()
 	var count int64
 	for _, key := range keys {
-		if !s.isAPIKeyFrozen(key, now) {
+		if !s.isAPIKeyFrozen(key, now, engine...) {
 			count++
 		}
 	}
@@ -2734,6 +2797,7 @@ type moderationAPIResponse struct {
 }
 
 type moderationAPIResult struct {
+	EngineMeta      *ContentModerationEngineMeta `json:"engine_meta,omitempty"`
 	Flagged        bool               `json:"flagged"`
 	CategoryScores map[string]float64 `json:"category_scores"`
 }
@@ -2941,7 +3005,7 @@ func normalizeModerationAPIKeys(keys []string) []string {
 	return out
 }
 
-func deleteModerationAPIKeysByHash(keys []string, hashes []string) []string {
+func deleteModerationAPIKeysByHash(keys []string, hashes []string, engine ...string) []string {
 	keys = normalizeModerationAPIKeys(keys)
 	deleteHashes := make(map[string]struct{}, len(hashes))
 	for _, hash := range hashes {
@@ -2955,7 +3019,7 @@ func deleteModerationAPIKeysByHash(keys []string, hashes []string) []string {
 	}
 	out := make([]string, 0, len(keys))
 	for _, key := range keys {
-		if _, ok := deleteHashes[moderationAPIKeyHash(key)]; ok {
+		if _, ok := deleteHashes[scopedModerationKeyHash(key, engine...)]; ok {
 			continue
 		}
 		out = append(out, key)
