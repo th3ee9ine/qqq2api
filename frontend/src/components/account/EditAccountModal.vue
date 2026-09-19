@@ -397,6 +397,56 @@
           </div>
         </div>
       </div>
+      <!-- Grok OAuth media generation eligibility override -->
+      <div
+        v-if="isGrokOAuthAccount"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="grok-media-eligibility-card"
+      >
+        <div class="space-y-3">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.grokMediaEligibility.title') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.grokMediaEligibility.hint') }}
+            </p>
+          </div>
+          <select
+            v-model="grokMediaEligibilityMode"
+            class="input"
+            data-testid="grok-media-eligibility-mode"
+            :disabled="grokMediaEligibilityLoading"
+          >
+            <option value="auto">{{ t('admin.accounts.grokMediaEligibility.auto') }}</option>
+            <option value="enabled">{{ t('admin.accounts.grokMediaEligibility.enabled') }}</option>
+            <option value="disabled">{{ t('admin.accounts.grokMediaEligibility.disabled') }}</option>
+          </select>
+          <p v-if="grokMediaEligibilityLoading" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.grokMediaEligibility.loading') }}
+          </p>
+          <p v-else-if="grokMediaEligibilityError" class="text-xs text-red-600 dark:text-red-400">
+            {{ grokMediaEligibilityError }}
+          </p>
+          <div v-else-if="grokMediaEligibilityState" class="rounded-lg bg-gray-50 p-3 text-xs dark:bg-dark-700">
+            <span class="font-medium">{{ t('admin.accounts.grokMediaEligibility.current') }}</span>
+            <span class="ml-1" data-testid="grok-media-eligibility-status">
+              {{ grokMediaEligibilityState.eligible ? t('admin.accounts.grokMediaEligibility.eligible') : t('admin.accounts.grokMediaEligibility.ineligible') }}
+              · {{ t(`admin.accounts.grokMediaEligibility.reasons.${grokMediaEligibilityState.reason}`) }}
+            </span>
+          </div>
+          <div
+            v-if="grokMediaEligibilityMode === 'enabled'"
+            class="rounded-lg bg-amber-50 p-3 dark:bg-amber-900/20"
+          >
+            <p class="text-xs text-amber-700 dark:text-amber-400">
+              <Icon name="exclamationTriangle" size="sm" class="mr-1 inline" :stroke-width="2" />
+              {{ t('admin.accounts.grokMediaEligibility.forceEnableWarning') }}
+            </p>
+          </div>
+          <p v-else-if="grokMediaEligibilityMode === 'auto'" class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.grokMediaEligibility.autoHint') }}
+          </p>
+        </div>
+      </div>
       <!-- Header Override Section -->
       <div v-if="headerOverrideCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -2619,6 +2669,8 @@ import type {
   OpenAICompactMode,
   OpenAIEndpointCapability,
   OpenAIResponsesMode,
+  GrokMediaEligibilityMode,
+  GrokMediaEligibilityState,
   OllamaCloudUsageState,
   Proxy,
   UpdateAccountRequest
@@ -2674,7 +2726,9 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 
 const supported = computed(() =>
-  props.account?.platform === 'anthropic' || props.account?.platform === 'openai'
+  props.account?.platform === 'anthropic' ||
+  props.account?.platform === 'openai' ||
+  props.account?.platform === 'grok'
 )
 const isOpenAI = computed(() => props.account?.platform === 'openai')
 const isApiKey = computed(() => props.account?.type === 'apikey')
@@ -2686,6 +2740,9 @@ const isAnthropicApiKey = computed(() =>
 const isAnthropicOAuth = computed(() =>
   props.account?.platform === 'anthropic' &&
   (props.account?.type === 'oauth' || props.account?.type === 'setup-token')
+)
+const isGrokOAuthAccount = computed(
+  () => props.account?.platform === 'grok' && props.account?.type === 'oauth'
 )
 const isSparkShadow = computed(() => Boolean(props.account?.parent_account_id))
 const codexTurnStateInfo = computed(() => props.account?.codex_turn_state_auto ?? null)
@@ -2767,6 +2824,12 @@ const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
+const grokMediaEligibilityMode = ref<GrokMediaEligibilityMode>('auto')
+const grokMediaEligibilityInitialMode = ref<GrokMediaEligibilityMode>('auto')
+const grokMediaEligibilityState = ref<GrokMediaEligibilityState | null>(null)
+const grokMediaEligibilityLoading = ref(false)
+const grokMediaEligibilityError = ref('')
+let grokMediaEligibilityRequestVersion = 0
 const openAILongContextBillingEnabled = ref(false)
 const openAIFlattenNamespaces = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
@@ -2856,6 +2919,37 @@ loadQuotaNotifyGlobal()
 const readUpstreamRequestIdHeader = (extra: unknown): string => {
   const value = asRecord(extra).upstream_request_id_header
   return typeof value === 'string' ? value : ''
+}
+
+const modeFromGrokMediaExtra = (extra: Record<string, unknown> | undefined): GrokMediaEligibilityMode => {
+  if (extra?.grok_media_eligible === true) return 'enabled'
+  if (extra?.grok_media_eligible === false) return 'disabled'
+  return 'auto'
+}
+
+const loadGrokMediaEligibility = async (accountID: number): Promise<GrokMediaEligibilityState | null> => {
+  if (!isGrokOAuthAccount.value || typeof adminAPI.accounts.getGrokMediaEligibility !== 'function') {
+    return null
+  }
+  const requestVersion = ++grokMediaEligibilityRequestVersion
+  grokMediaEligibilityLoading.value = true
+  grokMediaEligibilityError.value = ''
+  try {
+    const state = await adminAPI.accounts.getGrokMediaEligibility(accountID)
+    if (requestVersion !== grokMediaEligibilityRequestVersion) return null
+    grokMediaEligibilityState.value = state
+    grokMediaEligibilityMode.value = state.mode
+    grokMediaEligibilityInitialMode.value = state.mode
+    return state
+  } catch (error: any) {
+    if (requestVersion !== grokMediaEligibilityRequestVersion) return null
+    grokMediaEligibilityError.value = error?.message || t('admin.accounts.grokMediaEligibility.loadFailed')
+    return null
+  } finally {
+    if (requestVersion === grokMediaEligibilityRequestVersion) {
+      grokMediaEligibilityLoading.value = false
+    }
+  }
 }
 
 const baseUrlPlaceholder = computed(() =>
@@ -3424,6 +3518,18 @@ function hydrate() {
     ? extra.quota_reset_timezone
     : 'UTC'
   loadQuotaNotifyFromExtra(extra)
+
+  // Grok media eligibility is maintained by its dedicated endpoint because
+  // the evaluated state can change independently of the account edit payload.
+  grokMediaEligibilityMode.value = modeFromGrokMediaExtra(extra)
+  grokMediaEligibilityInitialMode.value = grokMediaEligibilityMode.value
+  grokMediaEligibilityState.value = null
+  grokMediaEligibilityError.value = ''
+  if (account.platform === 'grok' && account.type === 'oauth') {
+    void loadGrokMediaEligibility(account.id)
+  } else {
+    grokMediaEligibilityRequestVersion++
+  }
 }
 
 function parseRetryStatusCodes(value: unknown): number[] {
@@ -3737,6 +3843,38 @@ function applyApiKeyQuotaExtra(extra: Record<string, unknown>) {
   } else {
     delete extra.quota_reset_timezone
   }
+}
+
+const persistGrokMediaEligibility = async (accountID: number, updatedAccount: Account): Promise<Account> => {
+  if (
+    !isGrokOAuthAccount.value ||
+    grokMediaEligibilityMode.value === grokMediaEligibilityInitialMode.value ||
+    typeof adminAPI.accounts.updateGrokMediaEligibility !== 'function'
+  ) {
+    return updatedAccount
+  }
+
+  try {
+    const state = await adminAPI.accounts.updateGrokMediaEligibility(accountID, grokMediaEligibilityMode.value)
+    grokMediaEligibilityState.value = state
+    grokMediaEligibilityInitialMode.value = state.mode
+    const nextExtra = { ...asRecord(updatedAccount.extra) }
+    if (state.mode === 'auto') delete nextExtra.grok_media_eligible
+    else nextExtra.grok_media_eligible = state.mode === 'enabled'
+    updatedAccount.extra = nextExtra
+  } catch {
+    // The main account update is still useful; refresh the dedicated state so
+    // the editor does not keep presenting a stale decision after a retry.
+    appStore.showError(t('admin.accounts.grokMediaEligibility.partialSave'))
+    const state = await loadGrokMediaEligibility(accountID)
+    if (state) {
+      const nextExtra = { ...asRecord(updatedAccount.extra) }
+      if (state.mode === 'auto') delete nextExtra.grok_media_eligible
+      else nextExtra.grok_media_eligible = state.mode === 'enabled'
+      updatedAccount.extra = nextExtra
+    }
+  }
+  return updatedAccount
 }
 
 async function handleSubmit() {
@@ -4058,8 +4196,9 @@ async function handleSubmit() {
   submitting.value = true
   try {
     const updated = await adminAPI.accounts.update(account.id, updates)
+    const updatedWithEligibility = await persistGrokMediaEligibility(account.id, updated)
     appStore.showSuccess(t('admin.accounts.accountUpdated'))
-    emit('updated', updated)
+    emit('updated', updatedWithEligibility)
     handleClose()
   } catch (error: any) {
     if (error.response?.data?.reason === 'PROXY_CAPACITY_INSUFFICIENT' || error.reason === 'PROXY_CAPACITY_INSUFFICIENT') {

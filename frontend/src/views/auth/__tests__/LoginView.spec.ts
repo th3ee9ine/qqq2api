@@ -97,11 +97,14 @@ describe('LoginView registration entry', () => {
     getPublicSettingsMock.mockResolvedValue(publicSettings)
   })
 
-  it('shows the registration entry when registration is enabled', async () => {
+  // The customized admin-only panel intentionally removes the /register
+  // self-service route, so the login page must not expose a dead link even
+  // when the backend still reports registration_enabled=true.
+  it('keeps the removed registration entry hidden when registration is enabled', async () => {
     const wrapper = mountLogin()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('auth.signUp')
+    expect(wrapper.text()).not.toContain('auth.signUp')
   })
 
   it('hides the registration entry when registration is disabled', async () => {

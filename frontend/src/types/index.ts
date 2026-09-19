@@ -1194,6 +1194,15 @@ export interface OllamaCloudUsageSettings {
   debounce_minutes: number
 }
 
+export type GrokMediaEligibilityMode = 'auto' | 'enabled' | 'disabled'
+
+export interface GrokMediaEligibilityState {
+  account_id: number
+  mode: GrokMediaEligibilityMode
+  eligible: boolean
+  reason: string
+}
+
 export interface Account {
   id: number
   name: string

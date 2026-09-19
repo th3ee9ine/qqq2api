@@ -64,6 +64,7 @@ export async function getAll(): Promise<Proxy[]> {
   const { data } = await apiClient.get<Proxy[]>('/admin/proxies/all', {
     params: { with_count: 'true' }
   })
+  assertProxyArray(data)
   return data
 }
 
