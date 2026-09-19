@@ -147,6 +147,39 @@ describe('feature route guard', () => {
     expect(next).toHaveBeenCalledWith()
   })
 
+  it('registers Codex Turn State as an administrator-only route', async () => {
+    const route = routerHarness.routes.find((item) => item.path === '/admin/codex-turn-state')
+
+    expect(route).toMatchObject({
+      name: 'AdminCodexTurnState',
+      meta: {
+        requiresAuth: true,
+        requiresAdmin: true,
+        titleKey: 'admin.codexTurnState.title',
+        descriptionKey: 'admin.codexTurnState.description',
+      },
+    })
+
+    const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/codex-turn-state')
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith()
+  })
+
+  it('rejects account administrators from the Codex Turn State route', async () => {
+    authStore.isAdmin = false
+    authStore.isAccountAdmin = true
+    authStore.panelHomePath = '/admin/accounts'
+    authStore.user = { role: 'account_admin' }
+
+    const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/codex-turn-state')
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/admin/accounts')
+  })
+
   it.each([
     ['/admin/accounts', 'accounts.manage'],
     ['/admin/proxies', 'proxies.manage'],

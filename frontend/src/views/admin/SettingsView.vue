@@ -4937,18 +4937,6 @@
                 </div>
               </div>
 
-              <CodexTurnStateSettings
-                :auto-enabled="form.openai_codex_turn_state_auto_enabled"
-                :models="form.openai_codex_turn_state_models"
-                :default-model="form.openai_codex_turn_state_default_model"
-                :proxy-id="form.openai_codex_turn_state_proxy_id"
-                :proxies="codexTurnStateProxies"
-                @update:auto-enabled="form.openai_codex_turn_state_auto_enabled = $event"
-                @update:models="form.openai_codex_turn_state_models = $event"
-                @update:default-model="form.openai_codex_turn_state_default_model = $event"
-                @update:proxy-id="form.openai_codex_turn_state_proxy_id = $event"
-              />
-
               <!-- Codex 版本号自动同步 -->
               <div class="flex items-center justify-between">
                 <div>
@@ -9201,7 +9189,6 @@ import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vu
 import GroupBadge from "@/components/common/GroupBadge.vue";
 import GroupOptionItem from "@/components/common/GroupOptionItem.vue";
 import Toggle from "@/components/common/Toggle.vue";
-import CodexTurnStateSettings from "@/components/settings/CodexTurnStateSettings.vue";
 import ProxySelector from "@/components/common/ProxySelector.vue";
 import ImageUpload from "@/components/common/ImageUpload.vue";
 import EmailTemplateEditor from "@/views/admin/settings/EmailTemplateEditor.vue";
@@ -9230,7 +9217,6 @@ import {
   defaultFingerprintSignalRows,
   type FingerprintSignalRow,
 } from "./codexFingerprintSignals";
-import { normalizeCodexTurnStateModels, normalizeCodexTurnStateDefaultModel } from "@/utils/codexTurnState";
 
 const { t, locale } = useI18n();
 const appStore = useAppStore();
@@ -9885,6 +9871,12 @@ type SettingsForm = Omit<
   | "wechat_connect_open_enabled"
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
+  | "openai_codex_turn_state_auto_enabled"
+  | "openai_codex_turn_state_models"
+  | "openai_codex_turn_state_default_model"
+  | "openai_codex_turn_state_proxy_ids"
+  | "openai_codex_turn_state_proxy_id"
+  | "openai_codex_turn_state_proxy_ids_valid"
 > & {
   /** Form always binds a concrete boolean (SystemSettings marks this optional). */
   channel_monitor_hide_throughput: boolean;
@@ -10185,10 +10177,6 @@ const form = reactive<SettingsForm>({
   // Responses/WS Version 共用；不参与提交（提交载荷按字段显式构造）
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
-  openai_codex_turn_state_auto_enabled: false,
-  openai_codex_turn_state_models: "",
-  openai_codex_turn_state_default_model: "gpt-5.5",
-  openai_codex_turn_state_proxy_id: 0,
   // codex_cli_only 加固
   min_codex_version: "",
   max_codex_version: "",
@@ -10433,11 +10421,6 @@ const authSourceDefaultsMeta = computed(() => [
 
 // Proxies for web search emulation ProxySelector
 const webSearchProxies = ref<Proxy[]>([]);
-// All proxy records are offered to the Turn State collector. Credentials are
-// intentionally never rendered by ProxySelector; status and expiry do not gate
-// maintenance collection.
-const codexTurnStateProxies = ref<Proxy[]>([]);
-
 // Web Search Emulation config (loaded/saved separately)
 const DEFAULT_WEB_SEARCH_QUOTA_LIMIT = 1000;
 
@@ -10581,22 +10564,6 @@ async function loadWebSearchConfig() {
     if (status !== 404 && status !== undefined) {
       appStore.showError(extractApiErrorMessage(err, t("common.error")));
     }
-  }
-}
-
-async function loadCodexTurnStateProxies() {
-  try {
-    const first = await adminAPI.proxies.list(1, 1000)
-    const proxies = [...(first.items || [])]
-    const pages = Math.max(1, Number(first.pages) || 1)
-    for (let page = 2; page <= pages; page += 1) {
-      const result = await adminAPI.proxies.list(page, 1000)
-      proxies.push(...(result.items || []))
-    }
-    codexTurnStateProxies.value = proxies
-  } catch {
-    // Settings remain usable when the optional proxy inventory request fails.
-    codexTurnStateProxies.value = []
   }
 }
 
@@ -11313,6 +11280,10 @@ const codexSyncedVersionLabel = computed(() => {
   });
 });
 
+function isStandaloneCodexTurnStateSetting(key: string): boolean {
+  return key === "openai_codex_turn_state" || key.startsWith("openai_codex_turn_state_");
+}
+
 async function loadSettings() {
   loading.value = true;
   loadFailed.value = false;
@@ -11322,6 +11293,7 @@ async function loadSettings() {
       settings.payment_load_balance_strategy || "round-robin";
     // Only assign non-null values from backend (null means unconfigured, keep defaults)
     for (const [key, value] of Object.entries(settings)) {
+      if (isStandaloneCodexTurnStateSetting(key)) continue;
       if (value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }
@@ -11477,9 +11449,7 @@ async function loadSettings() {
       openaiFastPolicyLoaded.value = true;
     }
 
-    // Load optional proxy inventories separately so a proxy API failure does
-    // not prevent the rest of the settings form from loading.
-    await Promise.all([loadWebSearchConfig(), loadCodexTurnStateProxies()]);
+    await loadWebSearchConfig();
   } catch (error: unknown) {
     loadFailed.value = true;
     appStore.showError(
@@ -11590,21 +11560,6 @@ async function saveSettings() {
       );
     form.claude_oauth_system_prompt_blocks =
       claudeOAuthSystemPromptBlocksJSON;
-    let codexTurnStateDefaultModel: string;
-    try {
-      codexTurnStateDefaultModel = normalizeCodexTurnStateDefaultModel(form.openai_codex_turn_state_default_model);
-    } catch {
-      appStore.showError(t("admin.settings.gatewayForwarding.codexTurnStateInvalidDefaultModel"));
-      return;
-    }
-    let codexTurnStateModels: string;
-    try {
-      codexTurnStateModels = normalizeCodexTurnStateModels(form.openai_codex_turn_state_models);
-    } catch {
-      appStore.showError(t("admin.settings.gatewayForwarding.codexTurnStateInvalidModels"));
-      return;
-    }
-
     const payload: UpdateSettingsRequest = {
       site_name: form.site_name,
       site_logo: form.site_logo,
@@ -11655,12 +11610,6 @@ async function saveSettings() {
         form.enable_openai_account_local_device_identity,
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
-      openai_codex_turn_state_auto_enabled: form.openai_codex_turn_state_auto_enabled,
-      openai_codex_turn_state_models: codexTurnStateModels,
-      openai_codex_turn_state_default_model: codexTurnStateDefaultModel,
-      openai_codex_turn_state_proxy_id: Number.isInteger(Number(form.openai_codex_turn_state_proxy_id)) && Number(form.openai_codex_turn_state_proxy_id) > 0
-        ? Number(form.openai_codex_turn_state_proxy_id)
-        : 0,
       min_codex_version: form.min_codex_version?.trim() || "",
       max_codex_version: form.max_codex_version?.trim() || "",
       codex_cli_only_allow_app_server_clients:
@@ -11752,7 +11701,7 @@ async function saveSettings() {
       adminAPI.settings.updateSettings(payload),
     );
     for (const [key, value] of Object.entries(updated)) {
-      if (key === "openai_fast_policy_settings") continue;
+      if (key === "openai_fast_policy_settings" || isStandaloneCodexTurnStateSetting(key)) continue;
       if (value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }

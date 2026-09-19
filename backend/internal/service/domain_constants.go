@@ -713,9 +713,13 @@ const (
 	// collection, renewal and bounded upstream probes. It is opt-in because each
 	// probe is an extra upstream request and may consume model quota.
 	SettingKeyOpenAICodexTurnStateAutoEnabled = "openai_codex_turn_state_auto_enabled"
+	// SettingKeyOpenAICodexTurnStateProxyIDs selects the explicit proxy pool used
+	// by automatic and manually triggered Turn State collection. The JSON array
+	// is authoritative when non-empty; an empty array keeps legacy selection.
+	SettingKeyOpenAICodexTurnStateProxyIDs = "openai_codex_turn_state_proxy_ids"
 	// SettingKeyOpenAICodexTurnStateProxyID selects the dedicated proxy record
-	// used by automatic and manually triggered Turn State collection. Zero keeps
-	// compatibility-pool selection enabled.
+	// used by older clients. New writes keep it synchronized with the first pool
+	// entry so rollback and mixed-version deployments retain a usable route.
 	SettingKeyOpenAICodexTurnStateProxyID = "openai_codex_turn_state_proxy_id"
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。
 	// 迁移后等价规则写入 SettingKeyCodexCLIOnlyWhitelist，不再参与运行时判定。

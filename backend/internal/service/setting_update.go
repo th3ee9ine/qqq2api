@@ -531,10 +531,34 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyOpenAICodexTurnStateModels] = turnStateModels
 	updates[SettingKeyOpenAICodexTurnStateAutoEnabled] = strconv.FormatBool(settings.OpenAICodexTurnStateAutoEnabled)
-	if settings.OpenAICodexTurnStateProxyID < 0 {
-		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_PROXY_ID", "openai_codex_turn_state_proxy_id must be zero or a positive proxy ID")
+	turnStateProxyIDs := settings.OpenAICodexTurnStateProxyIDs
+	if turnStateProxyIDs == nil {
+		if settings.OpenAICodexTurnStateProxyID < 0 {
+			return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_PROXY_ID", "openai_codex_turn_state_proxy_id must be zero or a positive proxy ID")
+		}
+		turnStateProxyIDs = []int64{}
+		if settings.OpenAICodexTurnStateProxyID > 0 {
+			turnStateProxyIDs = append(turnStateProxyIDs, settings.OpenAICodexTurnStateProxyID)
+		}
+	} else {
+		var err error
+		turnStateProxyIDs, err = NormalizeOpenAICodexTurnStateProxyIDs(turnStateProxyIDs)
+		if err != nil {
+			return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_PROXY_IDS", err.Error())
+		}
 	}
-	updates[SettingKeyOpenAICodexTurnStateProxyID] = strconv.FormatInt(settings.OpenAICodexTurnStateProxyID, 10)
+	encodedTurnStateProxyIDs, err := json.Marshal(turnStateProxyIDs)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s: %w", SettingKeyOpenAICodexTurnStateProxyIDs, err)
+	}
+	turnStateProxyID := int64(0)
+	if len(turnStateProxyIDs) > 0 {
+		turnStateProxyID = turnStateProxyIDs[0]
+	}
+	settings.OpenAICodexTurnStateProxyIDs = append([]int64{}, turnStateProxyIDs...)
+	settings.OpenAICodexTurnStateProxyID = turnStateProxyID
+	updates[SettingKeyOpenAICodexTurnStateProxyIDs] = string(encodedTurnStateProxyIDs)
+	updates[SettingKeyOpenAICodexTurnStateProxyID] = strconv.FormatInt(turnStateProxyID, 10)
 	// SettingKeyOpenAICodexClientVersionSynced 由自动同步任务独占写入，此处不得覆盖，
 	// 否则面板保存会把同步结果清空。
 	// codex_cli_only 加固

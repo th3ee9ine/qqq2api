@@ -154,7 +154,7 @@ func TestDebugWorkbenchProxySelectionIsPerRun(t *testing.T) {
 	require.Equal(t, "default-proxy.local", account.Proxy.Host)
 }
 
-func TestDebugWorkbenchErrorsRetainActualResponseAndReleaseSession(t *testing.T) {
+func TestDebugWorkbenchErrorsRetainActualResponse(t *testing.T) {
 	upstream := &debugWorkbenchHTTPStub{fn: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
 		return debugWorkbenchJSONResponse(400, `{"error":{"type":"invalid_request_error","message":"invalid quality; sk-debug-secret"}}`), nil
 	}}
@@ -169,9 +169,6 @@ func TestDebugWorkbenchErrorsRetainActualResponseAndReleaseSession(t *testing.T)
 	require.Contains(t, string(result.Attempts[0].Response.Body), "invalid quality")
 	serialized, _ := json.Marshal(result)
 	require.NotContains(t, string(serialized), "sk-debug-secret")
-	input.Session = DebugSessionInput{ID: result.Session.ID, Action: "continue_turn"}
-	_, err = svc.Run(context.Background(), 1, 7, input)
-	require.NoError(t, err)
 }
 
 func TestDebugWorkbenchContextCancellationReachesUpstream(t *testing.T) {
@@ -214,8 +211,11 @@ func TestDebugWorkbenchValidatesBeforeAccountLookup(t *testing.T) {
 				r.Headers[string(rune('A'+i))+"-Test"] = "x"
 			}
 		},
-		"proxy negative": func(r *DebugWorkbenchRequest) { id := int64(-1); r.ProxyID = &id },
-		"session action": func(r *DebugWorkbenchRequest) { r.Session.Action = "unknown" },
+		"proxy negative":         func(r *DebugWorkbenchRequest) { id := int64(-1); r.ProxyID = &id },
+		"session new turn":       func(r *DebugWorkbenchRequest) { r.Session.Action = "new_turn" },
+		"session continue turn":  func(r *DebugWorkbenchRequest) { r.Session.Action = "continue_turn" },
+		"session replay capture": func(r *DebugWorkbenchRequest) { r.Session.Action = "replay_capture" },
+		"session unknown action": func(r *DebugWorkbenchRequest) { r.Session.Action = "unknown" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -226,7 +226,13 @@ func TestDebugWorkbenchValidatesBeforeAccountLookup(t *testing.T) {
 		})
 	}
 	require.Zero(t, source.gets)
-	for _, raw := range []string{`{"endpoint":"responses","body":{}} {}`, `{"endpoint":"responses","body":{},"unknown":1}`} {
+	for _, raw := range []string{
+		`{"endpoint":"responses","body":{}} {}`,
+		`{"endpoint":"responses","body":{},"unknown":1}`,
+		`{"endpoint":"responses","body":{},"api_key_id":7}`,
+		`{"endpoint":"responses","body":{},"verification_stage":"capture"}`,
+		`{"endpoint":"responses","body":{},"session":{"id":"legacy","action":"new_session"}}`,
+	} {
 		_, err := DecodeDebugWorkbenchRequest(strings.NewReader(raw))
 		require.Error(t, err)
 	}
@@ -243,50 +249,97 @@ func TestDebugWorkbenchConcurrencyLimit(t *testing.T) {
 	require.Equal(t, http.StatusTooManyRequests, inputErr.StatusCode)
 }
 
-func TestDebugWorkbenchSessionHeadersReplayOnlyObservedUpstreamState(t *testing.T) {
-	var requests []http.Header
+func TestDebugWorkbenchAlwaysUsesIndependentIdentityAndNeverReplaysTurnState(t *testing.T) {
+	var requests []struct {
+		header http.Header
+		body   []byte
+	}
 	upstream := &debugWorkbenchHTTPStub{fn: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
-		requests = append(requests, req.Header.Clone())
+		body, _ := io.ReadAll(req.Body)
+		requests = append(requests, struct {
+			header http.Header
+			body   []byte
+		}{header: req.Header.Clone(), body: body})
 		response := debugWorkbenchJSONResponse(200, `{"id":"resp_debug","object":"response","status":"completed","model":"gpt-5.4","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`)
 		response.Header.Set("X-Codex-Turn-State", "observed-upstream-state")
 		return response, nil
 	}}
-	svc, _ := debugWorkbenchTestService(debugWorkbenchTestAccount(), upstream)
+	account := &Account{ID: 7, Name: "oauth-debug", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1, Credentials: map[string]any{"access_token": "oauth-debug-token", "chatgpt_account_id": "debug-account"}}
+	svc, _ := debugWorkbenchTestService(account, upstream)
 	input := DebugWorkbenchRequest{Endpoint: "responses", Body: json.RawMessage(`{"model":"gpt-5.4","input":"hello","stream":false}`), Headers: map[string]string{"X-Codex-Turn-State": "forged-client-state", "Thread-Id": "forged-client-thread"}, Session: DebugSessionInput{Action: "new_session"}}
 	first, err := svc.Run(context.Background(), 1, 7, input)
 	require.NoError(t, err)
 	require.True(t, first.Success, first.Error)
-	require.True(t, first.Session.TurnStateAvailable)
-	require.Empty(t, requests[0].Get("X-Codex-Turn-State"))
-	require.NotEqual(t, "forged-client-thread", requests[0].Get("Thread-Id"))
-	input.Session = DebugSessionInput{ID: first.Session.ID, Action: "continue_turn"}
 	second, err := svc.Run(context.Background(), 1, 7, input)
 	require.NoError(t, err)
 	require.True(t, second.Success, second.Error)
-	require.Equal(t, "observed-upstream-state", requests[1].Get("X-Codex-Turn-State"))
-	require.Equal(t, requests[0].Get("Thread-Id"), requests[1].Get("Thread-Id"))
-	require.Equal(t, requests[0].Get("Turn-Id"), requests[1].Get("Turn-Id"))
-	require.NotEqual(t, requests[0].Get("X-Client-Request-Id"), requests[1].Get("X-Client-Request-Id"))
-	input.Session.Action = "new_turn"
-	third, err := svc.Run(context.Background(), 1, 7, input)
+	require.Len(t, requests, 2)
+	for _, request := range requests {
+		require.Empty(t, request.header.Get("X-Codex-Turn-State"))
+		require.NotEqual(t, "forged-client-thread", request.header.Get("Thread-Id"))
+		require.NotEmpty(t, request.header.Get("session_id"))
+		require.NotEmpty(t, gjson.GetBytes(request.body, "prompt_cache_key").String())
+	}
+	require.NotEqual(t, requests[0].header.Get("session_id"), requests[1].header.Get("session_id"))
+	require.NotEqual(t, requests[0].header.Get("Thread-Id"), requests[1].header.Get("Thread-Id"))
+	require.NotEqual(t, gjson.GetBytes(requests[0].body, "prompt_cache_key").String(), gjson.GetBytes(requests[1].body, "prompt_cache_key").String())
+	require.NotEqual(t, first.RequestID, second.RequestID)
+	serialized, err := json.Marshal(second)
 	require.NoError(t, err)
-	require.True(t, third.Success, third.Error)
-	require.Empty(t, requests[2].Get("X-Codex-Turn-State"))
-	require.Equal(t, requests[1].Get("Thread-Id"), requests[2].Get("Thread-Id"))
-	require.NotEqual(t, requests[1].Get("Turn-Id"), requests[2].Get("Turn-Id"))
-	require.Equal(t, 2, third.Session.TurnIndex)
-	_, err = svc.Run(context.Background(), 2, 7, input)
-	var scopedErr *DebugWorkbenchInputError
-	require.ErrorAs(t, err, &scopedErr)
-	require.Equal(t, 404, scopedErr.StatusCode)
+	for _, removed := range []string{`"session"`, `"state_verification"`, `"daily_replay"`, "observed-upstream-state"} {
+		require.NotContains(t, string(serialized), removed)
+	}
 }
 
-func TestDebugWorkbenchAlignsExistingSessionMetadataWithoutInventingAncestry(t *testing.T) {
-	view := DebugSessionView{SessionID: "managed-session", ThreadID: "managed-thread", TurnID: "managed-turn", WindowID: "managed-window"}
+func TestDebugWorkbenchDisablesStoredAutomaticTurnState(t *testing.T) {
+	now := time.Now().UnixMilli()
+	account := &Account{
+		ID: 7, Name: "oauth-debug", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-debug-token", "chatgpt_account_id": "debug-account"},
+		Extra: map[string]any{
+			codexTurnStateModelExtraKey("gpt-5.4"): map[string]any{
+				CodexTurnStateAutoExtraKey:              "stored-automatic-state",
+				CodexTurnStateAutoSetAtExtraKey:         now,
+				CodexTurnStateAutoVerifiedAtExtraKey:    now,
+				CodexTurnStateAutoVerifiedModelExtraKey: "gpt-5.4",
+			},
+		},
+	}
+	var actualState string
+	upstream := &debugWorkbenchHTTPStub{fn: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
+		actualState = req.Header.Get(openAICodexTurnStateHeader)
+		response := debugWorkbenchJSONResponse(200, "data: "+`{"type":"response.completed","response":{"id":"resp_debug","object":"response","status":"completed","model":"gpt-5.4","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`+"\n\ndata: [DONE]\n\n")
+		response.Header.Set("Content-Type", "text/event-stream")
+		return response, nil
+	}}
+	svc, _ := debugWorkbenchTestService(account, upstream)
+	svc.gateway.settingService = NewSettingService(&codexHeaderSettingRepoStub{values: map[string]string{
+		SettingKeyOpenAICodexTurnStateDefaultModel: "gpt-5.4",
+		SettingKeyOpenAICodexTurnStateModels:       "gpt-5.4",
+		SettingKeyOpenAICodexTurnStateAutoEnabled:  "true",
+	}}, &config.Config{})
+
+	normal, _ := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
+	normal, err := svc.gateway.prepareCodexTurnStateRequest(context.Background(), normal, account, "gpt-5.4")
+	require.NoError(t, err)
+	require.Equal(t, "stored-automatic-state", normal.Header.Get(openAICodexTurnStateHeader), "fixture must prove automatic injection is otherwise active")
+
+	result, err := svc.Run(context.Background(), 1, 7, DebugWorkbenchRequest{
+		Endpoint: "responses",
+		Body:     json.RawMessage(`{"model":"gpt-5.4","input":"hello","stream":false}`),
+		Session:  DebugSessionInput{Action: "new_session"},
+	})
+	require.NoError(t, err)
+	require.True(t, result.Success, result.Error)
+	require.Empty(t, actualState)
+}
+
+func TestDebugWorkbenchAlignsExistingRequestMetadataWithoutInventingAncestry(t *testing.T) {
+	identity := debugWorkbenchRequestIdentity{sessionID: "managed-session", threadID: "managed-thread", turnID: "managed-turn", windowID: "managed-window"}
 	headers := http.Header{}
 	headers.Set("X-Codex-Turn-Metadata", `{"thread_id":"stale-thread","turn_id":"stale-turn","parent_thread_id":"parent-thread","parent_turn_id":"parent-turn","ordinal":9223372036854775806,"subagent":"reviewer"}`)
 	body := []byte(`{"model":"custom-model","metadata":{"keep":"untouched"},"client_metadata":{"session_id":"old-session","window_id":"old-window","x-codex-turn-metadata":"{\"turn_id\":\"old-turn\",\"root_turn_id\":\"root-turn\"}","custom":42}}`)
-	out, changed, err := debugWorkbenchAlignSessionMetadata(headers, body, view)
+	out, changed, err := debugWorkbenchAlignRequestMetadata(headers, body, identity)
 	require.NoError(t, err)
 	require.True(t, changed)
 	rawHeader := headers.Get("X-Codex-Turn-Metadata")
@@ -304,11 +357,11 @@ func TestDebugWorkbenchAlignsExistingSessionMetadataWithoutInventingAncestry(t *
 	require.Equal(t, "custom-model", gjson.GetBytes(out, "model").String())
 	require.Equal(t, "untouched", gjson.GetBytes(out, "metadata.keep").String())
 	unchanged := []byte(`{"model":"custom-model","client_metadata":{"parent_thread_id":"parent-thread","ordinal":9223372036854775806}}`)
-	out, changed, err = debugWorkbenchAlignSessionMetadata(http.Header{}, unchanged, view)
+	out, changed, err = debugWorkbenchAlignRequestMetadata(http.Header{}, unchanged, identity)
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.Equal(t, unchanged, out)
-	_, _, err = debugWorkbenchAlignSessionMetadata(http.Header{"X-Codex-Turn-Metadata": {"[]"}}, body, view)
+	_, _, err = debugWorkbenchAlignRequestMetadata(http.Header{"X-Codex-Turn-Metadata": {"[]"}}, body, identity)
 	require.Error(t, err)
 }
 
@@ -408,19 +461,17 @@ func TestDebugWorkbenchOAuthUsesNativeGatewayAndParentCredentials(t *testing.T) 
 			require.Equal(t, "low", gjson.GetBytes(actualBody, "text.verbosity").String())
 			require.Contains(t, string(actualBody), "complete custom prompt")
 			require.NotEmpty(t, actual.Get("session_id"))
-			cacheKey := "explicit-cache-key"
 			if shadow {
-				cacheKey = result.Session.SessionID
 				require.False(t, gjson.GetBytes(result.Inbound.Body, "prompt_cache_key").Exists())
 				require.Contains(t, strings.Join(result.Warnings, " "), "Body 未指定 prompt_cache_key")
+				require.NotEmpty(t, gjson.GetBytes(actualBody, "prompt_cache_key").String())
+				require.NotEmpty(t, actual.Get("session_id"))
 			} else {
 				require.Equal(t, "explicit-cache-key", gjson.GetBytes(result.Inbound.Body, "prompt_cache_key").String())
+				require.Equal(t, isolateOpenAIUpstreamSessionID(-23, parent, "explicit-cache-key"), actual.Get("session_id"))
+				require.Equal(t, scopeCodexAccountIdentityValue(parent, -23, "prompt-cache", "explicit-cache-key"), gjson.GetBytes(actualBody, "prompt_cache_key").String())
 			}
-			require.Equal(t, isolateOpenAIUpstreamSessionID(-23, parent, cacheKey), actual.Get("session_id"))
-			require.Equal(t, scopeCodexAccountIdentityValue(parent, -23, "prompt-cache", cacheKey), gjson.GetBytes(actualBody, "prompt_cache_key").String())
-			require.Equal(t, scopeCodexAccountIdentityValue(parent, -23, "thread", result.Session.ThreadID), actual.Get("Thread-Id"))
 			require.NotEmpty(t, actual.Get("Thread-Id"))
-			require.True(t, result.Session.TurnStateAvailable)
 			serialized, _ := json.Marshal(result)
 			for _, secret := range []string{"oauth-private-access-token", "private-chatgpt-account", "injected-admin-secret", "private-browser-cookie"} {
 				require.NotContains(t, string(serialized), secret)
@@ -431,27 +482,27 @@ func TestDebugWorkbenchOAuthUsesNativeGatewayAndParentCredentials(t *testing.T) 
 	}
 }
 
-func TestDebugWorkbenchSessionPromptCacheOnlyDefaultsOAuthCarrier(t *testing.T) {
+func TestDebugWorkbenchPromptCacheOnlyDefaultsOAuthCarrier(t *testing.T) {
 	oauth := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	for _, endpoint := range []string{"responses", "chat/completions"} {
-		body, key, note := debugWorkbenchSessionPromptCache(oauth, endpoint, []byte(`{"model":"custom-model","input":"complete","custom":{"ordinal":9223372036854775806}}`), "managed-session")
+		body, key, note := debugWorkbenchPromptCache(oauth, endpoint, []byte(`{"model":"custom-model","input":"complete","custom":{"ordinal":9223372036854775806}}`), "managed-session")
 		require.Equal(t, "managed-session", key)
 		require.NotEmpty(t, note)
 		require.Equal(t, "managed-session", gjson.GetBytes(body, "prompt_cache_key").String())
 		require.Equal(t, "9223372036854775806", gjson.GetBytes(body, "custom.ordinal").Raw)
 		for _, explicit := range []string{`{"prompt_cache_key":"user-chosen"}`, `{"prompt_cache_key":""}`, `{"prompt_cache_key":null}`} {
-			output, _, note := debugWorkbenchSessionPromptCache(oauth, endpoint, []byte(explicit), "managed-session")
+			output, _, note := debugWorkbenchPromptCache(oauth, endpoint, []byte(explicit), "managed-session")
 			require.Equal(t, []byte(explicit), output)
 			require.Contains(t, note, "显式")
 		}
 	}
 	image := []byte(`{"model":"gpt-image-1","prompt":"tree"}`)
-	output, key, note := debugWorkbenchSessionPromptCache(oauth, "images/generations", image, "managed-session")
+	output, key, note := debugWorkbenchPromptCache(oauth, "images/generations", image, "managed-session")
 	require.Equal(t, image, output)
 	require.Empty(t, key)
 	require.Contains(t, note, "Images→Responses")
 	body := []byte(`{"model":"custom-model","input":"complete"}`)
-	output, key, note = debugWorkbenchSessionPromptCache(debugWorkbenchTestAccount(), "responses", body, "managed-session")
+	output, key, note = debugWorkbenchPromptCache(debugWorkbenchTestAccount(), "responses", body, "managed-session")
 	require.Equal(t, body, output)
 	require.Empty(t, key)
 	require.Empty(t, note)

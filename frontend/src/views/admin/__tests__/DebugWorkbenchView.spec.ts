@@ -36,7 +36,7 @@ describe('debug workbench presentation', () => {
   it('identifies local previews without claiming upstream connectivity', async () => {
     accounts.mockResolvedValue({ items: [] })
     await render()
-    expect(wrapper.get('.session-badge').text()).toBe('模板预览')
+    expect(wrapper.get('.request-status-badge').text()).toBe('模板预览')
     expect(wrapper.get('.send-button').attributes('disabled')).toBeDefined()
     expect(wrapper.get('.preview-only-note').text()).toContain('不会模拟成功响应')
     expect(wrapper.text()).not.toContain('调试服务在线')
@@ -79,7 +79,7 @@ describe('debug workbench presentation', () => {
     await wrapper.get('#debug-headers').setValue('{invalid')
     await wrapper.get('.send-button').trigger('click')
     expect(wrapper.get('[role="alert"]').text()).toContain('请求头格式有误')
-    expect(wrapper.get('.session-badge').classes()).toContain('session-error')
+    expect(wrapper.get('.request-status-badge').classes()).toContain('request-status-error')
     expect(runTest).not.toHaveBeenCalled()
   })
 
@@ -211,7 +211,6 @@ describe('actual gateway debug execution', () => {
     const snapshot = (body: unknown, extra = {}) => ({ headers: { 'Content-Type': ['application/json'] }, body, body_bytes: 42, captured_bytes: 42, truncated: false, complete: true, ...extra })
     return {
       request_id: 'debug-request-1', success: true, endpoint: 'responses', transport: 'http', duration_ms: 246,
-      session: { id: 'session-handle-1', session_id: 'native-session', thread_id: 'native-thread', turn_id: 'native-turn', window_id: 'native-window', turn_index: 1, turn_state_available: true },
       inbound: snapshot({ input: 'actually received' }), outbound: snapshot({ output_text: 'actual result' }, { status_code: 200 }),
       attempts: [{ index: 1, transport: 'http', account_id: 1, proxy: 'direct', duration_ms: 231, ttft_ms: 53,
         request: snapshot({ model: 'actual-upstream-model' }, { method: 'POST', url: 'https://chatgpt.com/backend-api/codex/responses' }),
@@ -219,34 +218,6 @@ describe('actual gateway debug execution', () => {
         header_changes: [{ name: 'X-Codex-Routing-Hint', action: 'rewritten', input_values: ['model=old'], output_values: ['model=actual-upstream-model'], reason: '由最终上游模型生成' }, { name: 'X-Unknown', action: 'filtered', reason: '不在正式网关允许范围' }]
       }], warnings: [], ...overrides
     }
-  }
-
-  function verificationExecution(requestID: string, stage: 'baseline' | 'capture' | 'replay' | 'automatic') {
-    const stateReceived = stage === 'capture'
-    const stateSent = stage === 'replay' || stage === 'automatic'
-    return execution({
-      request_id: requestID,
-      session: { id: `${stage}-handle`, session_id: `${stage}-session`, thread_id: `${stage}-thread`, turn_id: `${stage}-turn`, window_id: `${stage}-window`, turn_index: 1, turn_state_available: stateReceived },
-      state_verification: {
-        requested_model: 'gpt-6-astra',
-        response_created_model: 'gpt-6-astra-2026-09-18',
-        response_completed_model: 'gpt-6-astra-2026-09-18',
-        state_sent: stateSent,
-        state_received: stateReceived,
-        state_length: stateReceived ? 332 : undefined,
-        state_source: stage === 'automatic' ? 'automatic' : stage === 'replay' ? 'native' : 'none',
-        actual_account_id: 1,
-        usage_log_account_id: 1,
-        usage_log_api_key_id: 19,
-        usage_log_requested_model: 'gpt-6-astra',
-        upstream_response_model: 'gpt-6-astra-2026-09-18',
-        usage_log_state_sent: stateSent,
-        usage_log_verified: true,
-        state_matches_capture: stage === 'replay',
-        state_published: stage === 'replay',
-        daily_route_verified: stage === 'replay'
-      }
-    })
   }
 
   it('submits the complete JSON and header editors to the real endpoint without dropping custom fields', async () => {
@@ -259,7 +230,7 @@ describe('actual gateway debug execution', () => {
     await wrapper.get('.send-button').trigger('click')
     await flushPromises()
     expect(runTest).toHaveBeenCalledWith('1', { endpoint: 'responses', body, headers, session: { action: 'new_session' } }, expect.any(AbortSignal))
-    expect(wrapper.get('.session-badge').text()).toBe('实际请求已返回')
+    expect(wrapper.get('.request-status-badge').text()).toBe('实际请求已返回')
     expect(wrapper.findComponent({ name: 'DebugJsonViewer' }).props('value')).toContain('response.completed')
     expect(wrapper.text()).toContain('首字节 53 ms')
     expect(wrapper.get('[data-header-change="X-Codex-Routing-Hint"]').text()).toContain('重写')
@@ -282,59 +253,20 @@ describe('actual gateway debug execution', () => {
     expect(runTest.mock.calls[0][1]).toMatchObject({ endpoint: 'images/generations', body })
   })
 
-  it('keeps a session across new turns, offers continuation, and resets explicitly', async () => {
+  it('starts every request in an independent session without Turn State controls', async () => {
     runTest.mockResolvedValue(execution())
     await render()
+    expect(wrapper.find('#debug-verification-mode').exists()).toBe(false)
+    expect(wrapper.find('#debug-verification-api-key').exists()).toBe(false)
+    expect(wrapper.find('#debug-turn-action').exists()).toBe(false)
+    expect(wrapper.find('.debug-context').exists()).toBe(false)
     await wrapper.get('.send-button').trigger('click'); await flushPromises()
-    expect(wrapper.get('.context-state').text()).toContain('已有上游 Turn State')
-    expect(wrapper.get('.context-ids').text()).toContain('native-thread')
+    expect(runTest.mock.calls[0][1].session).toEqual({ action: 'new_session' })
     await wrapper.get('.send-button').trigger('click'); await flushPromises()
-    expect(runTest.mock.calls[1][1].session).toEqual({ id: 'session-handle-1', action: 'new_turn' })
-    await wrapper.get('#debug-turn-action').setValue('continue_turn')
-    await wrapper.get('.send-button').trigger('click'); await flushPromises()
-    expect(runTest.mock.calls[2][1].session).toEqual({ id: 'session-handle-1', action: 'continue_turn' })
-    await wrapper.get('.context-topline button').trigger('click')
-    expect(wrapper.find('.context-ids').exists()).toBe(false)
-    await wrapper.get('.send-button').trigger('click'); await flushPromises()
-    expect(runTest.mock.calls[3][1].session).toEqual({ action: 'new_session' })
+    expect(runTest.mock.calls[1][1].session).toEqual({ action: 'new_session' })
   })
 
-  it('submits the four verification stages with a fixed API key and replays only the capture handle', async () => {
-    runTest
-      .mockResolvedValueOnce(verificationExecution('verify-baseline', 'baseline'))
-      .mockResolvedValueOnce(verificationExecution('verify-capture', 'capture'))
-      .mockResolvedValueOnce(verificationExecution('verify-replay', 'replay'))
-      .mockResolvedValueOnce(verificationExecution('verify-automatic', 'automatic'))
-    await render()
-    await wrapper.get('#debug-model').setValue('gpt-6-astra')
-    await wrapper.get('#debug-verification-mode').setValue(true)
-    await wrapper.get('#debug-verification-api-key').setValue('19')
-
-    const exactBody = {
-      model: 'gpt-6-astra',
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Reply with exactly OK.' }] }],
-      stream: true
-    }
-    expect(JSON.parse((wrapper.get('#debug-api-params').element as HTMLTextAreaElement).value)).toEqual(exactBody)
-
-    await wrapper.get('.send-button').trigger('click'); await flushPromises()
-    expect(runTest.mock.calls[0][1]).toMatchObject({ api_key_id: 19, verification_stage: 'baseline', body: exactBody, session: { action: 'new_session' } })
-    expect(runTest.mock.calls[0][1]).not.toHaveProperty('session.id')
-
-    await wrapper.get('.send-button').trigger('click'); await flushPromises()
-    expect(runTest.mock.calls[1][1]).toMatchObject({ api_key_id: 19, verification_stage: 'capture', session: { action: 'new_session' } })
-    expect(runTest.mock.calls[1][1]).not.toHaveProperty('session.id')
-
-    await wrapper.get('.send-button').trigger('click'); await flushPromises()
-    expect(runTest.mock.calls[2][1]).toMatchObject({ api_key_id: 19, verification_stage: 'replay', session: { id: 'capture-handle', action: 'replay_capture' } })
-
-    await wrapper.get('.send-button').trigger('click'); await flushPromises()
-    expect(runTest.mock.calls[3][1]).toMatchObject({ api_key_id: 19, verification_stage: 'automatic', session: { action: 'new_session' } })
-    expect(runTest.mock.calls[3][1]).not.toHaveProperty('session.id')
-    expect(wrapper.get('.overall-status').text()).toContain('自动注入已验收')
-  })
-
-  it('resets session on account changes and ignores stale in-flight results', async () => {
+  it('cancels stale in-flight results when the account changes', async () => {
     let resolveRequest!: (value: ReturnType<typeof execution>) => void
     runTest.mockImplementation(() => new Promise(resolve => { resolveRequest = resolve }))
     await render()
@@ -348,9 +280,8 @@ describe('actual gateway debug execution', () => {
     resolveRequest(execution())
     await flushPromises()
     expect(signal.aborted).toBe(true)
-    expect(wrapper.find('.context-ids').exists()).toBe(false)
     expect(wrapper.find('[data-header-change]').exists()).toBe(false)
-    expect(wrapper.get('.session-badge').text()).toBe('准备就绪')
+    expect(wrapper.get('.request-status-badge').text()).toBe('准备就绪')
   })
 
   it('selects actual retry attempts and identifies truncated and incomplete captures', async () => {
@@ -399,7 +330,7 @@ describe('actual gateway debug execution', () => {
     await render()
     await wrapper.get('.send-button').trigger('click'); await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('quota is exhausted')
-    expect(wrapper.get('.session-badge').classes()).toContain('session-error')
+    expect(wrapper.get('.request-status-badge').classes()).toContain('request-status-error')
     expect(wrapper.get('.inspector-status').text()).toContain('429')
   })
 })

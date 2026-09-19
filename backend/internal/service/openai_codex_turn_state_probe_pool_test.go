@@ -18,9 +18,12 @@ import (
 
 type turnStateProxyRepo struct {
 	ProxyRepository
-	proxies  []Proxy
-	calls    atomic.Int32
-	getCalls atomic.Int32
+	proxies       []Proxy
+	calls         atomic.Int32
+	getCalls      atomic.Int32
+	listByIDCalls atomic.Int32
+	selectedMu    sync.Mutex
+	selectedIDs   []int64
 }
 
 func (r *turnStateProxyRepo) GetByID(_ context.Context, id int64) (*Proxy, error) {
@@ -33,6 +36,30 @@ func (r *turnStateProxyRepo) GetByID(_ context.Context, id int64) (*Proxy, error
 		return &proxy, nil
 	}
 	return nil, ErrProxyNotFound
+}
+
+func (r *turnStateProxyRepo) ListByIDs(_ context.Context, ids []int64) ([]Proxy, error) {
+	r.listByIDCalls.Add(1)
+	r.selectedMu.Lock()
+	r.selectedIDs = append([]int64(nil), ids...)
+	r.selectedMu.Unlock()
+	selected := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		selected[id] = struct{}{}
+	}
+	result := make([]Proxy, 0, len(ids))
+	for _, proxy := range r.proxies {
+		if _, ok := selected[proxy.ID]; ok {
+			result = append(result, proxy)
+		}
+	}
+	return result, nil
+}
+
+func (r *turnStateProxyRepo) lastSelectedIDs() []int64 {
+	r.selectedMu.Lock()
+	defer r.selectedMu.Unlock()
+	return append([]int64(nil), r.selectedIDs...)
 }
 
 func (r *turnStateProxyRepo) ListActive(context.Context) ([]Proxy, error) {
@@ -295,16 +322,33 @@ func TestCodexTurnStateProbePoolUsesInactiveAndExpiredStaticRecordsWhenDynamicIs
 	require.Len(t, seen, codexTurnStateProbePoolSize)
 }
 
-func TestCodexTurnStateProbePoolPrefersDynamicRecordsOverOrdinaryIPPool(t *testing.T) {
+func TestCodexTurnStateProbePoolCombinesDynamicRecordsAndOrdinaryIPPool(t *testing.T) {
 	dynamic := turnStateDedicatedSessionProxy("SESSION01")
 	ordinary := Proxy{ID: 77, Protocol: "http", Host: "ordinary.example", Port: 8080, Status: StatusActive}
 	repo := &turnStateProxyRepo{proxies: []Proxy{dynamic, ordinary}}
 	s := &OpenAIGatewayService{proxyRepo: repo}
 
 	routes := s.codexTurnStatePoolRoutes(context.Background(), "")
-	require.Len(t, routes, 1)
+	require.Len(t, routes, 2)
 	require.EqualValues(t, 1, repo.calls.Load())
-	require.Equal(t, "testacct-region-US-sid-SESSION01-t-5", requireDedicatedTurnStateRoute(t, routes[0]))
+	require.Contains(t, routes, ordinary.URL())
+	var dynamicRoute string
+	for _, route := range routes {
+		if route != ordinary.URL() {
+			dynamicRoute = route
+		}
+	}
+	require.NotEmpty(t, dynamicRoute)
+	require.Equal(t, "testacct-region-US-sid-SESSION01-t-5", requireDedicatedTurnStateRoute(t, dynamicRoute))
+}
+
+func TestCodexTurnStateProbePoolExcludesCanonicalizedDedicatedPrimary(t *testing.T) {
+	primary := turnStateDedicatedSessionProxy("SESSION01")
+	primary.Protocol = "SOCKS5"
+	primary.Host = "US.1024PROXY.IO"
+
+	routes := codexTurnStateRoutesFromProxies([]Proxy{primary}, primary.URL())
+	require.Empty(t, routes, "the account's fixed session must not be retried through casing-only URL differences")
 }
 
 func TestCodexTurnStateProbePoolIgnoresNameStatusAndExpiryWithoutExplicitID(t *testing.T) {
@@ -376,12 +420,20 @@ func TestCodexTurnStateProbePoolSkipsInvalidDedicatedAndFallsBackBestEffort(t *t
 	t.Run("invalid companion does not discard valid dynamic template", func(t *testing.T) {
 		invalid := turnStateDedicatedTemplateProxy()
 		invalid.Host = "other.example"
-		s := &OpenAIGatewayService{proxyRepo: &turnStateProxyRepo{proxies: []Proxy{turnStateDedicatedTemplateProxy(), invalid}}}
+		dynamic := turnStateDedicatedTemplateProxy()
+		s := &OpenAIGatewayService{proxyRepo: &turnStateProxyRepo{proxies: []Proxy{dynamic, invalid}}}
 
 		routes := s.codexTurnStatePoolRoutes(context.Background(), "")
 		require.Len(t, routes, codexTurnStateProbePoolSize)
 		for _, route := range routes {
-			require.Regexp(t, `^testacct-region-US-sid-[A-Za-z0-9]{8}-t-5$`, requireDedicatedTurnStateRoute(t, route))
+			require.NotEqual(t, dynamic.URL(), route, "bare dynamic templates must never be dialed directly")
+			parsed, err := url.Parse(route)
+			require.NoError(t, err)
+			if parsed.Hostname() == codexTurnState1024ProxyHost {
+				require.Regexp(t, `^testacct-region-US-sid-[A-Za-z0-9]{8}-t-5$`, requireDedicatedTurnStateRoute(t, route))
+			} else {
+				require.Equal(t, "other.example", parsed.Hostname())
+			}
 		}
 	})
 
@@ -463,10 +515,97 @@ func TestCodexTurnStateConfiguredProxyIgnoresStatusExpiryVendorAndName(t *testin
 			} else {
 				require.Equal(t, []string{tc.proxy.URL()}, routes)
 			}
-			require.EqualValues(t, 1, proxyRepo.getCalls.Load())
+			require.EqualValues(t, 1, proxyRepo.listByIDCalls.Load())
+			require.Equal(t, []int64{configuredProxyID}, proxyRepo.lastSelectedIDs())
+			require.Zero(t, proxyRepo.getCalls.Load())
 			require.Zero(t, proxyRepo.calls.Load(), "configured proxy lookup must not depend on the active proxy list")
 		})
 	}
+}
+
+func TestCodexTurnStateConfiguredProxyPoolUsesOnlySelectedIDs(t *testing.T) {
+	settings, settingRepo := turnStateTestSettings("", "")
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[1,3]"
+	proxies := []Proxy{
+		{ID: 1, Protocol: "http", Host: "selected-a.example", Port: 8080},
+		{ID: 2, Protocol: "http", Host: "not-selected.example", Port: 8080},
+		{ID: 3, Protocol: "socks5", Host: "selected-b.example", Port: 1080},
+	}
+	proxyRepo := &turnStateProxyRepo{proxies: proxies}
+	s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
+
+	routes := s.codexTurnStatePoolRoutes(context.Background(), "")
+	require.ElementsMatch(t, []string{proxies[0].URL(), proxies[2].URL()}, routes)
+	require.Equal(t, []int64{1, 3}, proxyRepo.lastSelectedIDs())
+	require.EqualValues(t, 1, proxyRepo.listByIDCalls.Load())
+	require.Zero(t, proxyRepo.calls.Load(), "an explicit pool must never widen to all proxy records")
+}
+
+func TestCodexTurnStateConfiguredProxyPoolMissingOrUnusableDoesNotWiden(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		proxies []Proxy
+	}{
+		{name: "missing", proxies: []Proxy{{ID: 2, Protocol: "http", Host: "not-selected.example", Port: 8080}}},
+		{name: "unusable", proxies: []Proxy{{ID: 99, Protocol: "ftp", Host: "selected.example", Port: 21}}},
+		{name: "malformed dedicated template", proxies: []Proxy{{
+			ID: 99, Protocol: "socks5", Host: codexTurnState1024ProxyHost, Port: codexTurnState1024ProxyPort,
+			Username: "testacct-region-Rand", Password: "test-secret",
+		}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings, settingRepo := turnStateTestSettings("", "")
+			settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[99]"
+			proxyRepo := &turnStateProxyRepo{proxies: tc.proxies}
+			s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
+
+			require.Empty(t, s.codexTurnStatePoolRoutes(context.Background(), ""))
+			require.EqualValues(t, 1, proxyRepo.listByIDCalls.Load())
+			require.Zero(t, proxyRepo.calls.Load())
+		})
+	}
+}
+
+func TestCodexTurnStateMalformedLegacyProxySelectionDoesNotWiden(t *testing.T) {
+	settings, settingRepo := turnStateTestSettings("", "")
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[]"
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyID] = "malformed-private-value"
+	proxyRepo := &turnStateProxyRepo{proxies: []Proxy{{ID: 1, Protocol: "http", Host: "must-not-be-selected.example", Port: 8080}}}
+	s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
+
+	require.Empty(t, s.codexTurnStatePoolRoutes(context.Background(), ""))
+	require.Zero(t, proxyRepo.listByIDCalls.Load())
+	require.Zero(t, proxyRepo.calls.Load(), "a malformed legacy selection must not widen to all proxy records")
+}
+
+func TestCodexTurnStateConfiguredMixedProxyPoolGeneratesAndCapsRoutes(t *testing.T) {
+	dynamic := turnStateDedicatedTemplateProxy()
+	dynamic.ID = 1
+	ordinary := []Proxy{
+		{ID: 2, Protocol: "http", Host: "selected-a.example", Port: 8080},
+		{ID: 3, Protocol: "socks5", Host: "selected-b.example", Port: 1080},
+		{ID: 4, Protocol: "https", Host: "selected-c.example", Port: 8443},
+	}
+	settings, settingRepo := turnStateTestSettings("", "")
+	settingRepo.values[SettingKeyOpenAICodexTurnStateProxyIDs] = "[1,2,3,4]"
+	proxyRepo := &turnStateProxyRepo{proxies: append([]Proxy{dynamic}, ordinary...)}
+	s := &OpenAIGatewayService{settingService: settings, proxyRepo: proxyRepo}
+
+	routes := s.codexTurnStatePoolRoutes(context.Background(), "")
+	require.Len(t, routes, codexTurnStateProbePoolSize)
+	require.NotContains(t, routes, dynamic.URL(), "bare dynamic templates must be expanded into sticky sessions")
+	allowedStatic := map[string]bool{}
+	for _, proxy := range ordinary {
+		allowedStatic[proxy.URL()] = true
+	}
+	for _, route := range routes {
+		if allowedStatic[route] {
+			continue
+		}
+		require.Regexp(t, `^testacct-region-US-sid-[A-Za-z0-9]{8}-t-5$`, requireDedicatedTurnStateRoute(t, route))
+	}
+	require.Equal(t, []int64{1, 2, 3, 4}, proxyRepo.lastSelectedIDs())
+	require.Zero(t, proxyRepo.calls.Load())
 }
 
 func TestCodexTurnStateLiveProxyParserPreservesFixedCountryStickySessionsAndCapsAtThree(t *testing.T) {

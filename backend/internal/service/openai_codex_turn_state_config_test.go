@@ -131,6 +131,72 @@ func TestCodexTurnStateAutomaticCacheIsolationAndReload(t *testing.T) {
 	first.openAICodexTurnStateCache.Store(&cachedOpenAICodexTurnState{expiresAt: time.Now().Add(-time.Second)})
 	require.False(t, first.GetOpenAICodexTurnState(ctx).AutoEnabled)
 }
+
+func TestCodexTurnStateRuntimeProxyPoolPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stored     map[string]string
+		wantIDs    []int64
+		configured bool
+	}{
+		{
+			name: "explicit pool wins over legacy",
+			stored: map[string]string{
+				SettingKeyOpenAICodexTurnStateProxyIDs: "[9,3,9]",
+				SettingKeyOpenAICodexTurnStateProxyID:  "17",
+			},
+			wantIDs: []int64{9, 3}, configured: true,
+		},
+		{
+			name: "empty pool falls back to legacy",
+			stored: map[string]string{
+				SettingKeyOpenAICodexTurnStateProxyIDs: "[]",
+				SettingKeyOpenAICodexTurnStateProxyID:  "17",
+			},
+			wantIDs: []int64{17}, configured: true,
+		},
+		{
+			name: "malformed explicit pool fails closed",
+			stored: map[string]string{
+				SettingKeyOpenAICodexTurnStateProxyIDs: "not-json",
+				SettingKeyOpenAICodexTurnStateProxyID:  "17",
+			},
+			wantIDs: nil, configured: true,
+		},
+		{
+			name: "whitespace explicit pool fails closed",
+			stored: map[string]string{
+				SettingKeyOpenAICodexTurnStateProxyIDs: " \t ",
+				SettingKeyOpenAICodexTurnStateProxyID:  "17",
+			},
+			wantIDs: nil, configured: true,
+		},
+		{
+			name: "malformed legacy with empty pool fails closed",
+			stored: map[string]string{
+				SettingKeyOpenAICodexTurnStateProxyIDs: "[]",
+				SettingKeyOpenAICodexTurnStateProxyID:  "not-an-id",
+			},
+			wantIDs: nil, configured: true,
+		},
+		{
+			name: "malformed legacy without pool fails closed",
+			stored: map[string]string{
+				SettingKeyOpenAICodexTurnStateProxyID: "-1",
+			},
+			wantIDs: nil, configured: true,
+		},
+		{name: "no selection keeps compatibility pool", stored: map[string]string{}, wantIDs: nil, configured: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewSettingService(&codexHeaderSettingRepoStub{values: tc.stored}, &config.Config{})
+			got := svc.GetOpenAICodexTurnState(context.Background())
+			require.Equal(t, tc.wantIDs, got.ProxyIDs)
+			require.Equal(t, tc.configured, got.ProxyPoolConfigured)
+		})
+	}
+}
+
 func TestCodexTurnStateAutomaticPoolDialAndRotation(t *testing.T) {
 	settings, repo := turnStateTestSettings("legacy", "")
 	a := &Account{ID: 5000, Platform: PlatformOpenAI, Type: AccountTypeOAuth}

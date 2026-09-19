@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -16,9 +17,10 @@ import (
 )
 
 const (
-	codexTurnStateModelsMaxLen = 1024
-	codexTurnStateMaxLength    = 4096
-	codexTurnStateTTL          = time.Hour
+	codexTurnStateModelsMaxLen    = 1024
+	codexTurnStateMaxLength       = 4096
+	codexTurnStateProxyIDsMaxSize = 256
+	codexTurnStateTTL             = time.Hour
 )
 
 // Only the HTTP representation is validated. Envelope heuristics are diagnostics,
@@ -114,15 +116,53 @@ func NormalizeOpenAICodexTurnStateProxyID(raw string) (int64, error) {
 	return id, nil
 }
 
+// NormalizeOpenAICodexTurnStateProxyIDs validates and stably de-duplicates an
+// administrator-selected pool. Order is retained because the first ID is also
+// mirrored to the legacy single-proxy setting for mixed-version deployments.
+func NormalizeOpenAICodexTurnStateProxyIDs(ids []int64) ([]int64, error) {
+	if len(ids) > codexTurnStateProxyIDsMaxSize {
+		return nil, fmt.Errorf("openai_codex_turn_state_proxy_ids must contain at most %d proxy IDs", codexTurnStateProxyIDsMaxSize)
+	}
+	result := make([]int64, 0, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, fmt.Errorf("openai_codex_turn_state_proxy_ids must contain only positive proxy IDs")
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	return result, nil
+}
+
+func ParseOpenAICodexTurnStateProxyIDs(raw string) ([]int64, error) {
+	if raw == "" {
+		return []int64{}, nil
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, fmt.Errorf("openai_codex_turn_state_proxy_ids must be a JSON array of positive proxy IDs")
+	}
+	var ids []int64
+	if err := json.Unmarshal([]byte(raw), &ids); err != nil || ids == nil {
+		return nil, fmt.Errorf("openai_codex_turn_state_proxy_ids must be a JSON array of positive proxy IDs")
+	}
+	return NormalizeOpenAICodexTurnStateProxyIDs(ids)
+}
+
 // Only account-scoped lifecycle settings are read. Legacy global manual tokens
 // remain inert. ModelScopeValid keeps malformed historical values fail-closed
 // without discarding an independently valid default model or dedicated proxy.
 type OpenAICodexTurnStateConfig struct {
-	DefaultModel    string
-	Models          string
-	ModelScopeValid bool
-	AutoEnabled     bool
-	ProxyID         int64
+	DefaultModel        string
+	Models              string
+	ModelScopeValid     bool
+	AutoEnabled         bool
+	ProxyIDs            []int64
+	ProxyPoolConfigured bool
 }
 type cachedOpenAICodexTurnState struct {
 	config    OpenAICodexTurnStateConfig
@@ -149,7 +189,7 @@ func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICode
 	}
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
 	defer cancel()
-	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateDefaultModel, SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled, SettingKeyOpenAICodexTurnStateProxyID})
+	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateDefaultModel, SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled, SettingKeyOpenAICodexTurnStateProxyIDs, SettingKeyOpenAICodexTurnStateProxyID})
 	// A repository read failure cannot prove that the stored scope is empty. Keep
 	// both automatic and manual collection fail-closed until a later cache fill.
 	config := OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel}
@@ -162,8 +202,26 @@ func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICode
 		if defaultModel, modelErr := NormalizeOpenAICodexTurnStateDefaultModel(values[SettingKeyOpenAICodexTurnStateDefaultModel]); modelErr == nil {
 			config.DefaultModel = defaultModel
 		}
-		if proxyID, proxyIDErr := NormalizeOpenAICodexTurnStateProxyID(values[SettingKeyOpenAICodexTurnStateProxyID]); proxyIDErr == nil {
-			config.ProxyID = proxyID
+		rawProxyIDs := values[SettingKeyOpenAICodexTurnStateProxyIDs]
+		if proxyIDs, proxyIDsErr := ParseOpenAICodexTurnStateProxyIDs(rawProxyIDs); proxyIDsErr == nil && len(proxyIDs) > 0 {
+			config.ProxyIDs = proxyIDs
+			config.ProxyPoolConfigured = true
+		} else if proxyIDsErr != nil && rawProxyIDs != "" {
+			// A malformed explicit pool must not silently widen collection to every
+			// proxy record. Keep the pool configured but empty so routing fails closed
+			// to the account proxy/direct fallback.
+			config.ProxyPoolConfigured = true
+		}
+		if !config.ProxyPoolConfigured {
+			rawProxyID := values[SettingKeyOpenAICodexTurnStateProxyID]
+			if proxyID, proxyIDErr := NormalizeOpenAICodexTurnStateProxyID(rawProxyID); proxyIDErr == nil && proxyID > 0 {
+				config.ProxyIDs = []int64{proxyID}
+				config.ProxyPoolConfigured = true
+			} else if proxyIDErr != nil && strings.TrimSpace(rawProxyID) != "" {
+				// A malformed legacy selection is still an explicit stored value. Do
+				// not reinterpret it as the all-proxy compatibility pool.
+				config.ProxyPoolConfigured = true
+			}
 		}
 		config.AutoEnabled = config.ModelScopeValid && values[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"
 	} else {
@@ -184,18 +242,12 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 	if s == nil || headers == nil || s.settingService == nil {
 		return nil
 	}
-	noteSource := func(source string) {
-		if trace := DebugWorkbenchTraceFromContext(ctx); trace != nil {
-			trace.NoteTurnStateSource(source)
-		}
-	}
 	model := s.codexTurnStateModel(ctx, models...)
 	scopeModels := appendCodexTurnStateScopeModels(nil, models...)
 	scopeModels = appendCodexTurnStateScopeModels(scopeModels, model)
 	policy := openAICodexTurnStateInjectionPolicy(ctx)
 	if policy == codexTurnStateInjectionDisabled {
 		headers.Del(openAICodexTurnStateHeader)
-		noteSource("none")
 		return nil
 	}
 	if native := strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)); native != "" &&
@@ -203,20 +255,10 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 		headers.Del(openAICodexTurnStateHeader)
 	}
 	if policy == codexTurnStateInjectionNativeOnly {
-		if strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)) != "" {
-			noteSource("native")
-		} else {
-			noteSource("none")
-		}
 		return nil
 	}
 	cfg := s.settingService.GetOpenAICodexTurnState(ctx)
 	if !codexTurnStateAutoEligible(account) {
-		if strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)) != "" {
-			noteSource("native")
-		} else {
-			noteSource("none")
-		}
 		return nil
 	}
 	ctx = withCodexTurnStateModel(ctx, model)
@@ -224,11 +266,6 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 		s.enforceCodexTurnStateScopeForAccount(cfg, account.ID, model)
 		// The configured range gates managed collection and injection only. A
 		// native client continuation remains authoritative for its own request.
-		if strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)) != "" {
-			noteSource("native")
-		} else {
-			noteSource("none")
-		}
 		return nil
 	}
 	autoEnabled := cfg.AutoEnabled
@@ -286,16 +323,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 			headers.Set(openAICodexTurnStateHeader, auto)
 		}
 	}
-	source := "none"
-	if nativeAllowed {
-		source = "native"
-	} else if candidate != "" {
-		source = "candidate"
-	} else if auto != "" {
-		source = "automatic"
-	}
 	s.openaiTurnStateMu.Unlock()
-	noteSource(source)
 	return nil
 }
 

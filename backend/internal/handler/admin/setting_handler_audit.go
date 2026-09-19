@@ -509,6 +509,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAICodexTurnStateModels != after.OpenAICodexTurnStateModels {
 		changed = append(changed, "openai_codex_turn_state_models")
 	}
+	if !equalInt64Slice(before.OpenAICodexTurnStateProxyIDs, after.OpenAICodexTurnStateProxyIDs) {
+		changed = append(changed, "openai_codex_turn_state_proxy_ids")
+	}
 	if before.OpenAICodexTurnStateProxyID != after.OpenAICodexTurnStateProxyID {
 		changed = append(changed, "openai_codex_turn_state_proxy_id")
 	}
@@ -793,6 +796,18 @@ func equalLoginAgreementDocuments(a, b []service.LoginAgreementDocument) bool {
 }
 
 func equalIntSlice(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalInt64Slice(a, b []int64) bool {
 	if len(a) != len(b) {
 		return false
 	}

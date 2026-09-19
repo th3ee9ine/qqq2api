@@ -252,6 +252,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexTurnStateDefaultModel:                   openai.DefaultTestModel,
 		SettingKeyOpenAICodexTurnStateModels:                         "",
 		SettingKeyOpenAICodexTurnStateAutoEnabled:                    "false",
+		SettingKeyOpenAICodexTurnStateProxyIDs:                       "[]",
 		SettingKeyOpenAICodexTurnStateProxyID:                        "0",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
@@ -924,9 +925,31 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.OpenAICodexTurnStateModels = strings.TrimSpace(rawTurnStateModels)
 	}
 	result.OpenAICodexTurnStateAutoEnabled = settings[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"
+	result.OpenAICodexTurnStateProxyIDs = []int64{}
 	result.OpenAICodexTurnStateProxyID = 0
-	if proxyID, err := strconv.ParseInt(strings.TrimSpace(settings[SettingKeyOpenAICodexTurnStateProxyID]), 10, 64); err == nil && proxyID > 0 {
-		result.OpenAICodexTurnStateProxyID = proxyID
+	result.OpenAICodexTurnStateProxyIDsValid = true
+	rawTurnStateProxyIDs := settings[SettingKeyOpenAICodexTurnStateProxyIDs]
+	if proxyIDs, err := ParseOpenAICodexTurnStateProxyIDs(rawTurnStateProxyIDs); err == nil {
+		if len(proxyIDs) > 0 {
+			result.OpenAICodexTurnStateProxyIDs = proxyIDs
+			result.OpenAICodexTurnStateProxyID = proxyIDs[0]
+		} else {
+			rawLegacyProxyID := settings[SettingKeyOpenAICodexTurnStateProxyID]
+			if proxyID, legacyErr := NormalizeOpenAICodexTurnStateProxyID(rawLegacyProxyID); legacyErr == nil && proxyID > 0 {
+				result.OpenAICodexTurnStateProxyIDs = []int64{proxyID}
+				result.OpenAICodexTurnStateProxyID = proxyID
+			} else if legacyErr != nil && strings.TrimSpace(rawLegacyProxyID) != "" {
+				// The compatibility field controls routing whenever the new pool is
+				// empty. Mark malformed non-empty values invalid instead of widening
+				// automatic collection to every proxy record.
+				result.OpenAICodexTurnStateProxyIDsValid = false
+			}
+		}
+	} else if rawTurnStateProxyIDs != "" {
+		// Do not expose the malformed value or reinterpret it as the compatible
+		// all-proxy pool. The admin API returns an empty redacted value plus this
+		// validity bit so clients must explicitly repair the pool before saving.
+		result.OpenAICodexTurnStateProxyIDsValid = false
 	}
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]

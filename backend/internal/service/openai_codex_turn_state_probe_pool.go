@@ -210,6 +210,7 @@ func buildCodexTurnStateProbeRoutes(templates []codexTurnStateProbeProxyTemplate
 	if len(templates) == 0 || random == nil {
 		return nil
 	}
+	primary = canonicalCodexTurnStateDedicatedRoute(primary)
 	base := templates[0]
 	sessions := make(map[string]struct{}, codexTurnStateProbePoolSize)
 	dynamic := false
@@ -358,34 +359,86 @@ func codexTurnStateProxyRoute(proxy Proxy) string {
 	return proxy.URL()
 }
 
-// codexTurnStateProxyPoolRoutes returns a bounded, de-duplicated snapshot of
-// every syntactically usable proxy record. Status, expiry, display name and
-// provider do not gate maintenance collection. This request-level override
-// never changes the account's persisted binding; the primary route is excluded
-// because a pool fallback is meant to provide a fresh exit.
-func codexTurnStateProxyPoolRoutes(proxies []Proxy, primary string) []string {
+func codexTurnStateDedicatedProxyEndpoint(proxy Proxy) bool {
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(proxy.Host)), ".")
+	return host == codexTurnState1024ProxyHost && proxy.Port == codexTurnState1024ProxyPort
+}
+
+func canonicalCodexTurnStateDedicatedRoute(route string) string {
+	template, err := parseCodexTurnStateProbeProxyTemplate(route)
+	if err != nil || template.dynamic {
+		return route
+	}
+	return template.route(template.sessionID)
+}
+
+func codexTurnStateRoutesFromProxies(proxies []Proxy, primary string) []string {
+	type templateGroupKey struct {
+		protocol string
+		host     string
+		port     int
+		account  string
+		region   string
+		password string
+	}
+
 	seen := make(map[string]struct{}, len(proxies)+1)
 	if primary != "" {
 		seen[primary] = struct{}{}
 	}
-	routes := make([]string, 0, min(len(proxies), codexTurnStateProbePoolSize))
-	for _, proxy := range proxies {
-		if !codexTurnStateProxyAddressUsable(proxy) {
-			continue
-		}
-		route := codexTurnStateProxyRoute(proxy)
+	routes := make([]string, 0, len(proxies)+codexTurnStateProbePoolSize)
+	appendRoute := func(route string) {
 		if route == "" {
-			continue
+			return
 		}
 		if _, exists := seen[route]; exists {
-			continue
+			return
 		}
 		seen[route] = struct{}{}
 		routes = append(routes, route)
 	}
-	// Spread concurrent accounts over the pool without repeating an exit in the
-	// same maintenance run. The worker itself performs at most one collection
-	// plus same-route replay per returned route.
+
+	groups := make(map[templateGroupKey][]codexTurnStateProbeProxyTemplate)
+	groupOrder := make([]templateGroupKey, 0)
+	for _, proxy := range proxies {
+		if !codexTurnStateProxyAddressUsable(proxy) {
+			continue
+		}
+		template, err := codexTurnStateProbeProxyTemplateFromRecord(proxy)
+		if err != nil {
+			// An exact 1024Proxy endpoint is not an ordinary static route. If its
+			// country/sticky credentials are malformed, dialing the raw record would
+			// bypass the fixed-country and same-session guarantees above.
+			if codexTurnStateDedicatedProxyEndpoint(proxy) {
+				continue
+			}
+			appendRoute(codexTurnStateProxyRoute(proxy))
+			continue
+		}
+		key := templateGroupKey{
+			protocol: template.protocol,
+			host:     template.host,
+			port:     template.port,
+			account:  template.account,
+			region:   template.region,
+			password: template.password,
+		}
+		if _, exists := groups[key]; !exists {
+			groupOrder = append(groupOrder, key)
+		}
+		groups[key] = append(groups[key], template)
+	}
+	for _, key := range groupOrder {
+		// Bare dynamic templates are never dialed directly. They are converted to
+		// fresh sticky-session routes here, alongside exact fixed-session routes.
+		for _, route := range buildCodexTurnStateProbeRoutes(groups[key], primary, cryptorand.Reader) {
+			appendRoute(route)
+		}
+	}
+
+	// Spread concurrent accounts over all selected route types without repeating
+	// an exit in the same maintenance run. A worker performs at most one
+	// collection plus same-route replay per returned route.
 	rand.Shuffle(len(routes), func(i, j int) { routes[i], routes[j] = routes[j], routes[i] })
 	if len(routes) > codexTurnStateProbePoolSize {
 		routes = routes[:codexTurnStateProbePoolSize]
@@ -393,57 +446,35 @@ func codexTurnStateProxyPoolRoutes(proxies []Proxy, primary string) []string {
 	return routes
 }
 
-// Pool routes are used only for maintenance probes. A configured proxy ID takes
-// precedence without imposing status, expiry, provider, or naming policy. A
-// valid 1024Proxy dynamic template still expands into fresh sticky sessions;
-// every other syntactically usable record is used as-is. When no ID is set, all
-// proxy records form a best-effort pool under the same no-status/no-expiry
-// policy. The caller falls back to the account route or direct transport. Never
-// log URLs.
+// Pool routes are used only for maintenance probes. An explicit configured
+// pool takes precedence without imposing status, expiry, provider, or naming
+// policy and is resolved strictly through ListByIDs. A valid 1024Proxy dynamic
+// template still expands into fresh sticky sessions; malformed records at that
+// dedicated endpoint are skipped, while other syntactically usable records are
+// used as-is. Legacy installations with no configured pool retain the all-record
+// compatibility behavior. The caller falls back to the account route or direct
+// transport when this function returns no routes.
+// Never log URLs.
 func (s *OpenAIGatewayService) codexTurnStatePoolRoutes(ctx context.Context, primary string) []string {
-	if s != nil && s.settingService != nil {
-		config := s.settingService.GetOpenAICodexTurnState(ctx)
-		if config.ProxyID > 0 {
-			if s.proxyRepo == nil {
-				return nil
-			}
-			proxy, err := s.proxyRepo.GetByID(ctx, config.ProxyID)
-			if err != nil || proxy == nil || !codexTurnStateProxyAddressUsable(*proxy) {
-				return nil
-			}
-			if template, templateErr := codexTurnStateProbeProxyTemplateFromRecord(*proxy); templateErr == nil && template.dynamic {
-				if routes := buildCodexTurnStateProbeRoutes([]codexTurnStateProbeProxyTemplate{template}, primary, cryptorand.Reader); len(routes) > 0 {
-					return routes
-				}
-			}
-			return []string{codexTurnStateProxyRoute(*proxy)}
-		}
-	}
-	if s.proxyRepo == nil {
+	if s == nil || s.proxyRepo == nil {
 		return nil
+	}
+	if s.settingService != nil {
+		config := s.settingService.GetOpenAICodexTurnState(ctx)
+		if config.ProxyPoolConfigured {
+			if len(config.ProxyIDs) == 0 {
+				return nil
+			}
+			proxies, err := s.proxyRepo.ListByIDs(ctx, config.ProxyIDs)
+			if err != nil {
+				return nil
+			}
+			return codexTurnStateRoutesFromProxies(proxies, primary)
+		}
 	}
 	proxies, err := s.proxyRepo.ListAllForFallback(ctx)
 	if err != nil {
 		return nil
 	}
-	templates := make([]codexTurnStateProbeProxyTemplate, 0, len(proxies))
-	for _, proxy := range proxies {
-		if !codexTurnStateProxyAddressUsable(proxy) {
-			continue
-		}
-		template, err := codexTurnStateProbeProxyTemplateFromRecord(proxy)
-		if err != nil {
-			continue
-		}
-		templates = append(templates, template)
-	}
-	if len(templates) > 0 {
-		// A maintenance run gets at most one attempt per fresh route. Repeating a
-		// route across rounds can turn a bounded probe into an IP-rotation loop and
-		// can evade an upstream 429 boundary.
-		if routes := buildCodexTurnStateProbeRoutes(templates, primary, cryptorand.Reader); len(routes) > 0 {
-			return routes
-		}
-	}
-	return codexTurnStateProxyPoolRoutes(proxies, primary)
+	return codexTurnStateRoutesFromProxies(proxies, primary)
 }

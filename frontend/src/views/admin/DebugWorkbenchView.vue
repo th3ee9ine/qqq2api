@@ -8,7 +8,7 @@
           <p class="workspace-description">构造请求，探索模型，在同一视图检查调试链路。</p>
         </div>
         <div class="header-actions">
-          <span class="session-badge" :class="`session-${sessionState.tone}`" role="status"><span class="status-dot"></span>{{ sessionState.label }}</span>
+          <span class="request-status-badge" :class="`request-status-${requestState.tone}`" role="status"><span class="status-dot"></span>{{ requestState.label }}</span>
           <button type="button" class="secondary-button" :disabled="running || defaultsLoading" @click="resetAll"><Icon name="refresh" size="sm" /> 重置参数</button>
         </div>
       </header>
@@ -31,7 +31,7 @@
           </div>
           <div class="connection-field">
             <label for="debug-endpoint" class="field-label">请求方式</label>
-            <div class="control-with-icon"><Icon name="swap" size="md" /><select id="debug-endpoint" v-model="form.endpoint" class="workbench-input" :disabled="running || verificationMode"><option value="chat/completions">Chat Completions</option><option value="responses">Responses API</option><option value="images/generations">Images Generation</option></select></div>
+            <div class="control-with-icon"><Icon name="swap" size="md" /><select id="debug-endpoint" v-model="form.endpoint" class="workbench-input" :disabled="running"><option value="chat/completions">Chat Completions</option><option value="responses">Responses API</option><option value="images/generations">Images Generation</option></select></div>
             <p class="field-hint">{{ form.endpoint === 'images/generations' ? '图像生成接口' : '文本与多模态接口' }}</p>
           </div>
           <div class="connection-field proxy-field">
@@ -40,34 +40,12 @@
             <p class="field-hint">{{ selectedProxy ? `${selectedProxy.protocol} · ${selectedProxy.host}:${selectedProxy.port}` : form.proxyId === 0 ? '仅本次请求直连，不修改账号配置' : '使用所选账号的默认代理' }}</p>
           </div>
         </div>
-        <div class="verification-mode-panel">
-          <div class="verification-mode-heading">
-            <div><strong>短请求验收</strong><span>四阶段真实模型与 State 闭环</span></div>
-            <label class="switch-control" for="debug-verification-mode"><input id="debug-verification-mode" v-model="verificationMode" type="checkbox" :disabled="running" /><span class="switch-track" aria-hidden="true"></span><span>{{ verificationMode ? '已启用' : '未启用' }}</span></label>
-          </div>
-          <div v-if="verificationMode" class="verification-scope">
-            <label for="debug-verification-api-key">API Key ID</label>
-            <input id="debug-verification-api-key" v-model.trim="verificationApiKeyID" class="workbench-input" type="number" min="1" step="1" inputmode="numeric" placeholder="仅填数字 ID" :disabled="running" />
-            <span class="verification-stage-badge">{{ verificationStageLabel }}</span>
-            <span class="context-state">Reply with exactly OK.</span>
-          </div>
-          <p v-if="verificationMode && !validVerificationAPIKeyID" class="field-warning">验收模式必须指定真实专用 API Key 的正整数 ID，不接收 Key 原文。</p>
-          <p v-else-if="verificationMode && verificationStage === 'replay' && !captureSessionHandle" class="field-warning">需先在当前账号、API Key 和模型下完成候选 State 采集。</p>
-        </div>
-        <div v-if="!verificationMode" class="debug-context">
-          <div class="context-topline"><div><span class="context-label">会话上下文</span><span class="transport-badge">HTTP / SSE</span></div><button type="button" class="preset-button" :disabled="running" @click="resetSession">新建会话</button></div>
-          <div class="context-controls"><label for="debug-turn-action">下一次请求</label><select id="debug-turn-action" v-model="sessionAction" class="workbench-input" :disabled="running || !debugSession"><option value="new_turn">新回合 · 保留会话 / 线程</option><option value="continue_turn">续接当前回合 · 复用上游状态</option></select><span class="context-state">{{ debugSession ? `第 ${debugSession.turn_index} 回合 · ${debugSession.turn_state_available ? '已有上游 Turn State' : '暂无上游 Turn State'}` : '首次发送时创建会话，动态 IDs 由服务端维护' }}</span></div>
-          <details v-if="debugSession" class="context-ids"><summary>查看会话标识</summary><dl><template v-for="(value, key) in sessionIdentifiers" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl></details>
-          <p class="context-note">{{ sessionAction === 'continue_turn' && debugSession ? '续接复用当前回合；服务端仅复用本账号、本会话收到的 Turn State。' : '新回合保留 Session / Thread / Window，生成新的 Turn ID，并清空上一回合状态。' }} 对话消息以完整 JSON 为准，不自动追加历史。</p>
-        </div>
         <p v-if="isFixtureAccount && !accountsLoading" class="preview-only-note">当前仅预览参数模板。选择已配置的 GPT 账号后可发送真实请求；这里不会模拟成功响应。</p>
         <div class="request-bar">
           <div class="endpoint-address"><span class="method-badge">POST</span><code :title="upstreamUrl">{{ upstreamUrl }}</code></div>
-          <button type="button" class="send-button" :disabled="running || defaultsLoading || accountsLoading || modelsLoading || isFixtureAccount || verificationRequestBlocked" @click="runRequest"><Icon :name="running ? 'refresh' : 'play'" size="sm" :class="running && 'animate-spin'" /><span>{{ running ? '正在发送…' : isFixtureAccount ? '等待选择账号' : '发送请求' }}</span><Icon name="arrowRight" size="sm" class="send-arrow" /></button>
+          <button type="button" class="send-button" :disabled="running || defaultsLoading || accountsLoading || modelsLoading || isFixtureAccount" @click="runRequest"><Icon :name="running ? 'refresh' : 'play'" size="sm" :class="running && 'animate-spin'" /><span>{{ running ? '正在发送…' : isFixtureAccount ? '等待选择账号' : '发送请求' }}</span><Icon name="arrowRight" size="sm" class="send-arrow" /></button>
         </div>
       </section>
-
-      <DebugStateComparison v-if="verificationMode" v-model:stage="verificationStage" :run="verificationRun" :running="running" :scope-key="verificationScopeKey" />
 
       <div class="workspace-columns">
         <section class="editor-panel" aria-labelledby="editor-title">
@@ -77,29 +55,29 @@
           </div>
           <div v-if="responseStatus && !responseSuccessful" class="request-error" role="alert"><Icon name="exclamationCircle" size="sm" /><span>{{ responseError || '本次请求未成功，请在响应详情中检查错误信息。' }}</span></div>
           <div v-show="editorTab === 'message'" id="editor-panel-message" role="tabpanel" aria-labelledby="editor-tab-message" class="editor-body">
-            <div class="preset-row"><span>快捷场景</span><button v-for="preset in presets" :key="preset.label" type="button" class="preset-button" :disabled="running || defaultsLoading || verificationMode" :class="{ 'is-selected': form.prompt === preset.prompt }" @click="applyPreset(preset)">{{ preset.label }}</button></div>
-            <label class="editor-field"><span class="field-label">系统提示词<span class="field-label-note">SYSTEM</span></span><textarea v-model="form.system" :disabled="running || defaultsLoading || verificationMode || form.endpoint === 'images/generations'" rows="3" class="workbench-input" placeholder="设定模型的角色与行为…"></textarea></label>
-            <label class="editor-field"><span class="field-label">用户消息<span class="field-label-note">USER</span></span><textarea v-model="form.prompt" :disabled="running || defaultsLoading || verificationMode" rows="6" class="workbench-input prompt-input" placeholder="输入要调试的内容…"></textarea></label>
+            <div class="preset-row"><span>快捷场景</span><button v-for="preset in presets" :key="preset.label" type="button" class="preset-button" :disabled="running || defaultsLoading" :class="{ 'is-selected': form.prompt === preset.prompt }" @click="applyPreset(preset)">{{ preset.label }}</button></div>
+            <label class="editor-field"><span class="field-label">系统提示词<span class="field-label-note">SYSTEM</span></span><textarea v-model="form.system" :disabled="running || defaultsLoading || form.endpoint === 'images/generations'" rows="3" class="workbench-input" placeholder="设定模型的角色与行为…"></textarea></label>
+            <label class="editor-field"><span class="field-label">用户消息<span class="field-label-note">USER</span></span><textarea v-model="form.prompt" :disabled="running || defaultsLoading" rows="6" class="workbench-input prompt-input" placeholder="输入要调试的内容…"></textarea></label>
             <div class="parameter-grid"><label class="editor-field"><span class="field-label">Temperature</span><input v-model.number="form.temperature" :disabled="running || defaultsLoading || form.endpoint !== 'chat/completions'" type="number" min="0" max="2" step="0.1" class="workbench-input" /><span class="field-hint">{{ form.endpoint === 'chat/completions' ? '0 表示使用接口默认值' : '该接口请在 JSON 中配置支持的字段' }}</span></label><label class="editor-field"><span class="field-label">最大 Tokens</span><input v-model.number="form.maxTokens" :disabled="running || defaultsLoading || form.endpoint !== 'chat/completions'" type="number" min="0" class="workbench-input" /><span class="field-hint">{{ form.endpoint === 'chat/completions' ? '0 表示不指定上限' : '保留完整 JSON 中的参数' }}</span></label></div>
           </div>
           <div v-show="editorTab === 'json'" id="editor-panel-json" role="tabpanel" aria-labelledby="editor-tab-json" class="editor-body">
             <div class="editor-description"><span>完整 API 参数</span><span class="format-tag">JSON</span></div>
-            <label class="sr-only" for="debug-api-params">完整 API 参数 JSON</label><textarea id="debug-api-params" v-model="form.apiParams" :disabled="running || defaultsLoading || verificationMode" rows="23" class="source-editor" spellcheck="false"></textarea>
+            <label class="sr-only" for="debug-api-params">完整 API 参数 JSON</label><textarea id="debug-api-params" v-model="form.apiParams" :disabled="running || defaultsLoading" rows="23" class="source-editor" spellcheck="false"></textarea>
             <p class="editor-note">此 JSON 是发送时的完整请求体。便捷控件只更新对应字段；自定义字段原样提交，由正式网关按账号规则处理。</p>
           </div>
           <div v-show="editorTab === 'headers'" id="editor-panel-headers" role="tabpanel" aria-labelledby="editor-tab-headers" class="editor-body">
             <div class="editor-description"><span>上游请求 Headers</span><span class="format-tag">{{ headerCount === null ? 'JSON 格式待修正' : `${headerCount} HEADERS` }}</span></div>
-            <div class="headers-source-row"><span>{{ defaultsLoading ? '正在同步项目上游默认头…' : headersFromBackend ? '来自项目实际请求构造 · 已脱敏' : '基础示例 · 待同步后端配置' }}</span><button type="button" class="preset-button" :disabled="running || defaultsLoading || verificationMode" @click="restoreDefaultHeaders">恢复默认</button></div>
-            <label class="sr-only" for="debug-headers">上游完整请求头 JSON</label><textarea id="debug-headers" v-model="form.headers" :disabled="running || defaultsLoading || verificationMode" rows="20" class="source-editor" spellcheck="false" aria-describedby="headers-default-notes"></textarea>
+            <div class="headers-source-row"><span>{{ defaultsLoading ? '正在同步项目上游默认头…' : headersFromBackend ? '来自项目实际请求构造 · 已脱敏' : '基础示例 · 待同步后端配置' }}</span><button type="button" class="preset-button" :disabled="running || defaultsLoading" @click="restoreDefaultHeaders">恢复默认</button></div>
+            <label class="sr-only" for="debug-headers">上游完整请求头 JSON</label><textarea id="debug-headers" v-model="form.headers" :disabled="running || defaultsLoading" rows="20" class="source-editor" spellcheck="false" aria-describedby="headers-default-notes"></textarea>
             <div id="headers-default-notes" class="headers-default-notes"><p class="editor-note"><Icon name="lock" size="sm" /> 鉴权值已隐藏；动态请求头以占位符展示，实际值由后端生成。</p><p v-if="hasRoutingHintDetail" class="editor-note routing-hint-note">OAuth Codex 的 X-Codex-Routing-Hint 由正式网关按最终上游模型重新生成，JSON 中的静态值不会直接发送。执行后可检查实际保留、重写、生成与过滤结果。</p><details v-if="defaultsNotes.length"><summary>默认头来源与动态字段说明</summary><ul><li v-for="(note, index) in defaultsNotes" :key="index">{{ note }}</li></ul></details></div>
             <DebugHeaderGuide :details="headerDetails" :headers="form.headers" :loading="defaultsLoading" />
           </div>
           <div v-show="editorTab === 'image'" id="editor-panel-image" role="tabpanel" aria-labelledby="editor-tab-image" class="editor-body">
-            <div class="image-mode-row"><div><h3>生图测试</h3><p>提示词、生成参数与图像预览</p></div><label class="switch-control"><input v-model="imageMode" type="checkbox" :disabled="verificationMode || form.endpoint !== 'responses' || running || defaultsLoading" /><span class="switch-track" aria-hidden="true"></span><span>{{ imageMode ? '已启用' : '启用' }}</span></label></div>
+            <div class="image-mode-row"><div><h3>生图测试</h3><p>提示词、生成参数与图像预览</p></div><label class="switch-control"><input v-model="imageMode" type="checkbox" :disabled="form.endpoint !== 'responses' || running || defaultsLoading" /><span class="switch-track" aria-hidden="true"></span><span>{{ imageMode ? '已启用' : '启用' }}</span></label></div>
             <p v-if="form.endpoint !== 'images/generations'" class="editor-note">{{ form.endpoint === 'responses' ? '启用后会在完整 JSON 中加入 image_generation 工具；工具参数请在 JSON 中编辑。' : '生图请切换到 Responses API 或 Images Generation。' }}</p><fieldset :disabled="!imageMode || running || defaultsLoading" class="image-fields"><legend class="sr-only">生图参数</legend><label class="editor-field"><span class="field-label">图像提示词</span><textarea v-model="imageForm.prompt" rows="4" class="workbench-input" placeholder="描述画面、光线、构图与风格…"></textarea></label><div class="parameter-grid"><label class="editor-field"><span class="field-label">生成数量</span><input :disabled="form.endpoint !== 'images/generations'" v-model.number="imageForm.n" type="number" min="1" max="10" class="workbench-input" /></label><label class="editor-field"><span class="field-label">响应格式</span><select :disabled="form.endpoint !== 'images/generations'" v-model="imageForm.responseFormat" class="workbench-input"><option value="b64_json">b64_json</option><option value="url">url</option></select></label></div></fieldset>
             <div class="image-preview"><img v-if="imagePreviewUrl && !imagePreviewFailed" :src="imagePreviewUrl" alt="生成结果预览" @error="imagePreviewFailed = true" /><div v-else class="preview-placeholder"><span class="preview-icon"><Icon name="beaker" size="lg" /></span><strong>{{ imagePreviewFailed ? '图像加载失败' : '让想法成为画面' }}</strong><p>{{ imagePreviewFailed ? '请在上游响应中检查图像地址。' : isFixtureAccount ? '尚未选择真实账号，仅显示参数模板。' : '启用生图后，生成结果将在这里展示。' }}</p></div></div>
           </div>
-          <footer class="editor-footer"><label class="switch-control"><input v-model="form.stream" type="checkbox" :disabled="running || defaultsLoading || verificationMode || form.endpoint === 'images/generations'" /><span class="switch-track" aria-hidden="true"></span><span>流式响应</span></label><span class="format-tag">{{ form.endpoint === 'images/generations' ? 'JSON' : form.stream ? 'STREAM' : 'JSON' }}</span></footer>
+          <footer class="editor-footer"><label class="switch-control"><input v-model="form.stream" type="checkbox" :disabled="running || defaultsLoading || form.endpoint === 'images/generations'" /><span class="switch-track" aria-hidden="true"></span><span>流式响应</span></label><span class="format-tag">{{ form.endpoint === 'images/generations' ? 'JSON' : form.stream ? 'STREAM' : 'JSON' }}</span></footer>
         </section>
 
         <section class="inspector-panel" aria-labelledby="inspector-title">
@@ -129,8 +107,7 @@ import Icon, { type IconName } from '@/components/icons/Icon.vue'
 import DebugJsonViewer from '@/components/debug/DebugJsonViewer.vue'
 import DebugHeaderGuide from '@/components/debug/DebugHeaderGuide.vue'
 import DebugHeaderChanges from '@/components/debug/DebugHeaderChanges.vue'
-import DebugStateComparison, { type StateVerificationRun, type StateVerificationStage } from '@/components/debug/DebugStateComparison.vue'
-import { getUpstreamTestDefaults, runDebugWorkbench, type DebugEndpoint, type DebugSession, type DebugWorkbenchResult, type DebugSnapshot, type UpstreamHeaderDetail } from '@/api/admin/debugWorkbench'
+import { getUpstreamTestDefaults, runDebugWorkbench, type DebugEndpoint, type DebugWorkbenchResult, type DebugSnapshot, type UpstreamHeaderDetail } from '@/api/admin/debugWorkbench'
 import { getAvailableModels, list as listAccounts } from '@/api/admin/accounts'
 import { proxiesAPI } from '@/api/admin/proxies'
 import type { Proxy } from '@/types'
@@ -138,13 +115,6 @@ import type { Proxy } from '@/types'
 type DebugAccount = { id: string; name: string; email: string; typeLabel: string; status: string; platform?: string }
 type DebugModel = { id: string; display_name?: string; type?: string; created_at?: string }
 const fallbackModels: DebugModel[] = [{ id: 'gpt-5.5', display_name: 'GPT-5.5' }, { id: 'gpt-4o', display_name: 'GPT-4o' }, { id: 'gpt-4.1', display_name: 'GPT-4.1' }, { id: 'o3-mini', display_name: 'o3-mini' }, { id: 'gpt-image-2', display_name: 'GPT Image 2' }]
-const stateVerificationPrompt = 'Reply with exactly OK.'
-const stateVerificationStages: { key: StateVerificationStage; label: string }[] = [
-  { key: 'baseline', label: '原始请求' },
-  { key: 'capture', label: '新出口采集' },
-  { key: 'replay', label: '同账号回放' },
-  { key: 'automatic', label: '自动注入验收' }
-]
 const accounts = ref<DebugAccount[]>([])
 const models = ref<DebugModel[]>(fallbackModels.map(model => ({ ...model })))
 const proxies = ref<Proxy[]>([])
@@ -178,27 +148,14 @@ const headerDetails = ref<UpstreamHeaderDetail[]>([])
 const defaultUpstreamUrl = ref('https://api.openai.com/v1/responses')
 const defaultUpstreamBody = ref<Record<string, unknown> | undefined>()
 const result = ref<DebugWorkbenchResult | null>(null)
-const verificationRun = ref<StateVerificationRun | null>(null)
-const verificationMode = ref(false)
-const verificationApiKeyID = ref<string | number>('')
-const verificationStage = ref<StateVerificationStage>('baseline')
-const captureSessionHandle = ref('')
 const selectedAttemptIndex = ref(0)
-const debugSession = ref<DebugSession | null>(null)
-const sessionAction = ref<'new_turn' | 'continue_turn'>('new_turn')
 const selectedAttempt = computed(() => result.value?.attempts[selectedAttemptIndex.value])
-const sessionIdentifiers = computed(() => debugSession.value ? { Session: debugSession.value.session_id, Thread: debugSession.value.thread_id, Turn: debugSession.value.turn_id, Window: debugSession.value.window_id } : {})
 const isFixtureAccount = computed(() => !/^[1-9]\d*$/.test(form.account))
 const selectedAccount = computed(() => accounts.value.find(account => account.id === form.account) || null)
 const selectedModel = computed(() => models.value.find(model => model.id === form.model) || null)
 const selectedProxy = computed(() => proxies.value.find(proxy => proxy.id === form.proxyId) || null)
-const parsedVerificationAPIKeyID = computed(() => Number(verificationApiKeyID.value))
-const validVerificationAPIKeyID = computed(() => Number.isSafeInteger(parsedVerificationAPIKeyID.value) && parsedVerificationAPIKeyID.value > 0)
-const verificationRequestBlocked = computed(() => verificationMode.value && (!validVerificationAPIKeyID.value || (verificationStage.value === 'replay' && !captureSessionHandle.value)))
-const verificationStageLabel = computed(() => stateVerificationStages.find(stage => stage.key === verificationStage.value)?.label || '')
-const verificationScopeKey = computed(() => `${form.account}:${String(verificationApiKeyID.value).trim()}:${form.model.trim()}`)
 const responseSuccessful = computed(() => /^2\d\d$/.test(responseStatus.value) && Boolean(result.value?.success))
-const sessionState = computed(() => {
+const requestState = computed(() => {
   if (running.value) return { label: '请求中', tone: 'busy' }
   if (accountsLoading.value || modelsLoading.value || defaultsLoading.value) return { label: '同步配置', tone: 'neutral' }
   if (responseStatus.value && !responseSuccessful.value) return { label: '请求失败', tone: 'error' }
@@ -266,41 +223,6 @@ let modelsRequestSeq = 0
 let runRequestSeq = 0
 let requestController: AbortController | null = null
 let syncingControls = false
-
-function stateVerificationBody(): Record<string, unknown> {
-  return {
-    model: form.model.trim(),
-    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: stateVerificationPrompt }] }],
-    stream: true
-  }
-}
-
-function applyStateVerificationTemplate(): void {
-  if (!verificationMode.value) return
-  syncingControls = true
-  try {
-    form.endpoint = 'responses'
-    form.system = ''
-    form.prompt = stateVerificationPrompt
-    form.stream = true
-    form.apiParams = JSON.stringify(stateVerificationBody(), null, 2)
-    imageMode.value = false
-    let headers: Record<string, string> = {}
-    try { headers = parseHeaders() } catch { headers = {} }
-    for (const name of Object.keys(headers)) {
-      if (name.toLowerCase() === 'x-codex-turn-state') delete headers[name]
-    }
-    form.headers = JSON.stringify(headers, null, 2)
-  } finally {
-    syncingControls = false
-  }
-}
-
-function resetVerificationWorkflow(): void {
-  verificationStage.value = 'baseline'
-  captureSessionHandle.value = ''
-  verificationRun.value = null
-}
 
 function editBody(update: (body: Record<string, any>) => void) {
   if (syncingControls) return
@@ -388,18 +310,8 @@ function clearExecution() {
   submitted.value = false
   requestDuration.value = null
 }
-function resetSession() {
-  clearExecution()
-  debugSession.value = null
-  sessionAction.value = 'new_turn'
-}
-watch(verificationMode, enabled => {
-  resetSession()
-  resetVerificationWorkflow()
-  if (enabled) applyStateVerificationTemplate()
-})
 watch(() => form.endpoint, async endpoint => {
-  resetSession()
+  clearExecution()
   defaultUpstreamBody.value = undefined
   defaultUpstreamUrl.value = `https://api.openai.com/v1/${endpoint}`
   if (endpoint === 'images/generations') {
@@ -409,16 +321,12 @@ watch(() => form.endpoint, async endpoint => {
   await loadDefaults()
 })
 watch(() => form.account, async () => {
-  resetSession()
-  resetVerificationWorkflow()
+  clearExecution()
   ++defaultsRequestSeq
   headerDetails.value = []
   defaultsLoading.value = true
   await loadAccountModels()
   await loadDefaults()
-})
-watch([() => form.model, () => verificationApiKeyID.value], () => {
-  if (verificationMode.value) resetVerificationWorkflow()
 })
 // Proxy overrides are submitted with the next request without resetting the editor.
 function restoreDefaultHeaders() { form.headers = JSON.stringify(upstreamHeaders.value, null, 2) }
@@ -483,7 +391,6 @@ async function loadDefaults() {
     restoreDefaultHeaders()
   } finally {
     if (seq === defaultsRequestSeq) {
-      if (verificationMode.value) applyStateVerificationTemplate()
       defaultsLoading.value = false
     }
   }
@@ -507,7 +414,7 @@ function commitCustomModel() {
   if (!models.value.some(model => model.id === id)) models.value.push({ id, display_name: id, type: 'custom' })
 }
 function applyPreset(preset: { prompt: string }) { editBody(body => updatePrompt(body, preset.prompt)) }
-async function resetAll() { resetSession(); copyState.value = 'idle'; await loadDefaults() }
+async function resetAll() { clearExecution(); copyState.value = 'idle'; await loadDefaults() }
 function parseHeaders(): Record<string, string> {
   const headers = JSON.parse(form.headers || '{}')
   if (!headers || typeof headers !== 'object' || Array.isArray(headers)) throw new Error('请求头必须是 JSON 对象')
@@ -520,7 +427,6 @@ function parseHeaders(): Record<string, string> {
 }
 async function runRequest() {
   if (running.value || isFixtureAccount.value) return
-  if (verificationMode.value) applyStateVerificationTemplate()
   result.value = null
   submitted.value = false
   requestDuration.value = null
@@ -542,18 +448,6 @@ async function runRequest() {
     return
   }
   const accountId = form.account
-  // Capture the submitted model before the request starts. The editor may be
-  // changed while an upstream call is in flight; the comparison must use the
-  // model that was actually sent, never a later UI value.
-  const submittedModel = typeof body.model === 'string' ? body.model.trim() : undefined
-  const submittedVerificationStage = verificationMode.value ? verificationStage.value : undefined
-  const submittedAPIKeyID = verificationMode.value && validVerificationAPIKeyID.value ? parsedVerificationAPIKeyID.value : undefined
-  if (verificationMode.value && (!submittedAPIKeyID || (submittedVerificationStage === 'replay' && !captureSessionHandle.value))) {
-    responseStatus.value = '验收范围错误'
-    responseError.value = submittedVerificationStage === 'replay' ? '本账号、API Key 和模型尚无可回放的采集会话。' : '请填写真实专用 API Key 的正整数 ID。'
-    return
-  }
-  const submittedCaptureHandle = captureSessionHandle.value
   const seq = ++runRequestSeq
   const started = performance.now()
   const controller = new AbortController()
@@ -564,33 +458,13 @@ async function runRequest() {
   running.value = true
   activeTab.value = 'upstream-response'
   try {
-    const session = submittedVerificationStage
-      ? submittedVerificationStage === 'replay'
-        ? { id: submittedCaptureHandle, action: 'replay_capture' as const }
-        : { action: 'new_session' as const }
-      : debugSession.value
-        ? { id: debugSession.value.id, action: sessionAction.value }
-        : { action: 'new_session' as const }
     const response = await runDebugWorkbench(accountId, {
       endpoint: form.endpoint, headers, body,
       ...(form.proxyId != null ? { proxy_id: form.proxyId } : {}),
-      ...(submittedVerificationStage && submittedAPIKeyID ? { verification_stage: submittedVerificationStage, api_key_id: submittedAPIKeyID } : {}),
-      session
+      session: { action: 'new_session' }
     }, controller.signal)
     if (seq !== runRequestSeq || accountId !== form.account) return
     result.value = response
-    verificationRun.value = {
-      requestID: response.request_id,
-      stage: submittedVerificationStage || 'baseline',
-      requestedModel: submittedModel,
-      selectedAccountID: Number(accountId),
-      apiKeyID: submittedAPIKeyID,
-      result: response
-    }
-    if (submittedVerificationStage === 'capture') {
-      captureSessionHandle.value = response.state_verification?.state_received && response.session?.turn_state_available && response.session?.id ? response.session.id : ''
-    }
-    debugSession.value = response.session?.id ? response.session : null
     selectedAttemptIndex.value = Math.max(0, response.attempts.length - 1)
     responseStatus.value = String(response.outbound.status_code || (response.success ? 200 : 502))
     responseError.value = response.error || (response.success ? '' : '上游或网关返回错误，请检查实际链路记录。')

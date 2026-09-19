@@ -225,10 +225,12 @@ type SystemSettings struct {
 	EnableOpenAIAccountLocalDeviceIdentity bool   `json:"enable_openai_account_local_device_identity"`
 
 	// Automatic Codex Turn State configuration; tokens are managed per account.
-	OpenAICodexTurnStateDefaultModel string `json:"openai_codex_turn_state_default_model"`
-	OpenAICodexTurnStateModels       string `json:"openai_codex_turn_state_models"`
-	OpenAICodexTurnStateAutoEnabled  bool   `json:"openai_codex_turn_state_auto_enabled"`
-	OpenAICodexTurnStateProxyID      int64  `json:"openai_codex_turn_state_proxy_id"`
+	OpenAICodexTurnStateDefaultModel  string  `json:"openai_codex_turn_state_default_model"`
+	OpenAICodexTurnStateModels        string  `json:"openai_codex_turn_state_models"`
+	OpenAICodexTurnStateAutoEnabled   bool    `json:"openai_codex_turn_state_auto_enabled"`
+	OpenAICodexTurnStateProxyIDs      []int64 `json:"openai_codex_turn_state_proxy_ids"`
+	OpenAICodexTurnStateProxyID       int64   `json:"openai_codex_turn_state_proxy_id"`
+	OpenAICodexTurnStateProxyIDsValid bool    `json:"openai_codex_turn_state_proxy_ids_valid"`
 
 	// codex_cli_only 加固
 	MinCodexVersion                      string `json:"min_codex_version"`

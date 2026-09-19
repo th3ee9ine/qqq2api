@@ -27,7 +27,53 @@ func assertCodexTurnStateAutomaticResponse(t *testing.T, rec *httptest.ResponseR
 	require.Contains(t, payload.Data, "openai_codex_turn_state_auto_enabled")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_models")
 	require.Contains(t, payload.Data, "openai_codex_turn_state_default_model")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_ids")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_id")
+	require.Contains(t, payload.Data, "openai_codex_turn_state_proxy_ids_valid")
 }
+
+func TestOpenAICodexTurnStateMalformedStoredProxyPoolIsRedactedAndMarkedInvalid(t *testing.T) {
+	h, _ := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyOpenAICodexTurnStateProxyIDs: "not-json-private-value",
+		service.SettingKeyOpenAICodexTurnStateProxyID:  "17",
+	})
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	h.GetSettings(c)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, []any{}, payload.Data["openai_codex_turn_state_proxy_ids"])
+	require.EqualValues(t, 0, payload.Data["openai_codex_turn_state_proxy_id"])
+	require.Equal(t, false, payload.Data["openai_codex_turn_state_proxy_ids_valid"])
+	require.NotContains(t, rec.Body.String(), "not-json-private-value")
+}
+
+func TestOpenAICodexTurnStateMalformedStoredLegacyProxyIsRedactedAndMarkedInvalid(t *testing.T) {
+	h, _ := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyOpenAICodexTurnStateProxyIDs: "[]",
+		service.SettingKeyOpenAICodexTurnStateProxyID:  "malformed-private-value",
+	})
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	h.GetSettings(c)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, []any{}, payload.Data["openai_codex_turn_state_proxy_ids"])
+	require.EqualValues(t, 0, payload.Data["openai_codex_turn_state_proxy_id"])
+	require.Equal(t, false, payload.Data["openai_codex_turn_state_proxy_ids_valid"])
+	require.NotContains(t, rec.Body.String(), "malformed-private-value")
+}
+
 func TestOpenAICodexTurnStateAutomaticSettingsOmission(t *testing.T) {
 	for _, body := range []map[string]any{{"risk_control_enabled": true}, {"openai_codex_turn_state_auto_enabled": nil, "openai_codex_turn_state_models": nil}} {
 		h, repo := newStepUpSwitchTestHandler(t, map[string]string{
@@ -71,12 +117,148 @@ func TestOpenAICodexTurnStateAutomaticSwitchAndScope(t *testing.T) {
 	}
 }
 func TestOpenAICodexTurnStateAutomaticSettingsAudit(t *testing.T) {
-	changed := diffSettings(&service.SystemSettings{}, &service.SystemSettings{OpenAICodexTurnStateAutoEnabled: true, OpenAICodexTurnStateModels: "gpt-5.*", OpenAICodexTurnStateDefaultModel: "custom/probe"}, nil, nil, UpdateSettingsRequest{})
+	changed := diffSettings(&service.SystemSettings{}, &service.SystemSettings{OpenAICodexTurnStateAutoEnabled: true, OpenAICodexTurnStateModels: "gpt-5.*", OpenAICodexTurnStateDefaultModel: "custom/probe", OpenAICodexTurnStateProxyIDs: []int64{7, 9}, OpenAICodexTurnStateProxyID: 7}, nil, nil, UpdateSettingsRequest{})
 	require.Contains(t, changed, "openai_codex_turn_state_auto_enabled")
 	require.Contains(t, changed, "openai_codex_turn_state_models")
 	require.Contains(t, changed, "openai_codex_turn_state_default_model")
+	require.Contains(t, changed, "openai_codex_turn_state_proxy_ids")
+	require.Contains(t, changed, "openai_codex_turn_state_proxy_id")
 	require.NotContains(t, changed, "openai_codex_turn_state")
 	require.NotContains(t, changed, "openai_codex_turn_state_enabled")
+}
+
+func TestOpenAICodexTurnStateProxyPoolSettingsCompatibility(t *testing.T) {
+	type responsePayload struct {
+		Data struct {
+			ProxyIDs      []int64 `json:"openai_codex_turn_state_proxy_ids"`
+			ProxyID       int64   `json:"openai_codex_turn_state_proxy_id"`
+			ProxyIDsValid bool    `json:"openai_codex_turn_state_proxy_ids_valid"`
+		} `json:"data"`
+	}
+	decode := func(t *testing.T, rec *httptest.ResponseRecorder) responsePayload {
+		t.Helper()
+		var payload responsePayload
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+		return payload
+	}
+
+	for _, tc := range []struct {
+		name       string
+		body       map[string]any
+		wantJSON   string
+		wantLegacy string
+		wantIDs    []int64
+	}{
+		{
+			name: "new pool wins and synchronizes legacy",
+			body: map[string]any{
+				"openai_codex_turn_state_proxy_ids": []int64{9, 3, 9},
+				"openai_codex_turn_state_proxy_id":  int64(77),
+			},
+			wantJSON: "[9,3]", wantLegacy: "9", wantIDs: []int64{9, 3},
+		},
+		{
+			name:       "legacy-only request synchronizes pool",
+			body:       map[string]any{"openai_codex_turn_state_proxy_id": int64(17)},
+			wantJSON:   "[17]",
+			wantLegacy: "17",
+			wantIDs:    []int64{17},
+		},
+		{
+			name:       "empty new pool clears legacy",
+			body:       map[string]any{"openai_codex_turn_state_proxy_ids": []int64{}},
+			wantJSON:   "[]",
+			wantLegacy: "0",
+			wantIDs:    []int64{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+				service.SettingKeyOpenAICodexTurnStateProxyIDs: "[5,4]",
+				service.SettingKeyOpenAICodexTurnStateProxyID:  "5",
+			})
+			rec := doUpdateSettings(t, h, tc.body, nil)
+			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+			require.Equal(t, tc.wantJSON, repo.values[service.SettingKeyOpenAICodexTurnStateProxyIDs])
+			require.Equal(t, tc.wantLegacy, repo.values[service.SettingKeyOpenAICodexTurnStateProxyID])
+			payload := decode(t, rec)
+			require.Equal(t, tc.wantIDs, payload.Data.ProxyIDs)
+			require.Equal(t, tc.wantLegacy, strconv.FormatInt(payload.Data.ProxyID, 10))
+			require.True(t, payload.Data.ProxyIDsValid)
+		})
+	}
+}
+
+func TestOpenAICodexTurnStateProxyPoolRepairReturnsValid(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyOpenAICodexTurnStateProxyIDs: "malformed-private-value",
+		service.SettingKeyOpenAICodexTurnStateProxyID:  "17",
+	})
+	rec := doUpdateSettings(t, h, map[string]any{
+		"openai_codex_turn_state_proxy_ids": []int64{},
+	}, nil)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "[]", repo.values[service.SettingKeyOpenAICodexTurnStateProxyIDs])
+	require.Equal(t, "0", repo.values[service.SettingKeyOpenAICodexTurnStateProxyID])
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, true, payload.Data["openai_codex_turn_state_proxy_ids_valid"])
+	require.NotContains(t, rec.Body.String(), "malformed-private-value")
+}
+
+func TestOpenAICodexTurnStateMalformedProxyPoolRemainsInvalidWhenOmitted(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+		service.SettingKeyOpenAICodexTurnStateProxyIDs: "malformed-private-value",
+		service.SettingKeyOpenAICodexTurnStateProxyID:  "17",
+	})
+	rec := doUpdateSettings(t, h, map[string]any{"risk_control_enabled": true}, nil)
+
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, "malformed-private-value", repo.values[service.SettingKeyOpenAICodexTurnStateProxyIDs])
+	require.Equal(t, "17", repo.values[service.SettingKeyOpenAICodexTurnStateProxyID])
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Equal(t, false, payload.Data["openai_codex_turn_state_proxy_ids_valid"])
+	require.Equal(t, []any{}, payload.Data["openai_codex_turn_state_proxy_ids"])
+	require.EqualValues(t, 0, payload.Data["openai_codex_turn_state_proxy_id"])
+	require.NotContains(t, rec.Body.String(), "malformed-private-value")
+}
+
+func TestOpenAICodexTurnStateProxyPoolOmittedOrNullPreservesPair(t *testing.T) {
+	for _, body := range []map[string]any{
+		{"risk_control_enabled": true},
+		{"openai_codex_turn_state_proxy_ids": nil, "openai_codex_turn_state_proxy_id": nil},
+	} {
+		h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+			service.SettingKeyOpenAICodexTurnStateProxyIDs: "[8,6]",
+			service.SettingKeyOpenAICodexTurnStateProxyID:  "8",
+		})
+		rec := doUpdateSettings(t, h, body, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.Equal(t, "[8,6]", repo.values[service.SettingKeyOpenAICodexTurnStateProxyIDs])
+		require.Equal(t, "8", repo.values[service.SettingKeyOpenAICodexTurnStateProxyID])
+	}
+}
+
+func TestOpenAICodexTurnStateProxyPoolRejectsInvalidWithoutOverwrite(t *testing.T) {
+	for _, body := range []map[string]any{
+		{"openai_codex_turn_state_proxy_ids": []int64{1, 0}},
+		{"openai_codex_turn_state_proxy_id": int64(-1)},
+	} {
+		h, repo := newStepUpSwitchTestHandler(t, map[string]string{
+			service.SettingKeyOpenAICodexTurnStateProxyIDs: "[8,6]",
+			service.SettingKeyOpenAICodexTurnStateProxyID:  "8",
+		})
+		rec := doUpdateSettings(t, h, body, nil)
+		require.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+		require.Equal(t, "[8,6]", repo.values[service.SettingKeyOpenAICodexTurnStateProxyIDs])
+		require.Equal(t, "8", repo.values[service.SettingKeyOpenAICodexTurnStateProxyID])
+	}
 }
 
 func TestOpenAICodexTurnStateEditableDefaultModel(t *testing.T) {

@@ -89,6 +89,10 @@ type codexTurnStateAutoEntry struct {
 	pendingOwner codexTurnStateProbeCandidatePendingOwner
 }
 
+type CodexTurnStateAtomicRepository interface {
+	UpdateCodexTurnState(context.Context, int64, string, map[string]any) (bool, error)
+}
+
 type codexTurnStateProbeTask struct {
 	requestModel string
 	scopeModels  []string

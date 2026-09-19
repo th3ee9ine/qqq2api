@@ -47,6 +47,15 @@ describe('AppSidebar administrator navigation', () => {
     expect(componentSource).toContain("{ path: '/admin/usage', label: t('nav.usage'), icon: 'chart' }")
   })
 
+  it('links to the standalone Codex Turn State page after usage records', () => {
+    expect(componentSource).toContain("{ path: '/admin/codex-turn-state', label: t('nav.codexTurnState'), icon: 'database' }")
+    const usageIndex = componentSource.indexOf("path: '/admin/usage'")
+    const turnStateIndex = componentSource.indexOf("path: '/admin/codex-turn-state'")
+    const workbenchIndex = componentSource.indexOf("path: '/admin/debug-workbench'")
+    expect(turnStateIndex).toBeGreaterThan(usageIndex)
+    expect(workbenchIndex).toBeGreaterThan(turnStateIndex)
+  })
+
   it('marks only account and proxy navigation as available to restricted operators', () => {
     expect(componentSource).toContain("path: '/admin/accounts'")
     expect(componentSource).toContain("requiredPermission: 'accounts.manage'")
@@ -69,10 +78,12 @@ describe('AppSidebar administrator navigation', () => {
     expect(componentSource).toContain(':aria-hidden="sidebarCollapsed ? \'true\' : \'false\'"')
 
     const usageIndex = componentSource.indexOf("path: '/admin/usage'")
+    const turnStateIndex = componentSource.indexOf("path: '/admin/codex-turn-state'")
     const keysIndex = componentSource.indexOf("path: '/keys'")
     const settingsIndex = componentSource.indexOf("path: '/admin/settings'")
     expect(usageIndex).toBeGreaterThan(-1)
-    expect(keysIndex).toBeGreaterThan(usageIndex)
+    expect(turnStateIndex).toBeGreaterThan(usageIndex)
+    expect(keysIndex).toBeGreaterThan(turnStateIndex)
     expect(settingsIndex).toBeGreaterThan(keysIndex)
   })
 

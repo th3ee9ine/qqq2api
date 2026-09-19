@@ -43,37 +43,11 @@ func TestDebugWorkbenchTraceCapturesActualBodiesAndHeaderDecisions(t *testing.T)
 	require.Equal(t, "rewritten", actions["User-Agent"])
 	require.Equal(t, "generated", actions["X-Client-Request-Id"])
 	require.Equal(t, "filtered", actions["X-Unknown"])
-	require.Equal(t, "opaque-state-secret", trace.LastTurnState())
 	encoded, err := json.Marshal(attempts)
 	require.NoError(t, err)
 	for _, secret := range []string{"actual-secret", "editor-secret", "private-custom", "private-query", "proxy-secret", "username:", "opaque-state-secret", "secret-cookie"} {
 		require.NotContains(t, string(encoded), secret)
 	}
-}
-
-func TestDebugWorkbenchStateVerificationUsesObservedModelsAndRedactedStateLength(t *testing.T) {
-	trace := NewDebugWorkbenchTrace(nil, nil)
-	trace.NoteTurnStateSource("automatic")
-	observer := &upstreamResponseModelObserver{}
-	observer.ObserveOpenAI([]byte(`{"type":"response.created","response":{"model":"gpt-6-astra"}}`), "response.created")
-	observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"model":"gpt-6-astra"}}`), "response.completed")
-	attempts := []DebugUpstreamAttempt{{
-		AccountID: 42,
-		Request:   DebugHTTPSnapshot{Headers: map[string][]string{"X-Codex-Turn-State": {"[redacted:332]"}}},
-		Response:  &DebugHTTPSnapshot{Headers: map[string][]string{"X-Codex-Turn-State": {"[redacted:376]"}}},
-	}}
-
-	evidence := debugWorkbenchStateVerification([]byte(`{"model":"codex-auto-review"}`), attempts, trace, observer, nil, "")
-	require.Equal(t, "codex-auto-review", evidence.RequestedModel)
-	require.Equal(t, "gpt-6-astra", evidence.ResponseCreatedModel)
-	require.Equal(t, "gpt-6-astra", evidence.ResponseCompletedModel)
-	require.Equal(t, "automatic", evidence.StateSource)
-	require.True(t, evidence.StateSent)
-	require.True(t, evidence.StateReceived)
-	require.Equal(t, 376, evidence.StateLength)
-	require.Equal(t, int64(42), evidence.ActualAccountID)
-	require.Zero(t, evidence.UsageLogAccountID, "a request trace must not impersonate durable usage_logs evidence")
-	require.Empty(t, evidence.UpstreamResponseModel)
 }
 
 func TestDebugWorkbenchTraceBoundedCaptureDoesNotTruncateForwarding(t *testing.T) {
@@ -176,12 +150,13 @@ func TestDebugWorkbenchTraceAgentIdentityAndProxyErrors(t *testing.T) {
 	}
 }
 
-func TestDebugWorkbenchTraceOverflowNeverReplaysEarlierTurnState(t *testing.T) {
+func TestDebugWorkbenchTraceOverflowRemainsBounded(t *testing.T) {
 	trace := NewDebugWorkbenchTrace(nil, nil)
 	req, _ := http.NewRequest(http.MethodPost, "https://example.com", nil)
 	for i := 0; i < 9; i++ {
 		a := trace.StartAttempt(req, "", 1)
 		a.Finish(&http.Response{StatusCode: 500, Header: http.Header{"X-Codex-Turn-State": {"old-state"}}}, nil)
 	}
-	require.Empty(t, trace.LastTurnState())
+	require.Len(t, trace.Attempts(), 8)
+	require.Contains(t, strings.Join(trace.Warnings(), " "), "前 8 次")
 }

@@ -26,16 +26,12 @@ type debugWorkbenchTraceKey struct{}
 // DebugWorkbenchTrace is opt-in and scoped to a single debug run. No global
 // request logs or credentials are persisted by this collector.
 type DebugWorkbenchTrace struct {
-	mu        sync.Mutex
-	input     http.Header
-	secrets   []string
-	captures  []*DebugWorkbenchAttemptCapture
-	dropped   bool
-	warnings  []string
-	turnState string
-	// turnStateSource records the gateway decision only. It never contains the
-	// opaque state and is exposed solely to the administrator's debug run.
-	turnStateSource string
+	mu       sync.Mutex
+	input    http.Header
+	secrets  []string
+	captures []*DebugWorkbenchAttemptCapture
+	dropped  bool
+	warnings []string
 }
 
 type DebugWorkbenchAttemptCapture struct {
@@ -81,27 +77,6 @@ func DebugWorkbenchTraceFromContext(ctx context.Context) *DebugWorkbenchTrace {
 	}
 	t, _ := ctx.Value(debugWorkbenchTraceKey{}).(*DebugWorkbenchTrace)
 	return t
-}
-func (t *DebugWorkbenchTrace) NoteTurnStateSource(source string) {
-	if t == nil {
-		return
-	}
-	switch source {
-	case "native", "candidate", "automatic", "none":
-	default:
-		return
-	}
-	t.mu.Lock()
-	t.turnStateSource = source
-	t.mu.Unlock()
-}
-func (t *DebugWorkbenchTrace) TurnStateSource() string {
-	if t == nil {
-		return ""
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.turnStateSource
 }
 func (t *DebugWorkbenchTrace) AddSecrets(values []string) {
 	if t == nil {
@@ -377,10 +352,6 @@ func (a *DebugWorkbenchAttemptCapture) Finish(resp *http.Response, err error) {
 		a.ended = true
 		return
 	}
-	// An image download is not a Codex turn and must not overwrite its state.
-	if a.attempt.Request.Method == http.MethodPost {
-		t.turnState = resp.Header.Get("X-Codex-Turn-State")
-	}
 	for name, values := range resp.Header {
 		if !debugPublicHeader(name) {
 			t.addSecretsLocked(values)
@@ -462,21 +433,13 @@ func (t *DebugWorkbenchTrace) Attempts() []DebugUpstreamAttempt {
 	}
 	return result
 }
-func (t *DebugWorkbenchTrace) LastTurnState() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.dropped {
-		return ""
-	}
-	return t.turnState
-}
 func (t *DebugWorkbenchTrace) Warnings() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	out := append([]string{}, t.warnings...)
 	out = append(out, "快照记录交给 HTTP 客户端的最终应用层请求与业务层读取的响应；不虚构 HTTP/2、TLS 或传输层自动生成字段。响应压缩由现有客户端处理。")
 	if t.dropped {
-		out = append(out, "上游尝试超过 8 次，仅展示前 8 次记录；转发未被截断，本次不缓存回合状态以避免复用旧响应状态。")
+		out = append(out, "上游尝试超过 8 次，仅展示前 8 次记录；实际转发未被截断。")
 	}
 	for _, a := range t.captures {
 		if a.attempt.Request.Truncated || a.responseBody.total > int64(len(a.responseBody.data)) {
