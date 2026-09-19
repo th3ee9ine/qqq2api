@@ -509,6 +509,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAICodexTurnStateModels != after.OpenAICodexTurnStateModels {
 		changed = append(changed, "openai_codex_turn_state_models")
 	}
+	if before.OpenAICodexTurnStateProxyID != after.OpenAICodexTurnStateProxyID {
+		changed = append(changed, "openai_codex_turn_state_proxy_id")
+	}
 	if before.PaymentVisibleMethodAlipaySource != after.PaymentVisibleMethodAlipaySource {
 		changed = append(changed, "payment_visible_method_alipay_source")
 	}

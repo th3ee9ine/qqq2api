@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/tlsfingerprint"
 	"github.com/tidwall/gjson"
 )
@@ -232,6 +233,74 @@ func TestOpenAIGatewayService_Forward_HTTPIngressStaysHTTPWhenWSEnabled(t *testi
 	reason, _ := c.Get("openai_ws_transport_reason")
 	require.Equal(t, string(OpenAIUpstreamTransportHTTPSSE), decision)
 	require.Equal(t, "client_protocol_http", reason)
+}
+
+func TestOpenAIGatewayService_Forward_TurnStateUsageVerificationForcesHTTP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	verificationCtx := context.WithValue(context.Background(), ctxkey.RequestID, "turn-state-verification")
+	verificationCtx = WithOpenAICodexTurnStateUsageVerification(verificationCtx, 701)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil).WithContext(verificationCtx)
+	c.Request.Header.Set("User-Agent", "custom-client/1.0")
+	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader("data: " +
+			`{"type":"response.completed","response":{"id":"resp_turn_state_verification","model":"gpt-5.1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}` +
+			"\n\ndata: [DONE]\n\n")),
+	}}
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	captureDialer := &openAIWSCaptureDialer{conn: &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp_unexpected_ws","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+	}}}
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	pool.setClientDialerForTest(captureDialer)
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     upstream,
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		openaiWSPool:     pool,
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          103,
+		Name:        "openai-oauth-turn-state-verification",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Reply with exactly OK."}]}]}`)
+
+	result, err := svc.Forward(verificationCtx, c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.OpenAIWSMode)
+	require.NotNil(t, upstream.lastReq, "Turn State usage verification must use the HTTP upstream")
+	require.Equal(t, 0, captureDialer.DialCount())
+
+	decision, _ := c.Get("openai_ws_transport_decision")
+	reason, _ := c.Get("openai_ws_transport_reason")
+	require.Equal(t, string(OpenAIUpstreamTransportHTTPSSE), decision)
+	require.Equal(t, "codex_turn_state_usage_verification", reason)
 }
 
 func TestOpenAIGatewayService_Forward_HTTPAPIKeyPreviousResponseID(t *testing.T) {

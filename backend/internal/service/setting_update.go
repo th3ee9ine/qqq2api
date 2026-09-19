@@ -531,6 +531,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	}
 	updates[SettingKeyOpenAICodexTurnStateModels] = turnStateModels
 	updates[SettingKeyOpenAICodexTurnStateAutoEnabled] = strconv.FormatBool(settings.OpenAICodexTurnStateAutoEnabled)
+	if settings.OpenAICodexTurnStateProxyID < 0 {
+		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_PROXY_ID", "openai_codex_turn_state_proxy_id must be zero or a positive proxy ID")
+	}
+	updates[SettingKeyOpenAICodexTurnStateProxyID] = strconv.FormatInt(settings.OpenAICodexTurnStateProxyID, 10)
 	// SettingKeyOpenAICodexClientVersionSynced 由自动同步任务独占写入，此处不得覆盖，
 	// 否则面板保存会把同步结果清空。
 	// codex_cli_only 加固

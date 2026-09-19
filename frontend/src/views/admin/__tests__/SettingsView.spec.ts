@@ -515,13 +515,10 @@ const baseSettingsResponse = {
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
   enable_openai_account_local_device_identity: true,
-  openai_codex_turn_state_enabled: false,
   openai_codex_turn_state_auto_enabled: false,
-  openai_codex_turn_state_configured: false,
   openai_codex_turn_state_models: "",
   openai_codex_turn_state_default_model: "gpt-5.5",
-  openai_codex_turn_state_set_at_ms: 0,
-  openai_codex_turn_state_status: { enabled: false, configured: false, active: false, reason: "disabled", verdict: "unknown", blocks: 0 },
+  openai_codex_turn_state_proxy_id: 0,
   payment_enabled: true,
   payment_min_amount: 1,
   payment_max_amount: 10000,
@@ -776,12 +773,16 @@ describe("admin SettingsView", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
-  it("exposes only automatic Turn State settings even with legacy server fields", async () => {
+  it("saves automatic Turn State model scope and its dedicated proxy without legacy fields", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
+      openai_codex_turn_state: "legacy-secret",
       openai_codex_turn_state_enabled: true,
       openai_codex_turn_state_configured: true,
       openai_codex_turn_state_models: "gpt-5,gpt-5-*",
+      openai_codex_turn_state_set_at_ms: 123,
+      openai_codex_turn_state_status: { enabled: true, configured: true },
+      openai_codex_turn_state_proxy_id: 73,
     });
     const wrapper = mountView();
     await flushPromises();
@@ -791,13 +792,20 @@ describe("admin SettingsView", () => {
     expect(card.find('[data-testid="openai-codex-turn-state-token"]').exists()).toBe(false);
     expect(card.find('input[type="password"]').exists()).toBe(false);
     expect(card.get<HTMLInputElement>('[data-testid="openai-codex-turn-state-default-model"]').element.value).toBe("gpt-5.5");
+    expect(card.get<HTMLInputElement>('[data-testid="openai-codex-turn-state-models"]').element.value).toBe("gpt-5,gpt-5-*");
     await card.get('[data-testid="openai-codex-turn-state-default-model"]').setValue(" custom/probe ");
     await card.get('[data-testid="openai-codex-turn-state-auto-toggle"]').setValue(true);
     await card.get('[data-testid="openai-codex-turn-state-models"]').setValue(" GPT-5, gpt-5, Codex/* ");
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
     const payload = updateSettings.mock.calls.at(-1)?.[0];
-    expect(payload).toMatchObject({ openai_codex_turn_state_auto_enabled: true, openai_codex_turn_state_models: "gpt-5,codex/*", openai_codex_turn_state_default_model: "custom/probe" });
+    expect(payload).toMatchObject({
+      openai_codex_turn_state_auto_enabled: true,
+      openai_codex_turn_state_models: "gpt-5,codex/*",
+      openai_codex_turn_state_default_model: "custom/probe",
+      openai_codex_turn_state_proxy_id: 73,
+    });
+    expect(listProxies).toHaveBeenCalledWith(1, 1000);
     for (const key of ["openai_codex_turn_state", "openai_codex_turn_state_enabled", "openai_codex_turn_state_set_at_ms", "openai_codex_turn_state_status", "openai_codex_turn_state_configured"]) {
       expect(payload).not.toHaveProperty(key);
     }

@@ -46,6 +46,7 @@ func ProvideDebugAccountHandler(
 		rateLimitService, accountUsageService, accountTestService, concurrencyService,
 		crsSyncService, sessionLimitCache, rpmCache, tokenCacheInvalidator)
 	h.SetDebugWorkbenchService(service.NewDebugWorkbenchService(gateway, adminService, apiKeyService))
+	h.SetCodexTurnStateService(gateway)
 	return h
 }
 

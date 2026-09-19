@@ -364,7 +364,12 @@ func (s *DebugWorkbenchService) publishDebugWorkbenchState(ctx context.Context, 
 		return errors.New("newer state or revocation exists")
 	}
 	entry.token, entry.setAt, entry.verifiedAt, entry.verifiedModel = state, setAt, now.UnixMilli(), ownerModel
+	pendingOwner := entry.pendingOwner
+	candidateOwner := entry.candidate.pendingOwner
 	entry.recovery, entry.lastError, entry.candidate = recovery, "", codexTurnStateUsageCandidate{}
+	entry.pendingOwner = codexTurnStateProbeCandidatePendingOwner{}
+	s.gateway.releaseCodexTurnStateCandidateOwnerAsync(pendingOwner)
+	s.gateway.releaseCodexTurnStateCandidateOwnerAsync(candidateOwner)
 	entry.probe, entry.forceProbe, entry.dirty = false, false, false
 	s.gateway.rememberCodexTurnStateLocked(entry, now)
 	return nil

@@ -15,15 +15,14 @@ import (
 )
 
 const (
-	codexTurnStateProbeAttemptTimeout  = 12 * time.Second
-	codexTurnStateProbeSessionTimeout  = 24 * time.Second
-	codexTurnStateProbeTotalTimeout    = 90 * time.Second
-	codexTurnStateProbePoolSize        = 3
-	codexTurnStateProbe429Fallback     = 5 * time.Minute
-	codexTurnStateProbeProxyNamePrefix = "codex-turn-state-probe:"
-	codexTurnState1024ProxyHost        = "us.1024proxy.io"
-	codexTurnState1024ProxyPort        = 3000
-	codexTurnStateProbeSIDLength       = 8
+	codexTurnStateProbeAttemptTimeout = 12 * time.Second
+	codexTurnStateProbeSessionTimeout = 24 * time.Second
+	codexTurnStateProbeTotalTimeout   = 90 * time.Second
+	codexTurnStateProbePoolSize       = 3
+	codexTurnStateProbe429Fallback    = 5 * time.Minute
+	codexTurnState1024ProxyHost       = "us.1024proxy.io"
+	codexTurnState1024ProxyPort       = 3000
+	codexTurnStateProbeSIDLength      = 8
 
 	// These are local diagnostics only. They deliberately contain no status
 	// body, account data, proxy URL or Retry-After value.
@@ -42,28 +41,6 @@ type codexTurnStateProbeProxyTemplate struct {
 	password  string
 	sessionID string
 	dynamic   bool
-}
-
-func codexTurnStateDedicatedProxy(proxy Proxy) bool {
-	name := strings.TrimSpace(proxy.Name)
-	if strings.HasPrefix(name, codexTurnStateProbeProxyNamePrefix) {
-		return true
-	}
-	// Older local deployments stored the same explicit purpose in names such as
-	// "team3-state-US-<sid>" before the reserved prefix was introduced. Keep
-	// those records usable only when they are actually 1024Proxy records; a
-	// generic proxy named "state" must never become a dynamic configuration.
-	if strings.ToLower(strings.TrimSpace(proxy.Host)) != codexTurnState1024ProxyHost || proxy.Port != codexTurnState1024ProxyPort {
-		return false
-	}
-	for _, token := range strings.FieldsFunc(name, func(r rune) bool {
-		return r == '-' || r == '_' || r == ':' || r == ' ' || r == '\t'
-	}) {
-		if strings.EqualFold(token, "state") || strings.EqualFold(token, "turnstate") {
-			return true
-		}
-	}
-	return false
 }
 
 // parseCodexTurnStateProbeProxyTemplate accepts the 1024Proxy dashboard's
@@ -360,8 +337,8 @@ func codexTurnStateProbe429Diagnostic(statusCode int, header http.Header, now ti
 	return codexTurnStateProbe429NoRetryAfterCode, codexTurnStateProbe429Fallback
 }
 
-func codexTurnStateProxyUsable(proxy Proxy, now time.Time) bool {
-	if !proxy.IsActive() || proxy.IsExpired(now) || strings.TrimSpace(proxy.Host) == "" || strings.TrimSpace(proxy.Host) != proxy.Host || proxy.Port <= 0 || proxy.Port > 65535 {
+func codexTurnStateProxyAddressUsable(proxy Proxy) bool {
+	if strings.TrimSpace(proxy.Host) == "" || strings.TrimSpace(proxy.Host) != proxy.Host || proxy.Port <= 0 || proxy.Port > 65535 {
 		return false
 	}
 	if strings.TrimSpace(proxy.Protocol) != proxy.Protocol || strings.ContainsAny(proxy.Host, "\r\n\x00") || strings.ContainsAny(proxy.Protocol, "\r\n\x00") {
@@ -381,18 +358,19 @@ func codexTurnStateProxyRoute(proxy Proxy) string {
 	return proxy.URL()
 }
 
-// codexTurnStateIPPoolRoutes returns a bounded, de-duplicated snapshot of the
-// ordinary active proxy pool. This is a request-level route override only: it
-// never changes the account's persisted proxy binding. The primary route is
-// excluded because a pool fallback is meant to provide a fresh exit.
-func codexTurnStateIPPoolRoutes(proxies []Proxy, primary string, now time.Time) []string {
+// codexTurnStateProxyPoolRoutes returns a bounded, de-duplicated snapshot of
+// every syntactically usable proxy record. Status, expiry, display name and
+// provider do not gate maintenance collection. This request-level override
+// never changes the account's persisted binding; the primary route is excluded
+// because a pool fallback is meant to provide a fresh exit.
+func codexTurnStateProxyPoolRoutes(proxies []Proxy, primary string) []string {
 	seen := make(map[string]struct{}, len(proxies)+1)
 	if primary != "" {
 		seen[primary] = struct{}{}
 	}
 	routes := make([]string, 0, min(len(proxies), codexTurnStateProbePoolSize))
 	for _, proxy := range proxies {
-		if !codexTurnStateProxyUsable(proxy, now) {
+		if !codexTurnStateProxyAddressUsable(proxy) {
 			continue
 		}
 		route := codexTurnStateProxyRoute(proxy)
@@ -415,47 +393,57 @@ func codexTurnStateIPPoolRoutes(proxies []Proxy, primary string, now time.Time) 
 	return routes
 }
 
-// Pool routes are used only for maintenance probes. Explicitly marked dynamic
-// records take precedence and are validated as one fixed-country 1024Proxy
-// credential set. When no dynamic record is configured, the regular active IP
-// proxy pool is used as a bounded fallback. Account bindings and user requests
-// keep their configured route. Never log returned URLs.
+// Pool routes are used only for maintenance probes. A configured proxy ID takes
+// precedence without imposing status, expiry, provider, or naming policy. A
+// valid 1024Proxy dynamic template still expands into fresh sticky sessions;
+// every other syntactically usable record is used as-is. When no ID is set, all
+// proxy records form a best-effort pool under the same no-status/no-expiry
+// policy. The caller falls back to the account route or direct transport. Never
+// log URLs.
 func (s *OpenAIGatewayService) codexTurnStatePoolRoutes(ctx context.Context, primary string) []string {
+	if s != nil && s.settingService != nil {
+		config := s.settingService.GetOpenAICodexTurnState(ctx)
+		if config.ProxyID > 0 {
+			if s.proxyRepo == nil {
+				return nil
+			}
+			proxy, err := s.proxyRepo.GetByID(ctx, config.ProxyID)
+			if err != nil || proxy == nil || !codexTurnStateProxyAddressUsable(*proxy) {
+				return nil
+			}
+			if template, templateErr := codexTurnStateProbeProxyTemplateFromRecord(*proxy); templateErr == nil && template.dynamic {
+				if routes := buildCodexTurnStateProbeRoutes([]codexTurnStateProbeProxyTemplate{template}, primary, cryptorand.Reader); len(routes) > 0 {
+					return routes
+				}
+			}
+			return []string{codexTurnStateProxyRoute(*proxy)}
+		}
+	}
 	if s.proxyRepo == nil {
 		return nil
 	}
-	proxies, err := s.proxyRepo.ListActive(ctx)
+	proxies, err := s.proxyRepo.ListAllForFallback(ctx)
 	if err != nil {
 		return nil
 	}
-	now := time.Now()
 	templates := make([]codexTurnStateProbeProxyTemplate, 0, len(proxies))
-	dynamicConfigured := false
 	for _, proxy := range proxies {
-		if !codexTurnStateDedicatedProxy(proxy) || !proxy.IsActive() || proxy.IsExpired(now) {
+		if !codexTurnStateProxyAddressUsable(proxy) {
 			continue
-		}
-		dynamicConfigured = true
-		if !codexTurnStateProxyUsable(proxy, now) {
-			// An active, explicitly dedicated record is configuration, even when
-			// its protocol/host fields are malformed. Do not silently borrow a
-			// different identity in that case.
-			return nil
 		}
 		template, err := codexTurnStateProbeProxyTemplateFromRecord(proxy)
 		if err != nil {
-			// A malformed explicitly dedicated record is a configuration error.
-			// Fail closed instead of silently using another identity.
-			return nil
+			continue
 		}
 		templates = append(templates, template)
 	}
-	if dynamicConfigured {
+	if len(templates) > 0 {
 		// A maintenance run gets at most one attempt per fresh route. Repeating a
 		// route across rounds can turn a bounded probe into an IP-rotation loop and
-		// can evade an upstream 429 boundary. A malformed/mixed dynamic set stays
-		// fail-closed rather than silently switching identity pools.
-		return buildCodexTurnStateProbeRoutes(templates, primary, cryptorand.Reader)
+		// can evade an upstream 429 boundary.
+		if routes := buildCodexTurnStateProbeRoutes(templates, primary, cryptorand.Reader); len(routes) > 0 {
+			return routes
+		}
 	}
-	return codexTurnStateIPPoolRoutes(proxies, primary, now)
+	return codexTurnStateProxyPoolRoutes(proxies, primary)
 }

@@ -228,6 +228,7 @@ type SystemSettings struct {
 	OpenAICodexTurnStateDefaultModel string `json:"openai_codex_turn_state_default_model"`
 	OpenAICodexTurnStateModels       string `json:"openai_codex_turn_state_models"`
 	OpenAICodexTurnStateAutoEnabled  bool   `json:"openai_codex_turn_state_auto_enabled"`
+	OpenAICodexTurnStateProxyID      int64  `json:"openai_codex_turn_state_proxy_id"`
 
 	// codex_cli_only 加固
 	MinCodexVersion                      string `json:"min_codex_version"`

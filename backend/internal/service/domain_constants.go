@@ -705,13 +705,18 @@ const (
 	SettingKeyOpenAICodexTurnStateEnabled = "openai_codex_turn_state_enabled"
 	SettingKeyOpenAICodexTurnState        = "openai_codex_turn_state"
 	SettingKeyOpenAICodexTurnStateSetAtMS = "openai_codex_turn_state_set_at_ms"
-	// Active automatic lifecycle probe model and model scope.
+	// Active lifecycle probe model and model scope. An empty scope allows every
+	// model; entries support exact IDs and trailing-* prefix patterns.
 	SettingKeyOpenAICodexTurnStateDefaultModel = "openai_codex_turn_state_default_model"
 	SettingKeyOpenAICodexTurnStateModels       = "openai_codex_turn_state_models"
 	// SettingKeyOpenAICodexTurnStateAutoEnabled enables account-scoped automatic
 	// collection, renewal and bounded upstream probes. It is opt-in because each
 	// probe is an extra upstream request and may consume model quota.
 	SettingKeyOpenAICodexTurnStateAutoEnabled = "openai_codex_turn_state_auto_enabled"
+	// SettingKeyOpenAICodexTurnStateProxyID selects the dedicated proxy record
+	// used by automatic and manually triggered Turn State collection. Zero keeps
+	// compatibility-pool selection enabled.
+	SettingKeyOpenAICodexTurnStateProxyID = "openai_codex_turn_state_proxy_id"
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。
 	// 迁移后等价规则写入 SettingKeyCodexCLIOnlyWhitelist，不再参与运行时判定。
 	SettingKeyOpenAIAllowClaudeCodeCodexPlugin = "openai_allow_claude_code_codex_plugin"

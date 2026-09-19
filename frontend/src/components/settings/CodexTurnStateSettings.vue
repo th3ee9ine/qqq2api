@@ -11,6 +11,22 @@
     <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.settings.gatewayForwarding.codexTurnStateAutoHint') }}</p>
 
     <div class="mt-4">
+      <label class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300" for="openai-codex-turn-state-proxy">
+        {{ t('admin.settings.gatewayForwarding.codexTurnStateProxy') }}
+      </label>
+      <ProxySelector
+        id="openai-codex-turn-state-proxy"
+        :model-value="proxyId > 0 ? proxyId : null"
+        :proxies="proxies"
+        data-testid="openai-codex-turn-state-proxy"
+        @update:model-value="emit('update:proxyId', $event ?? 0)"
+      />
+      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+        {{ t('admin.settings.gatewayForwarding.codexTurnStateProxyHint') }}
+      </p>
+    </div>
+
+    <div class="mt-4">
       <label for="openai-codex-turn-state-default-model" class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.settings.gatewayForwarding.codexTurnStateDefaultModel') }}</label>
       <input
         id="openai-codex-turn-state-default-model"
@@ -45,13 +61,27 @@
 
 <script setup lang="ts">
 import Toggle from '@/components/common/Toggle.vue'
+import ProxySelector from '@/components/common/ProxySelector.vue'
 import { useI18n } from 'vue-i18n'
+import type { Proxy } from '@/types'
+import { toRefs } from 'vue'
 
-defineProps<{ autoEnabled: boolean; models: string; defaultModel: string }>()
+const props = withDefaults(defineProps<{
+  autoEnabled: boolean
+  models: string
+  defaultModel: string
+  proxyId?: number
+  proxies?: Proxy[]
+}>(), {
+  proxyId: 0,
+  proxies: () => [],
+})
 const emit = defineEmits<{
   'update:autoEnabled': [value: boolean]
   'update:models': [value: string]
   'update:defaultModel': [value: string]
+  'update:proxyId': [value: number]
 }>()
 const { t } = useI18n()
+const { proxyId, proxies } = toRefs(props)
 </script>

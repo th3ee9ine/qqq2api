@@ -314,6 +314,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAICodexTurnStateModels:                             settings.OpenAICodexTurnStateModels,
 		OpenAICodexTurnStateDefaultModel:                       settings.OpenAICodexTurnStateDefaultModel,
 		OpenAICodexTurnStateAutoEnabled:                        settings.OpenAICodexTurnStateAutoEnabled,
+		OpenAICodexTurnStateProxyID:                            settings.OpenAICodexTurnStateProxyID,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  settings.CodexCLIOnlyBlacklist,

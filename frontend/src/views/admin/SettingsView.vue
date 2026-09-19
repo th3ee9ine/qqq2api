@@ -4941,9 +4941,12 @@
                 :auto-enabled="form.openai_codex_turn_state_auto_enabled"
                 :models="form.openai_codex_turn_state_models"
                 :default-model="form.openai_codex_turn_state_default_model"
+                :proxy-id="form.openai_codex_turn_state_proxy_id"
+                :proxies="codexTurnStateProxies"
                 @update:auto-enabled="form.openai_codex_turn_state_auto_enabled = $event"
                 @update:models="form.openai_codex_turn_state_models = $event"
                 @update:default-model="form.openai_codex_turn_state_default_model = $event"
+                @update:proxy-id="form.openai_codex_turn_state_proxy_id = $event"
               />
 
               <!-- Codex 版本号自动同步 -->
@@ -10185,6 +10188,7 @@ const form = reactive<SettingsForm>({
   openai_codex_turn_state_auto_enabled: false,
   openai_codex_turn_state_models: "",
   openai_codex_turn_state_default_model: "gpt-5.5",
+  openai_codex_turn_state_proxy_id: 0,
   // codex_cli_only 加固
   min_codex_version: "",
   max_codex_version: "",
@@ -10429,6 +10433,10 @@ const authSourceDefaultsMeta = computed(() => [
 
 // Proxies for web search emulation ProxySelector
 const webSearchProxies = ref<Proxy[]>([]);
+// All proxy records are offered to the Turn State collector. Credentials are
+// intentionally never rendered by ProxySelector; status and expiry do not gate
+// maintenance collection.
+const codexTurnStateProxies = ref<Proxy[]>([]);
 
 // Web Search Emulation config (loaded/saved separately)
 const DEFAULT_WEB_SEARCH_QUOTA_LIMIT = 1000;
@@ -10573,6 +10581,22 @@ async function loadWebSearchConfig() {
     if (status !== 404 && status !== undefined) {
       appStore.showError(extractApiErrorMessage(err, t("common.error")));
     }
+  }
+}
+
+async function loadCodexTurnStateProxies() {
+  try {
+    const first = await adminAPI.proxies.list(1, 1000)
+    const proxies = [...(first.items || [])]
+    const pages = Math.max(1, Number(first.pages) || 1)
+    for (let page = 2; page <= pages; page += 1) {
+      const result = await adminAPI.proxies.list(page, 1000)
+      proxies.push(...(result.items || []))
+    }
+    codexTurnStateProxies.value = proxies
+  } catch {
+    // Settings remain usable when the optional proxy inventory request fails.
+    codexTurnStateProxies.value = []
   }
 }
 
@@ -11453,8 +11477,9 @@ async function loadSettings() {
       openaiFastPolicyLoaded.value = true;
     }
 
-    // Load web search emulation config separately
-    await loadWebSearchConfig();
+    // Load optional proxy inventories separately so a proxy API failure does
+    // not prevent the rest of the settings form from loading.
+    await Promise.all([loadWebSearchConfig(), loadCodexTurnStateProxies()]);
   } catch (error: unknown) {
     loadFailed.value = true;
     appStore.showError(
@@ -11633,6 +11658,9 @@ async function saveSettings() {
       openai_codex_turn_state_auto_enabled: form.openai_codex_turn_state_auto_enabled,
       openai_codex_turn_state_models: codexTurnStateModels,
       openai_codex_turn_state_default_model: codexTurnStateDefaultModel,
+      openai_codex_turn_state_proxy_id: Number.isInteger(Number(form.openai_codex_turn_state_proxy_id)) && Number(form.openai_codex_turn_state_proxy_id) > 0
+        ? Number(form.openai_codex_turn_state_proxy_id)
+        : 0,
       min_codex_version: form.min_codex_version?.trim() || "",
       max_codex_version: form.max_codex_version?.trim() || "",
       codex_cli_only_allow_app_server_clients:

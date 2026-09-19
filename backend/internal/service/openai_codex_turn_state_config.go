@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,11 +100,29 @@ func codexTurnStateModelMatches(scope string, models ...string) bool {
 	return !known
 }
 
-// Only automatic lifecycle settings are read. Legacy manual tokens are inert.
+// NormalizeOpenAICodexTurnStateProxyID accepts an empty value as the legacy
+// automatic-selection mode and otherwise requires a non-negative proxy ID.
+func NormalizeOpenAICodexTurnStateProxyID(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id < 0 {
+		return 0, fmt.Errorf("openai_codex_turn_state_proxy_id must be zero or a positive proxy ID")
+	}
+	return id, nil
+}
+
+// Only account-scoped lifecycle settings are read. Legacy global manual tokens
+// remain inert. ModelScopeValid keeps malformed historical values fail-closed
+// without discarding an independently valid default model or dedicated proxy.
 type OpenAICodexTurnStateConfig struct {
-	DefaultModel string
-	Models       string
-	AutoEnabled  bool
+	DefaultModel    string
+	Models          string
+	ModelScopeValid bool
+	AutoEnabled     bool
+	ProxyID         int64
 }
 type cachedOpenAICodexTurnState struct {
 	config    OpenAICodexTurnStateConfig
@@ -115,7 +134,7 @@ type cachedOpenAICodexTurnState struct {
 // load cannot overwrite an administrator's newly disabled setting.
 func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICodexTurnStateConfig {
 	if s == nil || s.settingRepo == nil {
-		return OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel}
+		return OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel, ModelScopeValid: true}
 	}
 	if cached, ok := s.openAICodexTurnStateCache.Load().(*cachedOpenAICodexTurnState); ok && cached != nil && time.Now().Before(cached.expiresAt) {
 		return cached.config
@@ -130,15 +149,23 @@ func (s *SettingService) GetOpenAICodexTurnState(ctx context.Context) OpenAICode
 	}
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
 	defer cancel()
-	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateDefaultModel, SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled})
+	values, err := s.settingRepo.GetMultiple(dbCtx, []string{SettingKeyOpenAICodexTurnStateDefaultModel, SettingKeyOpenAICodexTurnStateModels, SettingKeyOpenAICodexTurnStateAutoEnabled, SettingKeyOpenAICodexTurnStateProxyID})
+	// A repository read failure cannot prove that the stored scope is empty. Keep
+	// both automatic and manual collection fail-closed until a later cache fill.
 	config := OpenAICodexTurnStateConfig{DefaultModel: openai.DefaultTestModel}
 	ttl := gatewayForwardingCacheTTL
 	if err == nil {
-		models, modelsErr := NormalizeOpenAICodexTurnStateModels(values[SettingKeyOpenAICodexTurnStateModels])
-		defaultModel, modelErr := NormalizeOpenAICodexTurnStateDefaultModel(values[SettingKeyOpenAICodexTurnStateDefaultModel])
-		if modelsErr == nil && modelErr == nil {
-			config = OpenAICodexTurnStateConfig{DefaultModel: defaultModel, Models: models, AutoEnabled: values[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"}
+		if models, modelsErr := NormalizeOpenAICodexTurnStateModels(values[SettingKeyOpenAICodexTurnStateModels]); modelsErr == nil {
+			config.Models = models
+			config.ModelScopeValid = true
 		}
+		if defaultModel, modelErr := NormalizeOpenAICodexTurnStateDefaultModel(values[SettingKeyOpenAICodexTurnStateDefaultModel]); modelErr == nil {
+			config.DefaultModel = defaultModel
+		}
+		if proxyID, proxyIDErr := NormalizeOpenAICodexTurnStateProxyID(values[SettingKeyOpenAICodexTurnStateProxyID]); proxyIDErr == nil {
+			config.ProxyID = proxyID
+		}
+		config.AutoEnabled = config.ModelScopeValid && values[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"
 	} else {
 		ttl = gatewayForwardingErrorTTL
 	}
@@ -163,6 +190,8 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 		}
 	}
 	model := s.codexTurnStateModel(ctx, models...)
+	scopeModels := appendCodexTurnStateScopeModels(nil, models...)
+	scopeModels = appendCodexTurnStateScopeModels(scopeModels, model)
 	policy := openAICodexTurnStateInjectionPolicy(ctx)
 	if policy == codexTurnStateInjectionDisabled {
 		headers.Del(openAICodexTurnStateHeader)
@@ -182,7 +211,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 		return nil
 	}
 	cfg := s.settingService.GetOpenAICodexTurnState(ctx)
-	if !codexTurnStateAutoEligible(account) || !cfg.AutoEnabled {
+	if !codexTurnStateAutoEligible(account) {
 		if strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)) != "" {
 			noteSource("native")
 		} else {
@@ -191,10 +220,10 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 		return nil
 	}
 	ctx = withCodexTurnStateModel(ctx, model)
-	if !codexTurnStateModelMatches(cfg.Models, models...) {
-		// The model scope controls only automatic injection. A native Codex
-		// continuation remains the client's first choice; cross-account echoes are
-		// already removed by guardOpenAICodexTurnStateEcho before this point.
+	if !codexTurnStateScopeAllows(cfg, scopeModels...) {
+		s.enforceCodexTurnStateScopeForAccount(cfg, account.ID, model)
+		// The configured range gates managed collection and injection only. A
+		// native client continuation remains authoritative for its own request.
 		if strings.TrimSpace(headers.Get(openAICodexTurnStateHeader)) != "" {
 			noteSource("native")
 		} else {
@@ -202,17 +231,25 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 		}
 		return nil
 	}
-	auto := s.autoTurnStateForAccount(ctx, account, models...)
-	// Check the same account in persistent storage before treating the applicable
-	// pool as empty. Other accounts and other models are never candidates.
-	if err := s.refreshCodexTurnStateSource(ctx, account, model, auto == ""); err != nil {
-		return err
+	autoEnabled := cfg.AutoEnabled
+	auto := ""
+	if autoEnabled {
+		auto = s.autoTurnStateForAccount(ctx, account, models...)
+		// Check the same account in persistent storage before treating the
+		// applicable pool as empty. Other accounts and other models are never
+		// candidates.
+		if err := s.refreshCodexTurnStateSource(ctx, account, model, auto == ""); err != nil {
+			return err
+		}
+		current := s.settingService.GetOpenAICodexTurnState(ctx)
+		cfg = current
+		autoEnabled = current.AutoEnabled && codexTurnStateScopeAllows(current, scopeModels...)
+		if autoEnabled {
+			auto = s.autoTurnStateForAccount(ctx, account, models...)
+		} else {
+			return nil
+		}
 	}
-	current := s.settingService.GetOpenAICodexTurnState(ctx)
-	if !current.AutoEnabled || !codexTurnStateModelMatches(current.Models, models...) {
-		return nil
-	}
-	auto = s.autoTurnStateForAccount(ctx, account, models...)
 	native := headers.Get(openAICodexTurnStateHeader)
 	s.openaiTurnStateMu.Lock()
 	now := time.Now()
@@ -220,7 +257,7 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 	// Re-evaluate under the same lock as revocation/collection. The automatic
 	// result obtained before acquiring this lock may already have been revoked.
 	auto = ""
-	if !entry.reconciling && !entry.recovery.Pending && entry.recovery.allows(entry.token, now) && codexTurnStateAutoExpiry(entry.token, entry.setAt, now) > now.UnixMilli() {
+	if autoEnabled && !entry.reconciling && !entry.recovery.Pending && entry.recovery.allows(entry.token, now) && codexTurnStateAutoExpiry(entry.token, entry.setAt, now) > now.UnixMilli() {
 		auto = entry.token
 	}
 	// Native continuation has priority over automatic cache injection. It need
@@ -229,7 +266,11 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 	// and recovery-epoch only; account provenance is enforced separately.
 	nativeAllowed := native != "" && ValidateOpenAICodexTurnState(native) == nil && entry.recovery.allows(native, now)
 	candidate := ""
-	if !nativeAllowed && !codexTurnStateManualVerification(ctx) {
+	candidateInScope := entry.candidate.state == "" || codexTurnStateUsageCandidateInScopeLocked(cfg, entry)
+	if !candidateInScope {
+		s.discardCodexTurnStateCandidateLocked(entry)
+	}
+	if candidateInScope && !nativeAllowed && !codexTurnStateManualVerification(ctx) && (autoEnabled || entry.candidate.manual) {
 		candidate = s.codexTurnStateUsageCandidateForRequestLocked(
 			ctx,
 			entry,
@@ -328,7 +369,9 @@ func (req openAIWSAcquireRequest) withCurrentTurnState(ctx context.Context) open
 		req.turnStateError = req.TurnState.Gateway.applyOpenAICodexTurnState(ctx, req.Account, req.Headers, req.TurnState.Models...)
 		req.turnStateRecoveryEpoch = req.TurnState.Gateway.codexTurnStateRecoveryEpoch(ctx, req.Account)
 	}
-	if token := req.Headers.Get(openAICodexTurnStateHeader); token != "" && config.AutoEnabled && codexTurnStateModelMatches(config.Models, req.TurnState.Models...) {
+	scopeModels := appendCodexTurnStateScopeModels(nil, req.TurnState.Models...)
+	scopeModels = appendCodexTurnStateScopeModels(scopeModels, req.turnStateModel)
+	if token := req.Headers.Get(openAICodexTurnStateHeader); token != "" && config.AutoEnabled && codexTurnStateScopeAllows(config, scopeModels...) {
 		req.turnStateFingerprint = codexTurnStateDigest(token + "\x00" + req.turnStateModel + "\x00" + config.Models)
 	}
 	return req

@@ -266,6 +266,40 @@ func TestCodexTurnStateProbeCandidatePendingIsDurableAcrossInstances(t *testing.
 	require.NotContains(t, string(payload), "opaque-candidate-state")
 }
 
+func TestClearCodexTurnStateProbeCandidatePendingRequiresExactOwner(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	model := "gpt-6-astra"
+	reservation, err := s.reserveCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0)
+	require.NoError(t, err)
+	won, firstOwner, err := s.markCodexTurnStateProbeCandidatePendingOwned(context.Background(), account.ID, model, 0, reservation)
+	require.NoError(t, err)
+	require.True(t, won)
+
+	require.NoError(t, s.clearCodexTurnStateProbeCandidatePending(context.Background(), firstOwner))
+	stored, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	budget, err := codexTurnStateProbeBurstBudgetFromAccount(stored, codexTurnStateProbeBurstBudgetExtraKey(model))
+	require.NoError(t, err)
+	require.Equal(t, firstOwner.version+1, budget.Version)
+	require.Zero(t, budget.InFlightUntilMS)
+	require.Zero(t, budget.CandidatePendingUntilMS)
+
+	secondReservation, err := s.reserveCodexTurnStateProbeBurstAttempt(context.Background(), account.ID, model, 0)
+	require.NoError(t, err)
+	require.Equal(t, 2, secondReservation.attempt)
+	won, secondOwner, err := s.markCodexTurnStateProbeCandidatePendingOwned(context.Background(), account.ID, model, 0, secondReservation)
+	require.NoError(t, err)
+	require.True(t, won)
+	require.NoError(t, s.clearCodexTurnStateProbeCandidatePending(context.Background(), firstOwner))
+	stored, err = repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	budget, err = codexTurnStateProbeBurstBudgetFromAccount(stored, codexTurnStateProbeBurstBudgetExtraKey(model))
+	require.NoError(t, err)
+	require.Equal(t, secondOwner.version, budget.Version)
+	require.Equal(t, secondOwner.untilMS, budget.CandidatePendingUntilMS, "a stale owner cannot clear a newer marker")
+	require.NoError(t, s.clearCodexTurnStateProbeCandidatePending(context.Background(), secondOwner))
+}
+
 func TestCodexTurnStateProbeCandidatePendingExpiryAndNewGeneration(t *testing.T) {
 	s, repo, account := newTurnStateAutoService(t)
 	model := "gpt-6-astra"
@@ -425,7 +459,7 @@ func TestCodexTurnStateProbeCandidatePendingStopsSecondWorker(t *testing.T) {
 
 	require.Empty(t, first.autoTurnStateForAccount(context.Background(), account, model))
 	waitTurnStateAutoIdle(t, first)
-	require.EqualValues(t, 3, calls.Load(), "collection, sticky replay, and daily-route replay must complete once")
+	require.EqualValues(t, 2, calls.Load(), "collection and same-route replay must complete once")
 	first.openaiTurnStateMu.Lock()
 	require.Equal(t, candidate, first.openaiTurnStates[codexTurnStateKey{account.ID, model}].candidate.state)
 	first.openaiTurnStateMu.Unlock()
@@ -446,7 +480,7 @@ func TestCodexTurnStateProbeCandidatePendingStopsSecondWorker(t *testing.T) {
 	entry.forceProbe = true
 	second.openaiTurnStateMu.Unlock()
 	second.runCodexTurnStateProbe(account.ID, entry)
-	require.EqualValues(t, 3, calls.Load(), "a fresh instance must observe pending before contacting another route")
+	require.EqualValues(t, 2, calls.Load(), "a fresh instance must observe pending before contacting another route")
 	second.openaiTurnStateMu.Lock()
 	require.Empty(t, entry.candidate.state)
 	second.openaiTurnStateMu.Unlock()

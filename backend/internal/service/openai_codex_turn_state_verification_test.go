@@ -267,6 +267,23 @@ func TestCodexTurnStateAutoUnverifiedPersistedStateIsNeverInjected(t *testing.T)
 	}
 }
 
+func TestCodexTurnStateCandidateScopeDoesNotBorrowCurrentEntryAlias(t *testing.T) {
+	cfg := OpenAICodexTurnStateConfig{Models: "allowed-alias", ModelScopeValid: true, AutoEnabled: true}
+	entry := &codexTurnStateAutoEntry{
+		model:        "gpt-5",
+		requestModel: "gpt-5",
+		scopeModels:  []string{"allowed-alias", "gpt-5"},
+		candidate: codexTurnStateUsageCandidate{
+			state:                 "candidate-state",
+			scopeModels:           []string{"blocked-alias", "gpt-5"},
+			expectedResponseModel: "gpt-5",
+		},
+	}
+
+	require.True(t, codexTurnStateScopeAllows(cfg, entry.scopeModels...))
+	require.False(t, codexTurnStateUsageCandidateInScopeLocked(cfg, entry), "a later allowed alias must not authorize an older candidate")
+}
+
 func TestCodexTurnStateAutoProbeRejectsLunaDespiteHTTP200(t *testing.T) {
 	s, _, account := newTurnStateAutoService(t)
 	s.httpUpstream = &turnStateRawUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
@@ -408,6 +425,74 @@ func TestCodexTurnStateUsageCandidateRequiresDedicatedMarkedRequest(t *testing.T
 	require.Equal(t, "local:acceptance-request", entry.candidate.requestID)
 	require.Equal(t, int64(701), entry.candidate.apiKeyID)
 	require.Equal(t, model, entry.candidate.requestedModel)
+	s.openaiTurnStateMu.Unlock()
+}
+
+func TestCodexTurnStateManualCandidateCanBeVerifiedWhenAutomaticModeIsDisabled(t *testing.T) {
+	s, _, account := newTurnStateAutoService(t)
+	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+	settings.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "false"
+	s.settingService.InvalidateOpenAICodexTurnStateCache()
+
+	const model = "gpt-6-astra"
+	now := time.Now()
+	candidateState := recoveryTestToken(now, 12, 13)
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, model)
+	s.stageCodexTurnStateUsageCandidateWithModeLocked(entry, candidateState, entry.recovery.InvalidatedAtMS, now, true)
+	s.openaiTurnStateMu.Unlock()
+
+	ordinaryHeaders := http.Header{}
+	require.NoError(t, s.applyOpenAICodexTurnState(context.Background(), account, ordinaryHeaders, model))
+	require.Empty(t, ordinaryHeaders.Get(openAICodexTurnStateHeader), "a manual candidate must remain unavailable to ordinary traffic")
+
+	verificationCtx := context.WithValue(context.Background(), ctxkey.RequestID, "manual-candidate-verification")
+	verificationCtx = WithOpenAICodexTurnStateUsageVerification(verificationCtx, 701)
+	verificationHeaders := http.Header{}
+	require.NoError(t, s.applyOpenAICodexTurnState(verificationCtx, account, verificationHeaders, model))
+	require.Equal(t, candidateState, verificationHeaders.Get(openAICodexTurnStateHeader))
+	s.openaiTurnStateMu.Lock()
+	require.Equal(t, "local:manual-candidate-verification", entry.candidate.requestID)
+	require.Equal(t, int64(701), entry.candidate.apiKeyID)
+	require.True(t, entry.candidate.manual)
+	s.openaiTurnStateMu.Unlock()
+}
+
+func TestCodexTurnStateManualCandidateRejectsOlderIssuedState(t *testing.T) {
+	s, _, account := newTurnStateAutoService(t)
+	now := time.Now()
+	current := recoveryTestToken(now.Add(-2*time.Hour), 12, 20)
+	older := recoveryTestToken(now.Add(-3*time.Hour), 12, 21)
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, "gpt-5")
+	entry.token = current
+	entry.setAt = now.Add(-2 * time.Hour).UnixMilli()
+	entry.verifiedAt = entry.setAt
+	entry.verifiedModel = "gpt-5"
+	require.False(t, s.stageCodexTurnStateUsageCandidateWithModeLocked(entry, older, entry.recovery.InvalidatedAtMS, now, true))
+	require.Empty(t, entry.candidate)
+	s.openaiTurnStateMu.Unlock()
+}
+
+func TestCodexTurnStateManualCandidateDoesNotReplaceStateWithExpiredCandidate(t *testing.T) {
+	s, _, account := newTurnStateAutoService(t)
+	now := time.Now()
+	expiredCandidate := recoveryTestToken(now.Add(-2*time.Hour), 12, 22)
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, "gpt-5")
+	entry.token = "previous-expired-state"
+	entry.setAt = now.Add(-2 * time.Hour).UnixMilli()
+	entry.verifiedAt = entry.setAt
+	entry.verifiedModel = "gpt-5"
+	require.True(t, s.stageCodexTurnStateUsageCandidateWithModeLocked(entry, expiredCandidate, entry.recovery.InvalidatedAtMS, now, true))
+	require.False(t, s.publishManualCodexTurnStateCandidateLocked(entry, now))
+	require.Equal(t, "previous-expired-state", entry.token)
+	require.Equal(t, now.Add(-2*time.Hour).UnixMilli(), entry.setAt)
+	require.Equal(t, "invalid_state", entry.lastError)
+	require.True(t, entry.dirty)
+	require.True(t, entry.manualProbe)
 	s.openaiTurnStateMu.Unlock()
 }
 

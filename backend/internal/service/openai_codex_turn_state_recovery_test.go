@@ -198,7 +198,7 @@ func TestCodexTurnStateRecoveryHTTPResponseEvidenceStillNeedsReplayBeforePublica
 	waitTurnStateAutoIdle(t, s)
 	require.Equal(t, old, s.autoTurnStateForAccount(context.Background(), a, "gpt-5"))
 	// Matching lifecycle evidence from an ordinary client response is still not
-	// a same-route and daily-route replay, so it cannot publish the candidate.
+	// the bounded collection and same-route replay, so it cannot publish a state.
 	current := s.stampCodexTurnStateRequest(httptest.NewRequest(http.MethodPost, "/responses", nil), a)
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())

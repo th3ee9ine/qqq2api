@@ -263,6 +263,7 @@ type UpdateSettingsRequest struct {
 	OpenAICodexTurnStateDefaultModel       *string `json:"openai_codex_turn_state_default_model"`
 	OpenAICodexTurnStateModels             *string `json:"openai_codex_turn_state_models"`
 	OpenAICodexTurnStateAutoEnabled        *bool   `json:"openai_codex_turn_state_auto_enabled"`
+	OpenAICodexTurnStateProxyID            *int64  `json:"openai_codex_turn_state_proxy_id"`
 
 	// codex_cli_only 加固（global-only）
 	MinCodexVersion                      string `json:"min_codex_version"`
@@ -455,6 +456,7 @@ var settingOmittablePointerKeys = map[string]string{
 	"openai_codex_turn_state_models":              service.SettingKeyOpenAICodexTurnStateModels,
 	"openai_codex_turn_state_default_model":       service.SettingKeyOpenAICodexTurnStateDefaultModel,
 	"openai_codex_turn_state_auto_enabled":        service.SettingKeyOpenAICodexTurnStateAutoEnabled,
+	"openai_codex_turn_state_proxy_id":            service.SettingKeyOpenAICodexTurnStateProxyID,
 }
 
 // settingKeyByJSONName maps the value-typed top-level JSON fields of
@@ -1865,6 +1867,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAICodexTurnStateAutoEnabled
 		}(),
+		OpenAICodexTurnStateProxyID: func() int64 {
+			if req.OpenAICodexTurnStateProxyID != nil {
+				return *req.OpenAICodexTurnStateProxyID
+			}
+			return previousSettings.OpenAICodexTurnStateProxyID
+		}(),
 		MinCodexVersion:       strings.TrimSpace(req.MinCodexVersion),
 		MaxCodexVersion:       strings.TrimSpace(req.MaxCodexVersion),
 		CodexCLIOnlyBlacklist: strings.TrimSpace(req.CodexCLIOnlyBlacklist),
@@ -2417,6 +2425,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexTurnStateModels:                             updatedSettings.OpenAICodexTurnStateModels,
 		OpenAICodexTurnStateDefaultModel:                       updatedSettings.OpenAICodexTurnStateDefaultModel,
 		OpenAICodexTurnStateAutoEnabled:                        updatedSettings.OpenAICodexTurnStateAutoEnabled,
+		OpenAICodexTurnStateProxyID:                            updatedSettings.OpenAICodexTurnStateProxyID,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  updatedSettings.CodexCLIOnlyBlacklist,

@@ -252,6 +252,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexTurnStateDefaultModel:                   openai.DefaultTestModel,
 		SettingKeyOpenAICodexTurnStateModels:                         "",
 		SettingKeyOpenAICodexTurnStateAutoEnabled:                    "false",
+		SettingKeyOpenAICodexTurnStateProxyID:                        "0",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -912,10 +913,21 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	if model, err := NormalizeOpenAICodexTurnStateDefaultModel(settings[SettingKeyOpenAICodexTurnStateDefaultModel]); err == nil {
 		result.OpenAICodexTurnStateDefaultModel = model
 	}
-	if models, err := NormalizeOpenAICodexTurnStateModels(settings[SettingKeyOpenAICodexTurnStateModels]); err == nil {
+	rawTurnStateModels := settings[SettingKeyOpenAICodexTurnStateModels]
+	if models, err := NormalizeOpenAICodexTurnStateModels(rawTurnStateModels); err == nil {
 		result.OpenAICodexTurnStateModels = models
+	} else {
+		// Runtime loading treats malformed historical scope values as fail-closed.
+		// Preserve that value in the admin snapshot as well: presenting it as an
+		// empty (allow-all) scope would let an unrelated full-form save silently
+		// widen collection and injection to every model.
+		result.OpenAICodexTurnStateModels = strings.TrimSpace(rawTurnStateModels)
 	}
 	result.OpenAICodexTurnStateAutoEnabled = settings[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"
+	result.OpenAICodexTurnStateProxyID = 0
+	if proxyID, err := strconv.ParseInt(strings.TrimSpace(settings[SettingKeyOpenAICodexTurnStateProxyID]), 10, 64); err == nil && proxyID > 0 {
+		result.OpenAICodexTurnStateProxyID = proxyID
+	}
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]
 	result.MaxCodexVersion = settings[SettingKeyMaxCodexVersion]

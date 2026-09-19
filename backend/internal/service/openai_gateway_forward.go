@@ -109,6 +109,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
+	if _, _, ok := codexTurnStateUsageVerificationIdentity(ctx); ok {
+		wsDecision = openAIWSHTTPDecision("codex_turn_state_usage_verification")
+	}
 	clientTransport := GetOpenAIClientTransport(c)
 	httpResponsesWSBridge := clientTransport == OpenAIClientTransportHTTP && shouldBridgeOpenAIResponsesHTTPToWSV2(wsDecision, account)
 	// Native Responses API-key accounts remain on HTTP. Standard OAuth accounts

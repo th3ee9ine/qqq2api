@@ -256,8 +256,9 @@ type SystemSettings struct {
 
 	// Automatic Codex Turn State lifecycle; values are managed per account.
 	OpenAICodexTurnStateDefaultModel string // 自动探测默认模型，空=内置默认
-	OpenAICodexTurnStateModels       string // 逗号分隔模型范围，空=全部
+	OpenAICodexTurnStateModels       string // 逗号分隔模型范围，空=全部，支持尾部 * 前缀匹配
 	OpenAICodexTurnStateAutoEnabled  bool   `json:"openai_codex_turn_state_auto_enabled"`
+	OpenAICodexTurnStateProxyID      int64  `json:"openai_codex_turn_state_proxy_id"` // 专属动态代理记录 ID，0=兼容旧策略
 
 	// Codex client restrictions.
 	MinCodexVersion                      string // codex_cli_only 最低 Codex 引擎版本；空=不检查

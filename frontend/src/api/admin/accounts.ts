@@ -30,7 +30,8 @@ import type {
   OpenAIAccountSessionList,
   OpenAIAccountSessionBatchRevokeResult,
   OpenAISessionCleanupSettings,
-  OpenAISessionCleanupUpdateRequest
+  OpenAISessionCleanupUpdateRequest,
+  CodexTurnStateAutoInfo
 } from '@/types'
 
 /**
@@ -1115,6 +1116,52 @@ export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<U
   return data.results
 }
 
+export type CodexTurnStateCollectStatus = 'queued' | 'already_valid' | 'rejected' | 'error' | string
+
+export interface CodexTurnStateCollectResult {
+  status: CodexTurnStateCollectStatus
+  account_id: number
+  model?: string
+  codex_turn_state_auto?: CodexTurnStateAutoInfo | null
+  reason?: string
+  retry_at_ms?: number
+  message?: string
+}
+
+/** Queue a manual Turn State probe for an account whose state is missing or expired. */
+export async function collectCodexTurnState(
+  id: number,
+  model?: string,
+): Promise<CodexTurnStateCollectResult> {
+  const payload = model?.trim() ? { model: model.trim() } : undefined
+  try {
+    const { data } = await apiClient.post<CodexTurnStateCollectResult>(
+      `/admin/accounts/${id}/codex-turn-state/collect`,
+      payload,
+      { timeout: 120_000 },
+    )
+    return data
+  } catch (error: unknown) {
+    const rejected = error as {
+      status?: number
+      message?: string
+      reason?: string
+      data?: CodexTurnStateCollectResult
+    }
+    if (rejected?.status === 409) {
+      if (rejected.data?.status === 'rejected') return rejected.data
+      return {
+        status: 'rejected',
+        account_id: id,
+        model: payload?.model,
+        reason: rejected.reason,
+        message: rejected.message,
+      }
+    }
+    throw error
+  }
+}
+
 export async function getOllamaCloudUsageSettings(): Promise<OllamaCloudUsageSettings> {
   const { data } = await apiClient.get<OllamaCloudUsageSettings>('/admin/accounts/ollama-cloud-usage/settings')
   return data
@@ -1223,6 +1270,7 @@ export const accountsAPI = {
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
+  collectCodexTurnState,
   getOllamaCloudUsageSettings,
   updateOllamaCloudUsageSettings,
   getOllamaCloudUsage,

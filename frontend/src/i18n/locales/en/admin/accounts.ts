@@ -532,6 +532,17 @@ export default {
       recoverStateHint: 'Used to recover error, rate-limit, and temporary unschedulable runtime state.',
       recoverStateSuccess: 'Account state recovered successfully',
       recoverStateFailed: 'Failed to recover account state',
+      codexTurnState: {
+        collect: 'Collect Turn State manually',
+        status: 'Turn State status',
+        missing: 'Not collected',
+        expired: 'Expired',
+        validUntil: 'Valid until {time}',
+        queued: 'Turn State collection queued',
+        alreadyValid: 'Turn State is still valid',
+        rejected: 'This account cannot collect Turn State now',
+        failed: 'Turn State collection failed'
+      },
       fallbackActive: 'Fallback',
       fallbackActiveTip: 'Origin proxy {origin} expired',
       revertProxy: 'Revert proxy',

@@ -276,6 +276,38 @@ func TestPersistCodexTurnStateCASLossDoesNotPromoteUnverifiedDatabaseValue(t *te
 	require.EqualValues(t, 1, repo.sourceCalls.Load())
 }
 
+func TestPersistCodexTurnStateManualCASLossKeepsFreshProbeIntentWithoutRestoringLoser(t *testing.T) {
+	s, baseRepo, account := newTurnStateAutoService(t)
+	model := "gpt-6-astra"
+	now := time.Now()
+	winner := *account
+	winner.Extra = map[string]any{codexTurnStateModelExtraKey(model): map[string]any{
+		CodexTurnStateAutoExtraKey:      "database-value-without-verification",
+		CodexTurnStateAutoSetAtExtraKey: now.UnixMilli(),
+	}}
+	repo := &codexTurnStateCASWinnerRepo{turnStateAutoRepo: baseRepo, winner: &winner}
+	s.accountRepo = repo
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, model)
+	entry.token = "losing-process-state"
+	entry.setAt = now.UnixMilli()
+	entry.verifiedAt = now.UnixMilli()
+	entry.verifiedModel = model
+	entry.candidate = codexTurnStateUsageCandidate{state: "losing-local-candidate", collectedAt: now, manual: true, expectedResponseModel: model}
+	s.openaiTurnStateMu.Unlock()
+
+	require.NoError(t, s.persistCodexTurnStateWithMode(account.ID, entry, true))
+	s.openaiTurnStateMu.Lock()
+	require.Empty(t, entry.token)
+	require.Empty(t, entry.candidate, "CAS reconciliation must never restore the losing local candidate")
+	require.True(t, entry.probe)
+	require.True(t, entry.forceProbe)
+	require.True(t, entry.manualProbe, "an invalid database winner must retain the administrator's collection intent")
+	s.openaiTurnStateMu.Unlock()
+	require.EqualValues(t, 1, repo.sourceCalls.Load())
+}
+
 func TestPersistCodexTurnStateCASWinnerReadFailureStaysFailClosed(t *testing.T) {
 	s, baseRepo, account := newTurnStateAutoService(t)
 	model := "gpt-6-astra"

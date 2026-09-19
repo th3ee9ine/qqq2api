@@ -59,6 +59,7 @@ type AccountHandler struct {
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
 	debugWorkbench          *service.DebugWorkbenchService
+	codexTurnStateService   *service.OpenAIGatewayService
 	concurrencyService      *service.ConcurrencyService
 	crsSyncService          *service.CRSSyncService
 	sessionLimitCache       service.SessionLimitCache

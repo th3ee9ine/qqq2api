@@ -417,7 +417,7 @@ func TestCodexTurnStateAutoManagedExtraPreservedAndNotImported(t *testing.T) {
 	require.NotContains(t, created.Extra, burstKey)
 }
 
-func TestCodexTurnStateAutoProbeWorkerBoundAndDisableInFlight(t *testing.T) {
+func TestCodexTurnStateAutoProbeWorkersAreNotGloballyCappedAndDisableInFlight(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
 	accounts := make([]*Account, 12)
 	for i := range accounts {
@@ -441,14 +441,14 @@ func TestCodexTurnStateAutoProbeWorkerBoundAndDisableInFlight(t *testing.T) {
 	for _, account := range accounts {
 		s.autoTurnStateForAccount(context.Background(), account, "gpt-5")
 	}
-	for n := 0; n < codexTurnStateAutoMaxWorkers; n++ {
+	for range accounts {
 		select {
 		case <-started:
 		case <-time.After(time.Second):
 			t.Fatal("workers did not start")
 		}
 	}
-	require.EqualValues(t, codexTurnStateAutoMaxWorkers, calls.Load())
+	require.EqualValues(t, len(accounts), calls.Load())
 	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
 	settings.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "false"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()
@@ -491,7 +491,183 @@ func TestCodexTurnStateAutoProbeBodyBoundAndUnavailableAccount(t *testing.T) {
 	repo.accounts[a.ID].Schedulable = false
 	s.autoTurnStateForAccount(context.Background(), a, "gpt-5")
 	waitTurnStateAutoIdle(t, s)
-	require.EqualValues(t, 1, calls.Load(), "a stale request snapshot must not probe a now-paused account")
+	require.EqualValues(t, 2, calls.Load(), "Turn State collection must ignore account schedulability")
+}
+
+func TestManualCodexTurnStateCollectionPublishesWithAutoDisabledAndUnschedulableAccount(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+	settings.values[SettingKeyOpenAICodexTurnStateAutoEnabled] = "false"
+	s.settingService.InvalidateOpenAICodexTurnStateCache()
+	account.Schedulable = false
+	repo.accounts[account.ID].Schedulable = false
+
+	const (
+		model     = "gpt-5"
+		candidate = "manual-self-contained-candidate"
+	)
+	var calls atomic.Int32
+	s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
+		calls.Add(1)
+		if req.Header.Get(openAICodexTurnStateHeader) == "" {
+			return turnStateModelResponse(candidate, model), nil
+		}
+		require.Equal(t, candidate, req.Header.Get(openAICodexTurnStateHeader))
+		return turnStateModelResponse("", model), nil
+	}}
+
+	result, err := s.RequestCodexTurnStateCollection(context.Background(), account, model)
+	require.NoError(t, err)
+	require.Equal(t, CodexTurnStateManualStatusQueued, result.Status)
+	waitTurnStateAutoIdle(t, s)
+	require.EqualValues(t, 2, calls.Load(), "manual collection needs only collection and same-route replay")
+
+	stored, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	slot := codexTurnStateModelAccount(stored, model)
+	require.Equal(t, candidate, codexTurnStateAutoToken(slot))
+	require.Equal(t, model, slot.GetExtraString(CodexTurnStateAutoVerifiedModelExtraKey))
+}
+
+func TestCodexTurnStateModelScopeRejectsAutomaticAndManualCollection(t *testing.T) {
+	for _, tc := range []struct {
+		name, requestedModel, expectedModel string
+	}{
+		{name: "explicit model", requestedModel: "gpt-5", expectedModel: "gpt-5"},
+		{name: "default model", requestedModel: "", expectedModel: "gpt-5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, account := newTurnStateAutoService(t)
+			settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+			settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-6*"
+			settings.values[SettingKeyOpenAICodexTurnStateDefaultModel] = "gpt-5"
+			s.settingService.InvalidateOpenAICodexTurnStateCache()
+
+			var calls atomic.Int32
+			s.httpUpstream = &turnStateRawUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
+				calls.Add(1)
+				return turnStateModelResponse("must-not-be-collected", "gpt-5"), nil
+			}}
+
+			require.Empty(t, s.autoTurnStateForAccount(context.Background(), account, "gpt-5"))
+			result, err := s.RequestCodexTurnStateCollection(context.Background(), account, tc.requestedModel)
+			require.NoError(t, err)
+			require.Equal(t, CodexTurnStateManualStatusRejected, result.Status)
+			require.Equal(t, "model_out_of_scope", result.Reason)
+			require.Equal(t, tc.expectedModel, result.Model)
+			waitTurnStateAutoIdle(t, s)
+			require.Zero(t, calls.Load(), "out-of-scope models must not start maintenance requests")
+		})
+	}
+}
+
+func TestCodexTurnStateProbeScopeReplacesHistoricalAliases(t *testing.T) {
+	s, _, account := newTurnStateAutoService(t)
+	now := time.Now()
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, "alias-a", "gpt-5")
+	replacedFirst := replaceCodexTurnStateProbeModelsLocked(entry, "gpt-5", "alias-a", "gpt-5")
+	sameEntry := s.codexTurnStateEntryLocked(account, now.Add(time.Millisecond), "alias-b", "gpt-5")
+	afterRefresh := append([]string(nil), entry.scopeModels...)
+	replacedSecond := replaceCodexTurnStateProbeModelsLocked(entry, "gpt-5", "alias-b", "gpt-5")
+	afterReplacement := append([]string(nil), entry.scopeModels...)
+	s.openaiTurnStateMu.Unlock()
+
+	require.True(t, replacedFirst)
+	require.Same(t, entry, sameEntry)
+	require.Equal(t, []string{"alias-a", "gpt-5"}, afterRefresh, "cache refreshes must not append unrelated aliases")
+	require.True(t, replacedSecond)
+	require.Equal(t, []string{"alias-b", "gpt-5"}, afterReplacement, "a new task must replace, not union, its scope snapshot")
+}
+
+func TestCodexTurnStateActiveProbeTaskKeepsOwnScopeSnapshot(t *testing.T) {
+	s, _, account := newTurnStateAutoService(t)
+	now := time.Now()
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, "alias-a", "gpt-5")
+	require.True(t, replaceCodexTurnStateProbeModelsLocked(entry, "gpt-5", "alias-a", "gpt-5"))
+	entry.forceProbe = true
+	task := codexTurnStateProbeTaskLocked(entry)
+	require.True(t, replaceCodexTurnStateProbeModelsLocked(entry, "gpt-5", "alias-b", "gpt-5"))
+	entry.forceProbe = false
+	s.openaiTurnStateMu.Unlock()
+
+	require.Equal(t, "gpt-5", task.requestModel)
+	require.Equal(t, []string{"alias-a", "gpt-5"}, task.scopeModels)
+	require.True(t, task.force)
+	require.True(t, codexTurnStateProbeTaskAllows(OpenAICodexTurnStateConfig{Models: "alias-a", ModelScopeValid: true}, task))
+	require.False(t, codexTurnStateProbeTaskAllows(OpenAICodexTurnStateConfig{Models: "alias-b", ModelScopeValid: true}, task))
+	require.True(t, codexTurnStateEntryScopeAllowed(OpenAICodexTurnStateConfig{Models: "alias-b", ModelScopeValid: true}, entry))
+
+	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+	settings.values[SettingKeyOpenAICodexTurnStateModels] = "alias-b"
+	s.settingService.InvalidateOpenAICodexTurnStateCache()
+	var calls atomic.Int32
+	s.httpUpstream = &turnStateRawUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
+		calls.Add(1)
+		return turnStateModelResponse("must-not-be-staged", "gpt-5"), nil
+	}}
+	s.runCodexTurnStateProbeTaskWithMode(account.ID, entry, false, task)
+	require.Zero(t, calls.Load(), "an active task cannot borrow a later queued alias")
+	s.openaiTurnStateMu.Lock()
+	require.Empty(t, entry.candidate.state)
+	s.openaiTurnStateMu.Unlock()
+}
+
+func TestCodexTurnStateOutOfScopeDirtyStateStillPersists(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+	settings.values[SettingKeyOpenAICodexTurnStateModels] = "allowed-alias"
+	s.settingService.InvalidateOpenAICodexTurnStateCache()
+
+	now := time.Now()
+	state := recoveryTestToken(now, 10, 91)
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, "blocked-alias", "gpt-5")
+	replaced := replaceCodexTurnStateProbeModelsLocked(entry, "gpt-5", "blocked-alias", "gpt-5")
+	s.setCodexTurnStateLocked(entry, state, now)
+	s.startCodexTurnStateWorkerLocked(account.ID, entry)
+	s.openaiTurnStateMu.Unlock()
+
+	require.True(t, replaced)
+	waitTurnStateAutoIdle(t, s)
+	stored, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Equal(t, state, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")))
+}
+
+func TestCodexTurnStateOutOfScopeDirtyRetryTimerPersistsWithoutTraffic(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+	settings.values[SettingKeyOpenAICodexTurnStateModels] = "allowed-alias"
+	s.settingService.InvalidateOpenAICodexTurnStateCache()
+
+	now := time.Now()
+	state := recoveryTestToken(now, 10, 92)
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, "blocked-alias", "gpt-5")
+	require.True(t, replaceCodexTurnStateProbeModelsLocked(entry, "gpt-5", "blocked-alias", "gpt-5"))
+	s.setCodexTurnStateLocked(entry, state, now)
+	entry.retryAfter = now.Add(20 * time.Millisecond)
+	s.scheduleCodexTurnStatePersistenceRetryLocked(account.ID, entry, entry.retryAfter)
+	s.openaiTurnStateMu.Unlock()
+
+	require.Eventually(t, func() bool {
+		stored, err := repo.GetByID(context.Background(), account.ID)
+		return err == nil && codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5")) == state
+	}, time.Second, time.Millisecond)
+	waitTurnStateAutoIdle(t, s)
+	s.openaiTurnStateMu.Lock()
+	require.False(t, entry.dirty)
+	require.True(t, entry.retryWakeAt.IsZero())
+	require.False(t, entry.probe)
+	require.False(t, entry.manualProbe)
+	s.openaiTurnStateMu.Unlock()
+	repo.mu.Lock()
+	require.Equal(t, 1, repo.writes)
+	repo.mu.Unlock()
 }
 
 func TestCodexTurnStateAutoCollectionRetriesFailedPersistence(t *testing.T) {

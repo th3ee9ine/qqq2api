@@ -498,7 +498,7 @@
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <OpenAISessionsModal :show="showOpenAISessions" :account="sessionsAcc" :show-cleanup="false" @close="closeOpenAISessionsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @sessions="handleOpenAISessions" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @refresh-subscription="handleRefreshSubscription" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @sessions="handleOpenAISessions" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @refresh-subscription="handleRefreshSubscription" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @collect-turn-state="handleCollectCodexTurnState" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -2441,6 +2441,38 @@ const handleRecoverState = async (a: Account) => {
   } catch (error: any) {
     console.error('Failed to recover account state:', error)
     appStore.showError(error?.message || t('admin.accounts.recoverStateFailed'))
+  }
+}
+const collectingCodexTurnState = new Set<number>()
+const handleCollectCodexTurnState = async (a: Account) => {
+  if (collectingCodexTurnState.has(a.id)) return
+  if (a.platform !== 'openai' || (a.type !== 'oauth' && a.type !== 'setup-token')) return
+  collectingCodexTurnState.add(a.id)
+  try {
+    const result = await adminAPI.accounts.collectCodexTurnState(a.id)
+    if (result.codex_turn_state_auto) {
+      patchAccountInList({ ...a, codex_turn_state_auto: result.codex_turn_state_auto })
+    }
+    enterAutoRefreshSilentWindow()
+    if (result.status === 'queued') {
+      appStore.showSuccess(t('admin.accounts.codexTurnState.queued'))
+    } else if (result.status === 'already_valid') {
+      appStore.showSuccess(t('admin.accounts.codexTurnState.alreadyValid'))
+    } else if (result.status === 'rejected') {
+      appStore.showError(result.message || t('admin.accounts.codexTurnState.rejected'))
+    } else if (result.status === 'error') {
+      appStore.showError(result.message || t('admin.accounts.codexTurnState.failed'))
+    } else {
+      appStore.showSuccess(result.message || t('admin.accounts.codexTurnState.queued'))
+    }
+    // A queued probe completes asynchronously; refresh once to pick up any
+    // redacted diagnostics returned by the account list endpoint.
+    if (result.status === 'queued') void reload()
+  } catch (error: unknown) {
+    console.error('Failed to collect Codex Turn State:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.codexTurnState.failed')))
+  } finally {
+    collectingCodexTurnState.delete(a.id)
   }
 }
 const handleResetQuota = async (a: Account) => {

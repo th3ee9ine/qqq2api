@@ -542,7 +542,6 @@ type OpenAIGatewayService struct {
 	openaiTurnStateMu           sync.Mutex
 	openaiTurnStates            map[codexTurnStateKey]*codexTurnStateAutoEntry
 	openaiTurnStateWorkers      int
-	openaiTurnStatePending      []codexTurnStateKey
 	openaiTurnStateSweep        time.Time
 	openaiTurnStateLoads        codexTurnStateSourceLoads
 }

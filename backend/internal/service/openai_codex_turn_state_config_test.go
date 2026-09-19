@@ -48,9 +48,14 @@ func TestCodexTurnStateModelScope(t *testing.T) {
 		models []string
 		want   bool
 	}{
-		{"", []string{"gpt-5"}, true}, {"GPT-5", []string{"gpt-5"}, true}, {"gpt-5*", []string{"gpt-5.5"}, true},
-		{"gpt-5", []string{"alias", "gpt-5"}, true}, {"alias", []string{"alias", "gpt-5"}, true},
-		{"gpt-5", []string{"gpt-5.5"}, false}, {"gpt-5", []string{"", ""}, true}, {"gpt-5", []string{"", "gpt-4"}, false},
+		{"", []string{"gpt-5"}, true},
+		{"GPT-5", []string{"gpt-5"}, true},
+		{"gpt-5*", []string{"gpt-5.5"}, true},
+		{"gpt-5", []string{"alias", "gpt-5"}, true},
+		{"alias", []string{"alias", "gpt-5"}, true},
+		{"gpt-5", []string{"gpt-5.5"}, false},
+		{"gpt-5", []string{"", ""}, true},
+		{"gpt-5", []string{"", "gpt-4"}, false},
 	} {
 		require.Equal(t, tc.want, codexTurnStateModelMatches(tc.scope, tc.models...), tc)
 	}

@@ -53,6 +53,15 @@
               <Icon name="shield" size="sm" />
               {{ t('admin.accounts.setPrivacy') }}
             </button>
+            <button
+              v-if="canCollectCodexTurnState"
+              type="button"
+              @click="$emit('collect-turn-state', account); $emit('close')"
+              class="flex w-full items-center gap-2 px-4 py-2 text-sm text-cyan-600 hover:bg-gray-100 dark:hover:bg-dark-700"
+            >
+              <Icon name="refresh" size="sm" />
+              {{ t('admin.accounts.codexTurnState.collect') }}
+            </button>
             <div v-if="hasRecoverableState" class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
             <button v-if="hasRecoverableState" @click="$emit('recover-state', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="sync" size="sm" />
@@ -76,7 +85,7 @@ import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
 
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'refresh-subscription', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'sessions'])
+const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'refresh-subscription', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'sessions', 'collect-turn-state'])
 const { t } = useI18n()
 const isSupportedPlatform = computed(() =>
   props.account?.platform === 'anthropic' || props.account?.platform === 'openai'
@@ -114,6 +123,10 @@ const canRefreshSubscription = computed(() => {
 // A "parent" OpenAI OAuth account is one that is NOT itself a shadow (parent_account_id == null)
 const isOpenAIOAuthParent = computed(() => isOpenAIOAuth.value && !isShadow.value)
 const supportsPrivacy = computed(() => isOpenAIOAuth.value && !isShadow.value)
+const canCollectCodexTurnState = computed(() => {
+  const account = props.account
+  return Boolean(account && account.platform === 'openai' && (account.type === 'oauth' || account.type === 'setup-token'))
+})
 const hasQuotaLimit = computed(() => {
   return (props.account?.type === 'apikey' || props.account?.type === 'bedrock') && (
     (props.account?.quota_limit ?? 0) > 0 ||

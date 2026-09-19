@@ -44,6 +44,15 @@ func TestSystemSettingsCodexTurnStateModelsNormalize(t *testing.T) {
 	}
 }
 
+func TestSystemSettingsCodexTurnStateInvalidStoredScopeRemainsVisible(t *testing.T) {
+	svc := NewSettingService(&codexHeaderSettingRepoStub{values: map[string]string{}}, &config.Config{})
+	settings := svc.parseSettings(map[string]string{
+		SettingKeyOpenAICodexTurnStateModels: " invalid*scope ",
+	})
+
+	require.Equal(t, "invalid*scope", settings.OpenAICodexTurnStateModels)
+}
+
 func TestSystemSettingsCodexTurnStateOmittedPreservesScopeAndIgnoresLegacy(t *testing.T) {
 	// UpdateSettings refreshes unrelated package-wide gateway caches too. Keep
 	// this persistence test from disabling local Codex identities (or changing

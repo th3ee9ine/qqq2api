@@ -185,10 +185,10 @@ func TestCodexTurnStateLiveIntegration(t *testing.T) {
 		t.Fatal("baseline request unexpectedly populated the automatic cache")
 	}
 
-	// Phases 2-4: collect on a new sticky route, replay the exact opaque blob on
-	// that same route, then replay it on the daily route. Only a candidate with
-	// matching response.created and response.completed evidence at every phase is
-	// eligible for publication. A 429 stops the entire run immediately.
+	// Phases 2-3: collect on a new sticky route, then replay the exact opaque blob
+	// on that same route. Only a candidate with matching response.created and
+	// response.completed evidence at both phases is eligible for publication. A
+	// 429 stops the entire run immediately.
 	var acceptedState string
 	for index, dynamicProxy := range dynamicProxies {
 		attempt := index + 1
@@ -218,27 +218,14 @@ func TestCodexTurnStateLiveIntegration(t *testing.T) {
 			continue
 		}
 
-		dailyPhase := fmt.Sprintf("daily_proxy_replay_%d", attempt)
-		_, observer, err = codexTurnStateLiveRequest(
-			t, service, network, snapshot(), model, dailyProxy, candidate, false, dailyPhase,
-		)
-		codexTurnStateLiveStopOn429(t, dailyPhase, err)
-		codexTurnStateLiveLogEvidence(t, dailyPhase, expectedModel, observer, err)
-		if err != nil {
-			if !codexTurnStateProbeRetryable(err) {
-				t.Fatalf("phase=%s failed code=%s", dailyPhase, codexTurnStateLiveErrorCode(err))
-			}
-			continue
-		}
-
 		acceptedState = candidate
 		break
 	}
 	if acceptedState == "" {
-		t.Fatal("no candidate passed dynamic collection, sticky replay, and daily proxy replay")
+		t.Fatal("no candidate passed dynamic collection and same-route sticky replay")
 	}
 
-	// The three maintenance validations may only stage a memory-only candidate.
+	// Dynamic collection and same-route replay may only stage a memory-only candidate.
 	// Publication additionally requires a formal short /v1/responses request to
 	// reserve that exact candidate and a newly inserted usage row containing the
 	// same request ID, API key, account, requested model, outbound state, endpoint,

@@ -630,6 +630,8 @@ export interface SystemSettings {
   openai_codex_turn_state_auto_enabled: boolean;
   openai_codex_turn_state_models: string;
   openai_codex_turn_state_default_model: string;
+  /** Optional dedicated proxy record for Turn State probes; status/vendor do not gate use (0 = fallback selection). */
+  openai_codex_turn_state_proxy_id: number;
   // codex_cli_only 加固
   min_codex_version: string;
   max_codex_version: string;
@@ -948,6 +950,7 @@ export interface UpdateSettingsRequest {
   openai_codex_turn_state_auto_enabled?: boolean;
   openai_codex_turn_state_models?: string;
   openai_codex_turn_state_default_model?: string;
+  openai_codex_turn_state_proxy_id?: number;
   // codex_cli_only 加固
   min_codex_version?: string;
   max_codex_version?: string;

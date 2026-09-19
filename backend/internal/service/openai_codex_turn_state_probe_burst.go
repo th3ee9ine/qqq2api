@@ -22,6 +22,18 @@ type codexTurnStateProbeBurstReservation struct {
 	version  int64
 }
 
+// codexTurnStateProbeCandidatePendingOwner identifies the exact durable
+// pending marker created by one successful candidate race. The CAS version and
+// timestamp together prevent a late cleanup from clearing a newer instance's
+// marker for the same account/model generation.
+type codexTurnStateProbeCandidatePendingOwner struct {
+	accountID  int64
+	model      string
+	generation int64
+	version    int64
+	untilMS    int64
+}
+
 func codexTurnStateProbeNeedsBurst(entry *codexTurnStateAutoEntry, now time.Time) bool {
 	// An opaque token is not a usable state merely because it parses and has not
 	// aged out. Only a state that passed the usage-evidence gate for this model
@@ -63,8 +75,8 @@ func codexTurnStateProbeBurstOwnerModel(model string) string {
 }
 
 // Each fresh collection route gets at most the normal sticky-session timeout,
-// additionally capped by the durable burst deadline. Sticky and daily-route
-// replays reuse the parent context and do not consume another burst attempt.
+// additionally capped by the durable burst deadline. The same-route replay
+// reuses the parent context and does not consume another burst attempt.
 func codexTurnStateProbeAttemptContext(parent context.Context, burstDeadline time.Time) (context.Context, context.CancelFunc) {
 	return codexTurnStateProbeBoundedContext(parent, codexTurnStateProbeSessionTimeout, burstDeadline)
 }
@@ -231,14 +243,28 @@ func (s *OpenAIGatewayService) markCodexTurnStateProbeCandidatePending(
 	generation int64,
 	reservation codexTurnStateProbeBurstReservation,
 ) (bool, error) {
+	won, _, err := s.markCodexTurnStateProbeCandidatePendingOwned(ctx, accountID, model, generation, reservation)
+	return won, err
+}
+
+// markCodexTurnStateProbeCandidatePendingOwned is the ownership-bearing form
+// used by the production probe. The compatibility wrapper above intentionally
+// keeps the original return shape for existing callers and tests.
+func (s *OpenAIGatewayService) markCodexTurnStateProbeCandidatePendingOwned(
+	ctx context.Context,
+	accountID int64,
+	model string,
+	generation int64,
+	reservation codexTurnStateProbeBurstReservation,
+) (bool, codexTurnStateProbeCandidatePendingOwner, error) {
 	model = codexTurnStateProbeBurstOwnerModel(model)
 	if s == nil || s.accountRepo == nil || accountID <= 0 || model == "" || generation < 0 || reservation.version <= 0 {
-		return false, errCodexTurnStateProbeBurstPersistence
+		return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstPersistence
 	}
 	source, sourceOK := s.accountRepo.(CodexTurnStateSourceRepository)
 	repository, repositoryOK := s.accountRepo.(CodexTurnStateProbeBurstBudgetRepository)
 	if !sourceOK || !repositoryOK {
-		return false, errCodexTurnStateProbeBurstPersistence
+		return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstPersistence
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -249,21 +275,21 @@ func (s *OpenAIGatewayService) markCodexTurnStateProbeCandidatePending(
 		account, loadErr := source.GetCodexTurnStateSource(loadCtx, accountID)
 		cancelLoad()
 		if loadErr != nil || account == nil || account.ID != accountID {
-			return false, errCodexTurnStateProbeBurstPersistence
+			return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstPersistence
 		}
 		budget, parseErr := codexTurnStateProbeBurstBudgetFromAccount(account, slot)
 		if parseErr != nil || budget.Version == 0 || budget.Model != model || budget.Generation != generation {
-			return false, errCodexTurnStateProbeBurstPersistence
+			return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstPersistence
 		}
 		now := time.Now()
 		if budget.CandidatePendingUntilMS > now.UnixMilli() {
-			return false, nil
+			return false, codexTurnStateProbeCandidatePendingOwner{}, nil
 		}
 		if budget.Version != reservation.version || budget.InFlightUntilMS <= 0 {
-			return false, errCodexTurnStateProbeBurstPersistence
+			return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstPersistence
 		}
 		if !now.Before(time.UnixMilli(budget.StartedAtMS).Add(codexTurnStateProbeBurstWindow)) {
-			return false, errCodexTurnStateProbeBurstExhausted
+			return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstExhausted
 		}
 		expectedVersion := budget.Version
 		budget.Version++
@@ -275,11 +301,61 @@ func (s *OpenAIGatewayService) markCodexTurnStateProbeCandidatePending(
 		)
 		cancelWrite()
 		if updateErr != nil {
-			return false, errCodexTurnStateProbeBurstPersistence
+			return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstPersistence
 		}
 		if updated {
-			return true, nil
+			return true, codexTurnStateProbeCandidatePendingOwner{
+				accountID: accountID, model: model, generation: generation,
+				version: budget.Version, untilMS: budget.CandidatePendingUntilMS,
+			}, nil
 		}
 	}
-	return false, errCodexTurnStateProbeBurstPersistence
+	return false, codexTurnStateProbeCandidatePendingOwner{}, errCodexTurnStateProbeBurstPersistence
+}
+
+// clearCodexTurnStateProbeCandidatePending clears only a marker still owned by
+// the caller. A version/model/generation/timestamp mismatch is a normal
+// ownership loss and deliberately does nothing; retrying in that case could
+// erase a later candidate owned by another service instance.
+func (s *OpenAIGatewayService) clearCodexTurnStateProbeCandidatePending(ctx context.Context, owner codexTurnStateProbeCandidatePendingOwner) error {
+	model := codexTurnStateProbeBurstOwnerModel(owner.model)
+	if s == nil || s.accountRepo == nil || owner.accountID <= 0 || model == "" || owner.generation < 0 || owner.version <= 0 || owner.untilMS <= 0 {
+		return errCodexTurnStateProbeBurstPersistence
+	}
+	source, sourceOK := s.accountRepo.(CodexTurnStateSourceRepository)
+	repository, repositoryOK := s.accountRepo.(CodexTurnStateProbeBurstBudgetRepository)
+	if !sourceOK || !repositoryOK {
+		return errCodexTurnStateProbeBurstPersistence
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	slot := codexTurnStateProbeBurstBudgetExtraKey(model)
+	loadCtx, cancelLoad := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+	account, loadErr := source.GetCodexTurnStateSource(loadCtx, owner.accountID)
+	cancelLoad()
+	if loadErr != nil || account == nil || account.ID != owner.accountID {
+		return errCodexTurnStateProbeBurstPersistence
+	}
+	budget, parseErr := codexTurnStateProbeBurstBudgetFromAccount(account, slot)
+	if parseErr != nil {
+		return errCodexTurnStateProbeBurstPersistence
+	}
+	if budget.Version != owner.version || budget.Model != model || budget.Generation != owner.generation ||
+		budget.InFlightUntilMS != 0 || budget.CandidatePendingUntilMS != owner.untilMS {
+		return nil
+	}
+	expectedVersion := budget.Version
+	budget.Version++
+	budget.CandidatePendingUntilMS = 0
+	writeCtx, cancelWrite := context.WithTimeout(ctx, gatewayForwardingDBTimeout)
+	_, updateErr := repository.CompareAndSwapCodexTurnStateProbeBurstBudget(
+		writeCtx, owner.accountID, slot, expectedVersion, budget,
+	)
+	cancelWrite()
+	if updateErr != nil {
+		return errCodexTurnStateProbeBurstPersistence
+	}
+	// A CAS loss means ownership changed; do not retry against the new version.
+	return nil
 }
