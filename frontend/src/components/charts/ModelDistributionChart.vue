@@ -85,9 +85,11 @@
               <th class="pb-2 text-left">{{ t('admin.dashboard.model') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.requests') }}</th>
               <th class="pb-2 text-right">{{ t('admin.dashboard.tokens') }}</th>
-              <th class="pb-2 text-right">{{ t('admin.dashboard.actual') }}</th>
-              <th v-if="showAccountCost" class="pb-2 text-right">{{ t('admin.dashboard.accountCost') }}</th>
-              <th class="pb-2 text-right">{{ t('admin.dashboard.standard') }}</th>
+              <th class="pb-2 text-right">
+                {{ t(earningsMode ? 'admin.accounts.stats.earnings' : 'admin.dashboard.actual') }}
+              </th>
+              <th v-if="showAccountCost && !earningsMode" class="pb-2 text-right">{{ t('admin.dashboard.accountCost') }}</th>
+              <th v-if="!earningsMode" class="pb-2 text-right">{{ t('admin.dashboard.standard') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -111,10 +113,10 @@
               <td class="py-1.5 text-right text-green-600 dark:text-green-400">
                 ${{ formatCost(model.actual_cost) }}
               </td>
-              <td v-if="showAccountCost" class="py-1.5 text-right text-orange-500 dark:text-orange-400">
+              <td v-if="showAccountCost && !earningsMode" class="py-1.5 text-right text-orange-500 dark:text-orange-400">
                 ${{ formatCost(model.account_cost) }}
               </td>
-              <td class="py-1.5 text-right text-gray-400 dark:text-gray-500">
+              <td v-if="!earningsMode" class="py-1.5 text-right text-gray-400 dark:text-gray-500">
                 ${{ formatCost(model.cost) }}
               </td>
             </tr>
@@ -155,6 +157,7 @@ const props = withDefaults(defineProps<{
   showSourceToggle?: boolean
   showMetricToggle?: boolean
   showAccountCost?: boolean
+  earningsMode?: boolean
 }>(), {
   upstreamModelStats: () => [],
   mappingModelStats: () => [],
@@ -163,7 +166,8 @@ const props = withDefaults(defineProps<{
   metric: 'tokens',
   showSourceToggle: false,
   showMetricToggle: false,
-  showAccountCost: true
+  showAccountCost: true,
+  earningsMode: false
 })
 
 const emit = defineEmits<{
@@ -172,6 +176,7 @@ const emit = defineEmits<{
 }>()
 
 const showAccountCost = computed(() => props.showAccountCost)
+const earningsMode = computed(() => props.earningsMode)
 
 const chartColors = [
   '#3b82f6',

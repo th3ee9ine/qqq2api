@@ -16,6 +16,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/ent/predicate"
 	"github.com/th3ee9ine/qqq2api/ent/proxy"
 	"github.com/th3ee9ine/qqq2api/ent/usagelog"
+	"github.com/th3ee9ine/qqq2api/ent/user"
 )
 
 // AccountUpdate is the builder for updating Account entities.
@@ -265,6 +266,26 @@ func (_u *AccountUpdate) SetNillableRateMultiplier(v *float64) *AccountUpdate {
 // AddRateMultiplier adds value to the "rate_multiplier" field.
 func (_u *AccountUpdate) AddRateMultiplier(v float64) *AccountUpdate {
 	_u.mutation.AddRateMultiplier(v)
+	return _u
+}
+
+// SetAccountAdminID sets the "account_admin_id" field.
+func (_u *AccountUpdate) SetAccountAdminID(v int64) *AccountUpdate {
+	_u.mutation.SetAccountAdminID(v)
+	return _u
+}
+
+// SetNillableAccountAdminID sets the "account_admin_id" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableAccountAdminID(v *int64) *AccountUpdate {
+	if v != nil {
+		_u.SetAccountAdminID(*v)
+	}
+	return _u
+}
+
+// ClearAccountAdminID clears the value of the "account_admin_id" field.
+func (_u *AccountUpdate) ClearAccountAdminID() *AccountUpdate {
+	_u.mutation.ClearAccountAdminID()
 	return _u
 }
 
@@ -633,6 +654,11 @@ func (_u *AccountUpdate) AddUsageLogs(v ...*UsageLog) *AccountUpdate {
 	return _u.AddUsageLogIDs(ids...)
 }
 
+// SetAccountAdmin sets the "account_admin" edge to the User entity.
+func (_u *AccountUpdate) SetAccountAdmin(v *User) *AccountUpdate {
+	return _u.SetAccountAdminID(v.ID)
+}
+
 // Mutation returns the AccountMutation object of the builder.
 func (_u *AccountUpdate) Mutation() *AccountMutation {
 	return _u.mutation
@@ -711,6 +737,12 @@ func (_u *AccountUpdate) RemoveUsageLogs(v ...*UsageLog) *AccountUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveUsageLogIDs(ids...)
+}
+
+// ClearAccountAdmin clears the "account_admin" edge to the User entity.
+func (_u *AccountUpdate) ClearAccountAdmin() *AccountUpdate {
+	_u.mutation.ClearAccountAdmin()
+	return _u
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -1151,6 +1183,35 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 		}
 		_spec.Edges.Add = append(_spec.Edges.Add, edge)
 	}
+	if _u.mutation.AccountAdminCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.AccountAdminTable,
+			Columns: []string{account.AccountAdminColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.AccountAdminIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.AccountAdminTable,
+			Columns: []string{account.AccountAdminColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
 			err = &NotFoundError{account.Label}
@@ -1405,6 +1466,26 @@ func (_u *AccountUpdateOne) SetNillableRateMultiplier(v *float64) *AccountUpdate
 // AddRateMultiplier adds value to the "rate_multiplier" field.
 func (_u *AccountUpdateOne) AddRateMultiplier(v float64) *AccountUpdateOne {
 	_u.mutation.AddRateMultiplier(v)
+	return _u
+}
+
+// SetAccountAdminID sets the "account_admin_id" field.
+func (_u *AccountUpdateOne) SetAccountAdminID(v int64) *AccountUpdateOne {
+	_u.mutation.SetAccountAdminID(v)
+	return _u
+}
+
+// SetNillableAccountAdminID sets the "account_admin_id" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableAccountAdminID(v *int64) *AccountUpdateOne {
+	if v != nil {
+		_u.SetAccountAdminID(*v)
+	}
+	return _u
+}
+
+// ClearAccountAdminID clears the value of the "account_admin_id" field.
+func (_u *AccountUpdateOne) ClearAccountAdminID() *AccountUpdateOne {
+	_u.mutation.ClearAccountAdminID()
 	return _u
 }
 
@@ -1773,6 +1854,11 @@ func (_u *AccountUpdateOne) AddUsageLogs(v ...*UsageLog) *AccountUpdateOne {
 	return _u.AddUsageLogIDs(ids...)
 }
 
+// SetAccountAdmin sets the "account_admin" edge to the User entity.
+func (_u *AccountUpdateOne) SetAccountAdmin(v *User) *AccountUpdateOne {
+	return _u.SetAccountAdminID(v.ID)
+}
+
 // Mutation returns the AccountMutation object of the builder.
 func (_u *AccountUpdateOne) Mutation() *AccountMutation {
 	return _u.mutation
@@ -1851,6 +1937,12 @@ func (_u *AccountUpdateOne) RemoveUsageLogs(v ...*UsageLog) *AccountUpdateOne {
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveUsageLogIDs(ids...)
+}
+
+// ClearAccountAdmin clears the "account_admin" edge to the User entity.
+func (_u *AccountUpdateOne) ClearAccountAdmin() *AccountUpdateOne {
+	_u.mutation.ClearAccountAdmin()
+	return _u
 }
 
 // Where appends a list predicates to the AccountUpdate builder.
@@ -2314,6 +2406,35 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usagelog.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.AccountAdminCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.AccountAdminTable,
+			Columns: []string{account.AccountAdminColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.AccountAdminIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.AccountAdminTable,
+			Columns: []string{account.AccountAdminColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

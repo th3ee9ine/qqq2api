@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -117,6 +118,16 @@ func normalizeUserRole(role, fallback string) (string, error) {
 	return role, nil
 }
 
+func validateSupplyRateMultiplier(multiplier float64) error {
+	if multiplier < 0 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+		return infraerrors.BadRequest(
+			"INVALID_SUPPLY_RATE_MULTIPLIER",
+			"supply_rate_multiplier must be a finite non-negative number",
+		)
+	}
+	return nil
+}
+
 func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInput) (*User, error) {
 	balance := 0.0
 	if input.Balance != nil {
@@ -130,17 +141,28 @@ func (s *adminServiceImpl) CreateUser(ctx context.Context, input *CreateUserInpu
 	if err != nil {
 		return nil, err
 	}
+	supplyRateMultiplier := 1.0
+	if input.SupplyRateMultiplier != nil {
+		if role != RoleAccountAdmin {
+			return nil, infraerrors.BadRequest("INVALID_SUPPLY_RATE_MULTIPLIER", "supply_rate_multiplier is only valid for account administrators")
+		}
+		if err := validateSupplyRateMultiplier(*input.SupplyRateMultiplier); err != nil {
+			return nil, err
+		}
+		supplyRateMultiplier = *input.SupplyRateMultiplier
+	}
 
 	user := &User{
-		Email:         input.Email,
-		Username:      input.Username,
-		Notes:         input.Notes,
-		Role:          role,
-		Balance:       balance,
-		Concurrency:   input.Concurrency,
-		RPMLimit:      input.RPMLimit,
-		Status:        StatusActive,
-		AllowedGroups: input.AllowedGroups,
+		Email:                input.Email,
+		Username:             input.Username,
+		Notes:                input.Notes,
+		Role:                 role,
+		Balance:              balance,
+		Concurrency:          input.Concurrency,
+		RPMLimit:             input.RPMLimit,
+		Status:               StatusActive,
+		AllowedGroups:        input.AllowedGroups,
+		SupplyRateMultiplier: supplyRateMultiplier,
 
 		RestrictPublicGroups: input.RestrictPublicGroups,
 	}
@@ -222,6 +244,7 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	oldStatus := user.Status
 	oldRole := user.Role
 	oldRPMLimit := user.RPMLimit
+	oldSupplyRateMultiplier := user.SupplyRateMultiplier
 	oldAllowedGroups := append([]int64(nil), user.AllowedGroups...)
 
 	// fields 与下面的 input.X 判空条件一一对应：管理员没提交的列不写回，
@@ -291,7 +314,81 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		fields.RestrictPublicGroups = true
 	}
 
-	if err := s.userRepo.Update(ctx, user, fields); err != nil {
+	// A soft-deleted account administrator still has a live users row, so the
+	// accounts foreign key cannot clear ownership for a role demotion. Reset the
+	// user-level payout multiplier as part of the same write; the owned account
+	// rows are detached atomically below. Disabling an administrator only blocks
+	// panel access: retain ownership so re-enabling restores their accounts and
+	// earnings history without a lossy reassignment.
+	releaseAccountAdminOwnership := oldRole == RoleAccountAdmin && user.Role != RoleAccountAdmin
+	if releaseAccountAdminOwnership {
+		user.SupplyRateMultiplier = 1.0
+		fields.SupplyRateMultiplier = true
+	}
+
+	if input.SupplyRateMultiplier != nil {
+		if user.Role != RoleAccountAdmin {
+			return nil, infraerrors.BadRequest("INVALID_SUPPLY_RATE_MULTIPLIER", "supply_rate_multiplier is only valid for account administrators")
+		}
+		if err := validateSupplyRateMultiplier(*input.SupplyRateMultiplier); err != nil {
+			return nil, err
+		}
+		user.SupplyRateMultiplier = *input.SupplyRateMultiplier
+		fields.SupplyRateMultiplier = true
+	}
+
+	supplyRateChanged := input.SupplyRateMultiplier != nil && user.SupplyRateMultiplier != oldSupplyRateMultiplier
+	if releaseAccountAdminOwnership {
+		ownershipRepo, hasOwnershipRepo := s.accountRepo.(AccountAdminOwnershipRepository)
+		if s.accountRepo != nil && !hasOwnershipRepo {
+			return nil, errors.New("account repository does not support account administrator ownership release")
+		}
+		if !hasOwnershipRepo {
+			// Narrow service unit doubles may omit account storage entirely. There
+			// are no account rows to release in that configuration.
+			if err := s.userRepo.Update(ctx, user, fields); err != nil {
+				return nil, err
+			}
+		} else {
+			txRunner, ok := s.userRepo.(userProfileIdentityTxRunner)
+			if !ok {
+				return nil, errors.New("user repository does not support atomic account administrator ownership release")
+			}
+			var releasedAccountIDs []int64
+			if err := txRunner.WithUserProfileIdentityTx(ctx, func(txCtx context.Context) error {
+				if err := s.userRepo.Update(txCtx, user, fields); err != nil {
+					return err
+				}
+				var err error
+				releasedAccountIDs, err = ownershipRepo.ReleaseAccountAdminOwnership(txCtx, user.ID)
+				return err
+			}); err != nil {
+				return nil, err
+			}
+			ownershipRepo.RefreshSchedulerAccountSnapshots(ctx, releasedAccountIDs)
+		}
+	} else if supplyRateChanged {
+		txRunner, ok := s.userRepo.(userProfileIdentityTxRunner)
+		if !ok {
+			return nil, errors.New("user repository does not support atomic account administrator rate updates")
+		}
+		supplyRepo, ok := s.accountRepo.(AccountAdminSupplyRateRepository)
+		if !ok {
+			return nil, errors.New("account repository does not support account administrator rate updates")
+		}
+		var changedAccountIDs []int64
+		if err := txRunner.WithUserProfileIdentityTx(ctx, func(txCtx context.Context) error {
+			if err := s.userRepo.Update(txCtx, user, fields); err != nil {
+				return err
+			}
+			var err error
+			changedAccountIDs, err = supplyRepo.UpdateSupplyRateMultiplierByAccountAdmin(txCtx, user.ID, user.SupplyRateMultiplier)
+			return err
+		}); err != nil {
+			return nil, err
+		}
+		supplyRepo.RefreshSchedulerAccountSnapshots(ctx, changedAccountIDs)
+	} else if err := s.userRepo.Update(ctx, user, fields); err != nil {
 		return nil, err
 	}
 
@@ -369,12 +466,21 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 	if user.Role == "admin" {
 		return errors.New("cannot delete admin user")
 	}
+	var ownershipRepo AccountAdminOwnershipRepository
+	if user.Role == RoleAccountAdmin && s.accountRepo != nil {
+		var ok bool
+		ownershipRepo, ok = s.accountRepo.(AccountAdminOwnershipRepository)
+		if !ok {
+			return errors.New("account repository does not support account administrator ownership release")
+		}
+	}
 
 	apiKeys, err := s.listUserAPIKeysForDeletion(ctx, id)
 	if err != nil {
 		return err
 	}
 
+	var releasedAccountIDs []int64
 	if s.entClient != nil {
 		tx, err := s.entClient.Tx(ctx)
 		if err != nil {
@@ -383,6 +489,12 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 		defer func() { _ = tx.Rollback() }()
 
 		opCtx := dbent.NewTxContext(ctx, tx)
+		if ownershipRepo != nil {
+			releasedAccountIDs, err = ownershipRepo.ReleaseAccountAdminOwnership(opCtx, id)
+			if err != nil {
+				return err
+			}
+		}
 		if err := s.deleteUserWithAPIKeys(opCtx, id, apiKeys); err != nil {
 			return err
 		}
@@ -390,9 +502,18 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 			return err
 		}
 	} else {
+		if ownershipRepo != nil {
+			releasedAccountIDs, err = ownershipRepo.ReleaseAccountAdminOwnership(ctx, id)
+			if err != nil {
+				return err
+			}
+		}
 		if err := s.deleteUserWithAPIKeys(ctx, id, apiKeys); err != nil {
 			return err
 		}
+	}
+	if ownershipRepo != nil {
+		ownershipRepo.RefreshSchedulerAccountSnapshots(ctx, releasedAccountIDs)
 	}
 
 	if s.authCacheInvalidator != nil {

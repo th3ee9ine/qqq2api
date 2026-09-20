@@ -203,4 +203,22 @@ describe('UsageProgressBar', () => {
     expect(percent.classes()).toContain('w-[32px]')
     expect(percent.classes()).toContain('text-right')
   })
+
+  it('earningsMode 显示收益口径并隐藏用户计费', () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: '5h',
+        utilization: 30,
+        color: 'indigo',
+        earningsMode: true,
+        windowStats: { requests: 2, tokens: 100, cost: 3.5, user_cost: 9.5 }
+      }
+    })
+
+    const cost = wrapper.findAll('span').find((node) => node.text().includes('$3.50'))
+    expect(cost).toBeDefined()
+    expect(cost?.text()).toContain('E $3.50')
+    expect(cost?.attributes('title')).toBe('admin.accounts.stats.earnings')
+    expect(wrapper.text()).not.toContain('U $9.50')
+  })
 })

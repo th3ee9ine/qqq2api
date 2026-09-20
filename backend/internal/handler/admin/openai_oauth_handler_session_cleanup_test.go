@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
@@ -30,6 +31,8 @@ type cleanupHandlerAdminStub struct {
 	getErr             error
 	updateExtraErr     error
 	getCalls           int
+	accountsByID       map[int64]*service.Account
+	getAccountsCalls   int
 	updateExtraCalls   int
 	lastUpdateExtra    map[string]any
 	updatedAccountCopy bool
@@ -53,6 +56,21 @@ func (s *cleanupHandlerAdminStub) GetAccount(_ context.Context, _ int64) (*servi
 	copy := *s.account
 	copy.Extra = cloneCleanupHandlerExtra(s.account.Extra)
 	return &copy, nil
+}
+
+func (s *cleanupHandlerAdminStub) GetAccountsByIDs(_ context.Context, ids []int64) ([]*service.Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.getAccountsCalls++
+	out := make([]*service.Account, 0, len(ids))
+	for _, id := range ids {
+		if account, ok := s.accountsByID[id]; ok {
+			copy := *account
+			copy.Extra = cloneCleanupHandlerExtra(account.Extra)
+			out = append(out, &copy)
+		}
+	}
+	return out, nil
 }
 
 func (s *cleanupHandlerAdminStub) UpdateAccountExtra(_ context.Context, _ int64, updates map[string]any) error {
@@ -201,8 +219,30 @@ func performOpenAISessionCleanupHandlerRequest(
 	router.GET("/api/v1/admin/openai/accounts/:id/sessions/cleanup", handler.GetSessionCleanup)
 	router.PUT("/api/v1/admin/openai/accounts/:id/sessions/cleanup", handler.UpdateSessionCleanup)
 	router.POST("/api/v1/admin/openai/accounts/:id/sessions/cleanup/run", handler.RunSessionCleanup)
+	router.POST("/api/v1/admin/openai/sessions/cleanup/run", handler.RunSessionsCleanup)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	router.ServeHTTP(recorder, request)
+	var envelope cleanupHandlerEnvelope
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	return recorder.Code, envelope
+}
+
+func performOpenAISessionCleanupHandlerRequestWithContext(
+	t *testing.T,
+	handler *OpenAIOAuthHandler,
+	ctx context.Context,
+	method, path, body string,
+) (int, cleanupHandlerEnvelope) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/v1/admin/openai/sessions/cleanup/run", handler.RunSessionsCleanup)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(method, path, strings.NewReader(body)).WithContext(ctx)
 	if body != "" {
 		request.Header.Set("Content-Type", "application/json")
 	}
@@ -480,4 +520,70 @@ func TestOpenAISessionCleanupHandlerRunNowMissingWorkerReturnsBadRequest(t *test
 
 	require.Equal(t, http.StatusBadRequest, status)
 	require.Contains(t, envelope.Message, "service is not enabled")
+}
+
+func TestOpenAISessionCleanupBatchRejectsForeignAccountForScopedAdministrator(t *testing.T) {
+	account := openAICleanupHandlerAccount(true)
+	foreignOwnerID := int64(73)
+	account.AccountAdminID = &foreignOwnerID
+	admin := &cleanupHandlerAdminStub{
+		accountsByID: map[int64]*service.Account{account.ID: account},
+	}
+	client := &cleanupHandlerSessionClient{list: &service.OpenAIAccountSessionList{
+		CurrentKnown: true,
+		Sessions:     []service.OpenAIAccountSession{{ID: "old", CanRevoke: true}},
+	}}
+	handler := &OpenAIOAuthHandler{
+		adminService:   admin,
+		sessionCleanup: service.NewOpenAISessionCleanupService(&cleanupHandlerSessionRepo{account: account}, client, nil),
+	}
+
+	ctx := context.WithValue(context.Background(), ctxkey.AccountAdminID, int64(41))
+	status, envelope := performOpenAISessionCleanupHandlerRequestWithContext(
+		t,
+		handler,
+		ctx,
+		http.MethodPost,
+		"/api/v1/admin/openai/sessions/cleanup/run",
+		`{"account_ids":[42]}`,
+	)
+
+	require.Equal(t, http.StatusNotFound, status)
+	require.Equal(t, http.StatusNotFound, envelope.Code)
+	client.mu.Lock()
+	require.Zero(t, client.listCalls, "foreign account must be rejected before upstream cleanup")
+	client.mu.Unlock()
+}
+
+func TestOpenAISessionCleanupBatchAllowsOwnedAccountForScopedAdministrator(t *testing.T) {
+	account := openAICleanupHandlerAccount(true)
+	ownerID := int64(41)
+	account.AccountAdminID = &ownerID
+	admin := &cleanupHandlerAdminStub{
+		accountsByID: map[int64]*service.Account{account.ID: account},
+	}
+	client := &cleanupHandlerSessionClient{list: &service.OpenAIAccountSessionList{
+		CurrentKnown: true,
+		Sessions:     []service.OpenAIAccountSession{{ID: "old", CanRevoke: true}},
+	}}
+	handler := &OpenAIOAuthHandler{
+		adminService:   admin,
+		sessionCleanup: service.NewOpenAISessionCleanupService(&cleanupHandlerSessionRepo{account: account}, client, nil),
+	}
+
+	ctx := context.WithValue(context.Background(), ctxkey.AccountAdminID, ownerID)
+	status, envelope := performOpenAISessionCleanupHandlerRequestWithContext(
+		t,
+		handler,
+		ctx,
+		http.MethodPost,
+		"/api/v1/admin/openai/sessions/cleanup/run",
+		`{"account_ids":[42]}`,
+	)
+
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, http.StatusOK, envelope.Code)
+	client.mu.Lock()
+	require.Equal(t, 1, client.listCalls)
+	client.mu.Unlock()
 }

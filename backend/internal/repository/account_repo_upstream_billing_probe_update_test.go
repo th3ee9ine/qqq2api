@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	dbent "github.com/th3ee9ine/qqq2api/ent"
 	dbaccount "github.com/th3ee9ine/qqq2api/ent/account"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 
 	"entgo.io/ent/dialect"
@@ -314,6 +315,23 @@ func TestBulkUpdateDisablingProbeRemovesSnapshot(t *testing.T) {
 	require.Equal(t, `{"upstream_billing_probe_enabled":false}`, string(payload))
 }
 
+func TestBulkUpdateScopedAccountAdminRequiresTransaction(t *testing.T) {
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
+	repo := newAccountRepositoryWithSQL(nil, exec, nil)
+	ctx := context.WithValue(context.Background(), ctxkey.AccountAdminID, int64(42))
+	for _, supplied := range []*float64{nil, func() *float64 { value := 99.0; return &value }()} {
+		exec.execQueries = nil
+		exec.execArgs = nil
+		name := "scoped"
+		_, err := repo.BulkUpdate(ctx, []int64{27}, service.AccountBulkUpdate{
+			Name:           &name,
+			RateMultiplier: supplied,
+		})
+		require.ErrorContains(t, err, "requires a transaction-capable client")
+		require.Empty(t, exec.execQueries, "no scoped write may run without a transaction")
+	}
+}
+
 func TestBulkUpdateProbeEligibilityMismatchRollsBack(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
@@ -476,7 +494,7 @@ func updatedAccountRows(id int64, extra string) *sqlmock.Rows {
 	now := time.Now()
 	return sqlmock.NewRows(dbaccount.Columns).AddRow(
 		id, now, now, nil, "test", nil, service.PlatformOpenAI, service.AccountTypeAPIKey,
-		[]byte(`{"api_key":"sk-test"}`), []byte(extra), nil, nil, 1, nil, 1, 1.0,
+		[]byte(`{"api_key":"sk-test"}`), []byte(extra), nil, nil, 1, nil, 1, 1.0, nil,
 		service.StatusActive, nil, nil, nil, false, true, nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, service.QuotaDimensionGlobal,
 	)

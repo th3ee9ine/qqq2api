@@ -120,6 +120,11 @@ func RateMultiplier(v float64) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldRateMultiplier, v))
 }
 
+// AccountAdminID applies equality check predicate on the "account_admin_id" field. It's identical to AccountAdminIDEQ.
+func AccountAdminID(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldAccountAdminID, v))
+}
+
 // Status applies equality check predicate on the "status" field. It's identical to StatusEQ.
 func Status(v string) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldStatus, v))
@@ -843,6 +848,36 @@ func RateMultiplierLT(v float64) predicate.Account {
 // RateMultiplierLTE applies the LTE predicate on the "rate_multiplier" field.
 func RateMultiplierLTE(v float64) predicate.Account {
 	return predicate.Account(sql.FieldLTE(FieldRateMultiplier, v))
+}
+
+// AccountAdminIDEQ applies the EQ predicate on the "account_admin_id" field.
+func AccountAdminIDEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldAccountAdminID, v))
+}
+
+// AccountAdminIDNEQ applies the NEQ predicate on the "account_admin_id" field.
+func AccountAdminIDNEQ(v int64) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldAccountAdminID, v))
+}
+
+// AccountAdminIDIn applies the In predicate on the "account_admin_id" field.
+func AccountAdminIDIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldAccountAdminID, vs...))
+}
+
+// AccountAdminIDNotIn applies the NotIn predicate on the "account_admin_id" field.
+func AccountAdminIDNotIn(vs ...int64) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldAccountAdminID, vs...))
+}
+
+// AccountAdminIDIsNil applies the IsNil predicate on the "account_admin_id" field.
+func AccountAdminIDIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldAccountAdminID))
+}
+
+// AccountAdminIDNotNil applies the NotNil predicate on the "account_admin_id" field.
+func AccountAdminIDNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldAccountAdminID))
 }
 
 // StatusEQ applies the EQ predicate on the "status" field.
@@ -1712,6 +1747,29 @@ func HasUsageLogs() predicate.Account {
 func HasUsageLogsWith(preds ...predicate.UsageLog) predicate.Account {
 	return predicate.Account(func(s *sql.Selector) {
 		step := newUsageLogsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasAccountAdmin applies the HasEdge predicate on the "account_admin" edge.
+func HasAccountAdmin() predicate.Account {
+	return predicate.Account(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, AccountAdminTable, AccountAdminColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasAccountAdminWith applies the HasEdge predicate on the "account_admin" edge with a given conditions (other predicates).
+func HasAccountAdminWith(preds ...predicate.User) predicate.Account {
+	return predicate.Account(func(s *sql.Selector) {
+		step := newAccountAdminStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

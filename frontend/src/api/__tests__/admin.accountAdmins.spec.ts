@@ -38,7 +38,11 @@ describe('account administrators API', () => {
   })
 
   it('creates without accepting a caller-controlled role', async () => {
-    const payload = { email: 'operator@example.com', password: 'secret12' }
+    const payload = {
+      email: 'operator@example.com',
+      password: 'secret12',
+      supply_rate_multiplier: 1.25,
+    }
     post.mockResolvedValue({ data: { id: 7, ...payload, role: 'account_admin' } })
 
     await accountAdminsAPI.create(payload)
@@ -48,13 +52,16 @@ describe('account administrators API', () => {
   })
 
   it('updates and deletes by id', async () => {
-    put.mockResolvedValue({ data: { id: 7, status: 'disabled' } })
+    put.mockResolvedValue({ data: { id: 7, status: 'disabled', supply_rate_multiplier: 0.8 } })
     del.mockResolvedValue({ data: { message: 'ok' } })
 
-    await accountAdminsAPI.update(7, { status: 'disabled' })
+    await accountAdminsAPI.update(7, { status: 'disabled', supply_rate_multiplier: 0.8 })
     await accountAdminsAPI.remove(7)
 
-    expect(put).toHaveBeenCalledWith('/admin/account-admins/7', { status: 'disabled' })
+    expect(put).toHaveBeenCalledWith('/admin/account-admins/7', {
+      status: 'disabled',
+      supply_rate_multiplier: 0.8,
+    })
     expect(del).toHaveBeenCalledWith('/admin/account-admins/7')
   })
 })

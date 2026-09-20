@@ -106,11 +106,12 @@ func (s *OAuthService) generateAuthURLWithScope(ctx context.Context, scope strin
 
 	// Store session
 	session := &oauth.OAuthSession{
-		State:        state,
-		CodeVerifier: codeVerifier,
-		Scope:        scope,
-		ProxyURL:     proxyURL,
-		CreatedAt:    time.Now(),
+		State:          state,
+		CodeVerifier:   codeVerifier,
+		Scope:          scope,
+		ProxyURL:       proxyURL,
+		AccountAdminID: accountAdminOAuthSessionOwner(ctx),
+		CreatedAt:      time.Now(),
 	}
 	s.sessionStore.Set(sessionID, session)
 
@@ -149,6 +150,9 @@ func (s *OAuthService) ExchangeCode(ctx context.Context, input *ExchangeCodeInpu
 	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
 		return nil, fmt.Errorf("session not found or expired")
+	}
+	if err := authorizeAccountAdminOAuthSession(ctx, session.AccountAdminID); err != nil {
+		return nil, err
 	}
 
 	// Get proxy URL

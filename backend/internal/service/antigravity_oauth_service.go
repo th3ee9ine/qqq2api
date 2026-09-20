@@ -55,10 +55,11 @@ func (s *AntigravityOAuthService) GenerateAuthURL(ctx context.Context, proxyID *
 	}
 
 	session := &antigravity.OAuthSession{
-		State:        state,
-		CodeVerifier: codeVerifier,
-		ProxyURL:     proxyURL,
-		CreatedAt:    time.Now(),
+		State:          state,
+		CodeVerifier:   codeVerifier,
+		ProxyURL:       proxyURL,
+		AccountAdminID: accountAdminOAuthSessionOwner(ctx),
+		CreatedAt:      time.Now(),
 	}
 	s.sessionStore.Set(sessionID, session)
 
@@ -99,6 +100,9 @@ func (s *AntigravityOAuthService) ExchangeCode(ctx context.Context, input *Antig
 	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
 		return nil, fmt.Errorf("session 不存在或已过期")
+	}
+	if err := authorizeAccountAdminOAuthSession(ctx, session.AccountAdminID); err != nil {
+		return nil, err
 	}
 
 	if strings.TrimSpace(input.State) == "" || input.State != session.State {

@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/th3ee9ine/qqq2api/ent/account"
 	"github.com/th3ee9ine/qqq2api/ent/announcementread"
 	"github.com/th3ee9ine/qqq2api/ent/apikey"
 	"github.com/th3ee9ine/qqq2api/ent/authidentity"
@@ -368,6 +369,20 @@ func (_c *UserCreate) SetNillableRpmLimit(v *int) *UserCreate {
 	return _c
 }
 
+// SetSupplyRateMultiplier sets the "supply_rate_multiplier" field.
+func (_c *UserCreate) SetSupplyRateMultiplier(v float64) *UserCreate {
+	_c.mutation.SetSupplyRateMultiplier(v)
+	return _c
+}
+
+// SetNillableSupplyRateMultiplier sets the "supply_rate_multiplier" field if the given value is not nil.
+func (_c *UserCreate) SetNillableSupplyRateMultiplier(v *float64) *UserCreate {
+	if v != nil {
+		_c.SetSupplyRateMultiplier(*v)
+	}
+	return _c
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_c *UserCreate) AddAPIKeyIDs(ids ...int64) *UserCreate {
 	_c.mutation.AddAPIKeyIDs(ids...)
@@ -563,6 +578,21 @@ func (_c *UserCreate) AddPlatformQuotas(v ...*UserPlatformQuota) *UserCreate {
 	return _c.AddPlatformQuotaIDs(ids...)
 }
 
+// AddSuppliedAccountIDs adds the "supplied_accounts" edge to the Account entity by IDs.
+func (_c *UserCreate) AddSuppliedAccountIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddSuppliedAccountIDs(ids...)
+	return _c
+}
+
+// AddSuppliedAccounts adds the "supplied_accounts" edges to the Account entity.
+func (_c *UserCreate) AddSuppliedAccounts(v ...*Account) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddSuppliedAccountIDs(ids...)
+}
+
 // Mutation returns the UserMutation object of the builder.
 func (_c *UserCreate) Mutation() *UserMutation {
 	return _c.mutation
@@ -674,6 +704,10 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultRpmLimit
 		_c.mutation.SetRpmLimit(v)
 	}
+	if _, ok := _c.mutation.SupplyRateMultiplier(); !ok {
+		v := user.DefaultSupplyRateMultiplier
+		_c.mutation.SetSupplyRateMultiplier(v)
+	}
 	return nil
 }
 
@@ -765,6 +799,14 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		return &ValidationError{Name: "rpm_limit", err: errors.New(`ent: missing required field "User.rpm_limit"`)}
+	}
+	if _, ok := _c.mutation.SupplyRateMultiplier(); !ok {
+		return &ValidationError{Name: "supply_rate_multiplier", err: errors.New(`ent: missing required field "User.supply_rate_multiplier"`)}
+	}
+	if v, ok := _c.mutation.SupplyRateMultiplier(); ok {
+		if err := user.SupplyRateMultiplierValidator(v); err != nil {
+			return &ValidationError{Name: "supply_rate_multiplier", err: fmt.Errorf(`ent: validator failed for field "User.supply_rate_multiplier": %w`, err)}
+		}
 	}
 	return nil
 }
@@ -892,6 +934,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(user.FieldRpmLimit, field.TypeInt, value)
 		_node.RpmLimit = value
+	}
+	if value, ok := _c.mutation.SupplyRateMultiplier(); ok {
+		_spec.SetField(user.FieldSupplyRateMultiplier, field.TypeFloat64, value)
+		_node.SupplyRateMultiplier = value
 	}
 	if nodes := _c.mutation.APIKeysIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1098,6 +1144,22 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userplatformquota.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.SuppliedAccountsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SuppliedAccountsTable,
+			Columns: []string{user.SuppliedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -1514,6 +1576,24 @@ func (u *UserUpsert) UpdateRpmLimit() *UserUpsert {
 // AddRpmLimit adds v to the "rpm_limit" field.
 func (u *UserUpsert) AddRpmLimit(v int) *UserUpsert {
 	u.Add(user.FieldRpmLimit, v)
+	return u
+}
+
+// SetSupplyRateMultiplier sets the "supply_rate_multiplier" field.
+func (u *UserUpsert) SetSupplyRateMultiplier(v float64) *UserUpsert {
+	u.Set(user.FieldSupplyRateMultiplier, v)
+	return u
+}
+
+// UpdateSupplyRateMultiplier sets the "supply_rate_multiplier" field to the value that was provided on create.
+func (u *UserUpsert) UpdateSupplyRateMultiplier() *UserUpsert {
+	u.SetExcluded(user.FieldSupplyRateMultiplier)
+	return u
+}
+
+// AddSupplyRateMultiplier adds v to the "supply_rate_multiplier" field.
+func (u *UserUpsert) AddSupplyRateMultiplier(v float64) *UserUpsert {
+	u.Add(user.FieldSupplyRateMultiplier, v)
 	return u
 }
 
@@ -1979,6 +2059,27 @@ func (u *UserUpsertOne) AddRpmLimit(v int) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateRpmLimit() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateRpmLimit()
+	})
+}
+
+// SetSupplyRateMultiplier sets the "supply_rate_multiplier" field.
+func (u *UserUpsertOne) SetSupplyRateMultiplier(v float64) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetSupplyRateMultiplier(v)
+	})
+}
+
+// AddSupplyRateMultiplier adds v to the "supply_rate_multiplier" field.
+func (u *UserUpsertOne) AddSupplyRateMultiplier(v float64) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.AddSupplyRateMultiplier(v)
+	})
+}
+
+// UpdateSupplyRateMultiplier sets the "supply_rate_multiplier" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdateSupplyRateMultiplier() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateSupplyRateMultiplier()
 	})
 }
 
@@ -2610,6 +2711,27 @@ func (u *UserUpsertBulk) AddRpmLimit(v int) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateRpmLimit() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateRpmLimit()
+	})
+}
+
+// SetSupplyRateMultiplier sets the "supply_rate_multiplier" field.
+func (u *UserUpsertBulk) SetSupplyRateMultiplier(v float64) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetSupplyRateMultiplier(v)
+	})
+}
+
+// AddSupplyRateMultiplier adds v to the "supply_rate_multiplier" field.
+func (u *UserUpsertBulk) AddSupplyRateMultiplier(v float64) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.AddSupplyRateMultiplier(v)
+	})
+}
+
+// UpdateSupplyRateMultiplier sets the "supply_rate_multiplier" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdateSupplyRateMultiplier() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdateSupplyRateMultiplier()
 	})
 }
 

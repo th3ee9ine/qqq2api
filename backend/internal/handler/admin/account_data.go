@@ -11,6 +11,7 @@ import (
 	"log/slog"
 
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
@@ -95,6 +96,32 @@ type DataImportError struct {
 	Message  string `json:"message"`
 }
 
+// accountExportExtraForContext keeps the account backup useful to its owner
+// without exporting provider billing observations or managed probe policy.
+// Super-admin exports intentionally retain the historical raw-extra behavior.
+func accountExportExtraForContext(ctx context.Context, extra map[string]any) map[string]any {
+	if _, scoped := ctxkey.AccountAdminIDFromContext(ctx); !scoped || extra == nil {
+		return extra
+	}
+	redacted := make(map[string]any, len(extra))
+	for key, value := range extra {
+		switch key {
+		case service.UpstreamBillingProbeExtraKey,
+			service.UpstreamBillingProbeEnabledExtraKey,
+			service.UpstreamBillingRateSyncEnabledExtraKey,
+			service.OllamaCloudUsageSessionExtraKey,
+			service.OllamaCloudUsageAutoRefreshExtraKey,
+			service.OllamaCloudUsageSnapshotExtraKey,
+			"grok_billing_snapshot",
+			"grok_usage_snapshot":
+			continue
+		default:
+			redacted[key] = value
+		}
+	}
+	return redacted
+}
+
 func buildProxyKey(protocol, host string, port int, username, password string) string {
 	return fmt.Sprintf("%s|%s|%d|%s|%s", strings.TrimSpace(protocol), strings.TrimSpace(host), port, strings.TrimSpace(username), strings.TrimSpace(password))
 }
@@ -105,6 +132,9 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 	selectedIDs, err := parseAccountIDs(c)
 	if err != nil {
 		response.BadRequest(c, err.Error())
+		return
+	}
+	if len(selectedIDs) > 0 && !h.requireExplicitAccountOwnership(c, selectedIDs) {
 		return
 	}
 
@@ -154,6 +184,12 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 	if err != nil {
 		response.BadRequest(c, err.Error())
 		return
+	}
+	// Proxies are shared infrastructure. A restricted account administrator may
+	// export their own account credentials, but must never receive a bundle of
+	// shared proxy credentials merely because include_proxies defaults to true.
+	if _, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		includeProxies = false
 	}
 
 	var proxies []service.Proxy
@@ -227,7 +263,7 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 			Platform:           acc.Platform,
 			Type:               acc.Type,
 			Credentials:        acc.Credentials,
-			Extra:              service.StripCodexTurnStateAutoExtra(acc.Extra),
+			Extra:              accountExportExtraForContext(ctx, service.StripCodexTurnStateAutoExtra(acc.Extra)),
 			ProxyKey:           proxyKey,
 			Concurrency:        acc.Concurrency,
 			Priority:           acc.Priority,

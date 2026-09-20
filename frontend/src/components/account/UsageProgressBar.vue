@@ -12,11 +12,14 @@
         <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">
           {{ formatTokens }}
         </span>
-        <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800" :title="t('usage.accountBilled')">
-          A ${{ formatAccountCost }}
+        <span
+          class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
+          :title="t(earningsMode ? 'admin.accounts.stats.earnings' : 'usage.accountBilled')"
+        >
+          {{ earningsMode ? 'E' : 'A' }} ${{ formatAccountCost }}
         </span>
         <span
-          v-if="windowStats?.user_cost != null"
+          v-if="!earningsMode && windowStats?.user_cost != null"
           class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
           :title="t('usage.userBilled')"
         >
@@ -76,12 +79,14 @@ const props = withDefaults(
     color: 'indigo' | 'emerald' | 'purple' | 'amber'
     windowStats?: WindowStats | null
     estimatedTotalCost?: number | null
+    /** Account administrators receive account cost as their earnings. */
+    earningsMode?: boolean
     showNowWhenIdle?: boolean
     remainingCapacity?: boolean
     /** fixed: 定宽居中徽章（账号页纵向对齐）；auto: 限宽截断左对齐（监控页组合标签） */
     labelWidth?: 'fixed' | 'auto'
   }>(),
-  { labelWidth: 'fixed' }
+  { labelWidth: 'fixed', earningsMode: false }
 )
 
 const { t } = useI18n()

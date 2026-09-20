@@ -23,7 +23,9 @@ const usageLogSelectColumns = "id, user_id, api_key_id, account_id, request_id, 
 
 func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *service.UsageLog, err error) {
 	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE id = $1"
-	rows, err := r.sql.QueryContext(ctx, query, id)
+	args := []any{id}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -52,43 +54,59 @@ func (r *usageLogRepository) GetByID(ctx context.Context, id int64) (log *servic
 }
 
 func (r *usageLogRepository) ListByUser(ctx context.Context, userID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	return r.listUsageLogsWithPagination(ctx, "WHERE user_id = $1", []any{userID}, params)
+	conditions, args := appendUsageLogAccountAdminScope(ctx, []string{"user_id = $1"}, []any{userID}, "account_id")
+	return r.listUsageLogsWithPagination(ctx, buildWhere(conditions), args, params)
 }
 
 func (r *usageLogRepository) ListByAPIKey(ctx context.Context, apiKeyID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	return r.listUsageLogsWithPagination(ctx, "WHERE api_key_id = $1", []any{apiKeyID}, params)
+	conditions, args := appendUsageLogAccountAdminScope(ctx, []string{"api_key_id = $1"}, []any{apiKeyID}, "account_id")
+	return r.listUsageLogsWithPagination(ctx, buildWhere(conditions), args, params)
 }
 
 func (r *usageLogRepository) ListByAccount(ctx context.Context, accountID int64, params pagination.PaginationParams) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	return r.listUsageLogsWithPagination(ctx, "WHERE account_id = $1", []any{accountID}, params)
+	conditions, args := appendUsageLogAccountAdminScope(ctx, []string{"account_id = $1"}, []any{accountID}, "account_id")
+	return r.listUsageLogsWithPagination(ctx, buildWhere(conditions), args, params)
 }
 
 func (r *usageLogRepository) ListByUserAndTimeRange(ctx context.Context, userID int64, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE user_id = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000"
-	logs, err := r.queryUsageLogs(ctx, query, userID, startTime, endTime)
+	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE user_id = $1 AND created_at >= $2 AND created_at < $3"
+	args := []any{userID, startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
+	query += " ORDER BY id DESC LIMIT 10000"
+	logs, err := r.queryUsageLogs(ctx, query, args...)
 	return logs, nil, err
 }
 
 func (r *usageLogRepository) ListByAPIKeyAndTimeRange(ctx context.Context, apiKeyID int64, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE api_key_id = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000"
-	logs, err := r.queryUsageLogs(ctx, query, apiKeyID, startTime, endTime)
+	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE api_key_id = $1 AND created_at >= $2 AND created_at < $3"
+	args := []any{apiKeyID, startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
+	query += " ORDER BY id DESC LIMIT 10000"
+	logs, err := r.queryUsageLogs(ctx, query, args...)
 	return logs, nil, err
 }
 
 func (r *usageLogRepository) ListByAccountAndTimeRange(ctx context.Context, accountID int64, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE account_id = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000"
-	logs, err := r.queryUsageLogs(ctx, query, accountID, startTime, endTime)
+	query := "SELECT " + usageLogSelectColumns + " FROM usage_logs WHERE account_id = $1 AND created_at >= $2 AND created_at < $3"
+	args := []any{accountID, startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
+	query += " ORDER BY id DESC LIMIT 10000"
+	logs, err := r.queryUsageLogs(ctx, query, args...)
 	return logs, nil, err
 }
 
 func (r *usageLogRepository) ListByModelAndTimeRange(ctx context.Context, modelName string, startTime, endTime time.Time) ([]service.UsageLog, *pagination.PaginationResult, error) {
-	query := fmt.Sprintf("SELECT %s FROM usage_logs WHERE %s = $1 AND created_at >= $2 AND created_at < $3 ORDER BY id DESC LIMIT 10000", usageLogSelectColumns, rawUsageLogModelColumn)
-	logs, err := r.queryUsageLogs(ctx, query, modelName, startTime, endTime)
+	query := fmt.Sprintf("SELECT %s FROM usage_logs WHERE %s = $1 AND created_at >= $2 AND created_at < $3", usageLogSelectColumns, rawUsageLogModelColumn)
+	args := []any{modelName, startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
+	query += " ORDER BY id DESC LIMIT 10000"
+	logs, err := r.queryUsageLogs(ctx, query, args...)
 	return logs, nil, err
 }
 
 func (r *usageLogRepository) Delete(ctx context.Context, id int64) error {
-	_, err := r.sql.ExecContext(ctx, "DELETE FROM usage_logs WHERE id = $1", id)
+	query, args := appendUsageLogAccountAdminQueryScope(ctx, "DELETE FROM usage_logs WHERE id = $1", []any{id}, "account_id")
+	_, err := r.sql.ExecContext(ctx, query, args...)
 	return err
 }
 
@@ -139,6 +157,7 @@ func (r *usageLogRepository) ListWithFilters(ctx context.Context, params paginat
 		conditions = append(conditions, fmt.Sprintf("created_at < $%d", len(args)+1))
 		args = append(args, *filters.EndTime)
 	}
+	conditions, args = appendUsageLogAccountAdminScope(ctx, conditions, args, "account_id")
 
 	whereClause := buildWhere(conditions)
 	var (
@@ -404,7 +423,7 @@ func (r *usageLogRepository) loadAccounts(ctx context.Context, ids []int64) (map
 	if len(ids) == 0 {
 		return out, nil
 	}
-	models, err := r.client.Account.Query().Where(dbaccount.IDIn(ids...)).All(ctx)
+	models, err := accountQueryWithScope(ctx, r.client.Account.Query()).Where(dbaccount.IDIn(ids...)).All(ctx)
 	if err != nil {
 		return nil, err
 	}

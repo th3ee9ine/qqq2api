@@ -41,7 +41,12 @@ func (r *accountRepository) CompareAndSwapCodexTurnStateProbeBurstBudget(
 	if err != nil {
 		return false, err
 	}
-	result, err := r.sql.ExecContext(ctx, `
+	ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", 5)
+	ownerFilter := ""
+	if scoped {
+		ownerFilter = ownerClause
+	}
+	query := `
 		UPDATE accounts
 		SET extra = jsonb_set(
 			COALESCE(extra, '{}'::jsonb),
@@ -49,7 +54,7 @@ func (r *accountRepository) CompareAndSwapCodexTurnStateProbeBurstBudget(
 			$2::jsonb,
 			true
 		), updated_at = NOW()
-		WHERE id = $3 AND deleted_at IS NULL
+		WHERE id = $3 AND deleted_at IS NULL` + ownerFilter + `
 		  AND CASE
 			WHEN jsonb_typeof(COALESCE(extra, '{}'::jsonb) -> $1) = 'object'
 			 AND jsonb_typeof(COALESCE(extra, '{}'::jsonb) -> $1 -> 'version') = 'number'
@@ -57,7 +62,12 @@ func (r *accountRepository) CompareAndSwapCodexTurnStateProbeBurstBudget(
 			ELSE 0
 		  END = $4
 		  AND ($4 <> 0 OR NOT (COALESCE(extra, '{}'::jsonb) ? $1))
-	`, slot, string(payload), accountID, expectedVersion)
+	`
+	args := []any{slot, string(payload), accountID, expectedVersion}
+	if scoped {
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}

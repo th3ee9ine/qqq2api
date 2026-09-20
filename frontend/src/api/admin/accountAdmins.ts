@@ -17,6 +17,7 @@ export interface CreateAccountAdminRequest {
   password: string
   username?: string
   notes?: string
+  supply_rate_multiplier: number
 }
 
 export interface UpdateAccountAdminRequest {
@@ -25,6 +26,7 @@ export interface UpdateAccountAdminRequest {
   username?: string
   notes?: string
   status?: 'active' | 'disabled'
+  supply_rate_multiplier?: number
 }
 
 export async function list(

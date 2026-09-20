@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, listTLSProfilesMock, getWebSearchEmulationConfigMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, listTLSProfilesMock, getWebSearchEmulationConfigMock, authIsSimpleMode, authIsAdmin } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
   listTLSProfilesMock: vi.fn(),
   getWebSearchEmulationConfigMock: vi.fn(),
-  authIsSimpleMode: { value: true }
+  authIsSimpleMode: { value: true },
+  authIsAdmin: { value: true }
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -22,6 +23,9 @@ vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
     get isSimpleMode() {
       return authIsSimpleMode.value
+    },
+    get isAdmin() {
+      return authIsAdmin.value
     }
   })
 }))
@@ -332,6 +336,7 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    authIsAdmin.value = true
     listTLSProfilesMock.mockReset().mockResolvedValue([{ id: 7, name: 'Chrome profile' }])
     getWebSearchEmulationConfigMock.mockReset().mockResolvedValue({ enabled: false, providers: [] })
   })
@@ -349,6 +354,50 @@ describe('EditAccountModal', () => {
     const wrapper = mountModal(account)
 
     expect(wrapper.get('[data-testid="ollama-cloud-usage-settings"]').exists()).toBe(true)
+  })
+
+  it('hides and omits account rate controls for account administrators', async () => {
+    authIsAdmin.value = false
+    const account = buildAccount()
+    account.rate_multiplier = 1.75
+    account.upstream_billing_rate_sync_enabled = false
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="account-rate-multiplier"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="upstream-billing-rate-sync"]').exists()).toBe(false)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload).not.toHaveProperty('rate_multiplier')
+    expect(payload).not.toHaveProperty('upstream_billing_rate_sync_enabled')
+  })
+
+  it('hides and omits upstream billing probe controls for account administrators', async () => {
+    authIsAdmin.value = false
+    const account = buildAccount()
+    account.extra = {
+      upstream_billing_probe_enabled: true,
+      upstream_billing_rate_sync_enabled: true
+    }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="upstream-billing-rate-sync"]').exists()).toBe(false)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload).not.toHaveProperty('upstream_billing_probe_enabled')
+    expect(payload).not.toHaveProperty('upstream_billing_rate_sync_enabled')
   })
 
   afterEach(() => vi.useRealTimers())

@@ -350,7 +350,7 @@ func (h *AccountHandler) accountResponseFromService(ctx context.Context, account
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
-	return out
+	return accountAdminAccountResponse(ctx, out)
 }
 
 func (h *AccountHandler) accountListResponseFromService(ctx context.Context, account *service.Account) *dto.Account {
@@ -364,7 +364,7 @@ func (h *AccountHandler) accountListResponseFromService(ctx context.Context, acc
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
-	return out
+	return accountAdminAccountResponse(ctx, out)
 }
 
 func (h *AccountHandler) isSimpleMode() bool {
@@ -391,7 +391,7 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 		if h.accountUsageService != nil && account.GetWindowCostLimit() > 0 {
 			startTime := account.GetCurrentWindowStartTime()
 			if stats, err := h.accountUsageService.GetAccountWindowStats(ctx, account.ID, startTime); err == nil && stats != nil {
-				cost := stats.StandardCost
+				cost := accountWindowCostResponse(ctx, stats)
 				item.CurrentWindowCost = &cost
 			}
 		}
@@ -786,7 +786,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 				stats, err := h.accountUsageService.GetAccountWindowStats(gctx, accCopy.ID, startTime)
 				if err == nil && stats != nil {
 					mu.Lock()
-					windowCosts[accCopy.ID] = stats.StandardCost // 使用标准费用
+					windowCosts[accCopy.ID] = accountWindowCostResponse(gctx, stats)
 					mu.Unlock()
 				}
 				return nil // 不返回错误，允许部分失败
@@ -968,14 +968,17 @@ func (h *AccountHandler) CheckMixedChannel(c *gin.Context) {
 		return
 	}
 
-	if len(req.GroupIDs) == 0 {
-		response.Success(c, gin.H{"has_risk": false})
-		return
-	}
-
 	accountID := int64(0)
 	if req.AccountID != nil {
 		accountID = *req.AccountID
+	}
+	if accountID > 0 && !h.requireExplicitAccountOwnership(c, []int64{accountID}) {
+		return
+	}
+
+	if len(req.GroupIDs) == 0 {
+		response.Success(c, gin.H{"has_risk": false})
+		return
 	}
 
 	err := h.adminService.CheckMixedChannelRisk(c.Request.Context(), accountID, req.Platform, req.GroupIDs)
@@ -1347,6 +1350,9 @@ func (h *AccountHandler) GetOpenAITestDefaults(c *gin.Context) {
 		id, err := strconv.ParseInt(idRaw, 10, 64)
 		if err != nil {
 			response.BadRequest(c, "Invalid account_id")
+			return
+		}
+		if id > 0 && !h.requireExplicitAccountOwnership(c, []int64{id}) {
 			return
 		}
 		if h.adminService == nil {
@@ -1813,7 +1819,7 @@ func (h *AccountHandler) GetStats(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, stats)
+	response.Success(c, accountAdminUsageStatsResponse(c.Request.Context(), stats))
 }
 
 // ClearError handles clearing account error
@@ -1871,6 +1877,9 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 	accountIDs := normalizeInt64IDList(req.AccountIDs)
 	if len(accountIDs) == 0 {
 		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	if !h.requireExplicitAccountOwnership(c, accountIDs) {
 		return
 	}
 
@@ -2006,6 +2015,9 @@ func (h *AccountHandler) BatchClearError(c *gin.Context) {
 		response.BadRequest(c, "account_ids is required")
 		return
 	}
+	if !h.requireExplicitAccountOwnership(c, req.AccountIDs) {
+		return
+	}
 
 	ctx := c.Request.Context()
 
@@ -2072,6 +2084,9 @@ func (h *AccountHandler) BatchRefresh(c *gin.Context) {
 	}
 	if len(req.AccountIDs) == 0 {
 		response.BadRequest(c, "account_ids is required")
+		return
+	}
+	if !h.requireExplicitAccountOwnership(c, req.AccountIDs) {
 		return
 	}
 
@@ -2330,6 +2345,9 @@ func (h *AccountHandler) BatchUpdateCredentials(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	if !h.requireExplicitAccountOwnership(c, req.AccountIDs) {
+		return
+	}
 
 	// 阶段一：预验证所有账号存在，收集 credentials
 	type accountUpdate struct {
@@ -2431,6 +2449,9 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 
 	if !hasUpdates {
 		response.BadRequest(c, "No updates provided")
+		return
+	}
+	if len(req.AccountIDs) > 0 && !h.requireExplicitAccountOwnership(c, req.AccountIDs) {
 		return
 	}
 
@@ -2656,7 +2677,7 @@ func (h *AccountHandler) GetUsage(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, usage)
+	response.Success(c, accountAdminUsageInfoResponse(c.Request.Context(), usage))
 }
 
 // ClearRateLimit handles clearing account rate limit status
@@ -2764,7 +2785,7 @@ func (h *AccountHandler) GetTodayStats(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, stats)
+	response.Success(c, accountAdminWindowStatsResponse(c.Request.Context(), stats))
 }
 
 // BatchAccountStatsRequest 批量账号统计请求体。
@@ -2792,7 +2813,11 @@ func (h *AccountHandler) GetBatchTodayStats(c *gin.Context) {
 		return
 	}
 
-	cacheKey := buildAccountTodayStatsBatchCacheKey(accountIDs)
+	if !h.requireExplicitAccountOwnership(c, accountIDs) {
+		return
+	}
+
+	cacheKey := buildAccountTodayStatsBatchCacheKeyForContext(c.Request.Context(), accountIDs)
 	if cached, ok := accountTodayStatsBatchCache.Get(cacheKey); ok {
 		if cached.ETag != "" {
 			c.Header("ETag", cached.ETag)
@@ -2813,7 +2838,7 @@ func (h *AccountHandler) GetBatchTodayStats(c *gin.Context) {
 		return
 	}
 
-	payload := gin.H{"stats": stats}
+	payload := gin.H{"stats": accountAdminWindowStatsMapResponse(c.Request.Context(), stats)}
 	cached := accountTodayStatsBatchCache.Set(cacheKey, payload)
 	if cached.ETag != "" {
 		c.Header("ETag", cached.ETag)
@@ -2838,7 +2863,11 @@ func (h *AccountHandler) GetBatchLifetimeStats(c *gin.Context) {
 		return
 	}
 
-	cacheKey := buildAccountLifetimeStatsBatchCacheKey(accountIDs)
+	if !h.requireExplicitAccountOwnership(c, accountIDs) {
+		return
+	}
+
+	cacheKey := buildAccountLifetimeStatsBatchCacheKeyForContext(c.Request.Context(), accountIDs)
 	if cached, ok := accountLifetimeStatsBatchCache.Get(cacheKey); ok {
 		if cached.ETag != "" {
 			c.Header("ETag", cached.ETag)
@@ -2859,7 +2888,7 @@ func (h *AccountHandler) GetBatchLifetimeStats(c *gin.Context) {
 		return
 	}
 
-	payload := gin.H{"stats": stats}
+	payload := gin.H{"stats": accountAdminWindowStatsMapResponse(c.Request.Context(), stats)}
 	cached := accountLifetimeStatsBatchCache.Set(cacheKey, payload)
 	if cached.ETag != "" {
 		c.Header("ETag", cached.ETag)
@@ -2886,6 +2915,9 @@ func (h *AccountHandler) GetBatchUsage(c *gin.Context) {
 		})
 		return
 	}
+	if !h.requireExplicitAccountOwnership(c, accountIDs) {
+		return
+	}
 
 	usageByAccount, errorsByAccount, err := h.accountUsageService.GetUsageBatch(c.Request.Context(), accountIDs, req.Force)
 	if err != nil {
@@ -2894,7 +2926,7 @@ func (h *AccountHandler) GetBatchUsage(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{
-		"usage":  usageByAccount,
+		"usage":  accountAdminUsageInfoMapResponse(c.Request.Context(), usageByAccount),
 		"errors": errorsByAccount,
 	})
 }
@@ -3342,6 +3374,9 @@ func (h *AccountHandler) BatchRefreshTier(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	if len(req.AccountIDs) > 0 && !h.requireExplicitAccountOwnership(c, req.AccountIDs) {
+		return
+	}
 	accounts := make([]*service.Account, 0)
 
 	if len(req.AccountIDs) == 0 {

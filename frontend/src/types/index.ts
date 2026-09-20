@@ -112,6 +112,8 @@ export interface User {
 export interface AdminUser extends User {
   // 管理员备注（普通用户接口不返回）
   notes: string
+  // 账号管理员供货收益倍率；仅管理侧账号管理员接口返回。
+  supply_rate_multiplier?: number
   last_used_at?: string | null
   // 用户专属分组倍率配置 (group_id -> rate_multiplier)
   group_rates?: Record<number, number>
@@ -2072,7 +2074,7 @@ export interface ModelStat {
   cache_creation_tokens: number
   cache_read_tokens: number
   total_tokens: number
-  cost: number // 标准计费
+  cost?: number // 标准计费；账号管理员收益视图省略
   actual_cost: number // 实际扣除
   account_cost?: number // 账号成本（仅管理员接口返回）
 }
@@ -2262,28 +2264,28 @@ export interface AccountUsageHistory {
   label: string
   requests: number
   tokens: number
-  cost: number
+  cost?: number // Standard cost; omitted for account administrators
   actual_cost: number // Account cost (account multiplier)
-  user_cost: number // User/API key billed cost (group multiplier)
+  user_cost?: number // User/API key billed cost (group multiplier); omitted for account administrators
 }
 
 export interface AccountUsageSummary {
   days: number
   actual_days_used: number
   total_cost: number // Account cost (account multiplier)
-  total_user_cost: number
-  total_standard_cost: number
+  total_user_cost?: number
+  total_standard_cost?: number
   total_requests: number
   total_tokens: number
   avg_daily_cost: number // Account cost
-  avg_daily_user_cost: number
+  avg_daily_user_cost?: number
   avg_daily_requests: number
   avg_daily_tokens: number
   avg_duration_ms: number
   today: {
     date: string
     cost: number
-    user_cost: number
+    user_cost?: number
     requests: number
     tokens: number
   } | null
@@ -2291,7 +2293,7 @@ export interface AccountUsageSummary {
     date: string
     label: string
     cost: number
-    user_cost: number
+    user_cost?: number
     requests: number
   } | null
   highest_request_day: {
@@ -2299,7 +2301,7 @@ export interface AccountUsageSummary {
     label: string
     requests: number
     cost: number
-    user_cost: number
+    user_cost?: number
   } | null
 }
 

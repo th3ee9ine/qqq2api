@@ -454,6 +454,7 @@
         </div>
 
         <div
+          v-if="authStore.isAdmin"
           class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
         >
           <div>
@@ -1986,7 +1987,7 @@
           />
           <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
-        <div>
+        <div v-if="authStore.isAdmin">
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
           <input v-model.number="form.rate_multiplier" type="number" min="0" step="0.001" class="input" data-testid="create-rate-multiplier" />
           <p class="input-hint">{{ t('admin.accounts.billingRateMultiplierHint') }}</p>
@@ -3562,13 +3563,13 @@ function buildBasePayload(
     concurrency: form.concurrency,
     load_factor: loadFactor.value,
     priority: form.priority,
-    rate_multiplier: form.rate_multiplier,
+    ...(authStore.isAdmin ? { rate_multiplier: form.rate_multiplier } : {}),
     group_ids: form.group_ids,
     expires_at: expiresAt.value,
     auto_pause_on_expired: autoPauseOnExpired.value,
-    upstream_billing_probe_enabled: type === 'apikey'
-      ? upstreamBillingProbeEnabled.value
-      : undefined
+    ...(authStore.isAdmin && type === 'apikey'
+      ? { upstream_billing_probe_enabled: upstreamBillingProbeEnabled.value }
+      : {})
   }
 }
 
@@ -3932,7 +3933,7 @@ async function handleOpenAIImportCodexSession(content: string) {
       auto_assign_proxy: autoAssignProxy.value,
       concurrency: form.concurrency,
       priority: form.priority,
-      rate_multiplier: form.rate_multiplier,
+      ...(authStore.isAdmin ? { rate_multiplier: form.rate_multiplier } : {}),
       group_ids: form.group_ids,
       load_factor: loadFactor.value,
       expires_at: expiresAt.value,
@@ -3995,7 +3996,7 @@ async function handleOpenAIImportCodexPAT(accessToken: string) {
       auto_assign_proxy: autoAssignProxy.value,
       concurrency: form.concurrency,
       priority: form.priority,
-      rate_multiplier: form.rate_multiplier,
+      ...(authStore.isAdmin ? { rate_multiplier: form.rate_multiplier } : {}),
       group_ids: form.group_ids,
       load_factor: loadFactor.value,
       expires_at: expiresAt.value,

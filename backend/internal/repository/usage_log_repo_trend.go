@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/usagestats"
 )
 
@@ -29,12 +30,23 @@ type APIKeyUsageTrendPoint = usagestats.APIKeyUsageTrendPoint
 // GetAPIKeyUsageTrend returns usage trend data grouped by API key and date
 func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) (results []APIKeyUsageTrendPoint, err error) {
 	dateFormat := safeDateFormat(granularity)
+	args := []any{startTime, endTime, limit, startTime, endTime}
+	cteOwnerFilter := ""
+	outerOwnerFilter := ""
+	if ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		ownerPlaceholder := len(args) + 1
+		cteOwnerFilter, _ = usageLogAccountAdminScopeCondition(ctx, "account_id", ownerPlaceholder)
+		outerOwnerFilter, _ = usageLogAccountAdminScopeCondition(ctx, "u.account_id", ownerPlaceholder)
+		cteOwnerFilter = " AND " + cteOwnerFilter
+		outerOwnerFilter = " AND " + outerOwnerFilter
+		args = append(args, ownerID)
+	}
 
 	query := fmt.Sprintf(`
 		WITH top_keys AS (
 			SELECT api_key_id
 			FROM usage_logs
-			WHERE created_at >= $1 AND created_at < $2
+			WHERE created_at >= $1 AND created_at < $2%s
 			GROUP BY api_key_id
 			ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
 			LIMIT $3
@@ -47,13 +59,13 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 			COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) as tokens
 		FROM usage_logs u
 		LEFT JOIN api_keys k ON u.api_key_id = k.id
-		WHERE u.api_key_id IN (SELECT api_key_id FROM top_keys)
+		WHERE u.api_key_id IN (SELECT api_key_id FROM top_keys)%s
 		  AND u.created_at >= $4 AND u.created_at < $5
 		GROUP BY date, u.api_key_id, k.name
 		ORDER BY date ASC, tokens DESC
-	`, dateFormat)
+	`, cteOwnerFilter, dateFormat, outerOwnerFilter)
 
-	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit, startTime, endTime)
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -84,12 +96,23 @@ func (r *usageLogRepository) GetAPIKeyUsageTrend(ctx context.Context, startTime,
 // GetUserUsageTrend returns usage trend data grouped by user and date
 func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, endTime time.Time, granularity string, limit int) (results []UserUsageTrendPoint, err error) {
 	dateFormat := safeDateFormat(granularity)
+	args := []any{startTime, endTime, limit, startTime, endTime}
+	cteOwnerFilter := ""
+	outerOwnerFilter := ""
+	if ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		ownerPlaceholder := len(args) + 1
+		cteOwnerFilter, _ = usageLogAccountAdminScopeCondition(ctx, "account_id", ownerPlaceholder)
+		outerOwnerFilter, _ = usageLogAccountAdminScopeCondition(ctx, "u.account_id", ownerPlaceholder)
+		cteOwnerFilter = " AND " + cteOwnerFilter
+		outerOwnerFilter = " AND " + outerOwnerFilter
+		args = append(args, ownerID)
+	}
 
 	query := fmt.Sprintf(`
 		WITH top_users AS (
 			SELECT user_id
 			FROM usage_logs
-			WHERE created_at >= $1 AND created_at < $2
+			WHERE created_at >= $1 AND created_at < $2%s
 			GROUP BY user_id
 			ORDER BY SUM(input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens) DESC
 			LIMIT $3
@@ -105,13 +128,13 @@ func (r *usageLogRepository) GetUserUsageTrend(ctx context.Context, startTime, e
 			COALESCE(SUM(u.actual_cost), 0) as actual_cost
 		FROM usage_logs u
 		LEFT JOIN users us ON u.user_id = us.id
-		WHERE u.user_id IN (SELECT user_id FROM top_users)
+		WHERE u.user_id IN (SELECT user_id FROM top_users)%s
 		  AND u.created_at >= $4 AND u.created_at < $5
 		GROUP BY date, u.user_id, us.email, us.username
 		ORDER BY date ASC, tokens DESC
-	`, dateFormat)
+	`, cteOwnerFilter, dateFormat, outerOwnerFilter)
 
-	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit, startTime, endTime)
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +168,16 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 		limit = 12
 	}
 
-	query := `
+	args := []any{startTime, endTime, limit}
+	ownerFilter := ""
+	if ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		ownerPlaceholder := len(args) + 1
+		ownerFilter, _ = usageLogAccountAdminScopeCondition(ctx, "u.account_id", ownerPlaceholder)
+		ownerFilter = " AND " + ownerFilter
+		args = append(args, ownerID)
+	}
+
+	query := fmt.Sprintf(`
 		WITH user_spend AS (
 			SELECT
 				u.user_id,
@@ -156,7 +188,7 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 				COALESCE(SUM(u.input_tokens + u.output_tokens + u.cache_creation_tokens + u.cache_read_tokens), 0) as tokens
 			FROM usage_logs u
 			LEFT JOIN users us ON u.user_id = us.id
-			WHERE u.created_at >= $1 AND u.created_at < $2
+			WHERE u.created_at >= $1 AND u.created_at < $2%s
 			GROUP BY u.user_id, us.email, us.username
 		),
 		ranked AS (
@@ -186,9 +218,9 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 			total_tokens
 		FROM ranked
 		ORDER BY actual_cost DESC, tokens DESC, user_id ASC
-	`
+	`, ownerFilter)
 
-	rows, err := r.sql.QueryContext(ctx, query, startTime, endTime, limit)
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -225,6 +257,14 @@ func (r *usageLogRepository) GetUserSpendingRanking(ctx context.Context, startTi
 // GetUserUsageTrendByUserID 获取指定用户的使用趋势
 func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, userID int64, startTime, endTime time.Time, granularity string) (results []TrendDataPoint, err error) {
 	dateFormat := safeDateFormat(granularity)
+	args := []any{userID, startTime, endTime}
+	ownerFilter := ""
+	if ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		ownerPlaceholder := len(args) + 1
+		ownerFilter, _ = usageLogAccountAdminScopeCondition(ctx, "account_id", ownerPlaceholder)
+		ownerFilter = " AND " + ownerFilter
+		args = append(args, ownerID)
+	}
 
 	query := fmt.Sprintf(`
 		SELECT
@@ -238,12 +278,12 @@ func (r *usageLogRepository) GetUserUsageTrendByUserID(ctx context.Context, user
 			COALESCE(SUM(total_cost), 0) as cost,
 			COALESCE(SUM(actual_cost), 0) as actual_cost
 		FROM usage_logs
-		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
+		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3%s
 		GROUP BY date
 		ORDER BY date ASC
-	`, dateFormat)
+	`, dateFormat, ownerFilter)
 
-	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime)
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +318,8 @@ func (r *usageLogRepository) GetUsageTrendWithUsageFilters(ctx context.Context, 
 }
 
 func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, userID, apiKeyID, accountID, groupID int64, model string, modelSource string, requestType *int16, stream *bool, billingType *int8, billingMode string, upstreamModelMismatch *bool, nativeCompactionV2 *bool) (results []TrendDataPoint, err error) {
-	if shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, billingMode, upstreamModelMismatch, nativeCompactionV2) {
+	_, accountAdminScoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !accountAdminScoped && shouldUsePreaggregatedTrend(granularity, userID, apiKeyID, accountID, groupID, model, requestType, stream, billingType, billingMode, upstreamModelMismatch, nativeCompactionV2) {
 		aggregated, aggregatedErr := r.getUsageTrendFromAggregates(ctx, startTime, endTime, granularity)
 		if aggregatedErr == nil && len(aggregated) > 0 {
 			return aggregated, nil
@@ -330,6 +371,7 @@ func (r *usageLogRepository) getUsageTrendWithFilters(ctx context.Context, start
 	if upstreamModelMismatch != nil {
 		query += " AND " + upstreamModelMismatchCondition("upstream_model_mismatch", *upstreamModelMismatch)
 	}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 	query += " GROUP BY date ORDER BY date ASC"
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -500,6 +542,7 @@ func (r *usageLogRepository) getModelStatsWithFiltersBySource(ctx context.Contex
 	if upstreamModelMismatch != nil {
 		query += " AND " + upstreamModelMismatchCondition("upstream_model_mismatch", *upstreamModelMismatch)
 	}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 	query += fmt.Sprintf(" GROUP BY %s ORDER BY total_tokens DESC", modelExpr)
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -578,6 +621,7 @@ func (r *usageLogRepository) getGroupStatsWithFilters(ctx context.Context, start
 	if upstreamModelMismatch != nil {
 		query += " AND " + upstreamModelMismatchCondition("ul.upstream_model_mismatch", *upstreamModelMismatch)
 	}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "ul.account_id")
 	query += " GROUP BY ul.group_id, g.name ORDER BY total_tokens DESC"
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)
@@ -672,6 +716,7 @@ func (r *usageLogRepository) GetUserBreakdownStats(ctx context.Context, startTim
 		query += fmt.Sprintf(" AND ul.billing_type = $%d", len(args)+1)
 		args = append(args, *dim.BillingType)
 	}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "ul.account_id")
 
 	// ORDER BY 列来自固定 allowlist(非用户原样字符串),避免 SQL 注入。
 	orderBy := "actual_cost"

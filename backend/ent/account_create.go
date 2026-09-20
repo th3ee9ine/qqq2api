@@ -15,6 +15,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/ent/group"
 	"github.com/th3ee9ine/qqq2api/ent/proxy"
 	"github.com/th3ee9ine/qqq2api/ent/usagelog"
+	"github.com/th3ee9ine/qqq2api/ent/user"
 )
 
 // AccountCreate is the builder for creating a Account entity.
@@ -191,6 +192,20 @@ func (_c *AccountCreate) SetRateMultiplier(v float64) *AccountCreate {
 func (_c *AccountCreate) SetNillableRateMultiplier(v *float64) *AccountCreate {
 	if v != nil {
 		_c.SetRateMultiplier(*v)
+	}
+	return _c
+}
+
+// SetAccountAdminID sets the "account_admin_id" field.
+func (_c *AccountCreate) SetAccountAdminID(v int64) *AccountCreate {
+	_c.mutation.SetAccountAdminID(v)
+	return _c
+}
+
+// SetNillableAccountAdminID sets the "account_admin_id" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableAccountAdminID(v *int64) *AccountCreate {
+	if v != nil {
+		_c.SetAccountAdminID(*v)
 	}
 	return _c
 }
@@ -486,6 +501,11 @@ func (_c *AccountCreate) AddUsageLogs(v ...*UsageLog) *AccountCreate {
 		ids[i] = v[i].ID
 	}
 	return _c.AddUsageLogIDs(ids...)
+}
+
+// SetAccountAdmin sets the "account_admin" edge to the User entity.
+func (_c *AccountCreate) SetAccountAdmin(v *User) *AccountCreate {
+	return _c.SetAccountAdminID(v.ID)
 }
 
 // Mutation returns the AccountMutation object of the builder.
@@ -887,6 +907,23 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
+	if nodes := _c.mutation.AccountAdminIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   account.AccountAdminTable,
+			Columns: []string{account.AccountAdminColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.AccountAdminID = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
 	return _node, _spec
 }
 
@@ -1164,6 +1201,24 @@ func (u *AccountUpsert) UpdateRateMultiplier() *AccountUpsert {
 // AddRateMultiplier adds v to the "rate_multiplier" field.
 func (u *AccountUpsert) AddRateMultiplier(v float64) *AccountUpsert {
 	u.Add(account.FieldRateMultiplier, v)
+	return u
+}
+
+// SetAccountAdminID sets the "account_admin_id" field.
+func (u *AccountUpsert) SetAccountAdminID(v int64) *AccountUpsert {
+	u.Set(account.FieldAccountAdminID, v)
+	return u
+}
+
+// UpdateAccountAdminID sets the "account_admin_id" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateAccountAdminID() *AccountUpsert {
+	u.SetExcluded(account.FieldAccountAdminID)
+	return u
+}
+
+// ClearAccountAdminID clears the value of the "account_admin_id" field.
+func (u *AccountUpsert) ClearAccountAdminID() *AccountUpsert {
+	u.SetNull(account.FieldAccountAdminID)
 	return u
 }
 
@@ -1739,6 +1794,27 @@ func (u *AccountUpsertOne) AddRateMultiplier(v float64) *AccountUpsertOne {
 func (u *AccountUpsertOne) UpdateRateMultiplier() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateRateMultiplier()
+	})
+}
+
+// SetAccountAdminID sets the "account_admin_id" field.
+func (u *AccountUpsertOne) SetAccountAdminID(v int64) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetAccountAdminID(v)
+	})
+}
+
+// UpdateAccountAdminID sets the "account_admin_id" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateAccountAdminID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateAccountAdminID()
+	})
+}
+
+// ClearAccountAdminID clears the value of the "account_admin_id" field.
+func (u *AccountUpsertOne) ClearAccountAdminID() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearAccountAdminID()
 	})
 }
 
@@ -2524,6 +2600,27 @@ func (u *AccountUpsertBulk) AddRateMultiplier(v float64) *AccountUpsertBulk {
 func (u *AccountUpsertBulk) UpdateRateMultiplier() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.UpdateRateMultiplier()
+	})
+}
+
+// SetAccountAdminID sets the "account_admin_id" field.
+func (u *AccountUpsertBulk) SetAccountAdminID(v int64) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetAccountAdminID(v)
+	})
+}
+
+// UpdateAccountAdminID sets the "account_admin_id" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateAccountAdminID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateAccountAdminID()
+	})
+}
+
+// ClearAccountAdminID clears the value of the "account_admin_id" field.
+func (u *AccountUpsertBulk) ClearAccountAdminID() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearAccountAdminID()
 	})
 }
 

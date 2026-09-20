@@ -58,6 +58,22 @@ describe('AccountUsageCell', () => {
     expect(getUsage).not.toHaveBeenCalled()
   })
 
+  it('labels API-key today cost as earnings for account administrators', () => {
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: account(),
+        earningsMode: true,
+        todayStats: { requests: 2, tokens: 100, cost: 12.345, user_cost: 6.789 }
+      },
+      global: { stubs: { UsageProgressBar: true } }
+    })
+
+    expect(wrapper.text()).toContain('E $12.35')
+    expect(wrapper.text()).not.toContain('A $12.35')
+    expect(wrapper.find('[title="admin.accounts.stats.earnings"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('U $')
+  })
+
   it('keeps the original rolling quota reset timestamp when the DTO has no fixed reset field', () => {
     const wrapper = mount(AccountUsageCell, {
       props: {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/timezone"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/usagestats"
 	"github.com/th3ee9ine/qqq2api/internal/service"
@@ -25,6 +26,7 @@ func (r *usageLogRepository) getPerformanceStats(ctx context.Context, userID int
 		query += " AND user_id = $2"
 		args = append(args, userID)
 	}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 
 	var requestCount int64
 	var tokenCount int64
@@ -57,12 +59,15 @@ func (r *usageLogRepository) GetUserStats(ctx context.Context, userID int64, sta
 		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
 	`
 
+	args := []any{userID, startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
+
 	stats := &UserStats{}
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		[]any{userID, startTime, endTime},
+		args,
 		&stats.TotalRequests,
 		&stats.TotalTokens,
 		&stats.TotalCost,
@@ -79,6 +84,9 @@ func (r *usageLogRepository) GetUserStats(ctx context.Context, userID int64, sta
 type DashboardStats = usagestats.DashboardStats
 
 func (r *usageLogRepository) GetDashboardStats(ctx context.Context) (*DashboardStats, error) {
+	if _, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		return nil, service.ErrInsufficientPerms
+	}
 	stats := &DashboardStats{}
 	now := timezone.Now()
 	todayStart := timezone.Today()
@@ -101,6 +109,9 @@ func (r *usageLogRepository) GetDashboardStats(ctx context.Context) (*DashboardS
 }
 
 func (r *usageLogRepository) GetDashboardStatsWithRange(ctx context.Context, start, end time.Time) (*DashboardStats, error) {
+	if _, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		return nil, service.ErrInsufficientPerms
+	}
 	startUTC := start.UTC()
 	endUTC := end.UTC()
 	if !endUTC.After(startUTC) {
@@ -416,11 +427,13 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 		FROM usage_logs
 		WHERE user_id = $1
 	`
+	totalStatsArgs := []any{userID}
+	totalStatsQuery, totalStatsArgs = appendUsageLogAccountAdminQueryScope(ctx, totalStatsQuery, totalStatsArgs, "account_id")
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		totalStatsQuery,
-		[]any{userID},
+		totalStatsArgs,
 		&stats.TotalRequests,
 		&stats.TotalInputTokens,
 		&stats.TotalOutputTokens,
@@ -447,11 +460,13 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 		FROM usage_logs
 		WHERE user_id = $1 AND created_at >= $2
 	`
+	todayStatsArgs := []any{userID, today}
+	todayStatsQuery, todayStatsArgs = appendUsageLogAccountAdminQueryScope(ctx, todayStatsQuery, todayStatsArgs, "account_id")
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		todayStatsQuery,
-		[]any{userID, today},
+		todayStatsArgs,
 		&stats.TodayRequests,
 		&stats.TodayInputTokens,
 		&stats.TodayOutputTokens,
@@ -496,7 +511,9 @@ func (r *usageLogRepository) GetUserDashboardStats(ctx context.Context, userID i
 		HAVING ` + usageLogEffectivePlatformExpr + ` IS NOT NULL AND ` + usageLogEffectivePlatformExpr + ` <> ''
 		ORDER BY total_actual_cost DESC
 	`
-	rows, err := r.sql.QueryContext(ctx, platformQuery, userID, today)
+	platformArgs := []any{userID, today}
+	platformQuery, platformArgs = appendUsageLogAccountAdminQueryScopeBefore(ctx, platformQuery, platformArgs, "ul.account_id", "\n\t\tGROUP BY "+usageLogEffectivePlatformExpr)
+	rows, err := r.sql.QueryContext(ctx, platformQuery, platformArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -536,6 +553,7 @@ func (r *usageLogRepository) getPerformanceStatsByAPIKey(ctx context.Context, ap
 		FROM usage_logs
 		WHERE created_at >= $1 AND api_key_id = $2`
 	args := []any{fiveMinutesAgo, apiKeyID}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 
 	var requestCount int64
 	var tokenCount int64
@@ -568,11 +586,13 @@ func (r *usageLogRepository) GetAPIKeyDashboardStats(ctx context.Context, apiKey
 		FROM usage_logs
 		WHERE api_key_id = $1
 	`
+	totalStatsArgs := []any{apiKeyID}
+	totalStatsQuery, totalStatsArgs = appendUsageLogAccountAdminQueryScope(ctx, totalStatsQuery, totalStatsArgs, "account_id")
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		totalStatsQuery,
-		[]any{apiKeyID},
+		totalStatsArgs,
 		&stats.TotalRequests,
 		&stats.TotalInputTokens,
 		&stats.TotalOutputTokens,
@@ -599,11 +619,13 @@ func (r *usageLogRepository) GetAPIKeyDashboardStats(ctx context.Context, apiKey
 		FROM usage_logs
 		WHERE api_key_id = $1 AND created_at >= $2
 	`
+	todayStatsArgs := []any{apiKeyID, today}
+	todayStatsQuery, todayStatsArgs = appendUsageLogAccountAdminQueryScope(ctx, todayStatsQuery, todayStatsArgs, "account_id")
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		todayStatsQuery,
-		[]any{apiKeyID, today},
+		todayStatsArgs,
 		&stats.TodayRequests,
 		&stats.TodayInputTokens,
 		&stats.TodayOutputTokens,

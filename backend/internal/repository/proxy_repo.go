@@ -9,6 +9,7 @@ import (
 
 	dbent "github.com/th3ee9ine/qqq2api/ent"
 	"github.com/th3ee9ine/qqq2api/ent/proxy"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
 	"github.com/th3ee9ine/qqq2api/internal/service"
@@ -224,7 +225,11 @@ func lockProxyProbeIdentity(ctx context.Context, client *dbent.Client, proxyID i
 }
 
 func invalidateProxyProbeSnapshots(ctx context.Context, exec sqlExecutor, proxyID int64) ([]int64, error) {
-	rows, err := exec.QueryContext(ctx, `
+	// Proxy rows are shared infrastructure.  This is a write-side cache
+	// invalidation, so it must cover every account bound to the proxy even when
+	// the initiating request belongs to a restricted account administrator.
+	// Read-side account/proxy projections remain owner-scoped elsewhere.
+	query := `
 		UPDATE accounts
 		SET extra = COALESCE(extra, '{}'::jsonb)
 				- 'upstream_billing_probe'
@@ -235,13 +240,15 @@ func invalidateProxyProbeSnapshots(ctx context.Context, exec sqlExecutor, proxyI
 			AND (
 				(extra ? 'upstream_billing_probe'
 					AND extra -> 'upstream_billing_probe' <> 'null'::jsonb)
-				OR (platform IN (`+ollamaCloudUsagePlatformsSQL+`)
+				OR (platform IN (` + ollamaCloudUsagePlatformsSQL + `)
 					AND extra ? 'ollama_cloud_usage_snapshot'
 					AND extra -> 'ollama_cloud_usage_snapshot' <> 'null'::jsonb)
-			)
+				)
 			AND deleted_at IS NULL
 		RETURNING id
-	`, proxyID)
+	`
+	args := []any{proxyID}
+	rows, err := exec.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -474,19 +481,30 @@ func (r *proxyRepository) ExistsByHostPortAuth(ctx context.Context, host string,
 // CountAccountsByProxyID returns the number of accounts using a specific proxy
 func (r *proxyRepository) CountAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error) {
 	var count int64
-	if err := scanSingleRow(ctx, r.sql, "SELECT COUNT(*) FROM accounts WHERE proxy_id = $1 AND deleted_at IS NULL", []any{proxyID}, &count); err != nil {
+	query := "SELECT COUNT(*) FROM accounts WHERE proxy_id = $1 AND deleted_at IS NULL"
+	args := []any{proxyID}
+	if accountAdminID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		query += " AND account_admin_id = $2"
+		args = append(args, accountAdminID)
+	}
+	if err := scanSingleRow(ctx, r.sql, query, args, &count); err != nil {
 		return 0, err
 	}
 	return count, nil
 }
 
 func (r *proxyRepository) ListAccountSummariesByProxyID(ctx context.Context, proxyID int64) ([]service.ProxyAccountSummary, error) {
-	rows, err := r.sql.QueryContext(ctx, `
+	query := `
 		SELECT id, name, platform, type, notes, parent_account_id
 		FROM accounts
-		WHERE proxy_id = $1 AND deleted_at IS NULL
-		ORDER BY id DESC
-	`, proxyID)
+		WHERE proxy_id = $1 AND deleted_at IS NULL`
+	args := []any{proxyID}
+	if accountAdminID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		query += " AND account_admin_id = $2"
+		args = append(args, accountAdminID)
+	}
+	query += " ORDER BY id DESC"
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +548,14 @@ func (r *proxyRepository) ListAccountSummariesByProxyID(ctx context.Context, pro
 
 // GetAccountCountsForProxies returns a map of proxy ID to account count for all proxies
 func (r *proxyRepository) GetAccountCountsForProxies(ctx context.Context) (counts map[int64]int64, err error) {
-	rows, err := r.sql.QueryContext(ctx, "SELECT proxy_id, COUNT(*) AS count FROM accounts WHERE proxy_id IS NOT NULL AND deleted_at IS NULL GROUP BY proxy_id")
+	query := "SELECT proxy_id, COUNT(*) AS count FROM accounts WHERE proxy_id IS NOT NULL AND deleted_at IS NULL"
+	args := make([]any, 0, 1)
+	if accountAdminID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		query += " AND account_admin_id = $1"
+		args = append(args, accountAdminID)
+	}
+	query += " GROUP BY proxy_id"
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -754,7 +779,7 @@ func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec s
 	// Match the current proxy even after an earlier fallback. Keep the first
 	// origin so manual revert still restores the originally assigned proxy.
 	if target == nil {
-		rows, err = exec.QueryContext(ctx, `
+		query := `
 			UPDATE accounts SET proxy_id=NULL, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
 				extra=CASE
 					WHEN type='apikey' AND extra ? 'upstream_billing_probe'
@@ -763,9 +788,11 @@ func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec s
 				END,
 				updated_at=NOW()
 			WHERE proxy_id=$1 AND deleted_at IS NULL
-			RETURNING id`, proxyID)
+			RETURNING id`
+		args := []any{proxyID}
+		rows, err = exec.QueryContext(ctx, query, args...)
 	} else {
-		rows, err = exec.QueryContext(ctx, `
+		query := `
 			UPDATE accounts SET proxy_id=$2, proxy_fallback_origin_id=COALESCE(proxy_fallback_origin_id,$1),
 				extra=CASE
 					WHEN type='apikey' AND extra ? 'upstream_billing_probe'
@@ -774,7 +801,9 @@ func (r *proxyRepository) sweepOneExpiredProxyOnExec(ctx context.Context, exec s
 				END,
 				updated_at=NOW()
 			WHERE proxy_id=$1 AND deleted_at IS NULL
-			RETURNING id`, proxyID, *target)
+			RETURNING id`
+		args := []any{proxyID, *target}
+		rows, err = exec.QueryContext(ctx, query, args...)
 	}
 	if err != nil {
 		return nil, err

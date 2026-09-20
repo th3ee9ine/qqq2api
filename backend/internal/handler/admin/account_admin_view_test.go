@@ -35,6 +35,8 @@ func TestAccountAdminGroupOptionsExposeOnlyAccountFormFields(t *testing.T) {
 	raw, err := json.Marshal(options)
 	require.NoError(t, err)
 	require.Contains(t, string(raw), `"long_context_pricing_enabled":true`)
+	require.NotContains(t, string(raw), "rate_multiplier")
+	require.NotContains(t, string(raw), "account_count")
 	require.NotContains(t, string(raw), "profit")
 	require.NotContains(t, string(raw), "model_routing")
 	require.NotContains(t, string(raw), "secret-route")

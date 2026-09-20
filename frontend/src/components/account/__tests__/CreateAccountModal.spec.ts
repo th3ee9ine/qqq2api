@@ -12,6 +12,7 @@ const {
   getWebSearchEmulationConfigMock,
   oauthFlowResetMock,
   authIsSimpleMode,
+  authIsAdmin,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   probeUpstreamBillingMock: vi.fn(),
@@ -22,6 +23,7 @@ const {
   getWebSearchEmulationConfigMock: vi.fn(),
   oauthFlowResetMock: vi.fn(),
   authIsSimpleMode: { value: true },
+  authIsAdmin: { value: true },
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -37,6 +39,9 @@ vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
     get isSimpleMode() {
       return authIsSimpleMode.value
+    },
+    get isAdmin() {
+      return authIsAdmin.value
     },
   }),
 }))
@@ -200,6 +205,7 @@ async function openCodexImportStep(toggleClicks = 0) {
 describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    authIsAdmin.value = true
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
     probeUpstreamBillingMock.mockReset().mockResolvedValue({})
     importCodexSessionMock.mockReset().mockResolvedValue({
@@ -484,6 +490,41 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createAccountMock.mock.calls[0]?.[0]?.rate_multiplier).toBe(1.25)
   })
 
+  it('hides and omits the billing rate multiplier for account administrators', async () => {
+    authIsAdmin.value = false
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Managed OpenAI key')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-test')
+
+    expect(wrapper.find('[data-testid="create-rate-multiplier"]').exists()).toBe(false)
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]).not.toHaveProperty('rate_multiplier')
+  })
+
+  it('hides and omits upstream billing probe controls for account administrators', async () => {
+    authIsAdmin.value = false
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Managed OpenAI key')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('sk-test')
+
+    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(false)
+
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]).not.toHaveProperty('upstream_billing_probe_enabled')
+    expect(probeUpstreamBillingMock).not.toHaveBeenCalled()
+  })
+
   it('serializes the Bedrock force-global setting on creation', async () => {
     const wrapper = mountModal()
     await wrapper.get('[data-testid="create-account-type-bedrock"]').trigger('click')
@@ -619,6 +660,21 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
     expect(importCodexSessionMock).toHaveBeenCalledTimes(1)
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBeUndefined()
+  })
+
+  it('omits the billing rate multiplier from account administrator Codex imports', async () => {
+    authIsAdmin.value = false
+    const sessionWrapper = await openCodexImportStep()
+    await sessionWrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+
+    expect(importCodexSessionMock.mock.calls[0]?.[0]).not.toHaveProperty('rate_multiplier')
+
+    const patWrapper = await openCodexImportStep()
+    await patWrapper.get('[data-testid="import-codex-pat"]').trigger('click')
+    await flushPromises()
+
+    expect(createOpenAICodexPATMock.mock.calls[0]?.[0]).not.toHaveProperty('rate_multiplier')
   })
 
   it('does not leak hidden API-key quota fields into a Codex OAuth import', async () => {

@@ -11,6 +11,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
@@ -183,7 +184,10 @@ func TestAutomaticProxyBaselineExcludesReassignedFamily(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"proxy_id", "count"}))
 
 	capacities := []automaticProxyCapacity{{ID: 7, MaxAccounts: 2, AccountCount: 99}}
-	err = loadAutomaticProxyBaselineCounts(context.Background(), db, capacities, excluded)
+	// Proxy capacity is shared even when the requesting account administrator is
+	// owner-scoped. The baseline query must therefore remain global.
+	scopedCtx := context.WithValue(context.Background(), ctxkey.AccountAdminID, int64(41))
+	err = loadAutomaticProxyBaselineCounts(scopedCtx, db, capacities, excluded)
 
 	require.NoError(t, err)
 	require.Zero(t, capacities[0].AccountCount, "selected parent and shadow must be removed from the initial load")

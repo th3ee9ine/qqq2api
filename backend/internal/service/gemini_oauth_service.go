@@ -137,14 +137,15 @@ func (s *GeminiOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 	}
 
 	session := &geminicli.OAuthSession{
-		State:        state,
-		CodeVerifier: codeVerifier,
-		ProxyURL:     proxyURL,
-		RedirectURI:  redirectURI,
-		ProjectID:    strings.TrimSpace(projectID),
-		TierID:       canonicalGeminiTierIDForOAuthType(oauthType, tierID),
-		OAuthType:    oauthType,
-		CreatedAt:    time.Now(),
+		State:          state,
+		CodeVerifier:   codeVerifier,
+		ProxyURL:       proxyURL,
+		RedirectURI:    redirectURI,
+		ProjectID:      strings.TrimSpace(projectID),
+		AccountAdminID: accountAdminOAuthSessionOwner(ctx),
+		TierID:         canonicalGeminiTierIDForOAuthType(oauthType, tierID),
+		OAuthType:      oauthType,
+		CreatedAt:      time.Now(),
 	}
 	s.sessionStore.Set(sessionID, session)
 
@@ -450,6 +451,9 @@ func (s *GeminiOAuthService) ExchangeCode(ctx context.Context, input *GeminiExch
 	if !ok {
 		logger.LegacyPrintf("service.gemini_oauth", "[GeminiOAuth] ERROR: Session not found or expired")
 		return nil, fmt.Errorf("session not found or expired")
+	}
+	if err := authorizeAccountAdminOAuthSession(ctx, session.AccountAdminID); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(input.State) == "" || input.State != session.State {
 		logger.LegacyPrintf("service.gemini_oauth", "[GeminiOAuth] ERROR: Invalid state")

@@ -15,10 +15,61 @@ import (
 	"time"
 
 	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
 )
+
+var errAccountAdminSupplyRateManaged = infraerrors.New(
+	http.StatusForbidden,
+	"ACCOUNT_ADMIN_SUPPLY_RATE_MANAGED",
+	"account supply rate is managed by the super administrator",
+)
+
+func (s *adminServiceImpl) accountAdminSupplyScope(ctx context.Context) (int64, float64, bool, error) {
+	accountAdminID, scoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !scoped {
+		return 0, 0, false, nil
+	}
+	if s == nil || s.userRepo == nil {
+		return 0, 0, false, errors.New("account administrator repository is not configured")
+	}
+	user, err := s.userRepo.GetByID(ctx, accountAdminID)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if user == nil || user.Role != RoleAccountAdmin || !user.IsActive() {
+		return 0, 0, false, infraerrors.New(http.StatusForbidden, "ACCOUNT_ADMIN_INVALID", "account administrator is not active")
+	}
+	if user.SupplyRateMultiplier < 0 {
+		return 0, 0, false, errors.New("supply_rate_multiplier must be >= 0")
+	}
+	return accountAdminID, user.SupplyRateMultiplier, true, nil
+}
+
+func (s *adminServiceImpl) applyAccountAdminSupplyPolicy(ctx context.Context, account *Account) (bool, error) {
+	accountAdminID, multiplier, scoped, err := s.accountAdminSupplyScope(ctx)
+	if err != nil || !scoped {
+		return scoped, err
+	}
+	if account == nil {
+		return true, ErrAccountNilInput
+	}
+	account.AccountAdminID = &accountAdminID
+	account.RateMultiplier = &multiplier
+	if account.Extra == nil {
+		account.Extra = make(map[string]any)
+	}
+	// A supplier's payout rate is controlled centrally and must never be
+	// overwritten by an upstream billing probe.  Restricted operators also
+	// must not be able to turn the probe back on through a round-tripped Extra
+	// payload; the probe can reveal the upstream billing basis and is a
+	// super-administrator-only operation.
+	account.Extra[UpstreamBillingProbeEnabledExtraKey] = false
+	account.Extra[UpstreamBillingRateSyncEnabledExtraKey] = false
+	return true, nil
+}
 
 // Account management implementations
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
@@ -351,6 +402,10 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err != nil {
 		return nil, err
 	}
+	duplicate.AccountAdminID = cloneAccountValuePointer(source.AccountAdminID)
+	if _, err := s.applyAccountAdminSupplyPolicy(ctx, duplicate); err != nil {
+		return nil, err
+	}
 	// A copied credential must be reviewed before it can share live traffic with its source.
 	duplicate.Schedulable = false
 	if s.accountDuplicateRepo == nil {
@@ -564,6 +619,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if _, err := s.applyAccountAdminSupplyPolicy(ctx, account); err != nil {
+		return nil, err
+	}
 	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
 		return nil, err
 	}
@@ -639,6 +697,18 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	if account == nil {
 		return nil, ErrAccountNotFound
+	}
+	accountAdminID, supplyRateMultiplier, accountAdminScoped, err := s.accountAdminSupplyScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if accountAdminScoped {
+		if account.AccountAdminID == nil || *account.AccountAdminID != accountAdminID {
+			return nil, ErrAccountNotFound
+		}
+		if input.RateMultiplier != nil || (input.RateSyncEnabled != nil && *input.RateSyncEnabled) {
+			return nil, errAccountAdminSupplyRateManaged
+		}
 	}
 	if err := requireActiveAccountPlatform(account.Platform); err != nil {
 		return nil, err
@@ -762,9 +832,20 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// 关闭配额限制时前端会删除 quota_* 键并提交 extra:{}，此时也必须落库。
 	requestedProbeEnabledUpdate := input.ProbeEnabled
 	requestedRateSyncEnabledUpdate := input.RateSyncEnabled
+	if accountAdminScoped {
+		// Both controls are owned by the super administrator.  Set the
+		// effective values before interpreting a round-tripped Extra object so a
+		// caller cannot re-enable either control with a conflicting top-level
+		// field or a nested JSON value.
+		disabled := false
+		requestedProbeEnabledUpdate = &disabled
+		requestedRateSyncEnabledUpdate = &disabled
+		account.AccountAdminID = &accountAdminID
+		account.RateMultiplier = &supplyRateMultiplier
+	}
 	if input.Extra != nil {
 		requestedProbeEnabled, hasRequestedProbeEnabled := normalizedExtra[UpstreamBillingProbeEnabledExtraKey]
-		if hasRequestedProbeEnabled {
+		if hasRequestedProbeEnabled && !accountAdminScoped {
 			enabled, ok := requestedProbeEnabled.(bool)
 			if !ok {
 				return nil, infraerrors.BadRequest("INVALID_UPSTREAM_BILLING_PROBE_ENABLED", "upstream_billing_probe_enabled must be a boolean")
@@ -925,8 +1006,12 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.Priority != nil {
 		account.Priority = *input.Priority
 	}
-	if input.RateMultiplier != nil {
-		if *input.RateMultiplier < 0 {
+	effectiveRateMultiplier := input.RateMultiplier
+	if accountAdminScoped {
+		effectiveRateMultiplier = &supplyRateMultiplier
+		account.RateMultiplier = effectiveRateMultiplier
+	} else if effectiveRateMultiplier != nil {
+		if *effectiveRateMultiplier < 0 {
 			return nil, errors.New("rate_multiplier must be >= 0")
 		}
 		// 同步开启时倍率归上游所有，手工值活不过下一次成功探测（表现为"改了又自己
@@ -936,7 +1021,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if upstreamBillingRateSyncEnabled(account) {
 			return nil, ErrUpstreamBillingRateSyncConflict
 		}
-		account.RateMultiplier = input.RateMultiplier
+		account.RateMultiplier = effectiveRateMultiplier
 	}
 	if input.LoadFactor != nil {
 		if *input.LoadFactor <= 0 {
@@ -987,7 +1072,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				account,
 				requestedProbeEnabledUpdate,
 				requestedRateSyncEnabledUpdate,
-				input.RateMultiplier,
+				effectiveRateMultiplier,
 			); err != nil {
 				return nil, err
 			}
@@ -1007,7 +1092,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				account,
 				requestedProbeEnabledUpdate,
 				requestedRateSyncEnabledUpdate,
-				input.RateMultiplier,
+				effectiveRateMultiplier,
 			); err != nil {
 				return nil, err
 			}
@@ -1112,6 +1197,13 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input == nil {
 		return nil, ErrAccountNilInput
 	}
+	_, supplyRateMultiplier, accountAdminScoped, err := s.accountAdminSupplyScope(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if accountAdminScoped && input.RateMultiplier != nil {
+		return nil, errAccountAdminSupplyRateManaged
+	}
 	if input.AutoAssignProxy && input.ProxyID != nil {
 		return nil, ErrProxyAssignmentModeConflict
 	}
@@ -1208,6 +1300,13 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			targetsByID[account.ID] = account
 		}
 	}
+	if accountAdminScoped {
+		for _, accountID := range input.AccountIDs {
+			if _, ok := targetsByID[accountID]; !ok {
+				return nil, ErrAccountNotFound
+			}
+		}
+	}
 	if input.ExpectedProxyID != nil {
 		for _, accountID := range input.AccountIDs {
 			account, ok := targetsByID[accountID]
@@ -1237,6 +1336,12 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			return nil, err
 		}
 		result.LongContextInheritedCount = inheritedCount
+	}
+	if input.ProbeEnabled != nil && accountAdminScoped {
+		// The service-level policy above already forced this to false.  Do not
+		// run the ordinary account-type validation for a restricted request: it
+		// would make a harmless legacy payload fail on non-API-key accounts.
+		input.ProbeEnabled = nil
 	}
 	if input.ProbeEnabled != nil {
 		for _, accountID := range input.AccountIDs {
@@ -1338,6 +1443,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		AutoAssignProxy:            input.AutoAssignProxy,
 		ExpectedProxyID:            input.ExpectedProxyID,
 	}
+	if accountAdminScoped {
+		// Probe/sync policy is centrally owned.  Preserve the explicit false
+		// values in the JSON patch so a stale account cannot retain an enabled
+		// upstream policy after a restricted bulk edit.
+		repoUpdates.RateMultiplier = &supplyRateMultiplier
+		if repoUpdates.Extra == nil {
+			repoUpdates.Extra = make(map[string]any)
+		}
+		repoUpdates.Extra[UpstreamBillingProbeEnabledExtraKey] = false
+		repoUpdates.Extra[UpstreamBillingRateSyncEnabledExtraKey] = false
+	}
 	if input.ProbeEnabled != nil {
 		if repoUpdates.Extra == nil {
 			repoUpdates.Extra = make(map[string]any)
@@ -1346,6 +1462,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		if !*input.ProbeEnabled {
 			repoUpdates.Extra[UpstreamBillingRateSyncEnabledExtraKey] = false
 		}
+	}
+	// Account administrators never control upstream billing probe state. Keep
+	// this policy as the final overlay so it remains true even if a narrow
+	// repository implementation receives a non-nil ProbeEnabled value.
+	if accountAdminScoped {
+		if repoUpdates.Extra == nil {
+			repoUpdates.Extra = make(map[string]any)
+		}
+		repoUpdates.Extra[UpstreamBillingProbeEnabledExtraKey] = false
+		repoUpdates.Extra[UpstreamBillingRateSyncEnabledExtraKey] = false
+		repoUpdates.ProbeEnabled = nil
 	}
 	if updatesUpstreamBillingProbeIdentity(input.Credentials) || input.ProxyID != nil || input.AutoAssignProxy {
 		if repoUpdates.Extra == nil {
@@ -1367,7 +1494,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if input.Priority != nil {
 		repoUpdates.Priority = input.Priority
 	}
-	if input.RateMultiplier != nil {
+	if input.RateMultiplier != nil && !accountAdminScoped {
 		repoUpdates.RateMultiplier = input.RateMultiplier
 	}
 	if input.LoadFactor != nil {
@@ -1696,14 +1823,19 @@ func (s *adminServiceImpl) CreateShadow(ctx context.Context, parentID int64, opt
 		Status:          StatusActive,
 		Credentials:     map[string]any{"model_mapping": defaultSparkShadowModelMapping()},
 		ParentAccountID: &parentID,
+		AccountAdminID:  cloneAccountValuePointer(parent.AccountAdminID),
 		QuotaDimension:  QuotaDimensionSpark,
 		ProxyID:         parent.ProxyID,
+		RateMultiplier:  cloneAccountValuePointer(parent.RateMultiplier),
 		Priority:        priority,
 		Concurrency:     concurrency,
 		Schedulable:     true,
 		Extra: map[string]any{
 			openAILongContextBillingEnabledKey: parent.IsOpenAILongContextBillingEnabled(),
 		},
+	}
+	if _, err := s.applyAccountAdminSupplyPolicy(ctx, shadow); err != nil {
+		return nil, err
 	}
 
 	// 5. 持久化（Create 填充 shadow.ID）。并发竞态:预查(步骤2)放行后另一请求抢先建成,本次会撞

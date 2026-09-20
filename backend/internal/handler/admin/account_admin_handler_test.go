@@ -34,16 +34,21 @@ func newAccountAdminHandlerServiceStub() *accountAdminHandlerServiceStub {
 func (s *accountAdminHandlerServiceStub) CreateUser(_ context.Context, input *service.CreateUserInput) (*service.User, error) {
 	copied := *input
 	s.createInput = &copied
+	supplyRateMultiplier := 1.0
+	if input.SupplyRateMultiplier != nil {
+		supplyRateMultiplier = *input.SupplyRateMultiplier
+	}
 	return &service.User{
-		ID:          100,
-		Email:       input.Email,
-		Username:    input.Username,
-		Notes:       input.Notes,
-		Role:        input.Role,
-		Balance:     *input.Balance,
-		Concurrency: input.Concurrency,
-		RPMLimit:    input.RPMLimit,
-		Status:      service.StatusActive,
+		ID:                   100,
+		Email:                input.Email,
+		Username:             input.Username,
+		Notes:                input.Notes,
+		Role:                 input.Role,
+		Balance:              *input.Balance,
+		Concurrency:          input.Concurrency,
+		RPMLimit:             input.RPMLimit,
+		Status:               service.StatusActive,
+		SupplyRateMultiplier: supplyRateMultiplier,
 	}, nil
 }
 
@@ -61,7 +66,11 @@ func (s *accountAdminHandlerServiceStub) UpdateUser(_ context.Context, id int64,
 	s.updateID = id
 	copied := *input
 	s.updateInput = &copied
-	return &service.User{ID: id, Email: input.Email, Role: service.RoleAccountAdmin, Status: service.StatusActive}, nil
+	user := &service.User{ID: id, Email: input.Email, Role: service.RoleAccountAdmin, Status: service.StatusActive}
+	if input.SupplyRateMultiplier != nil {
+		user.SupplyRateMultiplier = *input.SupplyRateMultiplier
+	}
+	return user, nil
 }
 
 func (s *accountAdminHandlerServiceStub) DeleteUser(_ context.Context, id int64) error {
@@ -125,6 +134,68 @@ func TestAccountAdminHandlerCreateForcesRestrictedOperatorFields(t *testing.T) {
 	require.Zero(t, svc.createInput.Concurrency)
 	require.Zero(t, svc.createInput.RPMLimit)
 	require.Equal(t, int64(88), svc.createInput.ActorAdminID)
+	require.Nil(t, svc.createInput.SupplyRateMultiplier, "omitted multiplier must remain distinguishable from explicit zero")
+}
+
+func TestAccountAdminHandlerCreateForwardsExplicitZeroSupplyRateMultiplier(t *testing.T) {
+	svc := newAccountAdminHandlerServiceStub()
+	router := newAccountAdminHandlerRouter(t, svc, 88)
+
+	response := performAccountAdminJSONRequest(t, router, http.MethodPost, "/api/v1/admin/account-admins", map[string]any{
+		"email":                  "operator@example.com",
+		"password":               "pass123",
+		"supply_rate_multiplier": 0,
+	})
+
+	require.Equal(t, http.StatusCreated, response.Code, response.Body.String())
+	require.NotNil(t, svc.createInput)
+	require.NotNil(t, svc.createInput.SupplyRateMultiplier)
+	require.Zero(t, *svc.createInput.SupplyRateMultiplier)
+	require.Contains(t, response.Body.String(), `"supply_rate_multiplier":0`)
+}
+
+func TestAccountAdminHandlerCreateRejectsNegativeSupplyRateMultiplier(t *testing.T) {
+	svc := newAccountAdminHandlerServiceStub()
+	router := newAccountAdminHandlerRouter(t, svc, 88)
+
+	response := performAccountAdminJSONRequest(t, router, http.MethodPost, "/api/v1/admin/account-admins", map[string]any{
+		"email":                  "operator@example.com",
+		"password":               "pass123",
+		"supply_rate_multiplier": -0.01,
+	})
+
+	require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+	require.Nil(t, svc.createInput)
+}
+
+func TestAccountAdminHandlerUpdateForwardsExplicitZeroAndRejectsNegativeSupplyRateMultiplier(t *testing.T) {
+	t.Run("explicit zero", func(t *testing.T) {
+		svc := newAccountAdminHandlerServiceStub()
+		svc.targetRole = service.RoleAccountAdmin
+		router := newAccountAdminHandlerRouter(t, svc, 88)
+
+		response := performAccountAdminJSONRequest(t, router, http.MethodPut, "/api/v1/admin/account-admins/42", map[string]any{
+			"supply_rate_multiplier": 0,
+		})
+
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		require.Equal(t, 1, svc.updateCalls)
+		require.NotNil(t, svc.updateInput.SupplyRateMultiplier)
+		require.Zero(t, *svc.updateInput.SupplyRateMultiplier)
+	})
+
+	t.Run("negative", func(t *testing.T) {
+		svc := newAccountAdminHandlerServiceStub()
+		svc.targetRole = service.RoleAccountAdmin
+		router := newAccountAdminHandlerRouter(t, svc, 88)
+
+		response := performAccountAdminJSONRequest(t, router, http.MethodPut, "/api/v1/admin/account-admins/42", map[string]any{
+			"supply_rate_multiplier": -0.01,
+		})
+
+		require.Equal(t, http.StatusBadRequest, response.Code, response.Body.String())
+		require.Zero(t, svc.updateCalls)
+	})
 }
 
 func TestAccountAdminHandlerCreateRejectsPasswordOverBcryptLimit(t *testing.T) {

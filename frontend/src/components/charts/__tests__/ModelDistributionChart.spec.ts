@@ -14,6 +14,7 @@ const messages: Record<string, string> = {
   'admin.dashboard.metricTokens': 'By Tokens',
   'admin.dashboard.metricActualCost': 'By Actual Cost',
   'admin.dashboard.noDataAvailable': 'No data available',
+  'admin.accounts.stats.earnings': 'Earnings',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -141,4 +142,24 @@ describe('ModelDistributionChart', () => {
     expect(wrapper.findAll('tbody tr')[0].findAll('td')).toHaveLength(5)
   })
 
+  it('shows only earnings cost for account administrators', () => {
+    const wrapper = mount(ModelDistributionChart, {
+      props: {
+        modelStats: modelStats.map(({ cost: _cost, ...item }) => item),
+        earningsMode: true,
+      },
+      global: {
+        stubs: {
+          LoadingSpinner: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('Earnings')
+    expect(wrapper.text()).not.toContain('Actual')
+    expect(wrapper.text()).not.toContain('Account Cost')
+    expect(wrapper.text()).not.toContain('Standard')
+    expect(wrapper.findAll('thead th')).toHaveLength(4)
+    expect(wrapper.findAll('tbody tr')[0].findAll('td')).toHaveLength(4)
+  })
 })

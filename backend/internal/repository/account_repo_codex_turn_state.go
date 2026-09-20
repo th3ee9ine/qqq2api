@@ -21,7 +21,12 @@ func (r *accountRepository) AdvanceCodexTurnStateProbeNotBefore(ctx context.Cont
 	if notBefore <= 0 {
 		return nil
 	}
-	_, err := r.sql.ExecContext(ctx, `
+	ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", 3)
+	ownerFilter := ""
+	if scoped {
+		ownerFilter = ownerClause
+	}
+	query := `
 		UPDATE accounts
 		SET extra = jsonb_set(
 			COALESCE(extra, '{}'::jsonb),
@@ -29,9 +34,14 @@ func (r *accountRepository) AdvanceCodexTurnStateProbeNotBefore(ctx context.Cont
 			to_jsonb($1::bigint),
 			true
 		), updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL` + ownerFilter + `
 		  AND COALESCE((extra ->> 'codex_turn_state_auto_probe_not_before_ms')::bigint, 0) < $1
-	`, notBefore, accountID)
+	`
+	args := []any{notBefore, accountID}
+	if scoped {
+		args = append(args, ownerArg)
+	}
+	_, err := r.sql.ExecContext(ctx, query, args...)
 	return err
 }
 
@@ -45,7 +55,12 @@ func (r *accountRepository) UpdateCodexTurnState(ctx context.Context, accountID 
 		return false, err
 	}
 	var fullyWon bool
-	err = scanSingleRow(ctx, r.sql, `
+	ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", 4)
+	ownerFilter := ""
+	if scoped {
+		ownerFilter = ownerClause
+	}
+	query := `
 		WITH locked AS (
 			SELECT
 				id,
@@ -57,7 +72,7 @@ func (r *accountRepository) UpdateCodexTurnState(ctx context.Context, accountID 
 				END AS old_slot,
 				$2::jsonb AS incoming_slot
 			FROM accounts
-			WHERE id = $3 AND deleted_at IS NULL
+			WHERE id = $3 AND deleted_at IS NULL` + ownerFilter + `
 			FOR UPDATE
 		), versions AS (
 			SELECT
@@ -147,14 +162,19 @@ func (r *accountRepository) UpdateCodexTurnState(ctx context.Context, accountID 
 			RETURNING merged.fully_won
 		)
 		SELECT COALESCE((SELECT fully_won FROM updated), false)
-	`, []any{slot, string(payload), accountID}, &fullyWon)
+	`
+	args := []any{slot, string(payload), accountID}
+	if scoped {
+		args = append(args, ownerArg)
+	}
+	err = scanSingleRow(ctx, r.sql, query, args, &fullyWon)
 	return fullyWon, err
 }
 
 // Refresh just the selected account's managed states, without credentials,
 // proxies or group joins. The normal soft-delete filter still applies.
 func (r *accountRepository) GetCodexTurnStateSource(ctx context.Context, id int64) (*service.Account, error) {
-	row, err := r.client.Account.Query().Where(dbaccount.IDEQ(id)).Select(dbaccount.FieldID, dbaccount.FieldPlatform, dbaccount.FieldType, dbaccount.FieldExtra).Only(ctx)
+	row, err := accountQueryWithScope(ctx, r.client.Account.Query()).Where(dbaccount.IDEQ(id)).Select(dbaccount.FieldID, dbaccount.FieldPlatform, dbaccount.FieldType, dbaccount.FieldExtra).Only(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrAccountNotFound, nil)
 	}
@@ -174,7 +194,12 @@ func (r *accountRepository) RecordCodexTurnStateProvenance(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	result, err := r.sql.ExecContext(ctx, `
+	ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", 6)
+	ownerFilter := ""
+	if scoped {
+		ownerFilter = ownerClause
+	}
+	query := `
 		UPDATE accounts
 		SET extra = jsonb_set(
 			COALESCE(extra, '{}'::jsonb),
@@ -205,8 +230,13 @@ func (r *accountRepository) RecordCodexTurnStateProvenance(ctx context.Context, 
 			), '{}'::jsonb) || $4::jsonb,
 			true
 		), updated_at = NOW()
-		WHERE id = $5 AND deleted_at IS NULL
-	`, service.CodexTurnStateNativeProvenanceExtraKey, time.Now().UnixMilli(), service.CodexTurnStateNativeProvenanceLimit-1, string(payload), accountID)
+		WHERE id = $5 AND deleted_at IS NULL` + ownerFilter + `
+	`
+	args := []any{service.CodexTurnStateNativeProvenanceExtraKey, time.Now().UnixMilli(), service.CodexTurnStateNativeProvenanceLimit - 1, string(payload), accountID}
+	if scoped {
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -229,12 +259,22 @@ func (r *accountRepository) FindCodexTurnStateProvenance(ctx context.Context, di
 	if err != nil {
 		return nil, err
 	}
-	rows, err := r.sql.QueryContext(ctx, `
+	ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", 4)
+	ownerFilter := ""
+	if scoped {
+		ownerFilter = ownerClause
+	}
+	query := `
 		SELECT id, extra -> $1 -> $2
 		FROM accounts
 		WHERE deleted_at IS NULL
-		  AND extra @> $3::jsonb
-	`, service.CodexTurnStateNativeProvenanceExtraKey, digest, string(needle))
+		  AND extra @> $3::jsonb` + ownerFilter + `
+	`
+	args := []any{service.CodexTurnStateNativeProvenanceExtraKey, digest, string(needle)}
+	if scoped {
+		args = append(args, ownerArg)
+	}
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

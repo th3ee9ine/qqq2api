@@ -140,7 +140,7 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 		}
 	}
 
-	created, err := txClient.User.Create().
+	createOp := txClient.User.Create().
 		SetEmail(userIn.Email).
 		SetUsername(userIn.Username).
 		SetNotes(userIn.Notes).
@@ -153,8 +153,12 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 		SetNillableLastLoginAt(userIn.LastLoginAt).
 		SetNillableLastActiveAt(userIn.LastActiveAt).
 		SetRpmLimit(userIn.RPMLimit).
-		SetRestrictPublicGroups(userIn.RestrictPublicGroups).
-		Save(txCtx)
+		SetRestrictPublicGroups(userIn.RestrictPublicGroups)
+	// 0 是账号管理员的合法倍率；普通用户的零值则交给数据库默认值 1。
+	if userIn.SupplyRateMultiplier != 0 || userIn.Role == service.RoleAccountAdmin {
+		createOp.SetSupplyRateMultiplier(userIn.SupplyRateMultiplier)
+	}
+	created, err := createOp.Save(txCtx)
 	if err != nil {
 		return translatePersistenceError(err, nil, service.ErrEmailExists)
 	}
@@ -313,6 +317,9 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 	}
 	if fields.RPMLimit {
 		updateOp = updateOp.SetRpmLimit(userIn.RPMLimit)
+	}
+	if fields.SupplyRateMultiplier {
+		updateOp = updateOp.SetSupplyRateMultiplier(userIn.SupplyRateMultiplier)
 	}
 	if fields.Status {
 		updateOp = updateOp.SetStatus(userIn.Status)
@@ -1535,6 +1542,7 @@ func applyUserEntityToService(dst *service.User, src *dbent.User) {
 	dst.SignupSource = src.SignupSource
 	dst.LastLoginAt = src.LastLoginAt
 	dst.LastActiveAt = src.LastActiveAt
+	dst.SupplyRateMultiplier = src.SupplyRateMultiplier
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
 }

@@ -287,6 +287,7 @@ func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 
 func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
 	accounts := admin.Group("/accounts")
+	accounts.Use(h.Admin.Account.AccountOwnershipScope())
 	{
 		accounts.GET("", h.Admin.Account.List)
 		// Keep this static path before /:id so "test-defaults" is not parsed as
@@ -370,6 +371,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 
 func registerOpenAIOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	openai := admin.Group("/openai")
+	openai.Use(h.Admin.Account.AccountOwnershipScope())
 	{
 		openai.POST("/generate-auth-url", h.Admin.OpenAIOAuth.GenerateAuthURL)
 		openai.POST("/exchange-code", h.Admin.OpenAIOAuth.ExchangeCode)
@@ -499,7 +501,7 @@ func registerScheduledTestRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		plans.GET("/:id/results", h.Admin.ScheduledTest.ListResults)
 	}
 	// Nested under accounts
-	admin.GET("/accounts/:id/scheduled-test-plans", h.Admin.ScheduledTest.ListByAccount)
+	admin.GET("/accounts/:id/scheduled-test-plans", h.Admin.Account.AccountOwnershipScope(), h.Admin.ScheduledTest.ListByAccount)
 }
 
 func registerErrorPassthroughRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

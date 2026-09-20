@@ -50,7 +50,9 @@
           >
             <div class="mb-2 flex items-center justify-between">
               <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{
-                t('admin.accounts.stats.totalCost')
+                t(authStore.isAccountAdmin
+                  ? 'admin.accounts.stats.totalEarnings'
+                  : 'admin.accounts.stats.totalCost')
               }}</span>
               <div class="rounded-lg bg-emerald-100 p-1.5 dark:bg-emerald-900/30">
                 <Icon name="dollar" size="sm" class="text-emerald-600 dark:text-emerald-400" />
@@ -60,11 +62,13 @@
               ${{ formatCost(stats.summary.total_cost) }}
             </p>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.accounts.stats.accumulatedCost') }}
-              <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.total_user_cost) }} ·
+              {{ t(authStore.isAccountAdmin
+                ? 'admin.accounts.stats.accumulatedEarnings'
+                : 'admin.accounts.stats.accumulatedCost') }}
+              <span v-if="!authStore.isAccountAdmin" class="text-gray-400 dark:text-gray-500">
+                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.total_user_cost ?? 0) }} ·
                 {{ t('admin.accounts.stats.standardCost') }}: ${{
-                  formatCost(stats.summary.total_standard_cost)
+                  formatCost(stats.summary.total_standard_cost ?? 0)
                 }})
               </span>
             </p>
@@ -96,7 +100,9 @@
           >
             <div class="mb-2 flex items-center justify-between">
               <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{
-                t('admin.accounts.stats.avgDailyCost')
+                t(authStore.isAccountAdmin
+                  ? 'admin.accounts.stats.avgDailyEarnings'
+                  : 'admin.accounts.stats.avgDailyCost')
               }}</span>
               <div class="rounded-lg bg-amber-100 p-1.5 dark:bg-amber-900/30">
                 <Icon
@@ -115,8 +121,8 @@
                   days: stats.summary.actual_days_used
                 })
               }}
-              <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.avg_daily_user_cost) }})
+              <span v-if="!authStore.isAccountAdmin" class="text-gray-400 dark:text-gray-500">
+                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.avg_daily_user_cost ?? 0) }})
               </span>
             </p>
           </div>
@@ -168,12 +174,14 @@
             </div>
             <div class="space-y-2">
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t(authStore.isAccountAdmin ? 'admin.accounts.stats.earnings' : 'usage.accountBilled') }}
+                </span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.today?.cost || 0) }}</span
                 >
               </div>
-              <div class="flex items-center justify-between">
+              <div v-if="!authStore.isAccountAdmin" class="flex items-center justify-between">
                 <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.today?.user_cost || 0) }}</span
@@ -205,7 +213,9 @@
                 <Icon name="fire" size="sm" class="text-orange-600 dark:text-orange-400" />
               </div>
               <span class="text-sm font-semibold text-gray-900 dark:text-white">{{
-                t('admin.accounts.stats.highestCostDay')
+                t(authStore.isAccountAdmin
+                  ? 'admin.accounts.stats.highestEarningsDay'
+                  : 'admin.accounts.stats.highestCostDay')
               }}</span>
             </div>
             <div class="space-y-2">
@@ -218,12 +228,14 @@
                 }}</span>
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t(authStore.isAccountAdmin ? 'admin.accounts.stats.earnings' : 'usage.accountBilled') }}
+                </span>
                 <span class="text-sm font-semibold text-orange-600 dark:text-orange-400"
                   >${{ formatCost(stats.summary.highest_cost_day?.cost || 0) }}</span
                 >
               </div>
-              <div class="flex items-center justify-between">
+              <div v-if="!authStore.isAccountAdmin" class="flex items-center justify-between">
                 <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.highest_cost_day?.user_cost || 0) }}</span
@@ -272,12 +284,14 @@
                 }}</span>
               </div>
               <div class="flex items-center justify-between">
-                <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}</span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t(authStore.isAccountAdmin ? 'admin.accounts.stats.earnings' : 'usage.accountBilled') }}
+                </span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.highest_request_day?.cost || 0) }}</span
                 >
               </div>
-              <div class="flex items-center justify-between">
+              <div v-if="!authStore.isAccountAdmin" class="flex items-center justify-between">
                 <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.highest_request_day?.user_cost || 0) }}</span
@@ -382,7 +396,9 @@
               </div>
               <div class="flex items-center justify-between">
                 <span class="text-xs text-gray-500 dark:text-gray-400">{{
-                  t('admin.accounts.stats.todayCost')
+                  t(authStore.isAccountAdmin
+                    ? 'admin.accounts.stats.todayEarnings'
+                    : 'admin.accounts.stats.todayCost')
                 }}</span>
                 <span class="text-sm font-semibold text-gray-900 dark:text-white"
                   >${{ formatCost(stats.summary.today?.cost || 0) }}</span
@@ -395,7 +411,9 @@
         <!-- Usage Trend Chart -->
         <div class="card p-4">
           <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
-            {{ t('admin.accounts.stats.usageTrend') }}
+            {{ t(authStore.isAccountAdmin
+              ? 'admin.accounts.stats.earningsTrend'
+              : 'admin.accounts.stats.usageTrend') }}
           </h3>
           <div class="h-64">
             <Line v-if="trendChartData" :data="trendChartData" :options="lineChartOptions" />
@@ -409,15 +427,21 @@
         </div>
 
         <!-- Model Distribution -->
-        <ModelDistributionChart :model-stats="stats.models" :loading="false" />
+        <ModelDistributionChart
+          :model-stats="stats.models"
+          :loading="false"
+          :earnings-mode="authStore.isAccountAdmin"
+        />
 
         <EndpointDistributionChart
+          v-if="!authStore.isAccountAdmin"
           :endpoint-stats="stats.endpoints || []"
           :loading="false"
           :title="t('usage.inboundEndpoint')"
         />
 
         <EndpointDistributionChart
+          v-if="!authStore.isAccountAdmin"
           :endpoint-stats="stats.upstream_endpoints || []"
           :loading="false"
           :title="t('usage.upstreamEndpoint')"
@@ -450,6 +474,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '@/stores/auth'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -482,6 +507,7 @@ ChartJS.register(
 )
 
 const { t } = useI18n()
+const authStore = useAuthStore()
 
 const props = defineProps<{
   show: boolean
@@ -514,7 +540,7 @@ const trendChartData = computed(() => {
     labels: stats.value.history.map((h) => h.label),
     datasets: [
       {
-        label: t('usage.accountBilled') + ' (USD)',
+        label: t(authStore.isAccountAdmin ? 'admin.accounts.stats.earnings' : 'usage.accountBilled') + ' (USD)',
         data: stats.value.history.map((h) => h.actual_cost),
         borderColor: '#3b82f6',
         backgroundColor: 'rgba(59, 130, 246, 0.1)',
@@ -522,16 +548,16 @@ const trendChartData = computed(() => {
         tension: 0.3,
         yAxisID: 'y'
       },
-      {
+      ...(!authStore.isAccountAdmin ? [{
         label: t('usage.userBilled') + ' (USD)',
-        data: stats.value.history.map((h) => h.user_cost),
+        data: stats.value.history.map((h) => h.user_cost ?? 0),
         borderColor: '#10b981',
         backgroundColor: 'rgba(16, 185, 129, 0.08)',
         fill: false,
         tension: 0.3,
         borderDash: [5, 5],
         yAxisID: 'y'
-      },
+      }] : []),
       {
         label: t('admin.accounts.stats.requests'),
         data: stats.value.history.map((h) => h.requests),
@@ -609,7 +635,7 @@ const lineChartOptions = computed(() => ({
       },
       title: {
         display: true,
-        text: t('usage.accountBilled') + ' (USD)',
+        text: t(authStore.isAccountAdmin ? 'admin.accounts.stats.earnings' : 'usage.accountBilled') + ' (USD)',
         color: '#3b82f6',
         font: {
           size: 11

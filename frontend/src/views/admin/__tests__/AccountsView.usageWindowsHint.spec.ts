@@ -8,13 +8,15 @@ const {
   listWithEtag,
   getBatchTodayStats,
   getAllProxies,
-  getAllGroups
+  getAllGroups,
+  authState
 } = vi.hoisted(() => ({
   listAccounts: vi.fn(),
   listWithEtag: vi.fn(),
   getBatchTodayStats: vi.fn(),
   getAllProxies: vi.fn(),
-  getAllGroups: vi.fn()
+  getAllGroups: vi.fn(),
+  authState: { token: 'test-token', isAdmin: true, isAccountAdmin: false }
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -47,9 +49,7 @@ vi.mock('@/stores/app', () => ({
 }))
 
 vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({
-    token: 'test-token'
-  })
+  useAuthStore: () => authState
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -134,6 +134,8 @@ function mountView() {
 describe('admin AccountsView usage windows hint', () => {
   beforeEach(() => {
     localStorage.clear()
+    authState.isAdmin = true
+    authState.isAccountAdmin = false
 
     listAccounts.mockReset()
     listWithEtag.mockReset()
@@ -204,6 +206,27 @@ describe('admin AccountsView usage windows hint', () => {
     )).toBe(true)
     const columns = wrapper.getComponent(DataTableStub).props('columns') as Array<{ key: string; sortable: boolean }>
     expect(columns.find(column => column.key === 'upstream_billing_rate')?.sortable).toBe(true)
+  })
+
+  it('hides global CRS sync and rejects an unavailable persisted sort for account administrators', async () => {
+    authState.isAdmin = false
+    authState.isAccountAdmin = true
+    localStorage.setItem('account-table-sort', JSON.stringify({ key: 'upstream_billing_rate', order: 'desc' }))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(listAccounts).toHaveBeenCalled()
+    expect(listAccounts.mock.calls[0][2]).toMatchObject({ sort_by: 'name', sort_order: 'asc' })
+    expect(wrapper.find('[data-test="upstream-billing-header"]').exists()).toBe(false)
+
+    await wrapper.get('button[title="admin.accounts.moreActions"]').trigger('click')
+    const menuLabels = Array.from(document.querySelectorAll('button.account-tools-menu-item'))
+      .map(button => button.textContent?.trim())
+    expect(menuLabels).toContain('admin.accounts.dataImport')
+    expect(menuLabels).not.toContain('admin.accounts.syncFromCrs')
+
+    wrapper.unmount()
   })
 
   it('shows account multipliers with enough precision to match declared rates', async () => {

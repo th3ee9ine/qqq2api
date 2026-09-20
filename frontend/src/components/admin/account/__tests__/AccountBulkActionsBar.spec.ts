@@ -35,7 +35,8 @@ describe('AccountBulkActionsBar', () => {
         selectedIds: [1],
         totalResults: 45,
         selectingAll: false,
-        allResultsSelected: false
+        allResultsSelected: false,
+        canProbe: true
       }
     })
 
@@ -46,6 +47,22 @@ describe('AccountBulkActionsBar', () => {
     expect(button).toBeDefined()
     await button!.trigger('click')
     expect(wrapper.emitted('probe-upstream-billing')).toHaveLength(1)
+  })
+
+  it('hides the upstream billing probe action when probing is not allowed', () => {
+    const wrapper = mount(AccountBulkActionsBar, {
+      props: {
+        selectedIds: [1],
+        totalResults: 1,
+        selectingAll: false,
+        allResultsSelected: false,
+        canProbe: false
+      }
+    })
+
+    expect(wrapper.findAll('button').some(item =>
+      item.text().includes('admin.accounts.bulkActions.probeUpstreamBilling')
+    )).toBe(false)
   })
 
   it('hides delete by default and only emits it when explicitly allowed', async () => {

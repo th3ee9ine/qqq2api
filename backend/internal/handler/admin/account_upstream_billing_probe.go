@@ -118,5 +118,8 @@ func (h *AccountHandler) ProbeUpstreamBillingBatch(c *gin.Context) {
 		seen[accountID] = struct{}{}
 		accountIDs = append(accountIDs, accountID)
 	}
+	if !h.requireExplicitAccountOwnership(c, accountIDs) {
+		return
+	}
 	response.Success(c, gin.H{"results": h.upstreamBillingProbe.ProbeAccounts(c.Request.Context(), accountIDs)})
 }

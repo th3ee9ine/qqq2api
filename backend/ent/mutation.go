@@ -2420,6 +2420,8 @@ type AccountMutation struct {
 	usage_logs                  map[int64]struct{}
 	removedusage_logs           map[int64]struct{}
 	clearedusage_logs           bool
+	account_admin               *int64
+	clearedaccount_admin        bool
 	done                        bool
 	oldValue                    func(context.Context) (*Account, error)
 	predicates                  []predicate.Account
@@ -3228,6 +3230,55 @@ func (m *AccountMutation) AddedRateMultiplier() (r float64, exists bool) {
 func (m *AccountMutation) ResetRateMultiplier() {
 	m.rate_multiplier = nil
 	m.addrate_multiplier = nil
+}
+
+// SetAccountAdminID sets the "account_admin_id" field.
+func (m *AccountMutation) SetAccountAdminID(i int64) {
+	m.account_admin = &i
+}
+
+// AccountAdminID returns the value of the "account_admin_id" field in the mutation.
+func (m *AccountMutation) AccountAdminID() (r int64, exists bool) {
+	v := m.account_admin
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccountAdminID returns the old "account_admin_id" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldAccountAdminID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccountAdminID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccountAdminID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccountAdminID: %w", err)
+	}
+	return oldValue.AccountAdminID, nil
+}
+
+// ClearAccountAdminID clears the value of the "account_admin_id" field.
+func (m *AccountMutation) ClearAccountAdminID() {
+	m.account_admin = nil
+	m.clearedFields[account.FieldAccountAdminID] = struct{}{}
+}
+
+// AccountAdminIDCleared returns if the "account_admin_id" field was cleared in this mutation.
+func (m *AccountMutation) AccountAdminIDCleared() bool {
+	_, ok := m.clearedFields[account.FieldAccountAdminID]
+	return ok
+}
+
+// ResetAccountAdminID resets all changes to the "account_admin_id" field.
+func (m *AccountMutation) ResetAccountAdminID() {
+	m.account_admin = nil
+	delete(m.clearedFields, account.FieldAccountAdminID)
 }
 
 // SetStatus sets the "status" field.
@@ -4191,6 +4242,33 @@ func (m *AccountMutation) ResetUsageLogs() {
 	m.removedusage_logs = nil
 }
 
+// ClearAccountAdmin clears the "account_admin" edge to the User entity.
+func (m *AccountMutation) ClearAccountAdmin() {
+	m.clearedaccount_admin = true
+	m.clearedFields[account.FieldAccountAdminID] = struct{}{}
+}
+
+// AccountAdminCleared reports if the "account_admin" edge to the User entity was cleared.
+func (m *AccountMutation) AccountAdminCleared() bool {
+	return m.AccountAdminIDCleared() || m.clearedaccount_admin
+}
+
+// AccountAdminIDs returns the "account_admin" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// AccountAdminID instead. It exists only for internal usage by the builders.
+func (m *AccountMutation) AccountAdminIDs() (ids []int64) {
+	if id := m.account_admin; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetAccountAdmin resets all changes to the "account_admin" edge.
+func (m *AccountMutation) ResetAccountAdmin() {
+	m.account_admin = nil
+	m.clearedaccount_admin = false
+}
+
 // Where appends a list predicates to the AccountMutation builder.
 func (m *AccountMutation) Where(ps ...predicate.Account) {
 	m.predicates = append(m.predicates, ps...)
@@ -4225,7 +4303,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 31)
+	fields := make([]string, 0, 32)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -4270,6 +4348,9 @@ func (m *AccountMutation) Fields() []string {
 	}
 	if m.rate_multiplier != nil {
 		fields = append(fields, account.FieldRateMultiplier)
+	}
+	if m.account_admin != nil {
+		fields = append(fields, account.FieldAccountAdminID)
 	}
 	if m.status != nil {
 		fields = append(fields, account.FieldStatus)
@@ -4357,6 +4438,8 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.Priority()
 	case account.FieldRateMultiplier:
 		return m.RateMultiplier()
+	case account.FieldAccountAdminID:
+		return m.AccountAdminID()
 	case account.FieldStatus:
 		return m.Status()
 	case account.FieldErrorMessage:
@@ -4428,6 +4511,8 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldPriority(ctx)
 	case account.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
+	case account.FieldAccountAdminID:
+		return m.OldAccountAdminID(ctx)
 	case account.FieldStatus:
 		return m.OldStatus(ctx)
 	case account.FieldErrorMessage:
@@ -4573,6 +4658,13 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRateMultiplier(v)
+		return nil
+	case account.FieldAccountAdminID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccountAdminID(v)
 		return nil
 	case account.FieldStatus:
 		v, ok := value.(string)
@@ -4794,6 +4886,9 @@ func (m *AccountMutation) ClearedFields() []string {
 	if m.FieldCleared(account.FieldLoadFactor) {
 		fields = append(fields, account.FieldLoadFactor)
 	}
+	if m.FieldCleared(account.FieldAccountAdminID) {
+		fields = append(fields, account.FieldAccountAdminID)
+	}
 	if m.FieldCleared(account.FieldErrorMessage) {
 		fields = append(fields, account.FieldErrorMessage)
 	}
@@ -4858,6 +4953,9 @@ func (m *AccountMutation) ClearField(name string) error {
 		return nil
 	case account.FieldLoadFactor:
 		m.ClearLoadFactor()
+		return nil
+	case account.FieldAccountAdminID:
+		m.ClearAccountAdminID()
 		return nil
 	case account.FieldErrorMessage:
 		m.ClearErrorMessage()
@@ -4948,6 +5046,9 @@ func (m *AccountMutation) ResetField(name string) error {
 	case account.FieldRateMultiplier:
 		m.ResetRateMultiplier()
 		return nil
+	case account.FieldAccountAdminID:
+		m.ResetAccountAdminID()
+		return nil
 	case account.FieldStatus:
 		m.ResetStatus()
 		return nil
@@ -5002,7 +5103,7 @@ func (m *AccountMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *AccountMutation) AddedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.groups != nil {
 		edges = append(edges, account.EdgeGroups)
 	}
@@ -5017,6 +5118,9 @@ func (m *AccountMutation) AddedEdges() []string {
 	}
 	if m.usage_logs != nil {
 		edges = append(edges, account.EdgeUsageLogs)
+	}
+	if m.account_admin != nil {
+		edges = append(edges, account.EdgeAccountAdmin)
 	}
 	return edges
 }
@@ -5051,13 +5155,17 @@ func (m *AccountMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case account.EdgeAccountAdmin:
+		if id := m.account_admin; id != nil {
+			return []ent.Value{*id}
+		}
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *AccountMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.removedgroups != nil {
 		edges = append(edges, account.EdgeGroups)
 	}
@@ -5098,7 +5206,7 @@ func (m *AccountMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *AccountMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 5)
+	edges := make([]string, 0, 6)
 	if m.clearedgroups {
 		edges = append(edges, account.EdgeGroups)
 	}
@@ -5113,6 +5221,9 @@ func (m *AccountMutation) ClearedEdges() []string {
 	}
 	if m.clearedusage_logs {
 		edges = append(edges, account.EdgeUsageLogs)
+	}
+	if m.clearedaccount_admin {
+		edges = append(edges, account.EdgeAccountAdmin)
 	}
 	return edges
 }
@@ -5131,6 +5242,8 @@ func (m *AccountMutation) EdgeCleared(name string) bool {
 		return m.clearedchildren
 	case account.EdgeUsageLogs:
 		return m.clearedusage_logs
+	case account.EdgeAccountAdmin:
+		return m.clearedaccount_admin
 	}
 	return false
 }
@@ -5144,6 +5257,9 @@ func (m *AccountMutation) ClearEdge(name string) error {
 		return nil
 	case account.EdgeParent:
 		m.ClearParent()
+		return nil
+	case account.EdgeAccountAdmin:
+		m.ClearAccountAdmin()
 		return nil
 	}
 	return fmt.Errorf("unknown Account unique edge %s", name)
@@ -5167,6 +5283,9 @@ func (m *AccountMutation) ResetEdge(name string) error {
 		return nil
 	case account.EdgeUsageLogs:
 		m.ResetUsageLogs()
+		return nil
+	case account.EdgeAccountAdmin:
+		m.ResetAccountAdmin()
 		return nil
 	}
 	return fmt.Errorf("unknown Account edge %s", name)
@@ -48959,6 +49078,8 @@ type UserMutation struct {
 	addtotal_recharged            *float64
 	rpm_limit                     *int
 	addrpm_limit                  *int
+	supply_rate_multiplier        *float64
+	addsupply_rate_multiplier     *float64
 	clearedFields                 map[string]struct{}
 	api_keys                      map[int64]struct{}
 	removedapi_keys               map[int64]struct{}
@@ -48999,6 +49120,9 @@ type UserMutation struct {
 	platform_quotas               map[int64]struct{}
 	removedplatform_quotas        map[int64]struct{}
 	clearedplatform_quotas        bool
+	supplied_accounts             map[int64]struct{}
+	removedsupplied_accounts      map[int64]struct{}
+	clearedsupplied_accounts      bool
 	done                          bool
 	oldValue                      func(context.Context) (*User, error)
 	predicates                    []predicate.User
@@ -50201,6 +50325,62 @@ func (m *UserMutation) ResetRpmLimit() {
 	m.addrpm_limit = nil
 }
 
+// SetSupplyRateMultiplier sets the "supply_rate_multiplier" field.
+func (m *UserMutation) SetSupplyRateMultiplier(f float64) {
+	m.supply_rate_multiplier = &f
+	m.addsupply_rate_multiplier = nil
+}
+
+// SupplyRateMultiplier returns the value of the "supply_rate_multiplier" field in the mutation.
+func (m *UserMutation) SupplyRateMultiplier() (r float64, exists bool) {
+	v := m.supply_rate_multiplier
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSupplyRateMultiplier returns the old "supply_rate_multiplier" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldSupplyRateMultiplier(ctx context.Context) (v float64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSupplyRateMultiplier is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSupplyRateMultiplier requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSupplyRateMultiplier: %w", err)
+	}
+	return oldValue.SupplyRateMultiplier, nil
+}
+
+// AddSupplyRateMultiplier adds f to the "supply_rate_multiplier" field.
+func (m *UserMutation) AddSupplyRateMultiplier(f float64) {
+	if m.addsupply_rate_multiplier != nil {
+		*m.addsupply_rate_multiplier += f
+	} else {
+		m.addsupply_rate_multiplier = &f
+	}
+}
+
+// AddedSupplyRateMultiplier returns the value that was added to the "supply_rate_multiplier" field in this mutation.
+func (m *UserMutation) AddedSupplyRateMultiplier() (r float64, exists bool) {
+	v := m.addsupply_rate_multiplier
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSupplyRateMultiplier resets all changes to the "supply_rate_multiplier" field.
+func (m *UserMutation) ResetSupplyRateMultiplier() {
+	m.supply_rate_multiplier = nil
+	m.addsupply_rate_multiplier = nil
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by ids.
 func (m *UserMutation) AddAPIKeyIDs(ids ...int64) {
 	if m.api_keys == nil {
@@ -50903,6 +51083,60 @@ func (m *UserMutation) ResetPlatformQuotas() {
 	m.removedplatform_quotas = nil
 }
 
+// AddSuppliedAccountIDs adds the "supplied_accounts" edge to the Account entity by ids.
+func (m *UserMutation) AddSuppliedAccountIDs(ids ...int64) {
+	if m.supplied_accounts == nil {
+		m.supplied_accounts = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.supplied_accounts[ids[i]] = struct{}{}
+	}
+}
+
+// ClearSuppliedAccounts clears the "supplied_accounts" edge to the Account entity.
+func (m *UserMutation) ClearSuppliedAccounts() {
+	m.clearedsupplied_accounts = true
+}
+
+// SuppliedAccountsCleared reports if the "supplied_accounts" edge to the Account entity was cleared.
+func (m *UserMutation) SuppliedAccountsCleared() bool {
+	return m.clearedsupplied_accounts
+}
+
+// RemoveSuppliedAccountIDs removes the "supplied_accounts" edge to the Account entity by IDs.
+func (m *UserMutation) RemoveSuppliedAccountIDs(ids ...int64) {
+	if m.removedsupplied_accounts == nil {
+		m.removedsupplied_accounts = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.supplied_accounts, ids[i])
+		m.removedsupplied_accounts[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedSuppliedAccounts returns the removed IDs of the "supplied_accounts" edge to the Account entity.
+func (m *UserMutation) RemovedSuppliedAccountsIDs() (ids []int64) {
+	for id := range m.removedsupplied_accounts {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// SuppliedAccountsIDs returns the "supplied_accounts" edge IDs in the mutation.
+func (m *UserMutation) SuppliedAccountsIDs() (ids []int64) {
+	for id := range m.supplied_accounts {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetSuppliedAccounts resets all changes to the "supplied_accounts" edge.
+func (m *UserMutation) ResetSuppliedAccounts() {
+	m.supplied_accounts = nil
+	m.clearedsupplied_accounts = false
+	m.removedsupplied_accounts = nil
+}
+
 // Where appends a list predicates to the UserMutation builder.
 func (m *UserMutation) Where(ps ...predicate.User) {
 	m.predicates = append(m.predicates, ps...)
@@ -50937,7 +51171,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 25)
+	fields := make([]string, 0, 26)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -51013,6 +51247,9 @@ func (m *UserMutation) Fields() []string {
 	if m.rpm_limit != nil {
 		fields = append(fields, user.FieldRpmLimit)
 	}
+	if m.supply_rate_multiplier != nil {
+		fields = append(fields, user.FieldSupplyRateMultiplier)
+	}
 	return fields
 }
 
@@ -51071,6 +51308,8 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.TotalRecharged()
 	case user.FieldRpmLimit:
 		return m.RpmLimit()
+	case user.FieldSupplyRateMultiplier:
+		return m.SupplyRateMultiplier()
 	}
 	return nil, false
 }
@@ -51130,6 +51369,8 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldTotalRecharged(ctx)
 	case user.FieldRpmLimit:
 		return m.OldRpmLimit(ctx)
+	case user.FieldSupplyRateMultiplier:
+		return m.OldSupplyRateMultiplier(ctx)
 	}
 	return nil, fmt.Errorf("unknown User field %s", name)
 }
@@ -51314,6 +51555,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetRpmLimit(v)
 		return nil
+	case user.FieldSupplyRateMultiplier:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSupplyRateMultiplier(v)
+		return nil
 	}
 	return fmt.Errorf("unknown User field %s", name)
 }
@@ -51340,6 +51588,9 @@ func (m *UserMutation) AddedFields() []string {
 	if m.addrpm_limit != nil {
 		fields = append(fields, user.FieldRpmLimit)
 	}
+	if m.addsupply_rate_multiplier != nil {
+		fields = append(fields, user.FieldSupplyRateMultiplier)
+	}
 	return fields
 }
 
@@ -51360,6 +51611,8 @@ func (m *UserMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedTotalRecharged()
 	case user.FieldRpmLimit:
 		return m.AddedRpmLimit()
+	case user.FieldSupplyRateMultiplier:
+		return m.AddedSupplyRateMultiplier()
 	}
 	return nil, false
 }
@@ -51410,6 +51663,13 @@ func (m *UserMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddRpmLimit(v)
+		return nil
+	case user.FieldSupplyRateMultiplier:
+		v, ok := value.(float64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSupplyRateMultiplier(v)
 		return nil
 	}
 	return fmt.Errorf("unknown User numeric field %s", name)
@@ -51552,13 +51812,16 @@ func (m *UserMutation) ResetField(name string) error {
 	case user.FieldRpmLimit:
 		m.ResetRpmLimit()
 		return nil
+	case user.FieldSupplyRateMultiplier:
+		m.ResetSupplyRateMultiplier()
+		return nil
 	}
 	return fmt.Errorf("unknown User field %s", name)
 }
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 13)
+	edges := make([]string, 0, 14)
 	if m.api_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -51597,6 +51860,9 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.platform_quotas != nil {
 		edges = append(edges, user.EdgePlatformQuotas)
+	}
+	if m.supplied_accounts != nil {
+		edges = append(edges, user.EdgeSuppliedAccounts)
 	}
 	return edges
 }
@@ -51683,13 +51949,19 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeSuppliedAccounts:
+		ids := make([]ent.Value, 0, len(m.supplied_accounts))
+		for id := range m.supplied_accounts {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 13)
+	edges := make([]string, 0, 14)
 	if m.removedapi_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -51728,6 +52000,9 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedplatform_quotas != nil {
 		edges = append(edges, user.EdgePlatformQuotas)
+	}
+	if m.removedsupplied_accounts != nil {
+		edges = append(edges, user.EdgeSuppliedAccounts)
 	}
 	return edges
 }
@@ -51814,13 +52089,19 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 			ids = append(ids, id)
 		}
 		return ids
+	case user.EdgeSuppliedAccounts:
+		ids := make([]ent.Value, 0, len(m.removedsupplied_accounts))
+		for id := range m.removedsupplied_accounts {
+			ids = append(ids, id)
+		}
+		return ids
 	}
 	return nil
 }
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 13)
+	edges := make([]string, 0, 14)
 	if m.clearedapi_keys {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -51860,6 +52141,9 @@ func (m *UserMutation) ClearedEdges() []string {
 	if m.clearedplatform_quotas {
 		edges = append(edges, user.EdgePlatformQuotas)
 	}
+	if m.clearedsupplied_accounts {
+		edges = append(edges, user.EdgeSuppliedAccounts)
+	}
 	return edges
 }
 
@@ -51893,6 +52177,8 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedpending_auth_sessions
 	case user.EdgePlatformQuotas:
 		return m.clearedplatform_quotas
+	case user.EdgeSuppliedAccounts:
+		return m.clearedsupplied_accounts
 	}
 	return false
 }
@@ -51947,6 +52233,9 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgePlatformQuotas:
 		m.ResetPlatformQuotas()
+		return nil
+	case user.EdgeSuppliedAccounts:
+		m.ResetSuppliedAccounts()
 		return nil
 	}
 	return fmt.Errorf("unknown User edge %s", name)

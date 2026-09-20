@@ -18,6 +18,24 @@ type ProxyHandler struct {
 	adminService service.AdminService
 }
 
+// proxyResponseForAdmin returns the least-privileged proxy projection for the
+// authenticated panel role.  Proxies are shared infrastructure, so account
+// administrators may still select and maintain them, but their credentials
+// must never be returned by a read endpoint.
+func proxyResponseForAdmin(c *gin.Context, proxy *service.Proxy) any {
+	if isAccountAdminRequest(c) {
+		return dto.ProxyFromService(proxy)
+	}
+	return dto.ProxyFromServiceAdmin(proxy)
+}
+
+func proxyWithAccountCountResponseForAdmin(c *gin.Context, proxy *service.ProxyWithAccountCount) any {
+	if isAccountAdminRequest(c) {
+		return dto.ProxyWithAccountCountFromService(proxy)
+	}
+	return dto.ProxyWithAccountCountFromServiceAdmin(proxy)
+}
+
 // NewProxyHandler creates a new admin proxy handler
 func NewProxyHandler(adminService service.AdminService) *ProxyHandler {
 	return &ProxyHandler{
@@ -77,9 +95,9 @@ func (h *ProxyHandler) List(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.AdminProxyWithAccountCount, 0, len(proxies))
+	out := make([]any, 0, len(proxies))
 	for i := range proxies {
-		out = append(out, *dto.ProxyWithAccountCountFromServiceAdmin(&proxies[i]))
+		out = append(out, proxyWithAccountCountResponseForAdmin(c, &proxies[i]))
 	}
 	response.Paginated(c, out, total, page, pageSize)
 }
@@ -96,9 +114,9 @@ func (h *ProxyHandler) GetAll(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
-		out := make([]dto.AdminProxyWithAccountCount, 0, len(proxies))
+		out := make([]any, 0, len(proxies))
 		for i := range proxies {
-			out = append(out, *dto.ProxyWithAccountCountFromServiceAdmin(&proxies[i]))
+			out = append(out, proxyWithAccountCountResponseForAdmin(c, &proxies[i]))
 		}
 		response.Success(c, out)
 		return
@@ -110,9 +128,9 @@ func (h *ProxyHandler) GetAll(c *gin.Context) {
 		return
 	}
 
-	out := make([]dto.AdminProxy, 0, len(proxies))
+	out := make([]any, 0, len(proxies))
 	for i := range proxies {
-		out = append(out, *dto.ProxyFromServiceAdmin(&proxies[i]))
+		out = append(out, proxyResponseForAdmin(c, &proxies[i]))
 	}
 	response.Success(c, out)
 }
@@ -132,7 +150,7 @@ func (h *ProxyHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.ProxyFromServiceAdmin(proxy))
+	response.Success(c, proxyResponseForAdmin(c, proxy))
 }
 
 // Create handles creating a new proxy
@@ -166,7 +184,7 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 		if err != nil {
 			return nil, err
 		}
-		return dto.ProxyFromServiceAdmin(proxy), nil
+		return proxyResponseForAdmin(c, proxy), nil
 	})
 }
 
@@ -215,7 +233,7 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, dto.ProxyFromServiceAdmin(proxy))
+	response.Success(c, proxyResponseForAdmin(c, proxy))
 }
 
 // Delete handles deleting a proxy

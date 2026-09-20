@@ -4,10 +4,11 @@ import { nextTick } from 'vue'
 import BulkEditAccountModal from '../BulkEditAccountModal.vue'
 import { adminAPI } from '@/api/admin'
 
-const { showError, showSuccess, translate } = vi.hoisted(() => ({
+const { showError, showSuccess, translate, authIsAdmin } = vi.hoisted(() => ({
   showError: vi.fn(),
   showSuccess: vi.fn(),
-  translate: vi.fn((key: string) => key)
+  translate: vi.fn((key: string) => key),
+  authIsAdmin: { value: true }
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -15,6 +16,14 @@ vi.mock('@/stores/app', () => ({
     showError,
     showSuccess,
     showInfo: vi.fn()
+  })
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({
+    get isAdmin() {
+      return authIsAdmin.value
+    }
   })
 }))
 
@@ -77,6 +86,7 @@ function mountModal(extraProps: Record<string, unknown> = {}) {
 
 describe('BulkEditAccountModal', () => {
   beforeEach(() => {
+    authIsAdmin.value = true
     vi.mocked(adminAPI.accounts.bulkUpdate).mockReset()
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockReset()
     showError.mockReset()
@@ -139,6 +149,42 @@ describe('BulkEditAccountModal', () => {
     expect(wrapper.get('[data-testid="bulk-rate-sync-warning"]').text()).toContain(
       'admin.accounts.bulkEdit.rateSyncWarning'
     )
+  })
+
+  it('账号管理员看不到且无法批量提交账号倍率', async () => {
+    authIsAdmin.value = false
+    const wrapper = mountModal()
+
+    expect(wrapper.find('#bulk-edit-rate-multiplier-enabled').exists()).toBe(false)
+    expect(wrapper.find('#bulk-edit-rate-multiplier').exists()).toBe(false)
+
+    await wrapper.get('#bulk-edit-priority-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-priority').setValue('3')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], { priority: 3 })
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(adminAPI.accounts.bulkUpdate).mock.calls[0]?.[1]).not.toHaveProperty('rate_multiplier')
+  })
+
+  it('账号管理员看不到且无法批量提交上游倍率探测设置', async () => {
+    authIsAdmin.value = false
+    const wrapper = mountModal({
+      selectedPlatforms: ['openai'],
+      selectedTypes: ['apikey']
+    })
+
+    expect(wrapper.find('#bulk-edit-upstream-billing-auto-probe-enabled').exists()).toBe(false)
+
+    await wrapper.get('#bulk-edit-priority-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-priority').setValue('3')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    const payload = vi.mocked(adminAPI.accounts.bulkUpdate).mock.calls[0]?.[1]
+    expect(payload).not.toHaveProperty('upstream_billing_probe_enabled')
   })
 
   it('后端拒绝修改同步账号倍率时展示专用错误', async () => {

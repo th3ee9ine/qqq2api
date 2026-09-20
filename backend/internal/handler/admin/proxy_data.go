@@ -14,6 +14,15 @@ import (
 
 // ExportData exports proxy-only data for migration.
 func (h *ProxyHandler) ExportData(c *gin.Context) {
+	// The export format intentionally contains proxy credentials so it can be
+	// restored elsewhere. Shared proxy maintenance remains available to account
+	// administrators, but exporting the credential bundle is a super-admin-only
+	// operation.
+	if isAccountAdminRequest(c) {
+		response.Forbidden(c, "Account administrators cannot export proxy credentials")
+		return
+	}
+
 	ctx := c.Request.Context()
 
 	selectedIDs, err := parseProxyIDs(c)

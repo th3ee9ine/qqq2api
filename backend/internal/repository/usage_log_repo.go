@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	gocache "github.com/patrickmn/go-cache"
 	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
@@ -42,6 +44,111 @@ var dateFormatWhitelist = map[string]string{
 	"day":   "YYYY-MM-DD",
 	"week":  "IYYY-IW",
 	"month": "YYYY-MM",
+}
+
+// appendUsageLogAccountAdminScope adds an owner predicate to a usage-log
+// condition list.  The predicate is deliberately expressed through the
+// accounts table instead of trusting a caller-provided account ID: a scoped
+// request may only aggregate rows belonging to its authenticated account
+// administrator.  Unscoped gateway/background calls keep their existing SQL
+// and argument positions.
+func appendUsageLogAccountAdminScope(ctx context.Context, conditions []string, args []any, accountColumn string) ([]string, []any) {
+	ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !scoped {
+		return conditions, args
+	}
+	condition, _ := usageLogAccountAdminScopeCondition(ctx, accountColumn, len(args)+1)
+	conditions = append(conditions, condition)
+	return conditions, append(args, ownerID)
+}
+
+func usageLogAccountAdminScopeCondition(ctx context.Context, accountColumn string, placeholder int) (string, any) {
+	ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !scoped {
+		return "", nil
+	}
+	return fmt.Sprintf(
+		"%s IN (SELECT id FROM accounts WHERE account_admin_id = $%d AND deleted_at IS NULL)",
+		accountColumn,
+		placeholder,
+	), ownerID
+}
+
+// appendUsageLogAccountAdminQueryScope is the string-query counterpart used
+// by fixed SQL statements that already carry their own WHERE clause.
+func appendUsageLogAccountAdminQueryScope(ctx context.Context, query string, args []any, accountColumn string) (string, []any) {
+	ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !scoped {
+		return query, args
+	}
+	condition, _ := usageLogAccountAdminScopeCondition(ctx, accountColumn, len(args)+1)
+	query += " AND " + condition
+	return query, append(args, ownerID)
+}
+
+// appendUsageLogAccountAdminQueryScopeBefore is used when a fixed query has a
+// trailing GROUP BY/ORDER BY clause.  Appending an AND after that clause would
+// produce invalid SQL, so insert the owner predicate immediately before the
+// supplied marker while retaining the original unscoped text.
+func appendUsageLogAccountAdminQueryScopeBefore(ctx context.Context, query string, args []any, accountColumn, marker string) (string, []any) {
+	ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !scoped {
+		return query, args
+	}
+	condition, _ := usageLogAccountAdminScopeCondition(ctx, accountColumn, len(args)+1)
+	index := strings.Index(query, marker)
+	if index < 0 {
+		// Keep the fallback valid if a caller's fixed query changes its marker.
+		// Appending after GROUP BY/ORDER BY would turn the predicate into invalid
+		// SQL, so locate the first common trailing clause before falling back to
+		// the end of the WHERE expression.  The queries using this helper are
+		// static repository SQL, therefore clause keywords are safe to inspect
+		// textually here.
+		upperQuery := strings.ToUpper(query)
+		insertAt := -1
+		for _, clause := range []string{
+			" GROUP BY ",
+			"\nGROUP BY ",
+			"\n\tGROUP BY ",
+			"\n\t\tGROUP BY ",
+			" HAVING ",
+			"\nHAVING ",
+			"\n\tHAVING ",
+			"\n\t\tHAVING ",
+			" ORDER BY ",
+			"\nORDER BY ",
+			"\n\tORDER BY ",
+			"\n\t\tORDER BY ",
+			" LIMIT ",
+			"\nLIMIT ",
+			"\n\tLIMIT ",
+			"\n\t\tLIMIT ",
+			" OFFSET ",
+			"\nOFFSET ",
+			"\n\tOFFSET ",
+			"\n\t\tOFFSET ",
+		} {
+			if candidate := strings.Index(upperQuery, clause); candidate >= 0 && (insertAt < 0 || candidate < insertAt) {
+				insertAt = candidate
+			}
+		}
+		if insertAt < 0 {
+			// A trailing semicolon must remain the final token.  Otherwise the
+			// predicate can safely be appended to the existing WHERE clause.
+			trimmed := strings.TrimRight(query, " \t\r\n")
+			if strings.HasSuffix(trimmed, ";") {
+				insertAt = len(trimmed) - 1
+				query = trimmed
+			}
+		}
+		if insertAt >= 0 {
+			query = query[:insertAt] + " AND " + condition + query[insertAt:]
+			return query, append(args, ownerID)
+		}
+		return appendUsageLogAccountAdminQueryScope(ctx, query, args, accountColumn)
+	}
+	query = query[:index] + " AND " + condition + query[index:]
+	return query, append(args, ownerID)
 }
 
 // safeDateFormat 根据白名单获取 dateFormat，未匹配时返回默认值

@@ -10,6 +10,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 
 	"entgo.io/ent/dialect"
@@ -50,7 +51,11 @@ func TestProxyUpdateInvalidatesBoundProbeSnapshotsAndEnqueuesOutboxAtomically(t 
 		Status:   service.StatusActive,
 	}
 
-	err = repo.Update(context.Background(), proxy)
+	// A proxy is shared infrastructure. Even when the update originates from
+	// an account-admin request, invalidation must include snapshots owned by
+	// every account bound to this proxy.
+	scopedCtx := context.WithValue(context.Background(), ctxkey.AccountAdminID, int64(41))
+	err = repo.Update(scopedCtx, proxy)
 
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())

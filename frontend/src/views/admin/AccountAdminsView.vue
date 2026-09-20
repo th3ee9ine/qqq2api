@@ -113,6 +113,12 @@
             </span>
           </template>
 
+          <template #cell-supply_rate_multiplier="{ value }">
+            <span class="text-sm font-mono tabular-nums text-gray-700 dark:text-gray-300">
+              {{ formatMultiplier(Number(value ?? 1)) }}x
+            </span>
+          </template>
+
           <template #cell-last_active_at="{ value }">
             <span class="text-xs tabular-nums text-gray-500 dark:text-dark-400">{{ value ? formatDateTime(value) : t('admin.accountAdmins.neverActive') }}</span>
           </template>
@@ -224,6 +230,26 @@
           />
         </div>
         <div>
+          <label for="account-admin-supply-rate-multiplier" class="input-label">
+            {{ t('admin.accountAdmins.supplyRateMultiplier') }}
+            <span class="text-primary-600" aria-hidden="true">*</span>
+          </label>
+          <input
+            id="account-admin-supply-rate-multiplier"
+            v-model.number="form.supply_rate_multiplier"
+            type="number"
+            min="0"
+            step="0.0001"
+            required
+            class="input"
+            data-testid="account-admin-supply-rate-multiplier"
+            aria-describedby="account-admin-supply-rate-multiplier-hint"
+          />
+          <p id="account-admin-supply-rate-multiplier-hint" class="input-hint">
+            {{ t('admin.accountAdmins.supplyRateMultiplierHint') }}
+          </p>
+        </div>
+        <div>
           <label for="account-admin-password" class="input-label">{{ t('admin.accountAdmins.password') }} <span v-if="!editingAccountAdmin" class="text-primary-600" aria-hidden="true">*</span></label>
           <div class="flex gap-2">
             <input
@@ -324,6 +350,7 @@ import {
   useStepUp,
 } from '@/composables/useStepUp'
 import { formatDateTime } from '@/utils/format'
+import { formatMultiplier } from '@/utils/formatters'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import AdminPageHeader from '@/components/admin/AdminPageHeader.vue'
@@ -365,6 +392,7 @@ const form = reactive({
   email: '',
   username: '',
   password: '',
+  supply_rate_multiplier: 1,
   notes: '',
   status: 'active' as 'active' | 'disabled',
 })
@@ -372,6 +400,7 @@ const form = reactive({
 const columns = computed<Column[]>(() => [
   { key: 'identity', label: t('admin.accountAdmins.identity') },
   { key: 'role', label: t('admin.accountAdmins.role') },
+  { key: 'supply_rate_multiplier', label: t('admin.accountAdmins.supplyRateMultiplierColumn') },
   { key: 'status', label: t('common.status') },
   { key: 'last_active_at', label: t('admin.accountAdmins.lastActive') },
   { key: 'created_at', label: t('admin.accountAdmins.createdAt') },
@@ -416,6 +445,7 @@ function resetForm(): void {
     email: '',
     username: '',
     password: '',
+    supply_rate_multiplier: 1,
     notes: '',
     status: 'active',
   })
@@ -434,6 +464,7 @@ function openEdit(accountAdmin: AdminUser): void {
     email: accountAdmin.email,
     username: accountAdmin.username || '',
     password: '',
+    supply_rate_multiplier: accountAdmin.supply_rate_multiplier ?? 1,
     notes: accountAdmin.notes || '',
     status: accountAdmin.status,
   })
@@ -514,6 +545,11 @@ function handlePageSizeChange(pageSize: number): void {
 
 async function submitForm(): Promise<void> {
   if (submitting.value) return
+  const supplyRateMultiplier = Number(form.supply_rate_multiplier)
+  if (!Number.isFinite(supplyRateMultiplier) || supplyRateMultiplier < 0) {
+    appStore.showError(t('admin.accountAdmins.supplyRateMultiplierInvalid'))
+    return
+  }
   submitting.value = true
   try {
     if (editingAccountAdmin.value) {
@@ -522,6 +558,7 @@ async function submitForm(): Promise<void> {
         username: form.username,
         notes: form.notes,
         status: form.status,
+        supply_rate_multiplier: supplyRateMultiplier,
         ...(form.password ? { password: form.password } : {}),
       }
       await stepUp.run(() => adminAPI.accountAdmins.update(editingAccountAdmin.value!.id, payload))
@@ -532,6 +569,7 @@ async function submitForm(): Promise<void> {
         password: form.password,
         username: form.username || undefined,
         notes: form.notes || undefined,
+        supply_rate_multiplier: supplyRateMultiplier,
       }))
       appStore.showSuccess(t('admin.accountAdmins.created'))
     }

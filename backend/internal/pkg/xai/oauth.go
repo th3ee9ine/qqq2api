@@ -55,14 +55,17 @@ var (
 
 // OAuthSession stores one PKCE OAuth flow.
 type OAuthSession struct {
-	State         string    `json:"state"`
-	CodeVerifier  string    `json:"code_verifier"`
-	CodeChallenge string    `json:"code_challenge"`
-	ClientID      string    `json:"client_id,omitempty"`
-	Scope         string    `json:"scope,omitempty"`
-	ProxyURL      string    `json:"proxy_url,omitempty"`
-	RedirectURI   string    `json:"redirect_uri"`
-	CreatedAt     time.Time `json:"created_at"`
+	State         string `json:"state"`
+	CodeVerifier  string `json:"code_verifier"`
+	CodeChallenge string `json:"code_challenge"`
+	ClientID      string `json:"client_id,omitempty"`
+	Scope         string `json:"scope,omitempty"`
+	ProxyURL      string `json:"proxy_url,omitempty"`
+	RedirectURI   string `json:"redirect_uri"`
+	// AccountAdminID binds a pending session to the restricted administrator
+	// who created it. Zero means an unscoped (super-admin/background) flow.
+	AccountAdminID int64     `json:"account_admin_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 
 	mu       sync.Mutex
 	consumed bool
@@ -92,14 +95,15 @@ type SessionStore struct {
 }
 
 type oauthSessionDTO struct {
-	State         string    `json:"state"`
-	CodeVerifier  string    `json:"code_verifier"`
-	CodeChallenge string    `json:"code_challenge"`
-	ClientID      string    `json:"client_id,omitempty"`
-	Scope         string    `json:"scope,omitempty"`
-	ProxyURL      string    `json:"proxy_url,omitempty"`
-	RedirectURI   string    `json:"redirect_uri"`
-	CreatedAt     time.Time `json:"created_at"`
+	State          string    `json:"state"`
+	CodeVerifier   string    `json:"code_verifier"`
+	CodeChallenge  string    `json:"code_challenge"`
+	ClientID       string    `json:"client_id,omitempty"`
+	Scope          string    `json:"scope,omitempty"`
+	ProxyURL       string    `json:"proxy_url,omitempty"`
+	RedirectURI    string    `json:"redirect_uri"`
+	AccountAdminID int64     `json:"account_admin_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 func NewSessionStore() *SessionStore {
@@ -129,7 +133,7 @@ func (s *SessionStore) Set(sessionID string, session *OAuthSession) {
 		remoteErr = s.remote.Set(context.Background(), sessionID, oauthSessionDTO{
 			State: session.State, CodeVerifier: session.CodeVerifier, CodeChallenge: session.CodeChallenge,
 			ClientID: session.ClientID, Scope: session.Scope, ProxyURL: session.ProxyURL,
-			RedirectURI: session.RedirectURI, CreatedAt: session.CreatedAt,
+			RedirectURI: session.RedirectURI, AccountAdminID: session.AccountAdminID, CreatedAt: session.CreatedAt,
 		})
 	}
 	s.mu.Lock()
@@ -156,7 +160,7 @@ func (s *SessionStore) Get(sessionID string) (*OAuthSession, bool) {
 		session := &OAuthSession{
 			State: dto.State, CodeVerifier: dto.CodeVerifier, CodeChallenge: dto.CodeChallenge,
 			ClientID: dto.ClientID, Scope: dto.Scope, ProxyURL: dto.ProxyURL,
-			RedirectURI: dto.RedirectURI, CreatedAt: dto.CreatedAt,
+			RedirectURI: dto.RedirectURI, AccountAdminID: dto.AccountAdminID, CreatedAt: dto.CreatedAt,
 		}
 		s.mu.Lock()
 		s.sessions[sessionID] = session

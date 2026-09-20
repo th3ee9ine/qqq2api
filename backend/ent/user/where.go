@@ -180,6 +180,11 @@ func RpmLimit(v int) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldRpmLimit, v))
 }
 
+// SupplyRateMultiplier applies equality check predicate on the "supply_rate_multiplier" field. It's identical to SupplyRateMultiplierEQ.
+func SupplyRateMultiplier(v float64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldSupplyRateMultiplier, v))
+}
+
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.
 func CreatedAtEQ(v time.Time) predicate.User {
 	return predicate.User(sql.FieldEQ(FieldCreatedAt, v))
@@ -1400,6 +1405,46 @@ func RpmLimitLTE(v int) predicate.User {
 	return predicate.User(sql.FieldLTE(FieldRpmLimit, v))
 }
 
+// SupplyRateMultiplierEQ applies the EQ predicate on the "supply_rate_multiplier" field.
+func SupplyRateMultiplierEQ(v float64) predicate.User {
+	return predicate.User(sql.FieldEQ(FieldSupplyRateMultiplier, v))
+}
+
+// SupplyRateMultiplierNEQ applies the NEQ predicate on the "supply_rate_multiplier" field.
+func SupplyRateMultiplierNEQ(v float64) predicate.User {
+	return predicate.User(sql.FieldNEQ(FieldSupplyRateMultiplier, v))
+}
+
+// SupplyRateMultiplierIn applies the In predicate on the "supply_rate_multiplier" field.
+func SupplyRateMultiplierIn(vs ...float64) predicate.User {
+	return predicate.User(sql.FieldIn(FieldSupplyRateMultiplier, vs...))
+}
+
+// SupplyRateMultiplierNotIn applies the NotIn predicate on the "supply_rate_multiplier" field.
+func SupplyRateMultiplierNotIn(vs ...float64) predicate.User {
+	return predicate.User(sql.FieldNotIn(FieldSupplyRateMultiplier, vs...))
+}
+
+// SupplyRateMultiplierGT applies the GT predicate on the "supply_rate_multiplier" field.
+func SupplyRateMultiplierGT(v float64) predicate.User {
+	return predicate.User(sql.FieldGT(FieldSupplyRateMultiplier, v))
+}
+
+// SupplyRateMultiplierGTE applies the GTE predicate on the "supply_rate_multiplier" field.
+func SupplyRateMultiplierGTE(v float64) predicate.User {
+	return predicate.User(sql.FieldGTE(FieldSupplyRateMultiplier, v))
+}
+
+// SupplyRateMultiplierLT applies the LT predicate on the "supply_rate_multiplier" field.
+func SupplyRateMultiplierLT(v float64) predicate.User {
+	return predicate.User(sql.FieldLT(FieldSupplyRateMultiplier, v))
+}
+
+// SupplyRateMultiplierLTE applies the LTE predicate on the "supply_rate_multiplier" field.
+func SupplyRateMultiplierLTE(v float64) predicate.User {
+	return predicate.User(sql.FieldLTE(FieldSupplyRateMultiplier, v))
+}
+
 // HasAPIKeys applies the HasEdge predicate on the "api_keys" edge.
 func HasAPIKeys() predicate.User {
 	return predicate.User(func(s *sql.Selector) {
@@ -1691,6 +1736,29 @@ func HasPlatformQuotas() predicate.User {
 func HasPlatformQuotasWith(preds ...predicate.UserPlatformQuota) predicate.User {
 	return predicate.User(func(s *sql.Selector) {
 		step := newPlatformQuotasStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasSuppliedAccounts applies the HasEdge predicate on the "supplied_accounts" edge.
+func HasSuppliedAccounts() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, SuppliedAccountsTable, SuppliedAccountsColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasSuppliedAccountsWith applies the HasEdge predicate on the "supplied_accounts" edge with a given conditions (other predicates).
+func HasSuppliedAccountsWith(preds ...predicate.Account) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newSuppliedAccountsStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

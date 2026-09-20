@@ -145,6 +145,23 @@ type AccountBillingSettingsRepository interface {
 	) error
 }
 
+// AccountAdminSupplyRateRepository synchronizes the dedicated earnings rate
+// across every live account supplied by one account administrator. The caller
+// controls the transaction and refreshes scheduler snapshots only after commit.
+type AccountAdminSupplyRateRepository interface {
+	UpdateSupplyRateMultiplierByAccountAdmin(ctx context.Context, accountAdminID int64, multiplier float64) ([]int64, error)
+	RefreshSchedulerAccountSnapshots(ctx context.Context, accountIDs []int64)
+}
+
+// AccountAdminOwnershipRepository releases all accounts owned by an account
+// administrator when that identity is demoted or soft-deleted.  The method
+// participates in the caller's transaction when one is present; callers must
+// refresh scheduler snapshots only after the surrounding transaction commits.
+type AccountAdminOwnershipRepository interface {
+	ReleaseAccountAdminOwnership(ctx context.Context, accountAdminID int64) ([]int64, error)
+	RefreshSchedulerAccountSnapshots(ctx context.Context, accountIDs []int64)
+}
+
 // AccountAutomaticProxyRepository applies automatic proxy placement in the
 // same database transaction as an account create or edit. Implementations must
 // serialize against other automatic assigners and honor Proxy.MaxAccounts.

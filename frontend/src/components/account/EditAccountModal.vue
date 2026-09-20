@@ -1338,7 +1338,7 @@
           />
           <p class="input-hint">{{ t('admin.accounts.priorityHint') }}</p>
         </div>
-        <div>
+        <div v-if="authStore.isAdmin">
           <label class="input-label">{{ t('admin.accounts.billingRateMultiplier') }}</label>
           <input
             v-model.number="rateMultiplier"
@@ -1622,7 +1622,7 @@
       </div>
 
       <div
-        v-if="account?.type === 'apikey'"
+        v-if="authStore.isAdmin && account?.type === 'apikey'"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div>
@@ -4185,11 +4185,13 @@ async function handleSubmit() {
     // UpdateAccount treats nil as "leave unchanged" and 0 as "clear proxy".
     updates.proxy_id = proxyId.value ?? 0
   }
-  if (isApiKey.value) {
+  if (authStore.isAdmin && isApiKey.value) {
     updates.upstream_billing_probe_enabled = upstreamBillingProbeEnabled.value
+  }
+  if (authStore.isAdmin && isApiKey.value) {
     updates.upstream_billing_rate_sync_enabled = upstreamBillingRateSyncEnabled.value
   }
-  if (!upstreamBillingRateSyncEnabled.value) {
+  if (authStore.isAdmin && !upstreamBillingRateSyncEnabled.value) {
     updates.rate_multiplier = rateMultiplier.value
   }
 

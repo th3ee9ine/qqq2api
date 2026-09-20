@@ -1,6 +1,8 @@
 // Package ctxkey 定义用于 context.Value 的类型安全 key
 package ctxkey
 
+import "context"
+
 // Key 定义 context key 的类型，避免使用内置 string 类型（staticcheck SA1029）
 type Key string
 
@@ -63,6 +65,10 @@ const (
 	// 供 service 层执行用户级策略，不能使用客户端请求体中的 user 标识替代。
 	UserID Key = "ctx_user_id"
 
+	// AccountAdminID 是当前受限账号管理员的用户 ID。
+	// 它只能由面板认证中间件后的权限中间件设置，不能信任请求参数。
+	AccountAdminID Key = "ctx_account_admin_id"
+
 	// IsMaxTokensOneHaikuRequest 标识当前请求是否为 max_tokens=1 + haiku 模型的探测请求
 	// 用于 ClaudeCodeOnly 验证绕过（绕过 system prompt 检查，但仍需验证 User-Agent）
 	IsMaxTokensOneHaikuRequest Key = "ctx_is_max_tokens_one_haiku"
@@ -82,3 +88,14 @@ const (
 	// ClaudeCodeVersion stores the extracted Claude Code version from User-Agent (e.g. "2.1.22")
 	ClaudeCodeVersion Key = "ctx_claude_code_version"
 )
+
+// AccountAdminIDFromContext returns the authenticated restricted account
+// administrator scope. Super-administrator and background contexts are
+// intentionally unscoped.
+func AccountAdminIDFromContext(ctx context.Context) (int64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	accountAdminID, ok := ctx.Value(AccountAdminID).(int64)
+	return accountAdminID, ok && accountAdminID > 0
+}

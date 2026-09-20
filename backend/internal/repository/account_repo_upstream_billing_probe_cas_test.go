@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 	dbent "github.com/th3ee9ine/qqq2api/ent"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 
 	"entgo.io/ent/dialect"
@@ -127,6 +128,51 @@ func TestUpdateUpstreamBillingProbeSnapshotCommitsSnapshotAndOutboxAtomically(t 
 	)
 
 	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateUpstreamBillingProbeSnapshotScopedAdminKeepsSupplyRate(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+
+	ownerID := int64(42)
+	baseCtx := context.WithValue(context.Background(), ctxkey.AccountAdminID, ownerID)
+	mock.ExpectBegin()
+	tx, err := client.Tx(baseCtx)
+	require.NoError(t, err)
+	mock.ExpectExec("(?s)"+regexp.QuoteMeta("UPDATE accounts")+".*"+regexp.QuoteMeta("rate_multiplier = CASE")+".*"+regexp.QuoteMeta("THEN $10::numeric")+".*"+regexp.QuoteMeta("AND deleted_at IS NULL")+".*"+regexp.QuoteMeta("AND account_admin_id = $11")).
+		WithArgs(sqlmock.AnyArg(), int64(17), service.PlatformOpenAI, service.AccountTypeAPIKey, sqlmock.AnyArg(), nil, "{"+string([]byte{34})+"status"+string([]byte{34})+":"+string([]byte{34})+"old"+string([]byte{34})+"}", "true", "true", nil, ownerID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox")).
+		WithArgs(service.SchedulerOutboxEventAccountChanged, int64(17), nil, nil, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	repo := newAccountRepositoryWithSQL(client, db, nil)
+	account := &service.Account{
+		ID:          17,
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-test"},
+		Extra: map[string]any{
+			service.UpstreamBillingProbeExtraKey:           map[string]any{"status": "old"},
+			service.UpstreamBillingProbeEnabledExtraKey:    true,
+			service.UpstreamBillingRateSyncEnabledExtraKey: true,
+		},
+	}
+	probeRate := 0.065
+	txCtx := dbent.NewTxContext(baseCtx, tx)
+	err = repo.UpdateUpstreamBillingProbeSnapshot(
+		txCtx,
+		account,
+		&service.UpstreamBillingProbeSnapshot{Status: service.UpstreamBillingProbeStatusOK},
+		&probeRate,
+	)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

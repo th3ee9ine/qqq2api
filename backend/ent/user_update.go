@@ -11,6 +11,7 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/th3ee9ine/qqq2api/ent/account"
 	"github.com/th3ee9ine/qqq2api/ent/announcementread"
 	"github.com/th3ee9ine/qqq2api/ent/apikey"
 	"github.com/th3ee9ine/qqq2api/ent/authidentity"
@@ -446,6 +447,27 @@ func (_u *UserUpdate) AddRpmLimit(v int) *UserUpdate {
 	return _u
 }
 
+// SetSupplyRateMultiplier sets the "supply_rate_multiplier" field.
+func (_u *UserUpdate) SetSupplyRateMultiplier(v float64) *UserUpdate {
+	_u.mutation.ResetSupplyRateMultiplier()
+	_u.mutation.SetSupplyRateMultiplier(v)
+	return _u
+}
+
+// SetNillableSupplyRateMultiplier sets the "supply_rate_multiplier" field if the given value is not nil.
+func (_u *UserUpdate) SetNillableSupplyRateMultiplier(v *float64) *UserUpdate {
+	if v != nil {
+		_u.SetSupplyRateMultiplier(*v)
+	}
+	return _u
+}
+
+// AddSupplyRateMultiplier adds value to the "supply_rate_multiplier" field.
+func (_u *UserUpdate) AddSupplyRateMultiplier(v float64) *UserUpdate {
+	_u.mutation.AddSupplyRateMultiplier(v)
+	return _u
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_u *UserUpdate) AddAPIKeyIDs(ids ...int64) *UserUpdate {
 	_u.mutation.AddAPIKeyIDs(ids...)
@@ -639,6 +661,21 @@ func (_u *UserUpdate) AddPlatformQuotas(v ...*UserPlatformQuota) *UserUpdate {
 		ids[i] = v[i].ID
 	}
 	return _u.AddPlatformQuotaIDs(ids...)
+}
+
+// AddSuppliedAccountIDs adds the "supplied_accounts" edge to the Account entity by IDs.
+func (_u *UserUpdate) AddSuppliedAccountIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddSuppliedAccountIDs(ids...)
+	return _u
+}
+
+// AddSuppliedAccounts adds the "supplied_accounts" edges to the Account entity.
+func (_u *UserUpdate) AddSuppliedAccounts(v ...*Account) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSuppliedAccountIDs(ids...)
 }
 
 // Mutation returns the UserMutation object of the builder.
@@ -919,6 +956,27 @@ func (_u *UserUpdate) RemovePlatformQuotas(v ...*UserPlatformQuota) *UserUpdate 
 	return _u.RemovePlatformQuotaIDs(ids...)
 }
 
+// ClearSuppliedAccounts clears all "supplied_accounts" edges to the Account entity.
+func (_u *UserUpdate) ClearSuppliedAccounts() *UserUpdate {
+	_u.mutation.ClearSuppliedAccounts()
+	return _u
+}
+
+// RemoveSuppliedAccountIDs removes the "supplied_accounts" edge to Account entities by IDs.
+func (_u *UserUpdate) RemoveSuppliedAccountIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveSuppliedAccountIDs(ids...)
+	return _u
+}
+
+// RemoveSuppliedAccounts removes "supplied_accounts" edges to Account entities.
+func (_u *UserUpdate) RemoveSuppliedAccounts(v ...*Account) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSuppliedAccountIDs(ids...)
+}
+
 // Save executes the query and returns the number of nodes affected by the update operation.
 func (_u *UserUpdate) Save(ctx context.Context) (int, error) {
 	if err := _u.defaults(); err != nil {
@@ -991,6 +1049,11 @@ func (_u *UserUpdate) check() error {
 	if v, ok := _u.mutation.SignupSource(); ok {
 		if err := user.SignupSourceValidator(v); err != nil {
 			return &ValidationError{Name: "signup_source", err: fmt.Errorf(`ent: validator failed for field "User.signup_source": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.SupplyRateMultiplier(); ok {
+		if err := user.SupplyRateMultiplierValidator(v); err != nil {
+			return &ValidationError{Name: "supply_rate_multiplier", err: fmt.Errorf(`ent: validator failed for field "User.supply_rate_multiplier": %w`, err)}
 		}
 	}
 	return nil
@@ -1115,6 +1178,12 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedRpmLimit(); ok {
 		_spec.AddField(user.FieldRpmLimit, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.SupplyRateMultiplier(); ok {
+		_spec.SetField(user.FieldSupplyRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSupplyRateMultiplier(); ok {
+		_spec.AddField(user.FieldSupplyRateMultiplier, field.TypeFloat64, value)
 	}
 	if _u.mutation.APIKeysCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1706,6 +1775,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userplatformquota.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SuppliedAccountsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SuppliedAccountsTable,
+			Columns: []string{user.SuppliedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSuppliedAccountsIDs(); len(nodes) > 0 && !_u.mutation.SuppliedAccountsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SuppliedAccountsTable,
+			Columns: []string{user.SuppliedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SuppliedAccountsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SuppliedAccountsTable,
+			Columns: []string{user.SuppliedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {
@@ -2139,6 +2253,27 @@ func (_u *UserUpdateOne) AddRpmLimit(v int) *UserUpdateOne {
 	return _u
 }
 
+// SetSupplyRateMultiplier sets the "supply_rate_multiplier" field.
+func (_u *UserUpdateOne) SetSupplyRateMultiplier(v float64) *UserUpdateOne {
+	_u.mutation.ResetSupplyRateMultiplier()
+	_u.mutation.SetSupplyRateMultiplier(v)
+	return _u
+}
+
+// SetNillableSupplyRateMultiplier sets the "supply_rate_multiplier" field if the given value is not nil.
+func (_u *UserUpdateOne) SetNillableSupplyRateMultiplier(v *float64) *UserUpdateOne {
+	if v != nil {
+		_u.SetSupplyRateMultiplier(*v)
+	}
+	return _u
+}
+
+// AddSupplyRateMultiplier adds value to the "supply_rate_multiplier" field.
+func (_u *UserUpdateOne) AddSupplyRateMultiplier(v float64) *UserUpdateOne {
+	_u.mutation.AddSupplyRateMultiplier(v)
+	return _u
+}
+
 // AddAPIKeyIDs adds the "api_keys" edge to the APIKey entity by IDs.
 func (_u *UserUpdateOne) AddAPIKeyIDs(ids ...int64) *UserUpdateOne {
 	_u.mutation.AddAPIKeyIDs(ids...)
@@ -2332,6 +2467,21 @@ func (_u *UserUpdateOne) AddPlatformQuotas(v ...*UserPlatformQuota) *UserUpdateO
 		ids[i] = v[i].ID
 	}
 	return _u.AddPlatformQuotaIDs(ids...)
+}
+
+// AddSuppliedAccountIDs adds the "supplied_accounts" edge to the Account entity by IDs.
+func (_u *UserUpdateOne) AddSuppliedAccountIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddSuppliedAccountIDs(ids...)
+	return _u
+}
+
+// AddSuppliedAccounts adds the "supplied_accounts" edges to the Account entity.
+func (_u *UserUpdateOne) AddSuppliedAccounts(v ...*Account) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddSuppliedAccountIDs(ids...)
 }
 
 // Mutation returns the UserMutation object of the builder.
@@ -2612,6 +2762,27 @@ func (_u *UserUpdateOne) RemovePlatformQuotas(v ...*UserPlatformQuota) *UserUpda
 	return _u.RemovePlatformQuotaIDs(ids...)
 }
 
+// ClearSuppliedAccounts clears all "supplied_accounts" edges to the Account entity.
+func (_u *UserUpdateOne) ClearSuppliedAccounts() *UserUpdateOne {
+	_u.mutation.ClearSuppliedAccounts()
+	return _u
+}
+
+// RemoveSuppliedAccountIDs removes the "supplied_accounts" edge to Account entities by IDs.
+func (_u *UserUpdateOne) RemoveSuppliedAccountIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveSuppliedAccountIDs(ids...)
+	return _u
+}
+
+// RemoveSuppliedAccounts removes "supplied_accounts" edges to Account entities.
+func (_u *UserUpdateOne) RemoveSuppliedAccounts(v ...*Account) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveSuppliedAccountIDs(ids...)
+}
+
 // Where appends a list predicates to the UserUpdate builder.
 func (_u *UserUpdateOne) Where(ps ...predicate.User) *UserUpdateOne {
 	_u.mutation.Where(ps...)
@@ -2697,6 +2868,11 @@ func (_u *UserUpdateOne) check() error {
 	if v, ok := _u.mutation.SignupSource(); ok {
 		if err := user.SignupSourceValidator(v); err != nil {
 			return &ValidationError{Name: "signup_source", err: fmt.Errorf(`ent: validator failed for field "User.signup_source": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.SupplyRateMultiplier(); ok {
+		if err := user.SupplyRateMultiplierValidator(v); err != nil {
+			return &ValidationError{Name: "supply_rate_multiplier", err: fmt.Errorf(`ent: validator failed for field "User.supply_rate_multiplier": %w`, err)}
 		}
 	}
 	return nil
@@ -2838,6 +3014,12 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if value, ok := _u.mutation.AddedRpmLimit(); ok {
 		_spec.AddField(user.FieldRpmLimit, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.SupplyRateMultiplier(); ok {
+		_spec.SetField(user.FieldSupplyRateMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedSupplyRateMultiplier(); ok {
+		_spec.AddField(user.FieldSupplyRateMultiplier, field.TypeFloat64, value)
 	}
 	if _u.mutation.APIKeysCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -3429,6 +3611,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(userplatformquota.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.SuppliedAccountsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SuppliedAccountsTable,
+			Columns: []string{user.SuppliedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedSuppliedAccountsIDs(); len(nodes) > 0 && !_u.mutation.SuppliedAccountsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SuppliedAccountsTable,
+			Columns: []string{user.SuppliedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.SuppliedAccountsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.SuppliedAccountsTable,
+			Columns: []string{user.SuppliedAccountsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(account.FieldID, field.TypeInt64),
 			},
 		}
 		for _, k := range nodes {

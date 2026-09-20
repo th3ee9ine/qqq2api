@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
@@ -25,12 +26,18 @@ func TestAccountAdminScope_AccountAdminRequestMatrix(t *testing.T) {
 		{name: "update account", method: http.MethodPut, path: "/api/v1/admin/accounts/42", wantStatus: http.StatusNoContent},
 		{name: "account child action", method: http.MethodPost, path: "/api/v1/admin/accounts/42/test", wantStatus: http.StatusNoContent},
 		{name: "read account probe policy", method: http.MethodGet, path: "/api/v1/admin/accounts/upstream-billing-probe/settings", wantStatus: http.StatusNoContent},
+		{name: "per-account upstream billing probe", method: http.MethodPost, path: "/api/v1/admin/accounts/42/upstream-billing-probe", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
+		{name: "per-account upstream billing probe toggle", method: http.MethodPut, path: "/api/v1/admin/accounts/42/upstream-billing-probe", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
+		{name: "batch upstream billing probe", method: http.MethodPost, path: "/api/v1/admin/accounts/upstream-billing-probe/batch", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
 		{name: "read ollama account policy", method: http.MethodGet, path: "/api/v1/admin/accounts/ollama-cloud-usage/settings", wantStatus: http.StatusNoContent},
 		{name: "openai oauth account flow", method: http.MethodPost, path: "/api/v1/admin/openai/oauth/start", wantStatus: http.StatusNoContent},
 		{name: "create proxy IP", method: http.MethodPost, path: "/api/v1/admin/proxies", wantStatus: http.StatusNoContent},
 		{name: "clear ollama session", method: http.MethodDelete, path: "/api/v1/admin/accounts/42/ollama-cloud-usage/session", wantStatus: http.StatusNoContent},
 		{name: "clear temporary account state", method: http.MethodDelete, path: "/api/v1/admin/accounts/42/temp-unschedulable", wantStatus: http.StatusNoContent},
-		{name: "scheduled account test", method: http.MethodPost, path: "/api/v1/admin/scheduled-test-plans/9/run", wantStatus: http.StatusNoContent},
+		{name: "scheduled account test", method: http.MethodPost, path: "/api/v1/admin/scheduled-test-plans/9/run", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
+		{name: "global codex task center", method: http.MethodGet, path: "/api/v1/admin/accounts/codex-turn-state/tasks", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
+		{name: "global crs sync", method: http.MethodPost, path: "/api/v1/admin/accounts/sync/crs", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
+		{name: "upstream billing rates", method: http.MethodGet, path: "/api/v1/admin/accounts/upstream-billing-rates", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
 
 		// Account administrators may maintain resources but cannot remove them.
 		{name: "delete account", method: http.MethodDelete, path: "/api/v1/admin/accounts/42", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_DELETE_FORBIDDEN"},
@@ -66,6 +73,7 @@ func TestAccountAdminScope_AccountAdminRequestMatrix(t *testing.T) {
 			reached := false
 			router.Use(func(c *gin.Context) {
 				c.Set(string(ContextKeyUserRole), service.RoleAccountAdmin)
+				c.Set(string(ContextKeyUser), AuthSubject{UserID: 42})
 				c.Next()
 			})
 			router.Use(AccountAdminScope())
@@ -94,12 +102,16 @@ func TestAccountAdminScope_RoleMatrix(t *testing.T) {
 		name       string
 		role       string
 		setRole    bool
+		setSubject bool
+		userID     int64
 		path       string
 		wantStatus int
 		wantCode   string
 	}{
 		{name: "super administrator may manage account administrators", role: service.RoleAdmin, setRole: true, path: "/api/v1/admin/account-admins", wantStatus: http.StatusNoContent},
-		{name: "account administrator may access scoped route", role: service.RoleAccountAdmin, setRole: true, path: "/api/v1/admin/accounts", wantStatus: http.StatusNoContent},
+		{name: "account administrator may access scoped route", role: service.RoleAccountAdmin, setRole: true, setSubject: true, userID: 42, path: "/api/v1/admin/accounts", wantStatus: http.StatusNoContent},
+		{name: "account administrator without subject rejected", role: service.RoleAccountAdmin, setRole: true, path: "/api/v1/admin/accounts", wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
+		{name: "account administrator with invalid subject rejected", role: service.RoleAccountAdmin, setRole: true, setSubject: true, path: "/api/v1/admin/accounts", wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
 		{name: "ordinary user denied", role: service.RoleUser, setRole: true, path: "/api/v1/admin/accounts", wantStatus: http.StatusForbidden, wantCode: "FORBIDDEN"},
 		{name: "unknown role denied", role: "operator", setRole: true, path: "/api/v1/admin/accounts", wantStatus: http.StatusForbidden, wantCode: "FORBIDDEN"},
 		{name: "missing identity rejected", path: "/api/v1/admin/accounts", wantStatus: http.StatusUnauthorized, wantCode: "UNAUTHORIZED"},
@@ -110,6 +122,9 @@ func TestAccountAdminScope_RoleMatrix(t *testing.T) {
 			if tt.setRole {
 				router.Use(func(c *gin.Context) {
 					c.Set(string(ContextKeyUserRole), tt.role)
+					if tt.setSubject {
+						c.Set(string(ContextKeyUser), AuthSubject{UserID: tt.userID})
+					}
 					c.Next()
 				})
 			}
@@ -125,6 +140,49 @@ func TestAccountAdminScope_RoleMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAccountAdminScope_PropagatesAuthenticatedOwnerScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyUserRole), service.RoleAccountAdmin)
+		c.Set(string(ContextKeyUser), AuthSubject{UserID: 73})
+		c.Next()
+	})
+	router.Use(AccountAdminScope())
+	router.GET("/api/v1/admin/accounts", func(c *gin.Context) {
+		accountAdminID, ok := ctxkey.AccountAdminIDFromContext(c.Request.Context())
+		require.True(t, ok)
+		require.Equal(t, int64(73), accountAdminID)
+		c.Status(http.StatusNoContent)
+	})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts", nil))
+
+	require.Equal(t, http.StatusNoContent, response.Code)
+}
+
+func TestAccountAdminScope_DoesNotScopeSuperAdministrator(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(ContextKeyUserRole), service.RoleAdmin)
+		c.Set(string(ContextKeyUser), AuthSubject{UserID: 1})
+		c.Next()
+	})
+	router.Use(AccountAdminScope())
+	router.GET("/api/v1/admin/accounts", func(c *gin.Context) {
+		_, ok := ctxkey.AccountAdminIDFromContext(c.Request.Context())
+		require.False(t, ok)
+		c.Status(http.StatusNoContent)
+	})
+
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts", nil))
+
+	require.Equal(t, http.StatusNoContent, response.Code)
 }
 
 func TestAccountAdminScope_SuperAdminCanDeleteAccountsAndIPs(t *testing.T) {

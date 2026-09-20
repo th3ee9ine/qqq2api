@@ -112,6 +112,10 @@ func (Account) Fields() []ent.Field {
 		field.Float("rate_multiplier").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
+		// account_admin_id: 供货账号管理员；NULL 表示未分配归属。
+		field.Int64("account_admin_id").
+			Optional().
+			Nillable(),
 
 		// status: 账户状态，如 "active", "error", "disabled"
 		field.String("status").
@@ -227,6 +231,11 @@ func (Account) Edges() []ent.Edge {
 			Unique(),
 		// usage_logs: 该账户的使用日志
 		edge.To("usage_logs", UsageLog.Type),
+		edge.From("account_admin", User.Type).
+			Ref("supplied_accounts").
+			Field("account_admin_id").
+			Unique().
+			Annotations(entsql.OnDelete(entsql.SetNull)),
 	}
 }
 
@@ -249,5 +258,6 @@ func (Account) Indexes() []ent.Index {
 		index.Fields("priority", "status"),
 		index.Fields("deleted_at"), // 软删除查询优化
 		index.Fields("parent_account_id"),
+		index.Fields("account_admin_id"),
 	}
 }

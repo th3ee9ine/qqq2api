@@ -821,7 +821,7 @@
             aria-labelledby="bulk-edit-priority-label"
           />
         </div>
-        <div>
+        <div v-if="authStore.isAdmin">
           <div class="mb-3 flex items-center justify-between">
             <label
               id="bulk-edit-rate-multiplier-label"
@@ -1033,7 +1033,7 @@
       </div>
 
       <!-- Upstream billing auto probe (any API-key platform) -->
-      <div v-if="allBillingProbeCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+      <div v-if="authStore.isAdmin && allBillingProbeCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
           <div class="flex-1 pr-4">
             <label
@@ -1516,6 +1516,7 @@
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import type { BulkUpdateAccountFields } from '@/api/admin/accounts'
 import type {
@@ -1580,6 +1581,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
 
 // Platform awareness
 const targetMode = computed(() => props.target?.mode ?? 'selected')
@@ -1632,6 +1634,7 @@ const allOpenAIAPIKey = computed(() => {
 // 平台不限（兼容上游即可应答 /v1/billing）。
 const allBillingProbeCapable = computed(() => {
   return (
+    authStore.isAdmin &&
     targetSelectedTypes.value.length > 0 &&
     targetSelectedTypes.value.every(t => t === 'apikey')
   )
@@ -1999,7 +2002,7 @@ const buildUpdatePayload = (): BulkUpdateAccountFields | null => {
     updates.priority = priority.value
   }
 
-  if (enableRateMultiplier.value) {
+  if (authStore.isAdmin && enableRateMultiplier.value) {
     updates.rate_multiplier = rateMultiplier.value
   }
 
@@ -2112,7 +2115,7 @@ const buildUpdatePayload = (): BulkUpdateAccountFields | null => {
     )
   }
 
-  if (enableUpstreamBillingAutoProbe.value) {
+  if (authStore.isAdmin && enableUpstreamBillingAutoProbe.value) {
     updates.upstream_billing_probe_enabled = upstreamBillingAutoProbeMode.value === 'enabled'
   }
 
@@ -2262,12 +2265,12 @@ const handleSubmit = async () => {
     enableConcurrency.value ||
     enableLoadFactor.value ||
     enablePriority.value ||
-    enableRateMultiplier.value ||
+    (authStore.isAdmin && enableRateMultiplier.value) ||
     enableStatus.value ||
     enableGroups.value ||
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
-    enableUpstreamBillingAutoProbe.value ||
+    (authStore.isAdmin && enableUpstreamBillingAutoProbe.value) ||
     enableCodexCLIOnly.value ||
     enableCodexCLIOnlyAppServer.value ||
     enableCodexFingerprintMode.value ||

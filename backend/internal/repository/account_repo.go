@@ -28,6 +28,7 @@ import (
 	dbgroup "github.com/th3ee9ine/qqq2api/ent/group"
 	dbpredicate "github.com/th3ee9ine/qqq2api/ent/predicate"
 	dbproxy "github.com/th3ee9ine/qqq2api/ent/proxy"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
 	"github.com/th3ee9ine/qqq2api/internal/service"
@@ -130,7 +131,159 @@ func newAccountRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor, schedul
 	return &accountRepository{client: client, sql: sqlq, schedulerCache: schedulerCache}
 }
 
+func accountAdminPredicate(ctx context.Context) (dbpredicate.Account, bool) {
+	accountAdminID, scoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !scoped {
+		return nil, false
+	}
+	return dbaccount.AccountAdminIDEQ(accountAdminID), true
+}
+
+// accountAdminSQLScope returns an optional owner predicate for raw SQL
+// statements.  Background workers and super-administrator requests do not put
+// AccountAdminID in their context, so their SQL (and positional placeholders)
+// remains unchanged.  Restricted account-administrator requests receive an
+// explicit predicate in the final statement, rather than relying on a prior
+// read performed by a handler or service.
+func accountAdminSQLScope(ctx context.Context, column string, placeholder int) (string, any, bool) {
+	accountAdminID, scoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !scoped {
+		return "", nil, false
+	}
+	return " AND " + column + " = $" + itoa(placeholder), accountAdminID, true
+}
+
+func accountQueryWithScope(ctx context.Context, query *dbent.AccountQuery) *dbent.AccountQuery {
+	if predicate, scoped := accountAdminPredicate(ctx); scoped {
+		return query.Where(predicate)
+	}
+	return query
+}
+
+// applyScopedAccountAdminSupplyRate enforces the account administrator's
+// centrally configured payout multiplier at the repository boundary. Most
+// admin writes pass through AdminService, but CRS synchronization and a few
+// legacy/internal paths persist Account values directly. Those paths still
+// carry the authenticated scope in context, so they must not be able to
+// create or retain an account with a caller-supplied/default multiplier.
+func applyScopedAccountAdminSupplyRate(ctx context.Context, client *dbent.Client, account *service.Account) error {
+	ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !scoped {
+		return nil
+	}
+	if client == nil {
+		return errors.New("account administrator supply rate requires a database client")
+	}
+	if account == nil {
+		return service.ErrAccountNilInput
+	}
+	multiplier, err := lockedAccountAdminSupplyRate(ctx, client, ownerID)
+	if err != nil {
+		return err
+	}
+	account.AccountAdminID = &ownerID
+	account.RateMultiplier = &multiplier
+	account.Extra = forceScopedAccountAdminSupplyExtra(ctx, account.Extra)
+	return nil
+}
+
+// The owner row is updated before its accounts when a super administrator
+// changes the rate. FOR SHARE conflicts with that update, so a scoped write
+// cannot read an old rate and then overwrite the newly synchronized accounts.
+// Callers must hold the lock in the same transaction as their account write.
+func lockedAccountAdminSupplyRate(ctx context.Context, exec sqlExecutor, ownerID int64) (float64, error) {
+	rows, err := exec.QueryContext(ctx, `
+		SELECT supply_rate_multiplier FROM users
+		WHERE id = $1 AND role = $2 AND status = $3 AND deleted_at IS NULL
+		FOR SHARE
+	`, ownerID, service.RoleAccountAdmin, service.StatusActive)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return 0, err
+		}
+		return 0, service.ErrAccountNotFound
+	}
+	var multiplier float64
+	if err := rows.Scan(&multiplier); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	return multiplier, nil
+}
+
+// forceScopedAccountAdminSupplyExtra applies the account-administrator policy
+// to JSONB patches at the repository boundary.  The service layer normally
+// strips these keys, but a few internal workers and compatibility callers write
+// Account/Extra values directly.  Returning the original map for unscoped
+// callers keeps the super-administrator and background-worker paths unchanged.
+func forceScopedAccountAdminSupplyExtra(ctx context.Context, extra map[string]any) map[string]any {
+	if _, scoped := ctxkey.AccountAdminIDFromContext(ctx); !scoped {
+		return extra
+	}
+	forced := make(map[string]any, len(extra)+2)
+	for key, value := range extra {
+		forced[key] = value
+	}
+	forced[service.UpstreamBillingProbeEnabledExtraKey] = false
+	forced[service.UpstreamBillingRateSyncEnabledExtraKey] = false
+	return forced
+}
+
+// requireScopedAccount prevents join-table mutations from being used as an
+// ownership bypass.  It is intentionally a no-op for unscoped callers so
+// gateway workers retain their existing query/transaction behavior.
+func (r *accountRepository) requireScopedAccount(ctx context.Context, accountID int64) error {
+	if _, scoped := accountAdminPredicate(ctx); !scoped {
+		return nil
+	}
+	exists, err := accountQueryWithScope(ctx, r.client.Account.Query()).
+		Where(dbaccount.IDEQ(accountID)).
+		Exist(ctx)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return service.ErrAccountNotFound
+	}
+	return nil
+}
+
 func (r *accountRepository) Create(ctx context.Context, account *service.Account) error {
+	if _, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		if r.client == nil {
+			return errors.New("account administrator creation requires a transaction-capable client")
+		}
+		client := r.client
+		var tx *dbent.Tx
+		if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+			client = contextTx.Client()
+		} else {
+			var err error
+			tx, err = r.client.Tx(ctx)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+		if err := createAccountRecord(ctx, client, account); err != nil {
+			return err
+		}
+		if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &account.ID, nil, buildSchedulerGroupPayload(account.GroupIDs)); err != nil {
+			return err
+		}
+		if tx != nil {
+			return tx.Commit()
+		}
+		return nil
+	}
 	if err := createAccountRecord(ctx, r.client, account); err != nil {
 		return err
 	}
@@ -170,6 +323,13 @@ func (r *accountRepository) CreateWithAutomaticProxy(ctx context.Context, accoun
 			exec = client
 		} else {
 			exec = client
+		}
+	}
+	if ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		// Bulk auto-assignment takes the owner lock before proxy locks. Use
+		// the same order here to avoid a cycle between concurrent assignments.
+		if _, err := lockedAccountAdminSupplyRate(ctx, client, ownerID); err != nil {
+			return err
 		}
 	}
 
@@ -216,6 +376,10 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 		return service.ErrAccountNilInput
 	}
 
+	if err := applyScopedAccountAdminSupplyRate(ctx, client, account); err != nil {
+		return err
+	}
+
 	builder := client.Account.Create().
 		SetName(account.Name).
 		SetNillableNotes(account.Notes).
@@ -229,6 +393,9 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 		SetErrorMessage(account.ErrorMessage).
 		SetSchedulable(account.Schedulable).
 		SetAutoPauseOnExpired(account.AutoPauseOnExpired)
+	if account.AccountAdminID != nil {
+		builder.SetAccountAdminID(*account.AccountAdminID)
+	}
 
 	if account.RateMultiplier != nil {
 		builder.SetRateMultiplier(*account.RateMultiplier)
@@ -287,18 +454,24 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 	if account == nil {
 		return service.ErrAccountNilInput
 	}
-	tx, err := r.client.Tx(ctx)
-	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
-		return err
-	}
-
 	var txClient *dbent.Client
-	if err == nil {
-		defer func() { _ = tx.Rollback() }()
-		txClient = tx.Client()
+	var tx *dbent.Tx
+	if contextTx := dbent.TxFromContext(ctx); contextTx != nil {
+		txClient = contextTx.Client()
 	} else {
-		// Reuse a caller-owned transaction when this repository is already transactional.
-		txClient = r.client
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			txClient = tx.Client()
+		} else {
+			// A repository backed by a transactional client owns no commit here.
+			txClient = r.client
+		}
 	}
 	groupIDs := make([]int64, 0, len(groups))
 	for i := range groups {
@@ -340,7 +513,7 @@ func (r *accountRepository) CreateWithAccountGroups(ctx context.Context, account
 }
 
 func (r *accountRepository) GetByID(ctx context.Context, id int64) (*service.Account, error) {
-	m, err := r.client.Account.Query().Where(dbaccount.IDEQ(id)).Only(ctx)
+	m, err := accountQueryWithScope(ctx, r.client.Account.Query()).Where(dbaccount.IDEQ(id)).Only(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, service.ErrAccountNotFound, nil)
 	}
@@ -377,8 +550,7 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 		return []*service.Account{}, nil
 	}
 
-	entAccounts, err := r.client.Account.
-		Query().
+	entAccounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(dbaccount.IDIn(uniqueIDs...)).
 		WithProxy().
 		All(ctx)
@@ -445,7 +617,7 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 //   - 不加载完整的账号实体及其关联数据（Groups、Proxy 等）
 //   - 适用于删除前的存在性检查等只需判断有无的场景
 func (r *accountRepository) ExistsByID(ctx context.Context, id int64) (bool, error) {
-	exists, err := r.client.Account.Query().Where(dbaccount.IDEQ(id)).Exist(ctx)
+	exists, err := accountQueryWithScope(ctx, r.client.Account.Query()).Where(dbaccount.IDEQ(id)).Exist(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -461,7 +633,7 @@ func (r *accountRepository) GetByCRSAccountID(ctx context.Context, crsAccountID 
 	// 排除 spark 影子账号(parent_account_id 非空):影子不持凭据,绝不能被 CRS 当作普通账号
 	// 更新而覆盖 type/credentials/proxy。即便影子 Extra 被误写入 crs_account_id 也不会命中
 	// (外审第7轮 P1)。
-	m, err := r.client.Account.Query().
+	m, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(dbaccount.ParentAccountIDIsNil()).
 		Where(func(s *entsql.Selector) {
 			s.Where(sqljson.ValueEQ(dbaccount.FieldExtra, crsAccountID, sqljson.Path("crs_account_id")))
@@ -487,14 +659,20 @@ func (r *accountRepository) GetByCRSAccountID(ctx context.Context, crsAccountID 
 func (r *accountRepository) ListCRSAccountIDs(ctx context.Context) (map[string]int64, error) {
 	// parent_account_id IS NULL 排除 spark 影子账号:影子不是 CRS 账号,绝不能进 CRS 同步映射
 	// (否则会被当普通账号更新而覆盖 type/credentials/proxy)(外审第7轮 P1)。
-	rows, err := r.sql.QueryContext(ctx, `
+	query := `
 		SELECT id, extra->>'crs_account_id'
 		FROM accounts
 		WHERE deleted_at IS NULL
 			AND parent_account_id IS NULL
 			AND extra->>'crs_account_id' IS NOT NULL
 			AND extra->>'crs_account_id' != ''
-	`)
+	`
+	args := []any{}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -517,6 +695,179 @@ func (r *accountRepository) ListCRSAccountIDs(ctx context.Context) (map[string]i
 
 func (r *accountRepository) Update(ctx context.Context, account *service.Account) error {
 	return r.updateAccount(ctx, account, nil, nil, account.RateMultiplier)
+}
+
+// UpdateSupplyRateMultiplierByAccountAdmin updates the live account snapshots
+// and emits their durable scheduler notification in one transaction. When the
+// caller already supplied an Ent transaction, commit remains the caller's job.
+func (r *accountRepository) UpdateSupplyRateMultiplierByAccountAdmin(
+	ctx context.Context,
+	accountAdminID int64,
+	multiplier float64,
+) ([]int64, error) {
+	if accountAdminID <= 0 {
+		return nil, fmt.Errorf("account administrator ID must be greater than zero")
+	}
+	if scopedID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped && scopedID != accountAdminID {
+		return nil, service.ErrAccountNotFound
+	}
+
+	contextTx := dbent.TxFromContext(ctx)
+	var (
+		exec sqlExecutor
+		tx   *dbent.Tx
+	)
+	if contextTx != nil {
+		exec = contextTx.Client()
+	} else {
+		if r.client == nil {
+			return nil, errors.New("account administrator rate update requires a transaction-capable client")
+		}
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return nil, err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			exec = tx.Client()
+		} else {
+			exec = r.client
+		}
+	}
+
+	rows, err := exec.QueryContext(ctx, `
+		UPDATE accounts
+		SET rate_multiplier = $1,
+			extra = COALESCE(extra, '{}'::jsonb)
+				|| '{"upstream_billing_probe_enabled": false, "upstream_billing_rate_sync_enabled": false}'::jsonb,
+			updated_at = NOW()
+		WHERE account_admin_id = $2
+			AND deleted_at IS NULL
+		RETURNING id
+	`, multiplier, accountAdminID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	accountIDs := make([]int64, 0)
+	for rows.Next() {
+		var accountID int64
+		if err := rows.Scan(&accountID); err != nil {
+			return nil, err
+		}
+		accountIDs = append(accountIDs, accountID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(accountIDs, func(i, j int) bool { return accountIDs[i] < accountIDs[j] })
+
+	if len(accountIDs) > 0 {
+		if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, map[string]any{
+			"account_ids": accountIDs,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return accountIDs, nil
+}
+
+// ReleaseAccountAdminOwnership detaches every account from an account
+// administrator that is being demoted or soft-deleted.  Account ownership is
+// intentionally cleared even for already soft-deleted rows: the users table
+// remains physically present after a soft delete, so relying on the foreign
+// key's ON DELETE SET NULL would leave stale ownership and payout metadata.
+// The caller may provide an Ent transaction context; otherwise this method
+// owns and commits a short transaction itself.
+func (r *accountRepository) ReleaseAccountAdminOwnership(
+	ctx context.Context,
+	accountAdminID int64,
+) ([]int64, error) {
+	if accountAdminID <= 0 {
+		return nil, fmt.Errorf("account administrator ID must be greater than zero")
+	}
+	if scopedID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped && scopedID != accountAdminID {
+		return nil, service.ErrAccountNotFound
+	}
+
+	contextTx := dbent.TxFromContext(ctx)
+	var (
+		exec sqlExecutor
+		tx   *dbent.Tx
+	)
+	if contextTx != nil {
+		exec = contextTx.Client()
+	} else {
+		if r.client == nil {
+			return nil, errors.New("account administrator ownership release requires a transaction-capable client")
+		}
+		var err error
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return nil, err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			exec = tx.Client()
+		} else {
+			exec = r.client
+		}
+	}
+
+	rows, err := exec.QueryContext(ctx, `
+		UPDATE accounts
+		SET account_admin_id = NULL,
+			rate_multiplier = 1.0,
+			extra = COALESCE(extra, '{}'::jsonb)
+				|| '{"upstream_billing_probe_enabled": false, "upstream_billing_rate_sync_enabled": false}'::jsonb,
+			updated_at = NOW()
+		WHERE account_admin_id = $1
+		RETURNING id
+	`, accountAdminID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	accountIDs := make([]int64, 0)
+	for rows.Next() {
+		var accountID int64
+		if err := rows.Scan(&accountID); err != nil {
+			return nil, err
+		}
+		accountIDs = append(accountIDs, accountID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(accountIDs, func(i, j int) bool { return accountIDs[i] < accountIDs[j] })
+
+	if len(accountIDs) > 0 {
+		if err := enqueueSchedulerOutbox(ctx, exec, service.SchedulerOutboxEventAccountBulkChanged, nil, nil, map[string]any{
+			"account_ids": accountIDs,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return accountIDs, nil
+}
+
+func (r *accountRepository) RefreshSchedulerAccountSnapshots(ctx context.Context, accountIDs []int64) {
+	r.syncSchedulerAccountSnapshots(ctx, accountIDs)
 }
 
 // UpdateWithAccountBillingSettings applies an admin account edit while
@@ -703,6 +1054,9 @@ func (r *accountRepository) updateLockedAccount(
 	explicitRateSyncEnabled *bool,
 	explicitRateMultiplier *float64,
 ) (*dbent.Account, error) {
+	if err := applyScopedAccountAdminSupplyRate(ctx, client, account); err != nil {
+		return nil, err
+	}
 	extra, err := lockAndMergeAccountProbeExtra(ctx, client, account, explicitProbeEnabled, explicitRateSyncEnabled)
 	if err != nil {
 		return nil, err
@@ -728,8 +1082,16 @@ func (r *accountRepository) updateLockedAccount(
 		SetSchedulable(schedulable).
 		SetAutoPauseOnExpired(account.AutoPauseOnExpired)
 
-	if explicitRateMultiplier != nil {
+	// A scoped account administrator may not override the centrally configured
+	// supply multiplier through a round-tripped Account value or a legacy
+	// explicit-rate argument. applyScopedAccountAdminSupplyRate has already
+	// loaded the authoritative value onto account.RateMultiplier.
+	_, accountAdminScoped := ctxkey.AccountAdminIDFromContext(ctx)
+	if !accountAdminScoped && explicitRateMultiplier != nil {
 		builder.SetRateMultiplier(*explicitRateMultiplier)
+	}
+	if accountAdminScoped && account.RateMultiplier != nil {
+		builder.SetRateMultiplier(*account.RateMultiplier)
 	}
 	if account.LoadFactor != nil {
 		builder.SetLoadFactor(*account.LoadFactor)
@@ -788,6 +1150,13 @@ func (r *accountRepository) updateLockedAccount(
 
 	builder.SetQuotaDimension(dbaccount.QuotaDimension(account.QuotaDimensionOrDefault()))
 	builder.SetNillableParentAccountID(account.ParentAccountID)
+	if accountAdminID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		// A restricted administrator may edit only its own accounts and may not
+		// clear or reassign the ownership column through a round-tripped payload.
+		builder.SetAccountAdminID(accountAdminID).Where(dbaccount.AccountAdminIDEQ(accountAdminID))
+	} else {
+		builder.SetNillableAccountAdminID(account.AccountAdminID)
+	}
 
 	return builder.Save(ctx)
 }
@@ -807,20 +1176,20 @@ func lockAndMergeAccountProbeExtra(
 	if account.ProxyID != nil {
 		proxyID = *account.ProxyID
 	}
-	rows, err := client.QueryContext(ctx, `
+	query := `
 		SELECT
 			platform = $2
 			AND type = $3
 			AND credentials = $4::jsonb
 			AND proxy_id IS NOT DISTINCT FROM $5,
 			COALESCE(
-				platform IN (`+ollamaCloudUsagePlatformsSQL+`)
-				AND $2 IN (`+ollamaCloudUsagePlatformsSQL+`)
+				platform IN (` + ollamaCloudUsagePlatformsSQL + `)
+				AND $2 IN (` + ollamaCloudUsagePlatformsSQL + `)
 				AND type = 'apikey'
 				AND $3 = 'apikey'
 				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key'
-				AND `+ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'")+`
-				AND `+ollamaCloudBaseURLMatchesSQL("$4::jsonb ->> 'base_url'")+`,
+				AND ` + ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'") + `
+				AND ` + ollamaCloudBaseURLMatchesSQL("$4::jsonb ->> 'base_url'") + `,
 				false
 			),
 			proxy_id IS NOT DISTINCT FROM $5,
@@ -831,9 +1200,16 @@ func lockAndMergeAccountProbeExtra(
 			extra -> 'ollama_cloud_usage_auto_refresh',
 			extra -> 'ollama_cloud_usage_snapshot'
 		FROM accounts
-		WHERE id = $1 AND deleted_at IS NULL
+		WHERE id = $1 AND deleted_at IS NULL`
+	args := []any{account.ID, account.Platform, account.Type, string(credentials), proxyID}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	query += `
 		FOR NO KEY UPDATE
-	`, account.ID, account.Platform, account.Type, string(credentials), proxyID)
+	`
+	rows, err := client.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -995,21 +1371,21 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 			client = tx.Client()
 		}
 	}
-	result, err := client.ExecContext(ctx, `
+	query := `
 		UPDATE accounts
 		SET
 			credentials = $1::jsonb,
 			extra = CASE
 				-- 凭证整体未变化 ⇒ Ollama 组身份必然未变化；顶层 DISTINCT 守卫防止
 				-- 非 Ollama 账号的无变化持久化误清探测快照或重写 NULL extra。
-				WHEN platform IN (`+ollamaCloudUsagePlatformsSQL+`)
+				WHEN platform IN (` + ollamaCloudUsagePlatformsSQL + `)
 					AND type = 'apikey'
 					AND credentials IS DISTINCT FROM $1::jsonb
 					AND (
 						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
 						OR NOT (
-							`+ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'")+`
-							AND `+ollamaCloudBaseURLMatchesSQL("$1::jsonb ->> 'base_url'")+`
+							` + ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'") + `
+							AND ` + ollamaCloudBaseURLMatchesSQL("$1::jsonb ->> 'base_url'") + `
 						)
 					)
 				THEN COALESCE(extra, '{}'::jsonb)
@@ -1025,8 +1401,13 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 				ELSE extra
 			END,
 			updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
-	`, string(payload), id)
+		WHERE id = $2 AND deleted_at IS NULL`
+	args := []any{string(payload), id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := client.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -1052,6 +1433,9 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 }
 
 func (r *accountRepository) Delete(ctx context.Context, id int64) error {
+	if err := r.requireScopedAccount(ctx, id); err != nil {
+		return err
+	}
 	groupIDs, err := r.loadAccountGroupIDs(ctx, id)
 	if err != nil {
 		return err
@@ -1071,14 +1455,27 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 		txClient = r.client
 	}
 
-	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(id)).Exec(ctx); err != nil {
+	accountGroupDelete := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(id))
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		accountGroupDelete.Where(dbaccountgroup.HasAccountWith(ownerPredicate))
+	}
+	if _, err := accountGroupDelete.Exec(ctx); err != nil {
 		return err
 	}
 	if _, err := txClient.ExecContext(ctx, "DELETE FROM scheduled_test_plans WHERE account_id = $1", id); err != nil {
 		return err
 	}
-	if _, err := txClient.Account.Delete().Where(dbaccount.IDEQ(id)).Exec(ctx); err != nil {
+	accountDelete := txClient.Account.Delete().Where(dbaccount.IDEQ(id))
+	ownerPredicate, scoped := accountAdminPredicate(ctx)
+	if scoped {
+		accountDelete.Where(ownerPredicate)
+	}
+	deleted, err := accountDelete.Exec(ctx)
+	if err != nil {
 		return err
+	}
+	if scoped && deleted == 0 {
+		return service.ErrAccountNotFound
 	}
 
 	if tx != nil {
@@ -1097,8 +1494,8 @@ func (r *accountRepository) List(ctx context.Context, params pagination.Paginati
 	return r.ListWithFilters(ctx, params, "", "", "", "", 0, "")
 }
 
-func (r *accountRepository) accountListFilteredQuery(platform, accountType, status, search string, groupID int64, privacyMode string) *dbent.AccountQuery {
-	q := r.client.Account.Query()
+func (r *accountRepository) accountListFilteredQuery(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) *dbent.AccountQuery {
+	q := accountQueryWithScope(ctx, r.client.Account.Query())
 
 	if platform != "" {
 		q = q.Where(dbaccount.PlatformEQ(platform))
@@ -1194,7 +1591,7 @@ func (r *accountRepository) accountListFilteredQuery(platform, accountType, stat
 }
 
 func (r *accountRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, *pagination.PaginationResult, error) {
-	q := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode)
+	q := r.accountListFilteredQuery(ctx, platform, accountType, status, search, groupID, privacyMode)
 	// Clone before Count so interceptor-appended predicates (SoftDeleteMixin's
 	// deleted_at IS NULL) don't accumulate on the shared builder and pollute the
 	// subsequent list query. Same pattern used in group_repo/promo_code_repo/user_repo
@@ -1224,7 +1621,7 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 }
 
 func (r *accountRepository) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, error) {
-	accounts, err := r.accountListFilteredQuery(platform, accountType, status, search, groupID, privacyMode).All(ctx)
+	accounts, err := r.accountListFilteredQuery(ctx, platform, accountType, status, search, groupID, privacyMode).All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1236,7 +1633,7 @@ func (r *accountRepository) ListOpsAccountsForStats(ctx context.Context, platfor
 		return []service.Account{}, nil
 	}
 
-	q := r.client.Account.Query()
+	q := accountQueryWithScope(ctx, r.client.Account.Query())
 	if platformFilter = strings.TrimSpace(platformFilter); platformFilter != "" {
 		q = q.Where(dbaccount.PlatformEQ(platformFilter))
 	}
@@ -1369,7 +1766,7 @@ func (r *accountRepository) ListByGroup(ctx context.Context, groupID int64) ([]s
 }
 
 func (r *accountRepository) ListActive(ctx context.Context) ([]service.Account, error) {
-	accounts, err := r.client.Account.Query().
+	accounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(dbaccount.StatusEQ(service.StatusActive)).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -1436,8 +1833,16 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 	query += `
 		ORDER BY id ASC
 		LIMIT $3`
+	args := []any{pq.Array(options.Platforms), options.AfterID, options.Limit}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		// The candidate SQL has a stable base LIMIT placeholder.  Put the owner
+		// predicate before ORDER BY so scoped refreshes cannot hydrate another
+		// administrator's account even if IDs are supplied by a stale cursor.
+		query = strings.Replace(query, "\n\t\tORDER BY id ASC", ownerClause+"\n\t\tORDER BY id ASC", 1)
+		args = append(args, ownerArg)
+	}
 
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(options.Platforms), options.AfterID, options.Limit)
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1485,7 +1890,7 @@ func (r *accountRepository) ListOAuthRefreshCandidatePage(ctx context.Context, o
 }
 
 func (r *accountRepository) ListByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
-	accounts, err := r.client.Account.Query().
+	accounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
@@ -1500,12 +1905,22 @@ func (r *accountRepository) ListByPlatform(ctx context.Context, platform string)
 
 func (r *accountRepository) UpdateLastUsed(ctx context.Context, id int64) error {
 	now := time.Now()
-	_, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
-		SetLastUsedAt(now).
-		Save(ctx)
-	if err != nil {
-		return err
+		SetLastUsedAt(now)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+		updated, err := builder.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return service.ErrAccountNotFound
+		}
+	} else {
+		if _, err := builder.Save(ctx); err != nil {
+			return err
+		}
 	}
 	payload := map[string]any{
 		"last_used": map[string]int64{
@@ -1537,10 +1952,25 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 
 	caseSQL += " END, updated_at = NOW() WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
 	args = append(args, pq.Array(ids))
+	ownerScoped := false
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", idx+1); scoped {
+		caseSQL += ownerClause
+		args = append(args, ownerArg)
+		ownerScoped = true
+	}
 
-	_, err := r.sql.ExecContext(ctx, caseSQL, args...)
+	result, err := r.sql.ExecContext(ctx, caseSQL, args...)
 	if err != nil {
 		return err
+	}
+	if ownerScoped {
+		affected, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return rowsErr
+		}
+		if affected != int64(len(uniquePositiveInt64s(ids))) {
+			return service.ErrAccountNotFound
+		}
 	}
 	lastUsedPayload := make(map[string]int64, len(updates))
 	for id, ts := range updates {
@@ -1554,13 +1984,21 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 }
 
 func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg string) error {
-	_, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetStatus(service.StatusError).
 		SetErrorMessage(errorMsg).
-		SetSchedulable(false).
-		Save(ctx)
-	if err != nil {
+		SetSchedulable(false)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+		updated, err := builder.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return service.ErrAccountNotFound
+		}
+	} else if _, err := builder.Save(ctx); err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -1576,7 +2014,7 @@ func (r *accountRepository) SetGrokCredentialErrorIfMatch(
 	snapshot service.GrokCredentialMutationSnapshot,
 	errorMsg string,
 ) (bool, error) {
-	result, err := r.sql.ExecContext(ctx, `
+	query := `
 		WITH updated AS (
 		UPDATE accounts AS a
 		SET status = $1,
@@ -1599,14 +2037,21 @@ func (r *accountRepository) SetGrokCredentialErrorIfMatch(
 				a.proxy_id IS NOT NULL AND NOT EXISTS (
 					SELECT 1 FROM proxies p WHERE p.id = a.proxy_id AND p.deleted_at IS NULL
 				)
-			))
+				))`
+	args := []any{service.StatusError, errorMsg, id, service.StatusActive, service.PlatformGrok, service.AccountTypeOAuth,
+		snapshot.CredentialsJSON, snapshot.ProxyID, string(service.GrokCredentialReasonProxyInvalid),
+		service.SchedulerOutboxEventAccountChanged}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "a.account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	query += `
 		RETURNING a.id
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		SELECT $10, updated.id, NULL, NULL FROM updated
-	`, service.StatusError, errorMsg, id, service.StatusActive, service.PlatformGrok, service.AccountTypeOAuth,
-		snapshot.CredentialsJSON, snapshot.ProxyID, string(service.GrokCredentialReasonProxyInvalid),
-		service.SchedulerOutboxEventAccountChanged)
+	`
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -1636,7 +2081,7 @@ func (r *accountRepository) SetGrokOAuthErrorIfCredentialsUnchanged(
 	if err != nil {
 		return false, err
 	}
-	result, err := r.sql.ExecContext(ctx, `
+	query := `
 		WITH updated AS (
 		UPDATE accounts AS a
 		SET status = $1,
@@ -1654,16 +2099,14 @@ func (r *accountRepository) SetGrokOAuthErrorIfCredentialsUnchanged(
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		SELECT $8, updated.id, NULL, NULL FROM updated
-	`,
-		service.StatusError,
-		errorMsg,
-		id,
-		service.PlatformGrok,
-		service.AccountTypeOAuth,
-		service.StatusActive,
-		string(expectedJSON),
-		service.SchedulerOutboxEventAccountChanged,
-	)
+	`
+	args := []any{service.StatusError, errorMsg, id, service.PlatformGrok, service.AccountTypeOAuth,
+		service.StatusActive, string(expectedJSON), service.SchedulerOutboxEventAccountChanged}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "a.account_admin_id", len(args)+1); scoped {
+		query = strings.Replace(query, "\n\t\tRETURNING a.id", ownerClause+"\n\t\tRETURNING a.id", 1)
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -1701,7 +2144,7 @@ func (r *accountRepository) UpdateGrokOAuthCredentialsIfUnchanged(
 	if err != nil {
 		return false, err
 	}
-	result, err := r.sql.ExecContext(ctx, `
+	query := `
 		WITH updated AS (
 		UPDATE accounts AS a
 		SET credentials = $1::jsonb,
@@ -1716,15 +2159,14 @@ func (r *accountRepository) UpdateGrokOAuthCredentialsIfUnchanged(
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		SELECT $7, updated.id, NULL, NULL FROM updated
-	`,
-		string(credentialsJSON),
-		id,
-		service.PlatformGrok,
-		service.AccountTypeOAuth,
-		string(expectedJSON),
-		expectedProxyID,
-		service.SchedulerOutboxEventAccountChanged,
-	)
+	`
+	args := []any{string(credentialsJSON), id, service.PlatformGrok, service.AccountTypeOAuth,
+		string(expectedJSON), expectedProxyID, service.SchedulerOutboxEventAccountChanged}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "a.account_admin_id", len(args)+1); scoped {
+		query = strings.Replace(query, "\n\t\tRETURNING a.id", ownerClause+"\n\t\tRETURNING a.id", 1)
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -1757,7 +2199,7 @@ func (r *accountRepository) SetGrokOAuthRefreshErrorIfCredentialsUnchanged(
 	if err != nil {
 		return false, err
 	}
-	result, err := r.sql.ExecContext(ctx, `
+	query := `
 		WITH updated AS (
 		UPDATE accounts AS a
 		SET status = $1,
@@ -1775,17 +2217,14 @@ func (r *accountRepository) SetGrokOAuthRefreshErrorIfCredentialsUnchanged(
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		SELECT $9, updated.id, NULL, NULL FROM updated
-	`,
-		service.StatusError,
-		errorMsg,
-		id,
-		service.PlatformGrok,
-		service.AccountTypeOAuth,
-		service.StatusActive,
-		string(expectedJSON),
-		expectedProxyID,
-		service.SchedulerOutboxEventAccountChanged,
-	)
+	`
+	args := []any{service.StatusError, errorMsg, id, service.PlatformGrok, service.AccountTypeOAuth,
+		service.StatusActive, string(expectedJSON), expectedProxyID, service.SchedulerOutboxEventAccountChanged}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "a.account_admin_id", len(args)+1); scoped {
+		query = strings.Replace(query, "\n\t\tRETURNING a.id", ownerClause+"\n\t\tRETURNING a.id", 1)
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -1818,7 +2257,7 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 	if err != nil {
 		return false, err
 	}
-	result, err := r.sql.ExecContext(ctx, `
+	query := `
 		WITH updated AS (
 		UPDATE accounts AS a
 		SET temp_unschedulable_until = $1,
@@ -1836,17 +2275,14 @@ func (r *accountRepository) SetGrokOAuthRefreshTempUnschedulableIfCredentialsUnc
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		SELECT $9, updated.id, NULL, NULL FROM updated
-	`,
-		until,
-		reason,
-		id,
-		service.PlatformGrok,
-		service.AccountTypeOAuth,
-		service.StatusActive,
-		string(expectedJSON),
-		expectedProxyID,
-		service.SchedulerOutboxEventAccountChanged,
-	)
+	`
+	args := []any{until, reason, id, service.PlatformGrok, service.AccountTypeOAuth,
+		service.StatusActive, string(expectedJSON), expectedProxyID, service.SchedulerOutboxEventAccountChanged}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "a.account_admin_id", len(args)+1); scoped {
+		query = strings.Replace(query, "\n\t\tRETURNING a.id", ownerClause+"\n\t\tRETURNING a.id", 1)
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -1940,12 +2376,20 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 }
 
 func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
-	_, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetStatus(service.StatusActive).
-		SetErrorMessage("").
-		Save(ctx)
-	if err != nil {
+		SetErrorMessage("")
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+		updated, err := builder.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return service.ErrAccountNotFound
+		}
+	} else if _, err := builder.Save(ctx); err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -1956,6 +2400,9 @@ func (r *accountRepository) ClearError(ctx context.Context, id int64) error {
 }
 
 func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID int64, priority int) error {
+	if err := r.requireScopedAccount(ctx, accountID); err != nil {
+		return err
+	}
 	tx, err := r.client.Tx(ctx)
 	if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
 		return err
@@ -1989,12 +2436,18 @@ func (r *accountRepository) AddToGroup(ctx context.Context, accountID, groupID i
 }
 
 func (r *accountRepository) RemoveFromGroup(ctx context.Context, accountID, groupID int64) error {
-	_, err := r.client.AccountGroup.Delete().
+	if err := r.requireScopedAccount(ctx, accountID); err != nil {
+		return err
+	}
+	deleteBuilder := r.client.AccountGroup.Delete().
 		Where(
 			dbaccountgroup.AccountIDEQ(accountID),
 			dbaccountgroup.GroupIDEQ(groupID),
-		).
-		Exec(ctx)
+		)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		deleteBuilder.Where(dbaccountgroup.HasAccountWith(ownerPredicate))
+	}
+	_, err := deleteBuilder.Exec(ctx)
 	if err != nil {
 		return err
 	}
@@ -2006,6 +2459,9 @@ func (r *accountRepository) RemoveFromGroup(ctx context.Context, accountID, grou
 }
 
 func (r *accountRepository) GetGroups(ctx context.Context, accountID int64) ([]service.Group, error) {
+	if err := r.requireScopedAccount(ctx, accountID); err != nil {
+		return nil, err
+	}
 	groups, err := r.client.Group.Query().
 		Where(
 			dbgroup.HasAccountsWith(dbaccount.IDEQ(accountID)),
@@ -2023,6 +2479,9 @@ func (r *accountRepository) GetGroups(ctx context.Context, accountID int64) ([]s
 }
 
 func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, groupIDs []int64) error {
+	if err := r.requireScopedAccount(ctx, accountID); err != nil {
+		return err
+	}
 	existingGroupIDs, err := r.loadAccountGroupIDs(ctx, accountID)
 	if err != nil {
 		return err
@@ -2045,7 +2504,11 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 		return err
 	}
 
-	if _, err := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
+	accountGroupDelete := txClient.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID))
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		accountGroupDelete.Where(dbaccountgroup.HasAccountWith(ownerPredicate))
+	}
+	if _, err := accountGroupDelete.Exec(ctx); err != nil {
 		return err
 	}
 
@@ -2082,7 +2545,7 @@ func (r *accountRepository) BindGroups(ctx context.Context, accountID int64, gro
 }
 
 func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Account, error) {
-	accounts, err := r.schedulableAccountsQuery(time.Now()).All(ctx)
+	accounts, err := r.schedulableAccountsQuery(ctx, time.Now()).All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -2090,7 +2553,7 @@ func (r *accountRepository) ListSchedulable(ctx context.Context) ([]service.Acco
 }
 
 func (r *accountRepository) ListSchedulableAccountLoads(ctx context.Context) ([]service.AccountWithConcurrency, error) {
-	accounts, err := r.schedulableAccountsQuery(time.Now()).
+	accounts, err := r.schedulableAccountsQuery(ctx, time.Now()).
 		Select(
 			dbaccount.FieldID,
 			dbaccount.FieldConcurrency,
@@ -2116,8 +2579,8 @@ func (r *accountRepository) ListSchedulableAccountLoads(ctx context.Context) ([]
 	return loads, nil
 }
 
-func (r *accountRepository) schedulableAccountsQuery(now time.Time) *dbent.AccountQuery {
-	return r.client.Account.Query().
+func (r *accountRepository) schedulableAccountsQuery(ctx context.Context, now time.Time) *dbent.AccountQuery {
+	return accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(
 			dbaccount.StatusEQ(service.StatusActive),
 			dbaccount.SchedulableEQ(true),
@@ -2164,7 +2627,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 		return rows, nil
 	}
 
-	rows, err := r.sql.QueryContext(ctx, `
+	query := `
 		SELECT
 			ag.group_id,
 			a.id AS account_id,
@@ -2183,8 +2646,16 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
 			AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= $3)
+	`
+	args := []any{pq.Array(groupIDs), service.StatusActive, time.Now()}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "a.account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	query += `
 		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
-	`, pq.Array(groupIDs), service.StatusActive, time.Now())
+	`
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -2222,7 +2693,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 
 func (r *accountRepository) ListSchedulableByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
 	now := time.Now()
-	accounts, err := r.client.Account.Query().
+	accounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
@@ -2256,7 +2727,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 	// 仅返回可调度的活跃账号，并过滤处于过载/限流窗口的账号。
 	// 代理与分组信息统一在 accountsToService 中批量加载，避免 N+1 查询。
 	now := time.Now()
-	accounts, err := r.client.Account.Query().
+	accounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
@@ -2276,7 +2747,7 @@ func (r *accountRepository) ListSchedulableByPlatforms(ctx context.Context, plat
 
 func (r *accountRepository) ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]service.Account, error) {
 	now := time.Now()
-	accounts, err := r.client.Account.Query().
+	accounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(
 			dbaccount.PlatformEQ(platform),
 			dbaccount.StatusEQ(service.StatusActive),
@@ -2300,7 +2771,7 @@ func (r *accountRepository) ListSchedulableUngroupedByPlatforms(ctx context.Cont
 		return nil, nil
 	}
 	now := time.Now()
-	accounts, err := r.client.Account.Query().
+	accounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(
 			dbaccount.PlatformIn(platforms...),
 			dbaccount.StatusEQ(service.StatusActive),
@@ -2361,7 +2832,7 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 	if !includeGrouped {
 		preds = append(preds, dbaccount.Not(dbaccount.HasAccountGroups()))
 	}
-	accounts, err := r.client.Account.Query().
+	accounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(preds...).
 		Order(dbent.Asc(dbaccount.FieldPriority)).
 		All(ctx)
@@ -2373,12 +2844,20 @@ func (r *accountRepository) ListModelAvailabilityCandidates(
 
 func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
 	now := time.Now()
-	_, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetRateLimitedAt(now).
-		SetRateLimitResetAt(resetAt).
-		Save(ctx)
-	if err != nil {
+		SetRateLimitResetAt(resetAt)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+		updated, err := builder.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return service.ErrAccountNotFound
+		}
+	} else if _, err := builder.Save(ctx); err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -2393,7 +2872,7 @@ func (r *accountRepository) SetRateLimited(ctx context.Context, id int64, resetA
 // later reset boundary observed by another request or instance.
 func (r *accountRepository) SetRateLimitedIfLater(ctx context.Context, id int64, resetAt time.Time) error {
 	now := time.Now()
-	updated, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(
 			dbaccount.IDEQ(id),
 			dbaccount.Or(
@@ -2402,8 +2881,11 @@ func (r *accountRepository) SetRateLimitedIfLater(ctx context.Context, id int64,
 			),
 		).
 		SetRateLimitedAt(now).
-		SetRateLimitResetAt(resetAt).
-		Save(ctx)
+		SetRateLimitResetAt(resetAt)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+	}
+	updated, err := builder.Save(ctx)
 	if err != nil {
 		return err
 	}
@@ -2424,7 +2906,7 @@ func (r *accountRepository) SetRateLimitedIfLater(ctx context.Context, id int64,
 // by a successful request. Matching both timestamps prevents a stale success
 // from erasing a later clear/re-arm generation with an equal or shorter reset.
 func (r *accountRepository) ClearRateLimitIfObserved(ctx context.Context, id int64, observedLimitedAt, observedResetAt time.Time) (bool, error) {
-	updated, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(
 			dbaccount.IDEQ(id),
 			dbaccount.PlatformEQ(service.PlatformGrok),
@@ -2433,8 +2915,11 @@ func (r *accountRepository) ClearRateLimitIfObserved(ctx context.Context, id int
 			dbaccount.RateLimitResetAtEQ(observedResetAt),
 		).
 		ClearRateLimitedAt().
-		ClearRateLimitResetAt().
-		Save(ctx)
+		ClearRateLimitResetAt()
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+	}
+	updated, err := builder.Save(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -2482,11 +2967,14 @@ func (r *accountRepository) SetRateLimitedIfUnchanged(
 	}
 
 	now := time.Now()
-	updated, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(preds...).
 		SetRateLimitedAt(now).
-		SetRateLimitResetAt(newResetAt).
-		Save(ctx)
+		SetRateLimitResetAt(newResetAt)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+	}
+	updated, err := builder.Save(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -2524,9 +3012,7 @@ func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, sco
 	}
 
 	client := clientFromContext(ctx, r.client)
-	result, err := client.ExecContext(
-		ctx,
-		`UPDATE accounts SET 
+	query := `UPDATE accounts SET
 			extra = jsonb_set(
 				jsonb_set(COALESCE(extra, '{}'::jsonb), '{model_rate_limits}'::text[], COALESCE(extra->'model_rate_limits', '{}'::jsonb), true),
 				ARRAY['model_rate_limits', $1]::text[],
@@ -2534,10 +3020,16 @@ func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, sco
 				true
 			),
 			updated_at = NOW()
-		WHERE id = $3 AND deleted_at IS NULL`,
-		scope,
-		raw,
-		id,
+		WHERE id = $3 AND deleted_at IS NULL`
+	args := []any{scope, raw, id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := client.ExecContext(
+		ctx,
+		query,
+		args...,
 	)
 	if err != nil {
 		return err
@@ -2558,11 +3050,19 @@ func (r *accountRepository) SetModelRateLimit(ctx context.Context, id int64, sco
 }
 
 func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until time.Time) error {
-	_, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
-		SetOverloadUntil(until).
-		Save(ctx)
-	if err != nil {
+		SetOverloadUntil(until)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+		updated, err := builder.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return service.ErrAccountNotFound
+		}
+	} else if _, err := builder.Save(ctx); err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -2573,7 +3073,7 @@ func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until t
 }
 
 func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
-	result, err := r.sql.ExecContext(ctx, `
+	query := `
 		UPDATE accounts
 		SET temp_unschedulable_until = $1,
 			temp_unschedulable_reason = $2,
@@ -2588,7 +3088,13 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 					AND $2 NOT LIKE '{"source":"account_scheduling_threshold"%'
 				)
 			)
-	`, until, reason, id)
+	`
+	args := []any{until, reason, id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -2612,7 +3118,7 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 // source-compatible. The compare-and-swap guards against clearing a newer
 // authentication, transport, or custom-rule pause.
 func (r *accountRepository) ClearTempUnschedulableIfReason(ctx context.Context, id int64, until time.Time, reason string) (bool, error) {
-	result, err := r.sql.ExecContext(ctx, `
+	query := `
 		UPDATE accounts
 		SET temp_unschedulable_until = NULL,
 			temp_unschedulable_reason = NULL,
@@ -2622,7 +3128,13 @@ func (r *accountRepository) ClearTempUnschedulableIfReason(ctx context.Context, 
 			AND temp_unschedulable_until = $2
 			AND temp_unschedulable_reason = $3
 			AND temp_unschedulable_reason LIKE '{"source":"account_scheduling_threshold"%'
-	`, id, until, reason)
+	`
+	args := []any{id, until, reason}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -2644,7 +3156,7 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 	until time.Time,
 	reason string,
 ) (bool, error) {
-	result, err := r.sql.ExecContext(ctx, `
+	query := `
 		WITH updated AS (
 		UPDATE accounts AS a
 		SET temp_unschedulable_until = CASE
@@ -2669,8 +3181,14 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 		)
 		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
 		SELECT $9, updated.id, NULL, NULL FROM updated
-	`, until, reason, id, service.StatusActive, service.PlatformGrok, service.AccountTypeOAuth,
-		snapshot.CredentialsJSON, snapshot.ProxyID, service.SchedulerOutboxEventAccountChanged)
+	`
+	args := []any{until, reason, id, service.StatusActive, service.PlatformGrok, service.AccountTypeOAuth,
+		snapshot.CredentialsJSON, snapshot.ProxyID, service.SchedulerOutboxEventAccountChanged}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "a.account_admin_id", len(args)+1); scoped {
+		query = strings.Replace(query, "\n\t\tRETURNING a.id", ownerClause+"\n\t\tRETURNING a.id", 1)
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return false, err
 	}
@@ -2683,16 +3201,27 @@ func (r *accountRepository) SetGrokCredentialTempUnschedulableIfMatch(
 }
 
 func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64) error {
-	_, err := r.sql.ExecContext(ctx, `
+	query := `
 		UPDATE accounts
 		SET temp_unschedulable_until = NULL,
 			temp_unschedulable_reason = NULL,
 			updated_at = NOW()
 		WHERE id = $1
 			AND deleted_at IS NULL
-	`, id)
+	`
+	args := []any{id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
+	}
+	if affected, rowsErr := result.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if _, scoped := accountAdminPredicate(ctx); scoped && affected == 0 {
+		return service.ErrAccountNotFound
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue clear temp unschedulable failed: account=%d err=%v", id, err)
@@ -2702,13 +3231,21 @@ func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64
 }
 
 func (r *accountRepository) ClearRateLimit(ctx context.Context, id int64) error {
-	_, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		ClearRateLimitedAt().
 		ClearRateLimitResetAt().
-		ClearOverloadUntil().
-		Save(ctx)
-	if err != nil {
+		ClearOverloadUntil()
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+		updated, err := builder.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return service.ErrAccountNotFound
+		}
+	} else if _, err := builder.Save(ctx); err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -2720,10 +3257,16 @@ func (r *accountRepository) ClearRateLimit(ctx context.Context, id int64) error 
 
 func (r *accountRepository) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
 	client := clientFromContext(ctx, r.client)
+	query := "UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) - 'antigravity_quota_scopes', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+	args := []any{id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
 	result, err := client.ExecContext(
 		ctx,
-		"UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) - 'antigravity_quota_scopes', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
-		id,
+		query,
+		args...,
 	)
 	if err != nil {
 		return err
@@ -2744,10 +3287,16 @@ func (r *accountRepository) ClearAntigravityQuotaScopes(ctx context.Context, id 
 
 func (r *accountRepository) ClearModelRateLimits(ctx context.Context, id int64) error {
 	client := clientFromContext(ctx, r.client)
+	query := "UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) - 'model_rate_limits', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
+	args := []any{id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
 	result, err := client.ExecContext(
 		ctx,
-		"UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) - 'model_rate_limits', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL",
-		id,
+		query,
+		args...,
 	)
 	if err != nil {
 		return err
@@ -2777,9 +3326,17 @@ func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, s
 	if end != nil {
 		builder.SetSessionWindowEnd(*end)
 	}
-	_, err := builder.Save(ctx)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+	}
+	updated, err := builder.Save(ctx)
 	if err != nil {
 		return err
+	}
+	if updated == 0 {
+		if _, scoped := accountAdminPredicate(ctx); scoped {
+			return service.ErrAccountNotFound
+		}
 	}
 	// 触发调度器缓存更新（仅当窗口时间有变化时）
 	if start != nil || end != nil {
@@ -2791,11 +3348,19 @@ func (r *accountRepository) UpdateSessionWindow(ctx context.Context, id int64, s
 }
 
 func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64, end time.Time) error {
-	_, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
-		SetSessionWindowEnd(end).
-		Save(ctx)
-	if err != nil {
+		SetSessionWindowEnd(end)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+		updated, err := builder.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return service.ErrAccountNotFound
+		}
+	} else if _, err := builder.Save(ctx); err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -2805,11 +3370,19 @@ func (r *accountRepository) UpdateSessionWindowEnd(ctx context.Context, id int64
 }
 
 func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedulable bool) error {
-	_, err := r.client.Account.Update().
+	builder := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
-		SetSchedulable(schedulable).
-		Save(ctx)
-	if err != nil {
+		SetSchedulable(schedulable)
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		builder.Where(ownerPredicate)
+		updated, err := builder.Save(ctx)
+		if err != nil {
+			return err
+		}
+		if updated == 0 {
+			return service.ErrAccountNotFound
+		}
+	} else if _, err := builder.Save(ctx); err != nil {
 		return err
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
@@ -2822,7 +3395,7 @@ func (r *accountRepository) SetSchedulable(ctx context.Context, id int64, schedu
 }
 
 func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now time.Time) (int64, error) {
-	rows, err := r.sql.QueryContext(ctx, `
+	query := `
 		UPDATE accounts
 		SET schedulable = FALSE,
 			updated_at = NOW()
@@ -2830,9 +3403,16 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 			AND schedulable = TRUE
 			AND auto_pause_on_expired = TRUE
 			AND expires_at IS NOT NULL
-			AND expires_at <= $1
+			AND expires_at <= $1`
+	args := []any{now}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	query += `
 		RETURNING id
-	`, now)
+	`
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -2864,6 +3444,7 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
 	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
+	updates = forceScopedAccountAdminSupplyExtra(ctx, updates)
 	if len(updates) == 0 {
 		return nil
 	}
@@ -2899,10 +3480,16 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	if service.ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates) {
 		extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)
 	}
+	query := "UPDATE accounts SET extra = " + extraExpression + ", updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL"
+	args := []any{string(payload), id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
 	result, err := client.ExecContext(
 		ctx,
-		"UPDATE accounts SET extra = "+extraExpression+", updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
-		string(payload), id,
+		query,
+		args...,
 	)
 
 	if err != nil {
@@ -2953,6 +3540,12 @@ func (r *accountRepository) UpdateUpstreamBillingProbeSnapshot(
 	if snapshot.Status != service.UpstreamBillingProbeStatusOK {
 		rateMultiplier = nil
 	}
+	// Probe workers normally run outside an account-admin request, but keep the
+	// invariant at this repository boundary as well: a scoped caller can never
+	// replace the administrator's supply multiplier from probe output.
+	if _, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		rateMultiplier = nil
+	}
 	if dbent.TxFromContext(ctx) == nil {
 		tx, err := r.client.Tx(ctx)
 		if errors.Is(err, dbent.ErrTxStarted) {
@@ -2983,7 +3576,15 @@ func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(
 	snapshot *service.UpstreamBillingProbeSnapshot,
 	rateMultiplier *float64,
 ) error {
-	payload, err := json.Marshal(map[string]any{service.UpstreamBillingProbeExtraKey: snapshot})
+	payloadValues := map[string]any{service.UpstreamBillingProbeExtraKey: snapshot}
+	if _, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		// A scoped request is not allowed to operate upstream billing; retain the
+		// probe snapshot for observability but disable both policy switches.
+		payloadValues[service.UpstreamBillingProbeEnabledExtraKey] = false
+		payloadValues[service.UpstreamBillingRateSyncEnabledExtraKey] = false
+		rateMultiplier = nil
+	}
+	payload, err := json.Marshal(payloadValues)
 	if err != nil {
 		return err
 	}
@@ -3027,7 +3628,7 @@ func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(
 	if account.ProxyID != nil {
 		proxyID = *account.ProxyID
 	}
-	result, err := client.ExecContext(ctx, `
+	query := `
 		UPDATE accounts
 		SET
 			extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb,
@@ -3048,7 +3649,14 @@ func (r *accountRepository) updateUpstreamBillingProbeSnapshotInTx(
 			AND COALESCE(extra -> 'upstream_billing_probe_enabled', 'null'::jsonb) = $8::jsonb
 			AND COALESCE(extra -> 'upstream_billing_rate_sync_enabled', 'null'::jsonb) = $9::jsonb
 			AND deleted_at IS NULL
-	`, string(payload), account.ID, account.Platform, account.Type, string(credentials), proxyID, string(expectedSnapshotJSON), string(expectedEnabledJSON), string(expectedRateSyncEnabledJSON), rateMultiplier)
+	`
+	args := []any{string(payload), account.ID, account.Platform, account.Type, string(credentials), proxyID,
+		string(expectedSnapshotJSON), string(expectedEnabledJSON), string(expectedRateSyncEnabledJSON), rateMultiplier}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := client.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -3155,9 +3763,18 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		ids = uniquePositiveInt64s(ids)
 	}
 	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(updates.Extra)
+	if _, scoped := accountAdminPredicate(ctx); scoped {
+		// A restricted caller cannot enable upstream probing through a direct
+		// repository invocation.  The admin service also supplies the current
+		// multiplier; this patch makes the JSON policy fail closed even when an
+		// older caller omits it.
+		updates.ProbeEnabled = nil
+		updates.Extra = forceScopedAccountAdminSupplyExtra(ctx, updates.Extra)
+	}
 
 	setClauses := make([]string, 0, 8)
 	args := make([]any, 0, 8)
+	_, ownerScoped := accountAdminPredicate(ctx)
 
 	idx := 1
 	ollamaProxyIdentityChanged := ""
@@ -3189,7 +3806,17 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		args = append(args, *updates.Priority)
 		idx++
 	}
-	if updates.RateMultiplier != nil {
+	if ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		// Do not trust a multiplier supplied by a restricted caller, even when
+		// BulkUpdate is invoked without the admin service or the request omits
+		// the field. Resolve the current value from the authenticated
+		// account-admin row inside the same SQL statement so every scoped write
+		// converges the selected accounts to the authoritative rate.
+		ownerPlaceholder := "$" + itoa(idx)
+		setClauses = append(setClauses, "rate_multiplier = (SELECT supply_rate_multiplier FROM users WHERE id = "+ownerPlaceholder+" AND role = 'account_admin' AND status = 'active' AND deleted_at IS NULL)")
+		args = append(args, ownerID)
+		idx++
+	} else if updates.RateMultiplier != nil {
 		setClauses = append(setClauses, "rate_multiplier = $"+itoa(idx))
 		args = append(args, *updates.RateMultiplier)
 		idx++
@@ -3299,6 +3926,19 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		whereClause := " WHERE id = ANY($" + itoa(idx) + ") AND deleted_at IS NULL"
 		args = append(args, pq.Array(ids))
 		idx++
+		if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", idx); scoped {
+			whereClause += ownerClause
+			args = append(args, ownerArg)
+			idx++
+		}
+		if _, scoped := accountAdminPredicate(ctx); scoped {
+			// A missing, demoted, or inactive owner must fail closed instead of
+			// assigning SQL NULL (or silently retaining a caller-selected rate).
+			whereClause += " AND EXISTS (SELECT 1 FROM users WHERE id = $" + itoa(idx) + " AND role = 'account_admin' AND status = 'active' AND deleted_at IS NULL)"
+			ownerID, _ := ctxkey.AccountAdminIDFromContext(ctx)
+			args = append(args, ownerID)
+			idx++
+		}
 		if updates.ExpectedProxyID != nil {
 			whereClause += " AND proxy_id = $" + itoa(idx) + " AND parent_account_id IS NULL"
 			args = append(args, *updates.ExpectedProxyID)
@@ -3327,6 +3967,16 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			defer func() { _ = tx.Rollback() }()
 			ctx = dbent.NewTxContext(ctx, tx)
 			exec = tx.Client()
+		}
+	}
+	if ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		if contextTx == nil && tx == nil {
+			return 0, errors.New("account administrator bulk update requires a transaction-capable client")
+		}
+		// The rate subquery in the UPDATE must observe the same owner version
+		// that survives until this bulk transaction commits.
+		if _, err := lockedAccountAdminSupplyRate(ctx, exec, ownerID); err != nil {
+			return 0, err
 		}
 	}
 
@@ -3372,6 +4022,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		if err != nil {
 			return 0, err
 		}
+	}
+	if ownerScoped && hasBulkFields && rows != int64(len(uniquePositiveInt64s(ids))) {
+		return 0, service.ErrAccountNotFound
 	}
 	if updates.ExpectedProxyID != nil && rows != int64(len(ids)) {
 		return 0, service.ErrProxyBindingChanged
@@ -3442,7 +4095,7 @@ func updateProxyBindingShadows(ctx context.Context, exec sqlExecutor, parentIDs 
 	if proxyID > 0 {
 		targetProxyID = proxyID
 	}
-	rows, err := exec.QueryContext(ctx, `
+	query := `
 		UPDATE accounts
 		SET proxy_id = $2,
 			extra = CASE WHEN proxy_id IS DISTINCT FROM $2::bigint
@@ -3450,9 +4103,16 @@ func updateProxyBindingShadows(ctx context.Context, exec sqlExecutor, parentIDs 
 				ELSE extra END,
 			updated_at = NOW()
 		WHERE parent_account_id = ANY($1)
-		  AND quota_dimension = $3 AND deleted_at IS NULL
+		  AND quota_dimension = $3 AND deleted_at IS NULL`
+	args := []any{pq.Array(parentIDs), targetProxyID, service.QuotaDimensionSpark}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	query += `
 		RETURNING id
-	`, pq.Array(parentIDs), targetProxyID, service.QuotaDimensionSpark)
+	`
+	rows, err := exec.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -3619,14 +4279,22 @@ func loadAndLockAutomaticProxyTargets(ctx context.Context, exec sqlExecutor, ids
 		targetsByID[id] = &automaticProxyTarget{AccountID: id, MemberIDs: []int64{id}}
 	}
 
-	rows, err := exec.QueryContext(ctx, `
+	query := `
 		SELECT id, parent_account_id
 		FROM accounts
 		WHERE deleted_at IS NULL
 		  AND (id = ANY($1) OR parent_account_id = ANY($1))
+	`
+	args := []any{pq.Array(ids)}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	query += `
 		ORDER BY id
 		FOR UPDATE
-	`, pq.Array(ids))
+	`
+	rows, err := exec.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3677,14 +4345,20 @@ func loadAutomaticProxyBaselineCounts(ctx context.Context, exec sqlExecutor, cap
 		proxyIDs = append(proxyIDs, capacities[i].ID)
 		capacityByID[capacities[i].ID] = &capacities[i]
 	}
-	rows, err := exec.QueryContext(ctx, `
+	query := `
 		SELECT proxy_id, COUNT(*)
 		FROM accounts
 		WHERE deleted_at IS NULL
 		  AND proxy_id = ANY($1)
 		  AND NOT (id = ANY($2))
 		GROUP BY proxy_id
-	`, pq.Array(proxyIDs), pq.Array(excludedAccountIDs))
+	`
+	args := []any{pq.Array(proxyIDs), pq.Array(excludedAccountIDs)}
+	// Proxy capacity is shared across account administrators. The target set
+	// is owner-scoped by loadAndLockAutomaticProxyTargets, but the baseline must
+	// count every active account so a restricted administrator cannot overbook a
+	// proxy that is already used by another administrator or a super admin.
+	rows, err := exec.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -3711,7 +4385,7 @@ func applyAutomaticProxyAssignments(ctx context.Context, exec sqlExecutor, assig
 		accountIDs = append(accountIDs, assignment.AccountID)
 		proxyIDs = append(proxyIDs, assignment.ProxyID)
 	}
-	result, err := exec.ExecContext(ctx, `
+	query := `
 		UPDATE accounts AS a
 		SET proxy_id = assignment.proxy_id,
 			extra = CASE
@@ -3724,8 +4398,13 @@ func applyAutomaticProxyAssignments(ctx context.Context, exec sqlExecutor, assig
 			updated_at = NOW()
 		FROM unnest($1::bigint[], $2::bigint[]) AS assignment(account_id, proxy_id)
 		WHERE a.id = assignment.account_id
-		  AND a.deleted_at IS NULL
-	`, pq.Array(accountIDs), pq.Array(proxyIDs))
+		  AND a.deleted_at IS NULL`
+	args := []any{pq.Array(accountIDs), pq.Array(proxyIDs)}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "a.account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := exec.ExecContext(ctx, query, args...)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -3747,6 +4426,9 @@ func (r *accountRepository) queryAccountsByGroup(ctx context.Context, groupID in
 	// 通过 account_groups 中间表查询账号，并按需叠加状态/平台/调度能力过滤。
 	preds := make([]dbpredicate.Account, 0, 6)
 	preds = append(preds, dbaccount.DeletedAtIsNil())
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		preds = append(preds, ownerPredicate)
+	}
 	if opts.status != "" {
 		preds = append(preds, dbaccount.StatusEQ(opts.status))
 	}
@@ -4027,10 +4709,11 @@ func uniquePositiveInt64s(ids []int64) []int64 {
 }
 
 func (r *accountRepository) loadAccountGroupIDs(ctx context.Context, accountID int64) ([]int64, error) {
-	entries, err := r.client.AccountGroup.
-		Query().
-		Where(dbaccountgroup.AccountIDEQ(accountID)).
-		All(ctx)
+	query := r.client.AccountGroup.Query().Where(dbaccountgroup.AccountIDEQ(accountID))
+	if ownerPredicate, scoped := accountAdminPredicate(ctx); scoped {
+		query = query.Where(dbaccountgroup.HasAccountWith(ownerPredicate))
+	}
+	entries, err := query.All(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -4098,6 +4781,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Concurrency:             m.Concurrency,
 		Priority:                m.Priority,
 		RateMultiplier:          &rateMultiplier,
+		AccountAdminID:          m.AccountAdminID,
 		LoadFactor:              m.LoadFactor,
 		Status:                  m.Status,
 		ErrorMessage:            derefString(m.ErrorMessage),
@@ -4159,7 +4843,7 @@ func itoa(v int) string {
 // FindByExtraField finds accounts by key-value pairs in the extra field.
 // Uses PostgreSQL JSONB @> operator for efficient queries (requires GIN index).
 func (r *accountRepository) FindByExtraField(ctx context.Context, key string, value any) ([]service.Account, error) {
-	accounts, err := r.client.Account.Query().
+	accounts, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(
 			dbaccount.DeletedAtIsNil(),
 			func(s *entsql.Selector) {
@@ -4224,7 +4908,7 @@ func (r *accountRepository) ListDueUpstreamBillingProbeAccounts(ctx context.Cont
 		return nil, errors.New("account repository SQL executor not configured")
 	}
 
-	rows, err := r.sql.QueryContext(ctx, `
+	query := `
 		WITH candidates AS (
 			SELECT
 				id,
@@ -4283,7 +4967,13 @@ func (r *accountRepository) ListDueUpstreamBillingProbeAccounts(ctx context.Cont
 			CASE WHEN valid_next_probe_at THEN parsed_next_probe_at::timestamptz END ASC NULLS FIRST,
 			id ASC
 		LIMIT $2
-	`, now.UTC(), limit)
+	`
+	args := []any{now.UTC(), limit}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query = strings.Replace(query, "\n\t\t), parsed AS MATERIALIZED", ownerClause+"\n\t\t), parsed AS MATERIALIZED", 1)
+		args = append(args, ownerArg)
+	}
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -4411,8 +5101,7 @@ const nextWeeklyResetAtExpr = `(
 // 日/周额度在周期过期时自动重置为 0 再递增。
 // 支持滚动窗口（rolling）和固定时间（fixed）两种重置模式。
 func (r *accountRepository) IncrementQuotaUsed(ctx context.Context, id int64, amount float64) error {
-	rows, err := r.sql.QueryContext(ctx,
-		`UPDATE accounts SET extra = (
+	query := `UPDATE accounts SET extra = (
 			COALESCE(extra, '{}'::jsonb)
 			-- 总额度：始终递增
 			|| jsonb_build_object('quota_used', COALESCE((extra->>'quota_used')::numeric, 0) + $1)
@@ -4420,55 +5109,69 @@ func (r *accountRepository) IncrementQuotaUsed(ctx context.Context, id int64, am
 			|| CASE WHEN COALESCE((extra->>'quota_daily_limit')::numeric, 0) > 0 THEN
 				jsonb_build_object(
 					'quota_daily_used',
-					CASE WHEN `+dailyExpiredExpr+`
+					CASE WHEN ` + dailyExpiredExpr + `
 					THEN $1
 					ELSE COALESCE((extra->>'quota_daily_used')::numeric, 0) + $1 END,
 					'quota_daily_start',
-					CASE WHEN `+dailyExpiredExpr+`
-					THEN `+nowUTC+`
-					ELSE COALESCE(extra->>'quota_daily_start', `+nowUTC+`) END
+					CASE WHEN ` + dailyExpiredExpr + `
+					THEN ` + nowUTC + `
+					ELSE COALESCE(extra->>'quota_daily_start', ` + nowUTC + `) END
 				)
 				-- 固定模式重置时更新下次重置时间
-				|| CASE WHEN `+dailyExpiredExpr+` AND `+nextDailyResetAtExpr+` IS NOT NULL
-				   THEN jsonb_build_object('quota_daily_reset_at', `+nextDailyResetAtExpr+`)
+				|| CASE WHEN ` + dailyExpiredExpr + ` AND ` + nextDailyResetAtExpr + ` IS NOT NULL
+				   THEN jsonb_build_object('quota_daily_reset_at', ` + nextDailyResetAtExpr + `)
 				   ELSE '{}'::jsonb END
 			ELSE '{}'::jsonb END
 			-- 周额度：仅在 quota_weekly_limit > 0 时处理
 			|| CASE WHEN COALESCE((extra->>'quota_weekly_limit')::numeric, 0) > 0 THEN
 				jsonb_build_object(
 					'quota_weekly_used',
-					CASE WHEN `+weeklyExpiredExpr+`
+					CASE WHEN ` + weeklyExpiredExpr + `
 					THEN $1
 					ELSE COALESCE((extra->>'quota_weekly_used')::numeric, 0) + $1 END,
 					'quota_weekly_start',
-					CASE WHEN `+weeklyExpiredExpr+`
-					THEN `+nowUTC+`
-					ELSE COALESCE(extra->>'quota_weekly_start', `+nowUTC+`) END
+					CASE WHEN ` + weeklyExpiredExpr + `
+					THEN ` + nowUTC + `
+					ELSE COALESCE(extra->>'quota_weekly_start', ` + nowUTC + `) END
 				)
 				-- 固定模式重置时更新下次重置时间
-				|| CASE WHEN `+weeklyExpiredExpr+` AND `+nextWeeklyResetAtExpr+` IS NOT NULL
-				   THEN jsonb_build_object('quota_weekly_reset_at', `+nextWeeklyResetAtExpr+`)
+				|| CASE WHEN ` + weeklyExpiredExpr + ` AND ` + nextWeeklyResetAtExpr + ` IS NOT NULL
+				   THEN jsonb_build_object('quota_weekly_reset_at', ` + nextWeeklyResetAtExpr + `)
 				   ELSE '{}'::jsonb END
 			ELSE '{}'::jsonb END
 		), updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
+		WHERE id = $2 AND deleted_at IS NULL`
+	args := []any{amount, id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	query += `
 		RETURNING
 			COALESCE((extra->>'quota_used')::numeric, 0),
-			COALESCE((extra->>'quota_limit')::numeric, 0)`,
-		amount, id)
+			COALESCE((extra->>'quota_limit')::numeric, 0)`
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
 
 	var newUsed, limit float64
+	found := false
 	if rows.Next() {
+		found = true
 		if err := rows.Scan(&newUsed, &limit); err != nil {
 			return err
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	if !found {
+		if _, scoped := accountAdminPredicate(ctx); scoped {
+			return service.ErrAccountNotFound
+		}
+		return nil
 	}
 
 	// 任一维度配额刚超限时触发调度快照刷新
@@ -4483,14 +5186,18 @@ func (r *accountRepository) IncrementQuotaUsed(ctx context.Context, id int64, am
 // ResetQuotaUsedAndClearRateLimitCooldown resets all quota dimensions and the
 // account-level cooldown in one statement. Other scheduler blocking state is preserved.
 func (r *accountRepository) ResetQuotaUsedAndClearRateLimitCooldown(ctx context.Context, id int64) error {
-	result, err := r.sql.ExecContext(ctx,
-		`UPDATE accounts SET extra = (
+	query := `UPDATE accounts SET extra = (
 			COALESCE(extra, '{}'::jsonb)
 			|| '{"quota_used": 0, "quota_daily_used": 0, "quota_weekly_used": 0}'::jsonb
 		) - 'quota_daily_start' - 'quota_weekly_start' - 'quota_daily_reset_at' - 'quota_weekly_reset_at',
 		rate_limited_at = NULL, rate_limit_reset_at = NULL, updated_at = NOW()
-		WHERE id = $1 AND deleted_at IS NULL`,
-		id)
+		WHERE id = $1 AND deleted_at IS NULL`
+	args := []any{id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -4513,14 +5220,24 @@ func (r *accountRepository) ResetQuotaUsedAndClearRateLimitCooldown(ctx context.
 // 仅当 proxy_fallback_origin_id IS NOT NULL 时执行更新；
 // 若影响行数为 0，则返回 ErrAccountNotInFallback（账号存在但不在 fallback 状态）。
 func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID int64) error {
-	res, err := r.sql.ExecContext(ctx, `
+	query := `
 		UPDATE accounts SET proxy_id=proxy_fallback_origin_id, proxy_fallback_origin_id=NULL, updated_at=NOW()
-		WHERE id=$1 AND proxy_fallback_origin_id IS NOT NULL AND deleted_at IS NULL`, accountID)
+		WHERE id=$1 AND proxy_fallback_origin_id IS NOT NULL AND deleted_at IS NULL`
+	args := []any{accountID}
+	_, ownerScoped := accountAdminPredicate(ctx)
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	res, err := r.sql.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
+		if ownerScoped {
+			return service.ErrAccountNotFound
+		}
 		return service.ErrAccountNotInFallback
 	}
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &accountID, nil, nil); err != nil {
@@ -4534,7 +5251,7 @@ func (r *accountRepository) RevertProxyFallback(ctx context.Context, accountID i
 // ⚠️ 新增影子维度时：须更新此函数（或新增维度专用列举），并检查所有调用点（级联删除/一母一影校验/type 守卫），否则会静默漏掉新维度。
 // 软删除行由 SoftDeleteMixin 拦截器自动排除，无需手写 deleted_at IS NULL。
 func (r *accountRepository) ListShadowsByParent(ctx context.Context, parentID int64) ([]*service.Account, error) {
-	rows, err := r.client.Account.Query().
+	rows, err := accountQueryWithScope(ctx, r.client.Account.Query()).
 		Where(dbaccount.ParentAccountIDEQ(parentID), dbaccount.QuotaDimensionEQ(dbaccount.QuotaDimensionSpark)).
 		All(ctx)
 	if err != nil {

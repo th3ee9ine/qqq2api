@@ -1,11 +1,13 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	pathpkg "path"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
@@ -25,6 +27,14 @@ func AccountAdminScope() gin.HandlerFunc {
 			c.Next()
 			return
 		case service.RoleAccountAdmin:
+			subject, ok := GetAuthSubjectFromContext(c)
+			if !ok || subject.UserID <= 0 {
+				AbortWithError(c, http.StatusUnauthorized, "UNAUTHORIZED", "Panel administrator identity is missing")
+				return
+			}
+			requestContext := context.WithValue(c.Request.Context(), ctxkey.AccountAdminID, subject.UserID)
+			c.Request = c.Request.WithContext(requestContext)
+
 			requestPath := adminRelativePath(c.Request.URL.Path)
 			if accountAdminResourceDelete(c.Request.Method, requestPath) {
 				AbortWithError(c, http.StatusForbidden, "ACCOUNT_ADMIN_DELETE_FORBIDDEN", "Account administrators cannot delete accounts or IPs")
@@ -72,6 +82,32 @@ func accountAdminResourceDelete(method, path string) bool {
 }
 
 func accountAdminRequestAllowed(method, path string) bool {
+	// These workflows are global task/synchronization surfaces whose records are
+	// not partitioned by account owner. Keep them super-administrator only until
+	// their own persistence models carry an owner-aware authorization boundary.
+	for _, restrictedPrefix := range []string{
+		"/admin/accounts/codex-turn-state/tasks",
+		"/admin/accounts/sync/crs",
+		"/admin/accounts/upstream-billing-rates",
+		"/admin/scheduled-test-plans",
+	} {
+		if path == restrictedPrefix || strings.HasPrefix(path, restrictedPrefix+"/") {
+			return false
+		}
+	}
+
+	// Upstream billing probes expose the provider-declared multiplier and can
+	// write it back to account.rate_multiplier.  Restricted account
+	// administrators use a centrally managed supply multiplier, so allowing
+	// either the per-account or batch probe endpoint would leak the internal
+	// billing basis and could overwrite that managed value.  The read-only
+	// global settings endpoint below remains available for the account form's
+	// capability discovery; all probe actions stay super-administrator only.
+	if path == "/admin/accounts/upstream-billing-probe/batch" ||
+		(strings.HasPrefix(path, "/admin/accounts/") && strings.HasSuffix(path, "/upstream-billing-probe")) {
+		return false
+	}
+
 	// These endpoints live under /accounts for historical reasons but mutate
 	// global runtime policy. Restricted operators only need their read side to
 	// render account rows and editors.
@@ -88,7 +124,6 @@ func accountAdminRequestAllowed(method, path string) bool {
 		"/admin/accounts",
 		"/admin/openai",
 		"/admin/proxies",
-		"/admin/scheduled-test-plans",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true

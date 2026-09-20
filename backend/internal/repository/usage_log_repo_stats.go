@@ -231,8 +231,25 @@ func (r *usageLogRepository) loadAccountDailyUsageStats(ctx context.Context, acc
 		FULL OUTER JOIN raw ON raw.bucket_date = d.bucket_date
 		ORDER BY 1
 	`
+	args := []any{accountID, startDate, endDate, startTime, endTime, startBound, endBound}
+	if condition, ownerID := usageLogAccountAdminScopeCondition(ctx, "account_id", len(args)+1); condition != "" {
+		// Both durable rollups and retained raw rows must use the same owner
+		// boundary.  Keep the unscoped query text untouched for background jobs
+		// and existing SQL contracts.
+		query = strings.Replace(query,
+			"WHERE account_id = $1 AND bucket_date >= $2::date AND bucket_date < $3::date",
+			"WHERE account_id = $1 AND bucket_date >= $2::date AND bucket_date < $3::date AND "+condition,
+			1,
+		)
+		query = strings.Replace(query,
+			"WHERE account_id = $1 AND created_at >= $6 AND created_at < $7",
+			"WHERE account_id = $1 AND created_at >= $6 AND created_at < $7 AND "+condition,
+			1,
+		)
+		args = append(args, ownerID)
+	}
 
-	rows, err := r.sql.QueryContext(ctx, query, accountID, startDate, endDate, startTime, endTime, startBound, endBound)
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -322,13 +339,15 @@ func (r *usageLogRepository) GetUserStatsAggregated(ctx context.Context, userID 
 		FROM usage_logs
 		WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
 	`
+	args := []any{userID, startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 
 	var stats usagestats.UsageStats
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		[]any{userID, startTime, endTime},
+		args,
 		&stats.TotalRequests,
 		&stats.TotalInputTokens,
 		&stats.TotalOutputTokens,
@@ -361,13 +380,15 @@ func (r *usageLogRepository) GetAPIKeyStatsAggregated(ctx context.Context, apiKe
 		FROM usage_logs
 		WHERE api_key_id = $1 AND created_at >= $2 AND created_at < $3
 	`
+	args := []any{apiKeyID, startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 
 	var stats usagestats.UsageStats
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		[]any{apiKeyID, startTime, endTime},
+		args,
 		&stats.TotalRequests,
 		&stats.TotalInputTokens,
 		&stats.TotalOutputTokens,
@@ -434,13 +455,15 @@ func (r *usageLogRepository) GetModelStatsAggregated(ctx context.Context, modelN
 		FROM usage_logs
 		WHERE %s = $1 AND created_at >= $2 AND created_at < $3
 	`, rawUsageLogModelColumn)
+	args := []any{modelName, startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 
 	var stats usagestats.UsageStats
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		[]any{modelName, startTime, endTime},
+		args,
 		&stats.TotalRequests,
 		&stats.TotalInputTokens,
 		&stats.TotalOutputTokens,
@@ -477,8 +500,10 @@ func (r *usageLogRepository) GetDailyStatsAggregated(ctx context.Context, userID
 		GROUP BY 1
 		ORDER BY 1
 	`
+	args := []any{userID, startTime, endTime, tzName}
+	query, args = appendUsageLogAccountAdminQueryScopeBefore(ctx, query, args, "account_id", "\n\t\tGROUP BY 1")
 
-	rows, err := r.sql.QueryContext(ctx, query, userID, startTime, endTime, tzName)
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -560,13 +585,15 @@ func (r *usageLogRepository) GetAccountTodayStats(ctx context.Context, accountID
 		FROM usage_account_daily_rollups
 		WHERE account_id = $1 AND bucket_date = $2::date
 	`
+	args := []any{accountID, usageRollupDate(today)}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 
 	stats := &usagestats.AccountStats{}
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		[]any{accountID, usageRollupDate(today)},
+		args,
 		&stats.Requests,
 		&stats.Tokens,
 		&stats.Cost,
@@ -602,7 +629,9 @@ func (r *usageLogRepository) GetAccountTodayStatsBatch(ctx context.Context, acco
 		FROM usage_account_daily_rollups
 		WHERE account_id = ANY($1) AND bucket_date = $2::date
 	`
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), usageRollupDate(timezone.Today()))
+	args := []any{pq.Array(accountIDs), usageRollupDate(timezone.Today())}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -646,13 +675,15 @@ func (r *usageLogRepository) GetAccountWindowStats(ctx context.Context, accountI
 		FROM usage_logs
 		WHERE account_id = $1 AND created_at >= $2
 	`
+	args := []any{accountID, startTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 
 	stats := &usagestats.AccountStats{}
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		[]any{accountID, startTime},
+		args,
 		&stats.Requests,
 		&stats.Tokens,
 		&stats.Cost,
@@ -684,7 +715,9 @@ func (r *usageLogRepository) GetAccountWindowStatsBatch(ctx context.Context, acc
 		WHERE account_id = ANY($1) AND created_at >= $2
 		GROUP BY account_id
 	`
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), startTime)
+	args := []any{pq.Array(accountIDs), startTime}
+	query, args = appendUsageLogAccountAdminQueryScopeBefore(ctx, query, args, "account_id", "\n\t\tGROUP BY account_id")
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -746,7 +779,9 @@ func (r *usageLogRepository) GetAccountLifetimeStatsBatch(ctx context.Context, a
 		WHERE a.id = ANY($1)
 		GROUP BY a.id
 	`
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), usageRollupDate(timezone.Today()))
+	args := []any{pq.Array(accountIDs), usageRollupDate(timezone.Today())}
+	query, args = appendUsageLogAccountAdminQueryScopeBefore(ctx, query, args, "a.id", "\n\t\tGROUP BY a.id")
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -800,7 +835,9 @@ func (r *usageLogRepository) GetGeminiUsageTotalsBatch(ctx context.Context, acco
 		WHERE account_id = ANY($1) AND created_at >= $2 AND created_at < $3
 		GROUP BY account_id
 	`
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(accountIDs), startTime, endTime)
+	args := []any{pq.Array(accountIDs), startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScopeBefore(ctx, query, args, "account_id", "\n\t\tGROUP BY account_id")
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -900,7 +937,9 @@ func (r *usageLogRepository) GetBatchUserUsageStats(ctx context.Context, userIDs
 		GROUP BY ul.user_id, ` + usageLogEffectivePlatformExpr + `
 	`
 	today := timezone.Today()
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(normalizedUserIDs), startTime, endTime, today)
+	args := []any{pq.Array(normalizedUserIDs), startTime, endTime, today}
+	query, args = appendUsageLogAccountAdminQueryScopeBefore(ctx, query, args, "ul.account_id", "\n\t\tGROUP BY ul.user_id")
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -972,7 +1011,9 @@ func (r *usageLogRepository) GetBatchAPIKeyUsageStats(ctx context.Context, apiKe
 		GROUP BY api_key_id
 	`
 	today := timezone.Today()
-	rows, err := r.sql.QueryContext(ctx, query, pq.Array(normalizedAPIKeyIDs), startTime, endTime, today)
+	args := []any{pq.Array(normalizedAPIKeyIDs), startTime, endTime, today}
+	query, args = appendUsageLogAccountAdminQueryScopeBefore(ctx, query, args, "account_id", "\n\t\tGROUP BY api_key_id")
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1025,13 +1066,15 @@ func (r *usageLogRepository) GetGlobalStats(ctx context.Context, startTime, endT
 		FROM usage_logs
 		WHERE created_at >= $1 AND created_at < $2
 	`
+	args := []any{startTime, endTime}
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 
 	stats := &UsageStats{}
 	if err := scanSingleRow(
 		ctx,
 		r.sql,
 		query,
-		[]any{startTime, endTime},
+		args,
 		&stats.TotalRequests,
 		&stats.TotalInputTokens,
 		&stats.TotalOutputTokens,
@@ -1086,6 +1129,7 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		conditions = append(conditions, fmt.Sprintf("created_at < $%d", len(args)+1))
 		args = append(args, *filters.EndTime)
 	}
+	conditions, args = appendUsageLogAccountAdminScope(ctx, conditions, args, "account_id")
 
 	query := fmt.Sprintf(`
 		WITH scoped AS (
@@ -1270,6 +1314,7 @@ func (r *usageLogRepository) getEndpointStatsByColumnWithFilters(ctx context.Con
 		args = append(args, int16(*billingType))
 	}
 	query, args = appendUsageLogBillingModeQueryFilter(query, args, billingMode, "")
+	query, args = appendUsageLogAccountAdminQueryScope(ctx, query, args, "account_id")
 	query += " GROUP BY endpoint ORDER BY requests DESC"
 
 	rows, err := r.sql.QueryContext(ctx, query, args...)

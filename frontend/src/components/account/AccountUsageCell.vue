@@ -42,6 +42,7 @@
           :utilization="effectiveUsage.five_hour.utilization"
           :resets-at="effectiveUsage.five_hour.resets_at"
           :window-stats="effectiveUsage.five_hour.window_stats"
+          :earnings-mode="props.earningsMode"
           color="indigo"
         />
 
@@ -51,6 +52,7 @@
           label="7d"
           :utilization="effectiveUsage.seven_day.utilization"
           :resets-at="effectiveUsage.seven_day.resets_at"
+          :earnings-mode="props.earningsMode"
           color="emerald"
         />
 
@@ -60,6 +62,7 @@
           label="7d S"
           :utilization="effectiveUsage.seven_day_sonnet.utilization"
           :resets-at="effectiveUsage.seven_day_sonnet.resets_at"
+          :earnings-mode="props.earningsMode"
           color="purple"
         />
 
@@ -69,6 +72,7 @@
           label="7d F"
           :utilization="effectiveUsage.seven_day_fable.utilization"
           :resets-at="effectiveUsage.seven_day_fable.resets_at"
+          :earnings-mode="props.earningsMode"
           color="amber"
         />
 
@@ -106,6 +110,7 @@
           :utilization="effectiveUsage.five_hour.utilization"
           :resets-at="effectiveUsage.five_hour.resets_at"
           :window-stats="effectiveUsage.five_hour.window_stats"
+          :earnings-mode="props.earningsMode"
           :show-now-when-idle="true"
           color="indigo"
         />
@@ -115,6 +120,7 @@
           :utilization="effectiveUsage.seven_day.utilization"
           :resets-at="effectiveUsage.seven_day.resets_at"
           :window-stats="effectiveUsage.seven_day.window_stats"
+          :earnings-mode="props.earningsMode"
           :show-now-when-idle="true"
           color="emerald"
         />
@@ -167,7 +173,12 @@
         <div class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
           <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">{{ formatKeyRequests }} req</span>
           <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800">{{ formatKeyTokens }}</span>
-          <span class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800" :title="t('usage.accountBilled')">A ${{ formatKeyCost }}</span>
+          <span
+            class="rounded bg-gray-100 px-1.5 py-0.5 dark:bg-gray-800"
+            :title="t(props.earningsMode ? 'admin.accounts.stats.earnings' : 'usage.accountBilled')"
+          >
+            {{ props.earningsMode ? 'E' : 'A' }} ${{ formatKeyCost }}
+          </span>
         </div>
       </div>
       <!-- Loading skeleton for today stats -->
@@ -208,6 +219,8 @@ const usageCache = new Map<number, { data: AccountUsageInfo; at: number }>()
 
 const props = withDefaults(defineProps<{
   account: Account
+  /** Render account-scoped costs as administrator earnings. */
+  earningsMode?: boolean
   todayStats?: WindowStats | null
   todayStatsLoading?: boolean
   manualRefreshToken?: number
@@ -216,6 +229,7 @@ const props = withDefaults(defineProps<{
   batchedUsageLoading?: boolean
   requestBatchedUsage?: ((account: Account, options?: { force?: boolean }) => void) | null
 }>(), {
+  earningsMode: false,
   todayStats: null,
   todayStatsLoading: false,
   manualRefreshToken: 0,

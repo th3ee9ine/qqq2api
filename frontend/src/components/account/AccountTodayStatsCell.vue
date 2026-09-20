@@ -35,13 +35,15 @@
       </div>
       <!-- Cost (Account) -->
       <div class="flex items-center gap-1">
-        <span class="text-gray-500 dark:text-gray-400">{{ t('usage.accountBilled') }}:</span>
+        <span class="text-gray-500 dark:text-gray-400">
+          {{ t(authStore.isAccountAdmin ? 'admin.accounts.stats.earnings' : 'usage.accountBilled') }}:
+        </span>
         <span class="font-medium text-emerald-600 dark:text-emerald-400">{{
           formatCurrency(props.stats.cost)
         }}</span>
       </div>
       <!-- Cost (User/API Key) -->
-      <div v-if="props.stats.user_cost != null" class="flex items-center gap-1">
+      <div v-if="!authStore.isAccountAdmin && props.stats.user_cost != null" class="flex items-center gap-1">
         <span class="text-gray-500 dark:text-gray-400">{{ t('usage.userBilled') }}:</span>
         <span class="font-medium text-gray-700 dark:text-gray-300">{{
           formatCurrency(props.stats.user_cost)
@@ -56,6 +58,7 @@
 
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '@/stores/auth'
 import type { WindowStats } from '@/types'
 import { formatNumber, formatCurrency } from '@/utils/format'
 
@@ -73,6 +76,7 @@ const props = withDefaults(
 )
 
 const { t } = useI18n()
+const authStore = useAuthStore()
 
 // Format large token numbers (e.g., 1234567 -> 1.23M)
 const formatTokens = (tokens: number): string => {

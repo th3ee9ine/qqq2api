@@ -2,6 +2,7 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
@@ -181,6 +183,47 @@ func TestExportDataWithoutProxies(t *testing.T) {
 	require.Len(t, resp.Data.Proxies, 0)
 	require.Len(t, resp.Data.Accounts, 1)
 	require.Nil(t, resp.Data.Accounts[0].ProxyKey)
+}
+
+func TestAccountAdminExportOmitsSharedProxyCredentialsAndManagedBillingExtra(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+	proxyID := int64(11)
+	adminSvc.proxies = []service.Proxy{{
+		ID: proxyID, Name: "shared", Protocol: "http", Host: "127.0.0.1", Port: 8080,
+		Username: "proxy-user", Password: "proxy-secret", Status: service.StatusActive,
+	}}
+	adminSvc.accounts = []service.Account{{
+		ID: 21, Name: "owned", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "account-secret"}, ProxyID: &proxyID,
+		Extra: map[string]any{
+			"safe_setting":                                 true,
+			service.UpstreamBillingProbeExtraKey:           map[string]any{"group_rate_multiplier": 8.5},
+			service.UpstreamBillingProbeEnabledExtraKey:    true,
+			service.UpstreamBillingRateSyncEnabledExtraKey: true,
+			"grok_billing_snapshot":                        map[string]any{"monthly_used": 99},
+		},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/data?include_proxies=true", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxkey.AccountAdminID, int64(41)))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp dataResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Empty(t, resp.Data.Proxies, "account administrators must not export shared proxy credentials")
+	require.Len(t, resp.Data.Accounts, 1)
+	require.Equal(t, "account-secret", resp.Data.Accounts[0].Credentials["api_key"])
+	require.Equal(t, true, resp.Data.Accounts[0].Extra["safe_setting"])
+	for _, key := range []string{
+		service.UpstreamBillingProbeExtraKey,
+		service.UpstreamBillingProbeEnabledExtraKey,
+		service.UpstreamBillingRateSyncEnabledExtraKey,
+		"grok_billing_snapshot",
+	} {
+		require.NotContains(t, resp.Data.Accounts[0].Extra, key)
+	}
 }
 
 // TestExportDataExcludesSparkShadow 验证外审第5轮 P1/P2:导出时排除 spark 影子账号

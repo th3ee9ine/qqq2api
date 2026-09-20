@@ -96,14 +96,15 @@ func (s *GrokOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64, 
 	}
 
 	s.sessionStore.Set(sessionID, &xai.OAuthSession{
-		State:         state,
-		CodeVerifier:  codeVerifier,
-		CodeChallenge: codeChallenge,
-		ClientID:      xai.EffectiveClientID(),
-		Scope:         xai.EffectiveScope(),
-		ProxyURL:      proxyURL,
-		RedirectURI:   redirectURI,
-		CreatedAt:     time.Now(),
+		State:          state,
+		CodeVerifier:   codeVerifier,
+		CodeChallenge:  codeChallenge,
+		ClientID:       xai.EffectiveClientID(),
+		Scope:          xai.EffectiveScope(),
+		ProxyURL:       proxyURL,
+		RedirectURI:    redirectURI,
+		AccountAdminID: accountAdminOAuthSessionOwner(ctx),
+		CreatedAt:      time.Now(),
 	})
 
 	return &GrokAuthURLResult{
@@ -151,6 +152,9 @@ func (s *GrokOAuthService) ExchangeCode(ctx context.Context, input *GrokExchange
 	session, ok := s.sessionStore.Get(input.SessionID)
 	if !ok {
 		return nil, infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_SESSION_NOT_FOUND", "session not found or expired")
+	}
+	if err := authorizeAccountAdminOAuthSession(ctx, session.AccountAdminID); err != nil {
+		return nil, err
 	}
 
 	parsed := xai.ParseAuthorizationInput(input.Code)

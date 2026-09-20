@@ -74,9 +74,9 @@
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.stats.accumulatedCost') }}
               <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.total_user_cost) }} ·
+                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.total_user_cost ?? 0) }} ·
                 {{ t('admin.accounts.stats.standardCost') }}: ${{
-                  formatCost(stats.summary.total_standard_cost)
+                  formatCost(stats.summary.total_standard_cost ?? 0)
                 }})
               </span>
             </p>
@@ -129,7 +129,7 @@
                 })
               }}
               <span class="text-gray-400 dark:text-gray-500">
-                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.avg_daily_user_cost) }})
+                ({{ t('usage.userBilled') }}: ${{ formatCost(stats.summary.avg_daily_user_cost ?? 0) }})
               </span>
             </p>
           </div>
@@ -560,7 +560,7 @@ const trendChartData = computed(() => {
       },
       {
         label: t('usage.userBilled') + ' (USD)',
-        data: stats.value.history.map((h) => h.user_cost),
+        data: stats.value.history.map((h) => h.user_cost ?? 0),
         borderColor: '#10b981',
         backgroundColor: 'rgba(16, 185, 129, 0.08)',
         fill: false,

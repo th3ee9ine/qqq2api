@@ -22,18 +22,20 @@ func NewAccountAdminHandler(adminService service.AdminService) *AccountAdminHand
 }
 
 type CreateAccountAdminRequest struct {
-	Email    string `json:"email" binding:"required,email,max=255"`
-	Password string `json:"password" binding:"required,min=6,max=72"`
-	Username string `json:"username" binding:"omitempty,max=100"`
-	Notes    string `json:"notes"`
+	Email                string   `json:"email" binding:"required,email,max=255"`
+	Password             string   `json:"password" binding:"required,min=6,max=72"`
+	Username             string   `json:"username" binding:"omitempty,max=100"`
+	Notes                string   `json:"notes"`
+	SupplyRateMultiplier *float64 `json:"supply_rate_multiplier" binding:"omitempty,gte=0"`
 }
 
 type UpdateAccountAdminRequest struct {
-	Email    string  `json:"email" binding:"omitempty,email,max=255"`
-	Password string  `json:"password" binding:"omitempty,min=6,max=72"`
-	Username *string `json:"username" binding:"omitempty,max=100"`
-	Notes    *string `json:"notes"`
-	Status   string  `json:"status" binding:"omitempty,oneof=active disabled"`
+	Email                string   `json:"email" binding:"omitempty,email,max=255"`
+	Password             string   `json:"password" binding:"omitempty,min=6,max=72"`
+	Username             *string  `json:"username" binding:"omitempty,max=100"`
+	Notes                *string  `json:"notes"`
+	Status               string   `json:"status" binding:"omitempty,oneof=active disabled"`
+	SupplyRateMultiplier *float64 `json:"supply_rate_multiplier" binding:"omitempty,gte=0"`
 }
 
 // List returns only restricted account administrators.
@@ -83,15 +85,16 @@ func (h *AccountAdminHandler) Create(c *gin.Context) {
 
 	zeroBalance := 0.0
 	user, err := h.adminService.CreateUser(c.Request.Context(), &service.CreateUserInput{
-		Email:        strings.TrimSpace(req.Email),
-		Password:     req.Password,
-		Username:     strings.TrimSpace(req.Username),
-		Notes:        req.Notes,
-		Role:         service.RoleAccountAdmin,
-		Balance:      &zeroBalance,
-		Concurrency:  0,
-		RPMLimit:     0,
-		ActorAdminID: getAdminIDFromContext(c),
+		Email:                strings.TrimSpace(req.Email),
+		Password:             req.Password,
+		Username:             strings.TrimSpace(req.Username),
+		Notes:                req.Notes,
+		Role:                 service.RoleAccountAdmin,
+		Balance:              &zeroBalance,
+		Concurrency:          0,
+		RPMLimit:             0,
+		SupplyRateMultiplier: req.SupplyRateMultiplier,
+		ActorAdminID:         getAdminIDFromContext(c),
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -126,12 +129,13 @@ func (h *AccountAdminHandler) Update(c *gin.Context) {
 	}
 
 	user, err := h.adminService.UpdateUser(c.Request.Context(), userID, &service.UpdateUserInput{
-		Email:        strings.TrimSpace(req.Email),
-		Password:     req.Password,
-		Username:     req.Username,
-		Notes:        req.Notes,
-		Status:       req.Status,
-		ActorAdminID: getAdminIDFromContext(c),
+		Email:                strings.TrimSpace(req.Email),
+		Password:             req.Password,
+		Username:             req.Username,
+		Notes:                req.Notes,
+		Status:               req.Status,
+		SupplyRateMultiplier: req.SupplyRateMultiplier,
+		ActorAdminID:         getAdminIDFromContext(c),
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
