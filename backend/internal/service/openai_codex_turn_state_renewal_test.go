@@ -2,7 +2,10 @@ package service
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -214,6 +217,72 @@ func TestCodexTurnStateRenewalSkipsCatalogWhenEveryDueOwnerIsResolved(t *testing
 	require.Equal(t, []codexTurnStateRenewalPlan{{requestModel: "gpt-5", owner: "gpt-5"}}, plans)
 }
 
+func TestCodexTurnStateRenewalPlanningIsBoundedAndStable(t *testing.T) {
+	s, repo, seed := newTurnStateAutoService(t)
+	now := time.Now()
+	const accountCount = codexTurnStateRenewalScanWorkers + 2
+	accounts := make([]Account, 0, accountCount)
+	repo.mu.Lock()
+	for index := 0; index < accountCount; index++ {
+		account := *seed
+		account.ID = int64(100 + index)
+		account.Name = "account-" + string(rune('a'+index))
+		account.Credentials = mergeMap(nil, seed.Credentials)
+		account.Extra = map[string]any{
+			codexTurnStateModelExtraKey("gpt-6-astra"): map[string]any{
+				CodexTurnStateAutoProbeAtExtraKey:   now.Add(-codexTurnStateAutoProbeInterval - time.Second).UnixMilli(),
+				CodexTurnStateAutoLastErrorExtraKey: "transport_failed",
+			},
+		}
+		repo.accounts[account.ID] = &account
+		accounts = append(accounts, account)
+	}
+	repo.mu.Unlock()
+
+	var active, maxActive, started atomic.Int32
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	s.httpUpstream = &turnStateRawUpstream{call: func(*http.Request, string, int64) (*http.Response, error) {
+		current := active.Add(1)
+		for observed := maxActive.Load(); current > observed && !maxActive.CompareAndSwap(observed, current); observed = maxActive.Load() {
+		}
+		started.Add(1)
+		<-release
+		active.Add(-1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"models":[{"slug":"gpt-6-astra-2026-09-19"}]}`)),
+		}, nil
+	}}
+
+	ctx := context.Background()
+	cfg := OpenAICodexTurnStateConfig{Models: "gpt-6-astra-*", ModelScopeValid: true, AutoEnabled: true}
+	plannedCh := make(chan []codexTurnStateRenewalAccountPlan, 1)
+	go func() {
+		plannedCh <- s.planCodexTurnStateRenewalAccounts(ctx, accounts, cfg, now)
+	}()
+	require.Eventually(t, func() bool {
+		return started.Load() >= codexTurnStateRenewalScanWorkers
+	}, time.Second, time.Millisecond, "renewal planning should use the bounded account worker pool")
+	require.EqualValues(t, codexTurnStateRenewalScanWorkers, maxActive.Load())
+	releaseOnce.Do(func() { close(release) })
+	var planned []codexTurnStateRenewalAccountPlan
+	select {
+	case planned = <-plannedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("renewal planning did not finish after the worker pool was released")
+	}
+	require.Len(t, planned, accountCount)
+	for index, result := range planned {
+		require.Equal(t, accounts[index].ID, result.account.ID, "planning results preserve repository order")
+		require.Len(t, result.plans, 1)
+		require.Equal(t, "gpt-6-astra-2026-09-19", result.plans[0].requestModel)
+		require.Equal(t, "gpt-6-astra", result.plans[0].owner)
+	}
+}
+
 func TestCodexTurnStateRenewalRetriesFailedSlotsAfterBackoff(t *testing.T) {
 	now := time.Now()
 	failedAt := now.Add(-codexTurnStateAutoProbeInterval - time.Second).UnixMilli()
@@ -270,12 +339,113 @@ func TestCodexTurnStateRenewalRetriesFailedSlotsAfterBackoff(t *testing.T) {
 	}
 }
 
-func TestCodexTurnStateRenewalDefersFailedSlotsDuringBackoffOrProbeBoundary(t *testing.T) {
+func TestCodexTurnStateAutomaticRetryBypassesRecordedFailureBoundary(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	now := time.Now()
+	notBefore := now.Add(time.Hour).UnixMilli()
+	failedAt := now.Add(-codexTurnStateAutoProbeInterval - time.Second).UnixMilli()
+	account.Extra = map[string]any{
+		CodexTurnStateAutoProbeNotBeforeExtraKey: notBefore,
+		codexTurnStateModelExtraKey("gpt-5"): map[string]any{
+			CodexTurnStateAutoProbeAtExtraKey:          failedAt,
+			CodexTurnStateAutoProbeCompletedAtExtraKey: failedAt,
+			CodexTurnStateAutoProbeNotBeforeExtraKey:   notBefore,
+			CodexTurnStateAutoLastErrorExtraKey:        "transport_failed",
+		},
+	}
+	repo.mu.Lock()
+	repo.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
+	repo.mu.Unlock()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	var calls atomic.Int32
+	s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
+		calls.Add(1)
+		if req.Header.Get(openAICodexTurnStateHeader) == "" {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+		}
+		<-release
+		if req.Header.Get(openAICodexTurnStateHeader) == "" {
+			return turnStateModelResponse("automatic-retry-state", "gpt-5"), nil
+		}
+		return turnStateModelResponse("", "gpt-5"), nil
+	}}
+
+	s.autoTurnStateForAccount(context.Background(), account, "gpt-5")
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("recorded failure did not bypass the future Retry-After boundary")
+	}
+	releaseOnce.Do(func() { close(release) })
+	waitTurnStateAutoIdle(t, s)
+	require.GreaterOrEqual(t, calls.Load(), int32(2), "the automatic retry should complete collection and replay")
+}
+
+func TestCodexTurnStateRenewalRetriesRecordedFailureBeforeBoundary(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	now := time.Now()
+	notBefore := now.Add(time.Hour).UnixMilli()
+	failedAt := now.Add(-codexTurnStateAutoProbeInterval - time.Second).UnixMilli()
+	account.Extra = map[string]any{
+		CodexTurnStateAutoProbeNotBeforeExtraKey: notBefore,
+		codexTurnStateModelExtraKey("gpt-5"): map[string]any{
+			CodexTurnStateAutoProbeAtExtraKey:          failedAt,
+			CodexTurnStateAutoProbeCompletedAtExtraKey: failedAt,
+			CodexTurnStateAutoProbeNotBeforeExtraKey:   notBefore,
+			CodexTurnStateAutoLastErrorExtraKey:        "transport_failed",
+		},
+	}
+	repo.mu.Lock()
+	repo.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
+	repo.mu.Unlock()
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
+		if req.Header.Get(openAICodexTurnStateHeader) == "" {
+			select {
+			case started <- struct{}{}:
+			default:
+			}
+		}
+		<-release
+		if req.Header.Get(openAICodexTurnStateHeader) == "" {
+			return turnStateModelResponse("renewal-retry-state", "gpt-5"), nil
+		}
+		return turnStateModelResponse("", "gpt-5"), nil
+	}}
+
+	plans := codexTurnStateExpiredRenewalPlans(account, codexTurnStateRenewalTestConfig(), now)
+	require.Len(t, plans, 1)
+	scheduled, saturated := s.scheduleExpiredCodexTurnStateRenewal(account, codexTurnStateRenewalTestConfig(), plans[0], now)
+	require.True(t, scheduled)
+	require.False(t, saturated)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("renewal did not bypass the future Retry-After boundary for a failed slot")
+	}
+	releaseOnce.Do(func() { close(release) })
+	waitTurnStateAutoIdle(t, s)
+}
+
+func TestCodexTurnStateRenewalKeepsFailureBackoffButBypassesOwnProbeBoundary(t *testing.T) {
 	now := time.Now()
 
 	for _, tc := range []struct {
-		name string
-		slot map[string]any
+		name          string
+		slot          map[string]any
+		wantScheduled bool
+		wantCalls     int32
 	}{
 		{
 			name: "five minute failure backoff active",
@@ -285,12 +455,14 @@ func TestCodexTurnStateRenewalDefersFailedSlotsDuringBackoffOrProbeBoundary(t *t
 			},
 		},
 		{
-			name: "persisted probe not before in future",
+			name: "persisted probe not before in future is bypassed after backoff",
 			slot: map[string]any{
 				CodexTurnStateAutoProbeAtExtraKey:        now.Add(-codexTurnStateAutoProbeInterval - time.Second).UnixMilli(),
 				CodexTurnStateAutoProbeNotBeforeExtraKey: now.Add(time.Minute).UnixMilli(),
 				CodexTurnStateAutoLastErrorExtraKey:      "http_429_retry_after",
 			},
+			wantScheduled: true,
+			wantCalls:     1,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -310,10 +482,10 @@ func TestCodexTurnStateRenewalDefersFailedSlotsDuringBackoffOrProbeBoundary(t *t
 				requestModel: "gpt-5",
 				owner:        "gpt-5",
 			}, now)
-			require.False(t, scheduled)
+			require.Equal(t, tc.wantScheduled, scheduled)
 			require.False(t, saturated)
 			waitTurnStateAutoIdle(t, s)
-			require.Zero(t, calls.Load())
+			require.Equal(t, tc.wantCalls, calls.Load())
 		})
 	}
 }

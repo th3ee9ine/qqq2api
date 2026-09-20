@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DOMWrapper, flushPromises, mount } from '@vue/test-utils'
-import { defineComponent } from 'vue'
+import { defineComponent, nextTick } from 'vue'
 
 import AccountsView from '../AccountsView.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
@@ -248,6 +248,10 @@ describe('admin AccountsView lite account list', () => {
     expect(getById).toHaveBeenCalledWith(42)
     expect(wrapper.get('[data-test="edit-account"]').text()).toBe('compact row')
 
+    wrapper.getComponent(EditAccountModalStub).vm.$emit('close')
+    await nextTick()
+    expect(wrapper.get('[data-test="edit-account"]').text()).toBe('')
+
     const menu = wrapper.findComponent(AccountActionMenu)
     menu.vm.$emit('test', listRow)
     await flushPromises()
@@ -290,7 +294,7 @@ describe('admin AccountsView lite account list', () => {
     await flushPromises()
 
     expect(showError).toHaveBeenCalledWith('detail failed')
-    expect(wrapper.get('[data-test="edit-account"]').text()).toBe('')
+    expect(wrapper.find('[data-test="edit-account"]').exists()).toBe(false)
     consoleError.mockRestore()
     wrapper.unmount()
   })

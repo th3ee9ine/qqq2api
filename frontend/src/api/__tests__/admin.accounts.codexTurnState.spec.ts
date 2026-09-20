@@ -107,6 +107,26 @@ describe('admin account Codex Turn State API', () => {
     expect(get).toHaveBeenNthCalledWith(2, '/admin/accounts/codex-turn-state/tasks/task%2Fid%20with%20spaces')
   })
 
+  it('forwards abort signals for task list and detail requests', async () => {
+    const controller = new AbortController()
+    const task = { id: 'task-1', status: 'running' }
+    get.mockResolvedValueOnce({ data: [task] }).mockResolvedValueOnce({ data: task })
+
+    await expect(listCodexTurnStateTasks({ signal: controller.signal })).resolves.toEqual([task])
+    await expect(getCodexTurnStateTask('task-1', { signal: controller.signal })).resolves.toEqual(task)
+
+    expect(get).toHaveBeenNthCalledWith(
+      1,
+      '/admin/accounts/codex-turn-state/tasks',
+      { signal: controller.signal },
+    )
+    expect(get).toHaveBeenNthCalledWith(
+      2,
+      '/admin/accounts/codex-turn-state/tasks/task-1',
+      { signal: controller.signal },
+    )
+  })
+
   it('cancels and retries a task through the task action endpoints', async () => {
     const canceled = { id: 'task-1', status: 'canceled' }
     const retried = { id: 'task-2', status: 'queued', retry_of: 'task-1' }

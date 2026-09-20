@@ -301,48 +301,50 @@ func (s *OpenAIGatewayService) stageCodexTurnStateUsageCandidateWithVerifiedMode
 // acceptance request. Persistence still goes through the ordinary worker and
 // repository CAS. Caller must hold openaiTurnStateMu.
 func (s *OpenAIGatewayService) publishManualCodexTurnStateCandidateLocked(entry *codexTurnStateAutoEntry, now time.Time) bool {
-	if !s.codexTurnStateUsageCandidateActiveLocked(entry, now) || !entry.candidate.manual {
-		return false
-	}
-	queuedTask := entry.probe
-	candidate := entry.candidate
-	entry.candidate = codexTurnStateUsageCandidate{}
-	entry.pendingOwner = candidate.pendingOwner
-	candidateSetAt := candidate.collectedAt.UnixMilli()
-	if candidateSetAt <= 0 || codexTurnStateAutoExpiry(candidate.state, candidateSetAt, now) <= now.UnixMilli() {
-		s.releaseCodexTurnStateCandidateOwnerAsync(entry.pendingOwner)
-		entry.pendingOwner = codexTurnStateProbeCandidatePendingOwner{}
-		entry.lastError = "invalid_state"
-		markCodexTurnStateProbeCompletedLocked(entry, now)
-		entry.dirty = true
-		entry.manualProbe = true
+	return s.withActiveCodexTurnStateCollectionTaskLocked(entry, func() bool {
+		if !s.codexTurnStateUsageCandidateActiveLocked(entry, now) || !entry.candidate.manual {
+			return false
+		}
+		queuedTask := entry.probe
+		candidate := entry.candidate
+		entry.candidate = codexTurnStateUsageCandidate{}
+		entry.pendingOwner = candidate.pendingOwner
+		candidateSetAt := candidate.collectedAt.UnixMilli()
+		if candidateSetAt <= 0 || codexTurnStateAutoExpiry(candidate.state, candidateSetAt, now) <= now.UnixMilli() {
+			s.releaseCodexTurnStateCandidateOwnerAsync(entry.pendingOwner)
+			entry.pendingOwner = codexTurnStateProbeCandidatePendingOwner{}
+			entry.lastError = "invalid_state"
+			markCodexTurnStateProbeCompletedLocked(entry, now)
+			entry.dirty = true
+			entry.manualProbe = true
+			entry.retryAfter = time.Time{}
+			entry.retryWakeAt = time.Time{}
+			return false
+		}
+		previousToken := entry.token
+		s.setCodexTurnStateLocked(entry, candidate.state, now)
+		if entry.token == candidate.state && codexTurnStateOwnerModel(candidate.verifiedModel) == entry.model {
+			entry.verifiedModel = candidate.verifiedModel
+			entry.dirty = true
+		}
+		if entry.token == candidate.state && previousToken != candidate.state {
+			entry.setAt = candidate.collectedAt.UnixMilli()
+		}
+		published := entry.token == candidate.state && codexTurnStateAutoExpiry(entry.token, entry.setAt, now) > now.UnixMilli()
+		if !published {
+			s.releaseCodexTurnStateCandidateOwnerAsync(entry.pendingOwner)
+			entry.pendingOwner = codexTurnStateProbeCandidatePendingOwner{}
+			entry.lastError = "invalid_state"
+			markCodexTurnStateProbeCompletedLocked(entry, now)
+			entry.dirty = true
+		}
+		if !queuedTask {
+			entry.manualProbe = true
+		}
 		entry.retryAfter = time.Time{}
 		entry.retryWakeAt = time.Time{}
-		return false
-	}
-	previousToken := entry.token
-	s.setCodexTurnStateLocked(entry, candidate.state, now)
-	if entry.token == candidate.state && codexTurnStateOwnerModel(candidate.verifiedModel) == entry.model {
-		entry.verifiedModel = candidate.verifiedModel
-		entry.dirty = true
-	}
-	if entry.token == candidate.state && previousToken != candidate.state {
-		entry.setAt = candidate.collectedAt.UnixMilli()
-	}
-	published := entry.token == candidate.state && codexTurnStateAutoExpiry(entry.token, entry.setAt, now) > now.UnixMilli()
-	if !published {
-		s.releaseCodexTurnStateCandidateOwnerAsync(entry.pendingOwner)
-		entry.pendingOwner = codexTurnStateProbeCandidatePendingOwner{}
-		entry.lastError = "invalid_state"
-		markCodexTurnStateProbeCompletedLocked(entry, now)
-		entry.dirty = true
-	}
-	if !queuedTask {
-		entry.manualProbe = true
-	}
-	entry.retryAfter = time.Time{}
-	entry.retryWakeAt = time.Time{}
-	return published
+		return published
+	})
 }
 
 func firstCodexTurnStateRequestModel(fallback string, models ...string) string {
@@ -573,23 +575,29 @@ func (s *OpenAIGatewayService) confirmCodexTurnStateUsageLog(input *OpenAIRecord
 			s.noteCodexTurnStateUsageCandidateErrorLocked(key.accountID, entry, errCodexTurnStateUsageLogMissing)
 			continue
 		}
-		entry.candidate = codexTurnStateUsageCandidate{}
-		entry.pendingOwner = candidate.pendingOwner
-		previousToken := entry.token
-		s.setCodexTurnStateLocked(entry, candidate.state, now)
-		if entry.token == candidate.state && codexTurnStateOwnerModel(evidence.completedModel) == entry.model {
-			entry.verifiedModel = evidence.completedModel
-			entry.dirty = true
-		}
-		if entry.token == candidate.state && previousToken != candidate.state {
-			entry.setAt = candidate.collectedAt.UnixMilli()
-		}
-		if candidate.manual && !entry.probe {
-			entry.manualProbe = true
-		}
-		if candidate.manual {
-			entry.retryAfter = time.Time{}
-			entry.retryWakeAt = time.Time{}
+		published := s.withActiveCodexTurnStateCollectionTaskLocked(entry, func() bool {
+			entry.candidate = codexTurnStateUsageCandidate{}
+			entry.pendingOwner = candidate.pendingOwner
+			previousToken := entry.token
+			s.setCodexTurnStateLocked(entry, candidate.state, now)
+			if entry.token == candidate.state && codexTurnStateOwnerModel(evidence.completedModel) == entry.model {
+				entry.verifiedModel = evidence.completedModel
+				entry.dirty = true
+			}
+			if entry.token == candidate.state && previousToken != candidate.state {
+				entry.setAt = candidate.collectedAt.UnixMilli()
+			}
+			if candidate.manual && !entry.probe {
+				entry.manualProbe = true
+			}
+			if candidate.manual {
+				entry.retryAfter = time.Time{}
+				entry.retryWakeAt = time.Time{}
+			}
+			return true
+		})
+		if !published {
+			return
 		}
 		if entry.collectionTaskID != "" {
 			s.UpdateCodexTurnStateCollectionTask(entry.collectionTaskID, CodexTurnStateCollectionTaskStagePersisting, 85, 100)

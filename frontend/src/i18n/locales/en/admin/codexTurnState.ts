@@ -4,6 +4,10 @@ export default {
     title: 'Codex Turn State',
     description: 'Configure Codex Turn State collection and its dedicated IP pool, then review redacted results for healthy accounts.',
     refresh: 'Refresh',
+    refreshing: 'Refreshing Turn State data',
+    refreshPaused: 'Refresh paused while this page is hidden',
+    lastRefreshed: 'Last refreshed {time}',
+    notRefreshed: 'Waiting for the first refresh',
     overview: {
       eligible: 'Eligible accounts',
       valid: 'Valid states',
@@ -26,6 +30,7 @@ export default {
       detailDescription: 'Review the account, models, progress, and complete event timeline for task {id}.',
       detailPageDescription: 'Review progress and events for a Codex Turn State collection task.',
       detailLoadFailed: 'Failed to load collection task details',
+      refreshDelayed: 'Live task refresh is delayed; retrying in about {seconds}s',
       taskNoLongerActive: 'This task is no longer active. The result is available in the account collection status.',
       invalidTaskId: 'The collection task ID is invalid',
       back: 'Back to Turn State',

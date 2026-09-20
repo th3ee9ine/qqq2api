@@ -268,6 +268,31 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 
 	result := s.newCodexTurnStateManualResult(ctx, account, "", CodexTurnStateManualStatusRejected, "", "", now)
 	applyCodexTurnStateManualTargets(result, targets)
+	if s.codexTurnStateAccountCollectionTaskActive(account.ID, retryTaskID) {
+		result.Status = CodexTurnStateManualStatusRejected
+		result.Reason = "collection_already_in_flight"
+		result.Message = "another Turn State collection is already in progress; retry after it finishes"
+		return result, nil
+	}
+	collectionLease, leaseAcquired, leaseErr := s.acquireCodexTurnStateCollectionLease(ctx, account.ID)
+	if leaseErr != nil {
+		return nil, infraerrors.New(http.StatusServiceUnavailable, "CODEX_TURN_STATE_COLLECTION_LEASE_UNAVAILABLE", "Codex Turn State collection admission is temporarily unavailable")
+	}
+	if !leaseAcquired {
+		result.Status = CodexTurnStateManualStatusRejected
+		result.Reason = "collection_already_in_flight"
+		result.Message = "another Turn State collection is already in progress; retry after it finishes"
+		return result, nil
+	}
+	if collectionLease != nil {
+		// The acquisition owns one setup reference. Every created owner task below
+		// retains its own reference before workers start; the last terminal task
+		// releases the shared Redis lease.
+		defer collectionLease.releaseRef()
+		if retryTask != nil && !s.attachCodexTurnStateCollectionTaskLease(retryTask.ID, collectionLease) {
+			return nil, infraerrors.New(http.StatusConflict, "CODEX_TURN_STATE_COLLECTION_IN_FLIGHT", "another Turn State collection is already in progress")
+		}
+	}
 	s.openaiTurnStateMu.Lock()
 	type queuedOwner struct {
 		plan  CodexTurnStateManualModelTarget
@@ -276,6 +301,16 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 	queued := make([]queuedOwner, 0, len(plans))
 	busy := false
 	scopeChanged := false
+	// Recheck under the state lock after the optimistic registry read above. A
+	// concurrent automatic or renewal scheduler may have registered a task while
+	// the authoritative account/model reads were in flight.
+	if s.codexTurnStateAccountCollectionTaskActive(account.ID, retryTaskID) {
+		s.openaiTurnStateMu.Unlock()
+		result.Status = CodexTurnStateManualStatusRejected
+		result.Reason = "collection_already_in_flight"
+		result.Message = "another Turn State collection is already in progress; retry after it finishes"
+		return result, nil
+	}
 	for _, plan := range plans {
 		entry := s.codexTurnStateEntryLocked(account, now, plan.Model)
 		if !codexTurnStateScopeAllows(cfg, plan.Model, plan.Owner) {
@@ -285,8 +320,8 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 		s.discardCanceledCodexTurnStateCollectionTaskLocked(entry)
 		candidatePending := s.codexTurnStateUsageCandidateActiveLocked(entry, now)
 		// A detached dirty entry only represents a pending database write. It
-		// must not block a fresh manual/bulk collection; only an active worker,
-		// probe, candidate, or task binding makes the owner busy.
+		// must not block a fresh manual/bulk collection; only active collection
+		// work, a candidate, or a task binding makes the owner busy.
 		if entry.running || entry.reconciling || entry.probe || entry.manualProbe || entry.collectionTaskID != "" || candidatePending {
 			busy = true
 			break
@@ -348,11 +383,12 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 			taskCtx = ctx
 		} else {
 			created, createdCtx, createErr := s.CreateCodexTurnStateCollectionTask(ctx, CodexTurnStateCollectionTaskInput{
-				AccountID:    account.ID,
-				AccountName:  account.Name,
-				RequestModel: plan.Model,
-				OwnerModel:   plan.Owner,
-				Source:       source,
+				AccountID:       account.ID,
+				AccountName:     account.Name,
+				RequestModel:    plan.Model,
+				OwnerModel:      plan.Owner,
+				Source:          source,
+				collectionLease: collectionLease,
 			})
 			if createErr != nil {
 				rollbackCreatedTasks()

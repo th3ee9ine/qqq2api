@@ -16,6 +16,14 @@
 
       <AdminOverviewStrip :items="overviewItems" :loading="loadingAccounts" />
 
+      <div class="turn-state-refresh-status" role="status" aria-live="polite" data-testid="turn-state-refresh-status">
+        <Icon name="refresh" size="xs" :class="{ 'animate-spin': loading || backgroundRefreshing }" aria-hidden="true" />
+        <span v-if="!pageVisible">{{ t('admin.codexTurnState.refreshPaused') }}</span>
+        <span v-else-if="loading || backgroundRefreshing">{{ t('admin.codexTurnState.refreshing') }}</span>
+        <span v-else-if="lastRefreshAt">{{ t('admin.codexTurnState.lastRefreshed', { time: formatTimestamp(lastRefreshAt) }) }}</span>
+        <span v-else>{{ t('admin.codexTurnState.notRefreshed') }}</span>
+      </div>
+
       <section class="admin-surface tasks-panel" :aria-busy="loadingTasks">
         <div class="section-heading-row">
           <div class="min-w-0">
@@ -25,7 +33,7 @@
           <button
             type="button"
             class="btn btn-secondary"
-            :disabled="loadingTasks"
+            :disabled="loadingTasks || backgroundRefreshing"
             data-testid="turn-state-tasks-refresh"
             @click="loadRecentTasks()"
           >
@@ -261,7 +269,7 @@
         <div v-if="accountsError" class="account-empty" role="alert">
           <Icon name="exclamationCircle" size="lg" class="mb-3 text-red-400" />
           <p>{{ accountsError }}</p>
-          <button type="button" class="btn btn-secondary mt-4" @click="loadAccounts">{{ t('common.retry') }}</button>
+          <button type="button" class="btn btn-secondary mt-4" @click="loadAccounts()">{{ t('common.retry') }}</button>
         </div>
         <div v-else-if="loadingAccounts" class="account-empty" role="status">
           <Icon name="refresh" size="lg" class="mb-3 animate-spin text-primary-600" />
@@ -458,6 +466,11 @@ const POLL_INTERVAL_MS = 2_000
 const MAX_POLL_RETRY_DELAY_MS = 30_000
 const CLOCK_TICK_MS = 30_000
 const TASK_POLL_INTERVAL_MS = 2_000
+const TASK_IDLE_POLL_INTERVAL_MS = 15_000
+const TASK_POLL_MAX_RETRY_DELAY_MS = 15_000
+const ACCOUNT_FALLBACK_REFRESH_INTERVAL_MS = 60_000
+const TASK_ACCOUNT_REFRESH_RETRY_DELAYS_MS = [4_000, 8_000, 15_000] as const
+const BULK_COLLECTION_CONCURRENCY = 4
 const RECENT_TASK_LIMIT = 10
 const TASK_SOURCES = new Set(['manual', 'bulk', 'automatic', 'renewal', 'retry'])
 const TASK_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'canceled'])
@@ -490,6 +503,9 @@ const accountsError = ref('')
 const collectionTasks = ref<CodexTurnStateTask[]>([])
 const loadingTasks = ref(false)
 const tasksError = ref('')
+const backgroundRefreshing = ref(false)
+const lastRefreshAt = ref<number | null>(null)
+const pageVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const cancelTaskTargetId = ref<string | null>(null)
 const accountSearch = ref('')
 const statusFilter = ref<StatusFilter>('all')
@@ -504,15 +520,28 @@ const bulkCollectionActive = ref(false)
 const bulkProgressSnapshot = ref<BulkCollectionProgress | null>(null)
 const clock = ref(Date.now())
 const pollTimers = new Map<number, ReturnType<typeof setTimeout>>()
+const pollControllers = new Map<number, AbortController>()
+const taskAccountRefreshControllers = new Map<number, AbortController>()
+const taskAccountRefreshPending = new Set<number>()
+const taskAccountRefreshRetryCounts = new Map<number, number>()
+const taskAccountRefreshRetryTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const pollBaselines = new Map<number, PollBaseline>()
 const collectionSubmissionGates = new Map<number, CollectionSubmissionGate>()
 const accountDetailVersions = new Map<number, number>()
 let clockTimer: ReturnType<typeof setInterval> | undefined
+let accountFallbackRefreshTimer: ReturnType<typeof setTimeout> | undefined
 let taskPollTimer: ReturnType<typeof setTimeout> | undefined
+let taskRefreshDebounceTimer: ReturnType<typeof setTimeout> | undefined
+let taskRefreshPending = false
+let taskListRequest: { controller: AbortController; generation: number } | null = null
+let accountListRequest: { controller: AbortController; generation: number } | null = null
+let visibilityListener: (() => void) | undefined
 let componentActive = true
 let accountListRequestGeneration = 0
 let accountDetailGeneration = 0
 let taskListRequestGeneration = 0
+let taskPollFailureCount = 0
+let initialLoadStarted = false
 
 const loading = computed(() => loadingSettings.value || loadingAccounts.value || loadingTasks.value)
 const proxyPoolConfigurationValid = computed(() => storedProxyPoolValid.value && proxyEditorValid.value)
@@ -624,39 +653,203 @@ function timestampISO(value?: number): string {
   return Number.isNaN(date.getTime()) ? '' : date.toISOString()
 }
 
-function scheduleRecentTaskPoll() {
+function isAbortError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { name?: unknown; code?: unknown; message?: unknown }
+  return candidate.name === 'AbortError'
+    || candidate.name === 'CanceledError'
+    || candidate.code === 'ERR_CANCELED'
+    || String(candidate.message || '').toLowerCase() === 'canceled'
+}
+
+function markRefreshed() {
+  if (componentActive) lastRefreshAt.value = Date.now()
+}
+
+function scheduleRecentTaskPoll(delay?: number) {
   if (taskPollTimer) clearTimeout(taskPollTimer)
   taskPollTimer = undefined
-  if (!componentActive || !collectionTasks.value.some(isActiveTask)) return
+  if (!componentActive || !pageVisible.value) return
+  const pollDelay = delay ?? (collectionTasks.value.some(isActiveTask) ? TASK_POLL_INTERVAL_MS : TASK_IDLE_POLL_INTERVAL_MS)
   taskPollTimer = setTimeout(() => {
     taskPollTimer = undefined
     void loadRecentTasks({ background: true })
-  }, TASK_POLL_INTERVAL_MS)
+  }, pollDelay)
 }
 
-async function loadRecentTasks({ background = false }: { background?: boolean } = {}) {
+function clearTaskAccountRefreshRetry(accountId: number) {
+  const retryTimer = taskAccountRefreshRetryTimers.get(accountId)
+  if (retryTimer) clearTimeout(retryTimer)
+  taskAccountRefreshRetryTimers.delete(accountId)
+  taskAccountRefreshRetryCounts.delete(accountId)
+}
+
+function clearTaskAccountRefresh(accountId: number) {
+  taskAccountRefreshControllers.get(accountId)?.abort()
+  taskAccountRefreshControllers.delete(accountId)
+  taskAccountRefreshPending.delete(accountId)
+  clearTaskAccountRefreshRetry(accountId)
+}
+
+function scheduleTaskAccountRefreshRetry(accountId: number) {
+  const retryCount = taskAccountRefreshRetryCounts.get(accountId) || 0
+  const delay = TASK_ACCOUNT_REFRESH_RETRY_DELAYS_MS[retryCount]
+  if (delay == null) {
+    taskAccountRefreshPending.delete(accountId)
+    taskAccountRefreshRetryCounts.delete(accountId)
+    return
+  }
+  taskAccountRefreshRetryCounts.set(accountId, retryCount + 1)
+  taskAccountRefreshPending.add(accountId)
+  const retryTimer = setTimeout(() => {
+    if (taskAccountRefreshRetryTimers.get(accountId) !== retryTimer) return
+    taskAccountRefreshRetryTimers.delete(accountId)
+    void drainTaskAccountRefresh(accountId)
+  }, delay)
+  taskAccountRefreshRetryTimers.set(accountId, retryTimer)
+}
+
+async function drainTaskAccountRefresh(accountId: number) {
+  if (!taskAccountRefreshPending.has(accountId)) return
+  if (!componentActive || !pageVisible.value || pollingIds.has(accountId)) return
+  if (taskAccountRefreshControllers.has(accountId) || taskAccountRefreshRetryTimers.has(accountId)) return
+  if (!accounts.value.some(account => account.id === accountId)) {
+    clearTaskAccountRefresh(accountId)
+    return
+  }
+  taskAccountRefreshPending.delete(accountId)
+  const controller = new AbortController()
+  taskAccountRefreshControllers.set(accountId, controller)
+  try {
+    const refreshed = await adminAPI.accounts.getById(accountId, { signal: controller.signal })
+    if (!componentActive || !pageVisible.value || taskAccountRefreshControllers.get(accountId) !== controller) return
+    taskAccountRefreshRetryCounts.delete(accountId)
+    replaceAccount(refreshed)
+  } catch (error) {
+    if (isAbortError(error) || !componentActive || taskAccountRefreshControllers.get(accountId) !== controller) return
+    const status = pollingErrorStatus(error)
+    if (status === 404 || status === 410) {
+      clearTaskAccountRefresh(accountId)
+      removeAccountFromDetails(accountId)
+    } else if (isTransientPollingError(error)) {
+      scheduleTaskAccountRefreshRetry(accountId)
+    } else {
+      taskAccountRefreshRetryCounts.delete(accountId)
+    }
+  } finally {
+    if (taskAccountRefreshControllers.get(accountId) === controller) taskAccountRefreshControllers.delete(accountId)
+    if (
+      taskAccountRefreshPending.has(accountId)
+      && !taskAccountRefreshRetryTimers.has(accountId)
+      && componentActive
+      && pageVisible.value
+      && !pollingIds.has(accountId)
+    ) {
+      void drainTaskAccountRefresh(accountId)
+    }
+  }
+}
+
+function refreshAccountAfterTaskCompletion(accountId: number) {
+  if (!componentActive || !accounts.value.some(account => account.id === accountId)) return
+  taskAccountRefreshPending.add(accountId)
+  if (!pageVisible.value || pollingIds.has(accountId) || taskAccountRefreshControllers.has(accountId)) return
+  void drainTaskAccountRefresh(accountId)
+}
+
+function refreshAccountsForFinishedTasks(previous: CodexTurnStateTask[], current: CodexTurnStateTask[]) {
+  if (previous.length === 0) return
+  const currentTaskIds = new Set(current.map(task => task.id))
+  const accountIds = new Set(
+    previous
+      .filter(task => isActiveTask(task) && !currentTaskIds.has(task.id))
+      .map(task => task.account_id),
+  )
+  for (const accountId of accountIds) void refreshAccountAfterTaskCompletion(accountId)
+}
+
+function queueRecentTaskRefresh() {
+  if (!componentActive || !pageVisible.value) return
+  if (taskListRequest) {
+    taskRefreshPending = true
+    return
+  }
+  if (taskRefreshDebounceTimer) return
+  taskRefreshDebounceTimer = setTimeout(() => {
+    taskRefreshDebounceTimer = undefined
+    void loadRecentTasks({ background: true })
+  }, 100)
+}
+
+function abortTaskListRequest() {
+  taskListRequest?.controller.abort()
+  taskListRequest = null
+  taskListRequestGeneration += 1
+  loadingTasks.value = false
+  backgroundRefreshing.value = false
+}
+
+async function loadRecentTasks({ background = false, force = false }: { background?: boolean; force?: boolean } = {}) {
+  if (background && !force && !pageVisible.value) return
+  let nextPollDelay: number | undefined
+  if (background && taskListRequest && !force) {
+    taskRefreshPending = true
+    return
+  }
+  if (taskRefreshDebounceTimer) {
+    clearTimeout(taskRefreshDebounceTimer)
+    taskRefreshDebounceTimer = undefined
+  }
   if (taskPollTimer) clearTimeout(taskPollTimer)
   taskPollTimer = undefined
+  taskRefreshPending = false
+  if (taskListRequest) {
+    abortTaskListRequest()
+  }
   const requestGeneration = ++taskListRequestGeneration
+  const request = { controller: new AbortController(), generation: requestGeneration }
+  taskListRequest = request
   if (!background) loadingTasks.value = true
+  else backgroundRefreshing.value = true
   if (!background || collectionTasks.value.length === 0) tasksError.value = ''
   try {
-    const response = await adminAPI.accounts.listCodexTurnStateTasks()
+    const response = await adminAPI.accounts.listCodexTurnStateTasks({ signal: request.controller.signal })
     if (!componentActive || requestGeneration !== taskListRequestGeneration) return
-    collectionTasks.value = (Array.isArray(response) ? response : []).filter(isActiveTask)
+    const previousTasks = collectionTasks.value
+    const nextTasks = (Array.isArray(response) ? response : []).filter(isActiveTask)
+    collectionTasks.value = nextTasks
+    taskPollFailureCount = 0
+    refreshAccountsForFinishedTasks(previousTasks, nextTasks)
     if (cancelTaskTargetId.value) {
       const cancelTarget = collectionTasks.value.find(task => task.id === cancelTaskTargetId.value)
       if (!cancelTarget?.can_cancel || !isActiveTask(cancelTarget)) cancelTaskTargetId.value = null
     }
     tasksError.value = ''
+    markRefreshed()
   } catch (error) {
-    if (componentActive && requestGeneration === taskListRequestGeneration && (!background || collectionTasks.value.length === 0)) {
-      tasksError.value = extractApiErrorMessage(error, t('admin.codexTurnState.tasks.loadFailed'))
+    if (isAbortError(error)) return
+    if (componentActive && requestGeneration === taskListRequestGeneration) {
+      taskPollFailureCount += 1
+      nextPollDelay = Math.min(
+        TASK_POLL_INTERVAL_MS * (2 ** taskPollFailureCount),
+        TASK_POLL_MAX_RETRY_DELAY_MS,
+      )
+      if (!background || collectionTasks.value.length === 0) {
+        tasksError.value = extractApiErrorMessage(error, t('admin.codexTurnState.tasks.loadFailed'))
+      }
     }
   } finally {
     if (componentActive && requestGeneration === taskListRequestGeneration) {
       loadingTasks.value = false
-      scheduleRecentTaskPoll()
+      backgroundRefreshing.value = false
+      scheduleRecentTaskPoll(nextPollDelay)
+    }
+    if (taskListRequest === request) {
+      taskListRequest = null
+      if (taskRefreshPending && componentActive && pageVisible.value) {
+        taskRefreshPending = false
+        queueRecentTaskRefresh()
+      }
     }
   }
 }
@@ -696,14 +889,20 @@ async function cancelSelectedTask() {
   cancelingTaskIds.add(targetId)
   if (taskPollTimer) clearTimeout(taskPollTimer)
   taskPollTimer = undefined
-  taskListRequestGeneration += 1
-  loadingTasks.value = false
+  abortTaskListRequest()
+  taskRefreshPending = false
 
   try {
     const canceledTask = await adminAPI.accounts.cancelCodexTurnStateTask(targetId)
     if (!componentActive) return
-    taskListRequestGeneration += 1
+    if (taskPollTimer) clearTimeout(taskPollTimer)
+    taskPollTimer = undefined
+    if (taskRefreshDebounceTimer) clearTimeout(taskRefreshDebounceTimer)
+    taskRefreshDebounceTimer = undefined
+    taskRefreshPending = false
+    abortTaskListRequest()
     replaceCollectionTask(canceledTask)
+    refreshAccountAfterTaskCompletion(target.account_id)
     appStore.showSuccess(t('admin.codexTurnState.tasks.cancelSucceeded'))
   } catch (error) {
     if (componentActive) {
@@ -737,18 +936,35 @@ async function loadTurnStateSettings() {
   }
 }
 
-async function loadAccounts() {
+function scheduleAccountFallbackRefresh() {
+  if (accountFallbackRefreshTimer) clearTimeout(accountFallbackRefreshTimer)
+  accountFallbackRefreshTimer = undefined
+  if (!componentActive || !pageVisible.value) return
+  accountFallbackRefreshTimer = setTimeout(() => {
+    accountFallbackRefreshTimer = undefined
+    void loadAccounts({ background: true })
+  }, ACCOUNT_FALLBACK_REFRESH_INTERVAL_MS)
+}
+
+async function loadAccounts({ background = false, force = false }: { background?: boolean; force?: boolean } = {}) {
+  if (background && !force && !pageVisible.value) return
+  if (background && accountListRequest) return
+  if (accountFallbackRefreshTimer) clearTimeout(accountFallbackRefreshTimer)
+  accountFallbackRefreshTimer = undefined
+  accountListRequest?.controller.abort()
   const requestGeneration = ++accountListRequestGeneration
+  const request = { controller: new AbortController(), generation: requestGeneration }
+  accountListRequest = request
   const detailGenerationAtStart = accountDetailGeneration
-  loadingAccounts.value = true
-  accountsError.value = ''
+  if (!background) loadingAccounts.value = true
+  if (!background || accounts.value.length === 0) accountsError.value = ''
   try {
     const filters = { platform: 'openai', status: 'active' }
-    const first = await adminAPI.accounts.list(1, 200, filters)
+    const first = await adminAPI.accounts.list(1, 200, filters, { signal: request.controller.signal })
     const result = [...(first.items || [])]
     const pages = Math.max(1, Number(first.pages) || 1)
     for (let page = 2; page <= pages; page += 1) {
-      const response = await adminAPI.accounts.list(page, 200, filters)
+      const response = await adminAPI.accounts.list(page, 200, filters, { signal: request.controller.signal })
       result.push(...(response.items || []))
     }
     const nextAccounts = result.filter(isCodexTurnStateEligibleAccount)
@@ -788,18 +1004,24 @@ async function loadAccounts() {
       setSuccessfulModels(account.id, successfulModelsFromInfo(account.codex_turn_state_auto))
     }
     accounts.value = mergedAccounts
+    markRefreshed()
     const activeCollectionIds = new Set([...collectionSubmissionGates.keys(), ...pollBaselines.keys()])
     for (const accountId of activeCollectionIds) {
       if (!mergedAccountIds.has(accountId)) stopPolling(accountId, 'skipped')
     }
   } catch (error) {
+    if (isAbortError(error)) return
     if (componentActive && requestGeneration === accountListRequestGeneration) {
-      accountsError.value = extractApiErrorMessage(error, t('admin.codexTurnState.accounts.loadFailed'))
+      if (!background || accounts.value.length === 0) {
+        accountsError.value = extractApiErrorMessage(error, t('admin.codexTurnState.accounts.loadFailed'))
+      }
     }
   } finally {
     if (componentActive && requestGeneration === accountListRequestGeneration) {
-      loadingAccounts.value = false
+      if (!background) loadingAccounts.value = false
+      scheduleAccountFallbackRefresh()
     }
+    if (accountListRequest === request) accountListRequest = null
   }
 }
 
@@ -1211,6 +1433,7 @@ function markAccountDetailVersion(accountId: number) {
 }
 
 function removeAccountFromDetails(accountId: number) {
+  clearTaskAccountRefresh(accountId)
   markAccountDetailVersion(accountId)
   const index = accounts.value.findIndex(account => account.id === accountId)
   if (index >= 0) accounts.value.splice(index, 1)
@@ -1340,6 +1563,8 @@ function stopPolling(accountId: number, outcome: AccountCollectionOutcome) {
   const timer = pollTimers.get(accountId)
   if (timer) clearTimeout(timer)
   pollTimers.delete(accountId)
+  pollControllers.get(accountId)?.abort()
+  pollControllers.delete(accountId)
   pollingIds.delete(accountId)
   delete pollingTargets[accountId]
   const baseline = pollBaselines.get(accountId)
@@ -1357,6 +1582,7 @@ function stopPolling(accountId: number, outcome: AccountCollectionOutcome) {
     baseline.settled = true
     baseline.complete(outcome)
   }
+  if (taskAccountRefreshPending.has(accountId)) void drainTaskAccountRefresh(accountId)
 }
 
 function pollingErrorStatus(error: unknown): number | undefined {
@@ -1373,20 +1599,40 @@ function isTransientPollingError(error: unknown): boolean {
   return status == null || status === 0 || status === 408 || status === 429 || status >= 500
 }
 
-function schedulePoll(accountId: number, baseline: PollBaseline, transientFailureCount = 0) {
+function schedulePoll(accountId: number, baseline: PollBaseline, transientFailureCount = 0, immediate = false) {
   if (baseline.settled) return
   pollBaselines.set(accountId, baseline)
   pollingIds.add(accountId)
   pollingTargets[accountId] = baseline.displayTargets
-  const delay = transientFailureCount === 0
+  const taskRefreshController = taskAccountRefreshControllers.get(accountId)
+  if (taskRefreshController) {
+    taskAccountRefreshPending.add(accountId)
+    taskAccountRefreshControllers.delete(accountId)
+    taskRefreshController.abort()
+  }
+  const taskRefreshRetryTimer = taskAccountRefreshRetryTimers.get(accountId)
+  if (taskRefreshRetryTimer) {
+    clearTimeout(taskRefreshRetryTimer)
+    taskAccountRefreshRetryTimers.delete(accountId)
+    taskAccountRefreshPending.add(accountId)
+  }
+  const existingTimer = pollTimers.get(accountId)
+  if (existingTimer) clearTimeout(existingTimer)
+  pollTimers.delete(accountId)
+  if (!pageVisible.value) return
+  const delay = immediate
+    ? 0
+    : transientFailureCount === 0
     ? POLL_INTERVAL_MS
     : Math.min(POLL_INTERVAL_MS * (2 ** transientFailureCount), MAX_POLL_RETRY_DELAY_MS)
   const timer = setTimeout(async () => {
     pollTimers.delete(accountId)
-    if (!componentActive || !pollingIds.has(accountId)) return
+    if (!componentActive || !pageVisible.value || !pollingIds.has(accountId)) return
+    const controller = new AbortController()
+    pollControllers.set(accountId, controller)
     try {
-      const refreshed = await adminAPI.accounts.getById(accountId)
-      if (!componentActive || !pollingIds.has(accountId)) return
+      const refreshed = await adminAPI.accounts.getById(accountId, { signal: controller.signal })
+      if (!componentActive || !pageVisible.value || !pollingIds.has(accountId)) return
       clock.value = Date.now()
       if (!replaceAccount(refreshed)) {
         stopPolling(accountId, 'skipped')
@@ -1409,7 +1655,7 @@ function schedulePoll(accountId: number, baseline: PollBaseline, transientFailur
       }
       schedulePoll(accountId, baseline)
     } catch (error) {
-      if (!componentActive || !pollingIds.has(accountId)) return
+      if (isAbortError(error) || !componentActive || !pageVisible.value || !pollingIds.has(accountId)) return
       const status = pollingErrorStatus(error)
       if (status === 404 || status === 410) {
         removeAccountFromDetails(accountId)
@@ -1422,6 +1668,8 @@ function schedulePoll(accountId: number, baseline: PollBaseline, transientFailur
       }
       stopPolling(accountId, 'failure')
       if (baseline.notify) appStore.showError(t('admin.codexTurnState.accounts.collectFailed'))
+    } finally {
+      if (pollControllers.get(accountId) === controller) pollControllers.delete(accountId)
     }
   }, delay)
   pollTimers.set(accountId, timer)
@@ -1459,7 +1707,7 @@ async function collectAccount(
     if (response.kind === 'cancelled') return response.outcome
     if (!componentActive) return 'skipped'
     const result = response.result
-    void loadRecentTasks({ background: true })
+    queueRecentTaskRefresh()
     clock.value = Date.now()
     const targetModels = [...new Set(
       (Array.isArray(result.target_models) ? result.target_models : result.model ? [result.model] : [])
@@ -1543,19 +1791,27 @@ async function collectAllAccounts() {
   bulkCollectionActive.value = true
   for (const account of targetAccounts) beginAccountCollection(account.id, 'queued')
 
-  await Promise.all(targetAccounts.map(async (snapshot) => {
-    if (!componentActive) return
-    const current = accounts.value.find(account => account.id === snapshot.id)
-    if (!current || !isCodexTurnStateEligibleAccount(current)) {
-      markAccountCollectionTerminal(snapshot.id, 'skipped')
-      return
+  let nextAccountIndex = 0
+  const collectNextAccount = async () => {
+    while (componentActive) {
+      const accountIndex = nextAccountIndex
+      nextAccountIndex += 1
+      const snapshot = targetAccounts[accountIndex]
+      if (!snapshot) return
+      const current = accounts.value.find(account => account.id === snapshot.id)
+      if (!current || !isCodexTurnStateEligibleAccount(current)) {
+        markAccountCollectionTerminal(snapshot.id, 'skipped')
+        continue
+      }
+      try {
+        await collectAccount(current, { notify: false, source: 'bulk' })
+      } catch {
+        markAccountCollectionTerminal(current.id, 'failure')
+      }
     }
-    try {
-      await collectAccount(current, { notify: false, source: 'bulk' })
-    } catch {
-      markAccountCollectionTerminal(current.id, 'failure')
-    }
-  }))
+  }
+  const workerCount = Math.min(BULK_COLLECTION_CONCURRENCY, targetAccounts.length)
+  await Promise.all(Array.from({ length: workerCount }, () => collectNextAccount()))
   if (!componentActive) return
   for (const accountId of bulkAccountIds.value) {
     const run = accountCollectionRuns[accountId]
@@ -1577,28 +1833,128 @@ async function collectAllAccounts() {
       skipped: progress.skippedAccounts,
     }))
   }
-  void loadRecentTasks({ background: true })
+  queueRecentTaskRefresh()
+}
+
+function pauseBackgroundRefresh() {
+  if (clockTimer) clearInterval(clockTimer)
+  clockTimer = undefined
+  if (accountFallbackRefreshTimer) clearTimeout(accountFallbackRefreshTimer)
+  accountFallbackRefreshTimer = undefined
+  if (taskPollTimer) clearTimeout(taskPollTimer)
+  taskPollTimer = undefined
+  if (taskRefreshDebounceTimer) clearTimeout(taskRefreshDebounceTimer)
+  taskRefreshDebounceTimer = undefined
+  taskRefreshPending = false
+  if (taskListRequest) {
+    taskListRequest.controller.abort()
+    taskListRequestGeneration += 1
+    taskListRequest = null
+    loadingTasks.value = false
+    backgroundRefreshing.value = false
+  }
+  for (const timer of pollTimers.values()) clearTimeout(timer)
+  pollTimers.clear()
+  for (const controller of pollControllers.values()) controller.abort()
+  pollControllers.clear()
+  for (const [accountId, controller] of taskAccountRefreshControllers) {
+    taskAccountRefreshPending.add(accountId)
+    controller.abort()
+  }
+  taskAccountRefreshControllers.clear()
+  for (const [accountId, timer] of taskAccountRefreshRetryTimers) {
+    clearTimeout(timer)
+    taskAccountRefreshPending.add(accountId)
+  }
+  taskAccountRefreshRetryTimers.clear()
+  if (accountListRequest) {
+    accountListRequest.controller.abort()
+    accountListRequestGeneration += 1
+    accountListRequest = null
+    loadingAccounts.value = false
+  }
+  backgroundRefreshing.value = false
+}
+
+function startClock() {
+  if (clockTimer || !componentActive || !pageVisible.value) return
+  clockTimer = setInterval(() => {
+    if (componentActive && pageVisible.value) clock.value = Date.now()
+  }, CLOCK_TICK_MS)
+}
+
+function resumeBackgroundRefresh() {
+  if (!componentActive || !pageVisible.value) return
+  clock.value = Date.now()
+  startClock()
+  void loadAccounts({ background: true, force: true })
+  void loadRecentTasks({ background: true, force: true })
+  for (const [accountId, baseline] of pollBaselines) {
+    if (pollControllers.has(accountId)) continue
+    schedulePoll(accountId, baseline, 0, true)
+  }
+  for (const accountId of taskAccountRefreshPending) void drainTaskAccountRefresh(accountId)
+}
+
+function handleVisibilityChange() {
+  const visible = typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  pageVisible.value = visible
+  if (!visible) {
+    pauseBackgroundRefresh()
+    return
+  }
+  if (!initialLoadStarted) {
+    initialLoadStarted = true
+    clock.value = Date.now()
+    startClock()
+    void loadAll()
+    return
+  }
+  resumeBackgroundRefresh()
 }
 
 onMounted(() => {
   clock.value = Date.now()
-  clockTimer = setInterval(() => {
-    if (componentActive) clock.value = Date.now()
-  }, CLOCK_TICK_MS)
-  void loadAll()
+  visibilityListener = handleVisibilityChange
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibilityListener)
+  pageVisible.value = typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  if (pageVisible.value) {
+    initialLoadStarted = true
+    startClock()
+    void loadAll()
+  }
 })
 onBeforeUnmount(() => {
   componentActive = false
   accountListRequestGeneration += 1
   taskListRequestGeneration += 1
+  accountListRequest?.controller.abort()
+  accountListRequest = null
+  taskListRequest?.controller.abort()
+  taskListRequest = null
+  if (typeof document !== 'undefined' && visibilityListener) document.removeEventListener('visibilitychange', visibilityListener)
+  visibilityListener = undefined
   if (clockTimer) clearInterval(clockTimer)
   clockTimer = undefined
+  if (accountFallbackRefreshTimer) clearTimeout(accountFallbackRefreshTimer)
+  accountFallbackRefreshTimer = undefined
   if (taskPollTimer) clearTimeout(taskPollTimer)
   taskPollTimer = undefined
+  if (taskRefreshDebounceTimer) clearTimeout(taskRefreshDebounceTimer)
+  taskRefreshDebounceTimer = undefined
+  taskRefreshPending = false
   const activeCollectionIds = new Set([...collectionSubmissionGates.keys(), ...pollBaselines.keys()])
   for (const accountId of activeCollectionIds) stopPolling(accountId, 'skipped')
   for (const timer of pollTimers.values()) clearTimeout(timer)
   pollTimers.clear()
+  for (const controller of pollControllers.values()) controller.abort()
+  pollControllers.clear()
+  for (const controller of taskAccountRefreshControllers.values()) controller.abort()
+  taskAccountRefreshControllers.clear()
+  taskAccountRefreshPending.clear()
+  for (const timer of taskAccountRefreshRetryTimers.values()) clearTimeout(timer)
+  taskAccountRefreshRetryTimers.clear()
+  taskAccountRefreshRetryCounts.clear()
   pollBaselines.clear()
   collectionSubmissionGates.clear()
   collectingIds.clear()
@@ -1619,6 +1975,9 @@ onBeforeUnmount(() => {
 }
 .turn-state-workspace :deep(.admin-overview) {
   border-radius: 0.5rem;
+}
+.turn-state-refresh-status {
+  @apply flex items-center gap-1.5 px-1 text-[11px] text-gray-500 dark:text-gray-400;
 }
 .section-heading-row,
 .accounts-heading {

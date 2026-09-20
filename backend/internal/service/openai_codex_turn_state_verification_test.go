@@ -489,6 +489,72 @@ func TestCanceledCodexTurnStateVerifyingTaskDropsCandidateAndAllowsImmediateRepl
 	s.openaiTurnStateMu.Unlock()
 }
 
+func TestCanceledCodexTurnStateManualTaskCannotPublishCandidate(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	const model = "gpt-6-astra"
+	now := time.Now()
+	oldState := recoveryTestToken(now.Add(-time.Minute), 10, 41)
+	candidateState := recoveryTestToken(now, 12, 42)
+	seedAutomaticTurnState(account, oldState, model)
+	repo.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
+
+	task, taskCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: model,
+		OwnerModel:   model,
+		Source:       CodexTurnStateCollectionSourceManual,
+	})
+	require.NoError(t, err)
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, now, model)
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, task.ID, taskCtx))
+	require.True(t, s.stageCodexTurnStateUsageCandidateWithModeLocked(entry, candidateState, entry.recovery.InvalidatedAtMS, now, true))
+	s.openaiTurnStateMu.Unlock()
+
+	_, err = s.CancelCodexTurnStateCollectionTask(task.ID)
+	require.NoError(t, err)
+
+	s.openaiTurnStateMu.Lock()
+	require.False(t, s.publishManualCodexTurnStateCandidateLocked(entry, time.Now()))
+	require.Equal(t, oldState, entry.token)
+	require.Empty(t, entry.candidate)
+	require.Empty(t, entry.collectionTaskID)
+	require.Nil(t, entry.collectionTaskContext)
+	s.openaiTurnStateMu.Unlock()
+}
+
+func TestCanceledCodexTurnStateAutomaticTaskCannotPublishUsageCandidate(t *testing.T) {
+	s, _, account, _, input, usageLog, oldState, _ := prepareCodexTurnStateUsageGateTest(t)
+	const model = "gpt-6-astra"
+	task, taskCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: model,
+		OwnerModel:   model,
+		Source:       CodexTurnStateCollectionSourceAutomatic,
+	})
+	require.NoError(t, err)
+
+	s.openaiTurnStateMu.Lock()
+	entry := s.openaiTurnStates[codexTurnStateKey{accountID: account.ID, model: model}]
+	require.NotNil(t, entry)
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, task.ID, taskCtx))
+	s.openaiTurnStateMu.Unlock()
+
+	_, err = s.CancelCodexTurnStateCollectionTask(task.ID)
+	require.NoError(t, err)
+	s.confirmCodexTurnStateUsageLog(input, usageLog, true)
+
+	s.openaiTurnStateMu.Lock()
+	require.Equal(t, oldState, entry.token)
+	require.Empty(t, entry.candidate)
+	require.Empty(t, entry.collectionTaskID)
+	require.Nil(t, entry.collectionTaskContext)
+	s.openaiTurnStateMu.Unlock()
+}
+
 func TestCodexTurnStateManualCandidateCanBeVerifiedWhenAutomaticModeIsDisabled(t *testing.T) {
 	s, _, account := newTurnStateAutoService(t)
 	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)

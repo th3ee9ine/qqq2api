@@ -11,8 +11,8 @@
             <Icon name="arrowLeft" size="sm" />
             {{ t('admin.codexTurnState.tasks.back') }}
           </RouterLink>
-          <button type="button" class="btn btn-secondary" :disabled="loading || actionPending !== null" @click="loadTask()">
-            <Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />
+          <button type="button" class="btn btn-secondary" :disabled="loading || backgroundRefreshing || actionPending !== null" @click="loadTask()">
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': loading || backgroundRefreshing }" />
             {{ t('admin.codexTurnState.tasks.refresh') }}
           </button>
           <button
@@ -28,6 +28,19 @@
           </button>
         </template>
       </AdminPageHeader>
+
+      <div class="task-refresh-status" role="status" aria-live="polite" data-testid="turn-state-task-refresh-status">
+        <Icon name="refresh" size="xs" :class="{ 'animate-spin': loading || backgroundRefreshing }" aria-hidden="true" />
+        <span v-if="!pageVisible">{{ t('admin.codexTurnState.refreshPaused') }}</span>
+        <span v-else-if="backgroundRefreshing || loading">{{ t('admin.codexTurnState.refreshing') }}</span>
+        <span v-else-if="lastRefreshAt">{{ t('admin.codexTurnState.lastRefreshed', { time: formatTimestamp(lastRefreshAt) }) }}</span>
+        <span v-else>{{ t('admin.codexTurnState.notRefreshed') }}</span>
+      </div>
+
+      <section v-if="refreshWarning && !error" class="admin-surface task-refresh-warning" role="status" data-testid="turn-state-task-refresh-warning">
+        <Icon name="infoCircle" size="sm" class="shrink-0" />
+        <p>{{ refreshWarning }}</p>
+      </section>
 
       <section v-if="error" class="admin-surface task-message" role="alert">
         <Icon name="exclamationCircle" size="lg" class="text-red-400" />
@@ -213,6 +226,7 @@ import type { CodexTurnStateTask, CodexTurnStateTaskEvent } from '@/api/admin/ac
 type TaskAction = 'cancel'
 
 const TASK_POLL_INTERVAL_MS = 2_000
+const TASK_POLL_MAX_INTERVAL_MS = 15_000
 const TASK_SOURCES = new Set(['manual', 'bulk', 'automatic', 'renewal', 'retry'])
 const TASK_STATUSES = new Set(['queued', 'running', 'succeeded', 'failed', 'canceled'])
 const TASK_STAGES = new Set([
@@ -235,13 +249,20 @@ const appStore = useAppStore()
 const task = ref<CodexTurnStateTask | null>(null)
 const loading = ref(false)
 const error = ref('')
+const backgroundRefreshing = ref(false)
+const refreshWarning = ref('')
+const lastRefreshAt = ref<number | null>(null)
+const pageVisible = ref(typeof document === 'undefined' || document.visibilityState !== 'hidden')
 const actionPending = ref<TaskAction | null>(null)
 const cancelConfirmOpen = ref(false)
 const clock = ref(Date.now())
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
+let pollController: AbortController | undefined
+let visibilityListener: (() => void) | undefined
 let requestGeneration = 0
 let actionGeneration = 0
+let pollFailureCount = 0
 let componentActive = true
 
 const taskId = computed(() => String(route.params.taskId || '').trim())
@@ -333,19 +354,51 @@ function formatDuration(value?: number): string {
   return t('admin.codexTurnState.tasks.durationHours', { hours, minutes: minutes % 60 })
 }
 
-function schedulePoll() {
+function isAbortError(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const error = value as { name?: unknown; code?: unknown; message?: unknown }
+  return error.name === 'AbortError'
+    || error.name === 'CanceledError'
+    || error.code === 'ERR_CANCELED'
+    || String(error.message || '').toLowerCase() === 'canceled'
+}
+
+function errorStatus(value: unknown): number | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const error = value as { status?: unknown; response?: { status?: unknown } }
+  const candidate = error.status ?? error.response?.status
+  if (candidate == null || candidate === '') return undefined
+  const status = Number(candidate)
+  return Number.isInteger(status) ? status : undefined
+}
+
+function isTransientRefreshError(value: unknown): boolean {
+  const status = errorStatus(value)
+  return status == null || status === 0 || status === 408 || status === 429 || status >= 500
+}
+
+function markRefreshed() {
+  if (!componentActive) return
+  lastRefreshAt.value = Date.now()
+  refreshWarning.value = ''
+}
+
+function schedulePoll(delay = TASK_POLL_INTERVAL_MS) {
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = undefined
-  if (!componentActive || actionPending.value !== null || !isActiveTask(task.value)) return
+  if (!componentActive || !pageVisible.value || actionPending.value !== null || !isActiveTask(task.value)) return
   pollTimer = setTimeout(() => {
     pollTimer = undefined
     void loadTask({ background: true })
-  }, TASK_POLL_INTERVAL_MS)
+  }, delay)
 }
 
-async function loadTask({ background = false }: { background?: boolean } = {}) {
+async function loadTask({ background = false, force = false }: { background?: boolean; force?: boolean } = {}) {
+  if (background && !force && !pageVisible.value) return
+  let nextPollDelay = TASK_POLL_INTERVAL_MS
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = undefined
+  if (!background) pollController?.abort()
   const id = taskId.value
   if (!id) {
     task.value = null
@@ -353,14 +406,21 @@ async function loadTask({ background = false }: { background?: boolean } = {}) {
     return
   }
   const generation = ++requestGeneration
+  const controller = new AbortController()
+  pollController?.abort()
+  pollController = controller
   if (!background) loading.value = true
+  else backgroundRefreshing.value = true
   if (!background || !task.value) error.value = ''
   try {
-    const result = await adminAPI.accounts.getCodexTurnStateTask(id)
+    const result = await adminAPI.accounts.getCodexTurnStateTask(id, { signal: controller.signal })
     if (!componentActive || generation !== requestGeneration || id !== taskId.value) return
     task.value = result
     error.value = ''
+    pollFailureCount = 0
+    markRefreshed()
   } catch (loadError) {
+    if (isAbortError(loadError)) return
     if (componentActive && generation === requestGeneration) {
       if (isTaskNoLongerActive(loadError)) {
         // Terminal tasks are intentionally removed from the server registry.
@@ -368,6 +428,18 @@ async function loadTask({ background = false }: { background?: boolean } = {}) {
         // at its previous progress while polling the same missing task forever.
         task.value = null
         error.value = t('admin.codexTurnState.tasks.taskNoLongerActive')
+      } else if (background && task.value && isTransientRefreshError(loadError)) {
+        pollFailureCount += 1
+        nextPollDelay = Math.min(TASK_POLL_INTERVAL_MS * (2 ** pollFailureCount), TASK_POLL_MAX_INTERVAL_MS)
+        refreshWarning.value = t('admin.codexTurnState.tasks.refreshDelayed', {
+          seconds: nextPollDelay / 1_000,
+        })
+      } else if (background && task.value) {
+        pollFailureCount = 0
+        nextPollDelay = TASK_POLL_MAX_INTERVAL_MS
+        refreshWarning.value = t('admin.codexTurnState.tasks.refreshDelayed', {
+          seconds: TASK_POLL_MAX_INTERVAL_MS / 1_000,
+        })
       } else if (!background || !task.value) {
         error.value = extractApiErrorMessage(loadError, t('admin.codexTurnState.tasks.detailLoadFailed'))
       }
@@ -375,8 +447,10 @@ async function loadTask({ background = false }: { background?: boolean } = {}) {
   } finally {
     if (componentActive && generation === requestGeneration) {
       if (!background) loading.value = false
-      schedulePoll()
+      backgroundRefreshing.value = false
+      schedulePoll(nextPollDelay)
     }
+    if (pollController === controller) pollController = undefined
   }
 }
 
@@ -386,6 +460,8 @@ async function cancelTask() {
   const id = task.value.id
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = undefined
+  pollController?.abort()
+  pollController = undefined
   requestGeneration += 1
   const generation = ++actionGeneration
   actionPending.value = 'cancel'
@@ -406,29 +482,67 @@ async function cancelTask() {
   }
 }
 
+function startClock() {
+  if (clockTimer || !componentActive || !pageVisible.value) return
+  clockTimer = setInterval(() => {
+    if (componentActive && pageVisible.value && isActiveTask(task.value)) clock.value = Date.now()
+  }, 1_000)
+}
+
+function handleVisibilityChange() {
+  pageVisible.value = typeof document === 'undefined' || document.visibilityState !== 'hidden'
+  if (!pageVisible.value) {
+    if (clockTimer) clearInterval(clockTimer)
+    clockTimer = undefined
+    if (pollTimer) clearTimeout(pollTimer)
+    pollTimer = undefined
+    pollController?.abort()
+    pollController = undefined
+    requestGeneration += 1
+    loading.value = false
+    backgroundRefreshing.value = false
+    return
+  }
+  clock.value = Date.now()
+  startClock()
+  if (taskId.value && actionPending.value === null && (!task.value || isActiveTask(task.value))) {
+    void loadTask({ background: Boolean(task.value), force: true })
+  }
+}
+
 watch(taskId, () => {
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = undefined
+  pollController?.abort()
+  pollController = undefined
   task.value = null
   error.value = ''
+  refreshWarning.value = ''
+  lastRefreshAt.value = null
+  pollFailureCount = 0
   cancelConfirmOpen.value = false
   actionGeneration += 1
   actionPending.value = null
-  void loadTask()
+  if (pageVisible.value) void loadTask()
 }, { immediate: true })
 
-clockTimer = setInterval(() => {
-  if (componentActive && isActiveTask(task.value)) clock.value = Date.now()
-}, 1_000)
+visibilityListener = handleVisibilityChange
+if (typeof document !== 'undefined') document.addEventListener('visibilitychange', visibilityListener)
+
+startClock()
 
 onBeforeUnmount(() => {
   componentActive = false
   requestGeneration += 1
   actionGeneration += 1
+  pollController?.abort()
+  pollController = undefined
   if (pollTimer) clearTimeout(pollTimer)
   if (clockTimer) clearInterval(clockTimer)
   pollTimer = undefined
   clockTimer = undefined
+  if (typeof document !== 'undefined' && visibilityListener) document.removeEventListener('visibilitychange', visibilityListener)
+  visibilityListener = undefined
 })
 </script>
 
@@ -438,6 +552,12 @@ onBeforeUnmount(() => {
 }
 .task-detail-workspace :deep(.admin-overview) {
   border-radius: 0.5rem;
+}
+.task-refresh-status {
+  @apply flex items-center gap-1.5 px-1 text-[11px] text-gray-500 dark:text-gray-400;
+}
+.task-refresh-warning {
+  @apply flex items-center gap-2 border-amber-200 bg-amber-50 px-5 py-3 text-xs text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/5 dark:text-amber-300;
 }
 .task-summary,
 .task-progress-section,

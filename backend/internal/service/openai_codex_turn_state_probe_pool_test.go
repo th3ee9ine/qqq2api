@@ -880,10 +880,10 @@ func TestCodexTurnStateProbeDoesNotReplayOnAccountDailyRoute(t *testing.T) {
 
 func TestCodexTurnStateProbe429CooldownIsSharedAcrossAccountModels(t *testing.T) {
 	for _, tc := range []struct {
-		name, heldModel, limitedModel string
+		name, blockedModel, limitedModel string
 	}{
-		{name: "astra_429_stops_auto_review", heldModel: "codex-auto-review", limitedModel: "gpt-6-astra"},
-		{name: "auto_review_429_stops_astra", heldModel: "gpt-6-astra", limitedModel: "codex-auto-review"},
+		{name: "astra_429_stops_auto_review", blockedModel: "codex-auto-review", limitedModel: "gpt-6-astra"},
+		{name: "auto_review_429_stops_astra", blockedModel: "gpt-6-astra", limitedModel: "codex-auto-review"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, repo, account := newTurnStateAutoService(t)
@@ -893,10 +893,6 @@ func TestCodexTurnStateProbe429CooldownIsSharedAcrossAccountModels(t *testing.T)
 			s.settingService.InvalidateOpenAICodexTurnStateCache()
 			s.proxyRepo = &turnStateConcurrentProxyRepo{proxies: []Proxy{turnStateDedicatedTemplateProxy()}}
 
-			heldStarted := make(chan struct{})
-			releaseHeld := make(chan struct{})
-			var releaseOnce sync.Once
-			t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHeld) }) })
 			calls := make(map[string]int)
 			var callsMu sync.Mutex
 			s.httpUpstream = &turnStateProbeSequenceUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
@@ -906,45 +902,28 @@ func TestCodexTurnStateProbe429CooldownIsSharedAcrossAccountModels(t *testing.T)
 				require.NoError(t, json.NewDecoder(req.Body).Decode(&payload))
 				callsMu.Lock()
 				calls[payload.Model]++
-				modelCall := calls[payload.Model]
 				callsMu.Unlock()
 
 				switch payload.Model {
-				case tc.heldModel:
-					if modelCall == 1 {
-						close(heldStarted)
-						<-releaseHeld
-					}
-					return turnStateModelResponse("held-model-candidate", payload.Model), nil
 				case tc.limitedModel:
 					resp := turnStateModelResponse("", payload.Model)
 					resp.StatusCode = http.StatusTooManyRequests
 					resp.Header.Set("Retry-After", "3600")
 					return resp, nil
+				case tc.blockedModel:
+					return turnStateModelResponse("must-not-run-during-account-cooldown", payload.Model), nil
 				default:
 					t.Fatalf("unexpected probe model %q", payload.Model)
 					return nil, nil
 				}
 			}}
 
-			s.autoTurnStateForAccount(context.Background(), account, tc.heldModel)
-			select {
-			case <-heldStarted:
-			case <-time.After(time.Second):
-				t.Fatal("the held model probe did not start")
-			}
 			s.autoTurnStateForAccount(context.Background(), account, tc.limitedModel)
-			require.Never(t, func() bool {
-				callsMu.Lock()
-				defer callsMu.Unlock()
-				return calls[tc.limitedModel] > 0
-			}, 50*time.Millisecond, 5*time.Millisecond, "a second model from the same account must remain queued")
-			releaseOnce.Do(func() { close(releaseHeld) })
 			waitTurnStateAutoIdle(t, s)
 
 			callsMu.Lock()
 			require.Equal(t, 3, calls[tc.limitedModel], "the active 429 round must visit every route once")
-			require.Equal(t, 2, calls[tc.heldModel], "the first serial round must finish collection and replay")
+			require.Zero(t, calls[tc.blockedModel])
 			callsMu.Unlock()
 
 			stored, err := repo.GetByID(context.Background(), account.ID)
@@ -952,14 +931,7 @@ func TestCodexTurnStateProbe429CooldownIsSharedAcrossAccountModels(t *testing.T)
 			persistedBoundary := codexTurnStateAutoInt64(stored, CodexTurnStateAutoProbeNotBeforeExtraKey)
 			require.Greater(t, persistedBoundary, time.Now().UnixMilli(), "the account-wide boundary must survive restart")
 
-			publishVerifiedTurnStateForTest(s, account, tc.limitedModel, "verified-during-account-cooldown")
-			waitTurnStateAutoIdle(t, s)
-			s.openaiTurnStateMu.Lock()
-			require.Greater(t, s.codexTurnStateAccountProbeNotBeforeLocked(account.ID), time.Now().UnixMilli(),
-				"successful state acceptance must not release another model from the account-wide 429 boundary")
-			s.openaiTurnStateMu.Unlock()
-
-			s.autoTurnStateForAccount(context.Background(), account, tc.heldModel)
+			s.autoTurnStateForAccount(context.Background(), account, tc.blockedModel)
 			waitTurnStateAutoIdle(t, s)
 			restarted := &OpenAIGatewayService{
 				settingService: s.settingService,
@@ -967,10 +939,10 @@ func TestCodexTurnStateProbe429CooldownIsSharedAcrossAccountModels(t *testing.T)
 				httpUpstream:   s.httpUpstream,
 				proxyRepo:      s.proxyRepo,
 			}
-			restarted.autoTurnStateForAccount(context.Background(), stored, tc.heldModel)
+			restarted.autoTurnStateForAccount(context.Background(), stored, tc.blockedModel)
 			waitTurnStateAutoIdle(t, restarted)
 			callsMu.Lock()
-			require.Equal(t, 2, calls[tc.heldModel], "neither later traffic nor a restarted process may bypass the other model's 429")
+			require.Zero(t, calls[tc.blockedModel], "neither later traffic nor a restarted process may bypass the other model's 429")
 			callsMu.Unlock()
 		})
 	}

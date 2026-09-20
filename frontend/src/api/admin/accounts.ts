@@ -175,8 +175,11 @@ export async function listWithEtag(
  * @param id - Account ID
  * @returns Account details
  */
-export async function getById(id: number): Promise<Account> {
-  const { data } = await apiClient.get<Account>(`/admin/accounts/${id}`)
+export async function getById(id: number, options?: { signal?: AbortSignal }): Promise<Account> {
+  const config = options?.signal ? { signal: options.signal } : undefined
+  const { data } = config
+    ? await apiClient.get<Account>(`/admin/accounts/${id}`, config)
+    : await apiClient.get<Account>(`/admin/accounts/${id}`)
   return data
 }
 
@@ -1247,17 +1250,20 @@ export async function collectCodexTurnState(
   }
 }
 
-export async function listCodexTurnStateTasks(): Promise<CodexTurnStateTask[]> {
-  const { data } = await apiClient.get<CodexTurnStateTask[]>(
-    '/admin/accounts/codex-turn-state/tasks',
-  )
+export async function listCodexTurnStateTasks(options?: { signal?: AbortSignal }): Promise<CodexTurnStateTask[]> {
+  const config = options?.signal ? { signal: options.signal } : undefined
+  const { data } = config
+    ? await apiClient.get<CodexTurnStateTask[]>('/admin/accounts/codex-turn-state/tasks', config)
+    : await apiClient.get<CodexTurnStateTask[]>('/admin/accounts/codex-turn-state/tasks')
   return Array.isArray(data) ? data : []
 }
 
-export async function getCodexTurnStateTask(taskId: string): Promise<CodexTurnStateTask> {
-  const { data } = await apiClient.get<CodexTurnStateTask>(
-    `/admin/accounts/codex-turn-state/tasks/${encodeURIComponent(taskId)}`,
-  )
+export async function getCodexTurnStateTask(taskId: string, options?: { signal?: AbortSignal }): Promise<CodexTurnStateTask> {
+  const path = `/admin/accounts/codex-turn-state/tasks/${encodeURIComponent(taskId)}`
+  const config = options?.signal ? { signal: options.signal } : undefined
+  const { data } = config
+    ? await apiClient.get<CodexTurnStateTask>(path, config)
+    : await apiClient.get<CodexTurnStateTask>(path)
   return data
 }
 

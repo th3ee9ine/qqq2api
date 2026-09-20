@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
@@ -16,7 +17,11 @@ const (
 	codexTurnStateRenewalInitialDelay = 10 * time.Second
 	codexTurnStateRenewalScanInterval = time.Minute
 	codexTurnStateRenewalPageSize     = 100
-	codexTurnStateRenewalMaxWorkers   = 3
+	// Planning a page performs account-scoped cleanup and may fetch a model
+	// catalog. Keep this deliberately small: it improves scan latency without
+	// turning a large account page into an unbounded catalog-request burst.
+	codexTurnStateRenewalScanWorkers = 4
+	codexTurnStateRenewalMaxWorkers  = 3
 )
 
 type codexTurnStateRenewalPlan struct {
@@ -27,6 +32,13 @@ type codexTurnStateRenewalPlan struct {
 type codexTurnStateRenewalCandidate struct {
 	account Account
 	plan    codexTurnStateRenewalPlan
+}
+
+type codexTurnStateRenewalAccountPlan struct {
+	account       Account
+	plans         []codexTurnStateRenewalPlan
+	cleanupFailed bool
+	catalogFailed bool
 }
 
 // StartOpenAICodexTurnStateRenewal starts the idle-account maintenance scanner.
@@ -88,6 +100,84 @@ func (s *OpenAIGatewayService) runOpenAICodexTurnStateRenewal(ctx context.Contex
 	}
 }
 
+// cloneCodexTurnStateRenewalAccount detaches the top-level maps before a page
+// is planned in parallel. Account snapshots are read-only inputs, but several
+// lookup helpers maintain per-value caches and optional cleanup can construct a
+// filtered Extra map; neither should race with another page worker or the
+// repository's backing snapshot.
+func cloneCodexTurnStateRenewalAccount(account Account) Account {
+	account.Credentials = mergeMap(nil, account.Credentials)
+	account.Extra = mergeMap(nil, account.Extra)
+	return account
+}
+
+func (s *OpenAIGatewayService) planCodexTurnStateRenewalAccount(ctx context.Context, account Account, cfg OpenAICodexTurnStateConfig, now time.Time) codexTurnStateRenewalAccountPlan {
+	account = cloneCodexTurnStateRenewalAccount(account)
+	result := codexTurnStateRenewalAccountPlan{account: account}
+	if ctx == nil || ctx.Err() != nil || !codexTurnStateCollectionEligible(&account) {
+		return result
+	}
+	filtered, cleanupErr := s.cleanupCodexTurnStateScope(ctx, &account, cfg)
+	if cleanupErr != nil {
+		result.cleanupFailed = true
+	}
+	if filtered != nil {
+		result.account = cloneCodexTurnStateRenewalAccount(*filtered)
+	}
+	plans, catalogFailed := s.resolveCodexTurnStateExpiredRenewalPlans(ctx, &result.account, cfg, now)
+	result.plans = plans
+	result.catalogFailed = catalogFailed
+	return result
+}
+
+// planCodexTurnStateRenewalAccounts processes one repository page with a small
+// bounded worker pool. Each result slot is written by exactly one worker and is
+// flattened by the caller in repository order, keeping cursor/fairness stable.
+func (s *OpenAIGatewayService) planCodexTurnStateRenewalAccounts(ctx context.Context, accounts []Account, cfg OpenAICodexTurnStateConfig, now time.Time) []codexTurnStateRenewalAccountPlan {
+	if len(accounts) == 0 || ctx == nil || ctx.Err() != nil {
+		return nil
+	}
+	results := make([]codexTurnStateRenewalAccountPlan, len(accounts))
+	workerCount := codexTurnStateRenewalScanWorkers
+	if workerCount > len(accounts) {
+		workerCount = len(accounts)
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	wg.Add(workerCount)
+	for worker := 0; worker < workerCount; worker++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case index, ok := <-jobs:
+					if !ok {
+						return
+					}
+					results[index] = s.planCodexTurnStateRenewalAccount(ctx, accounts[index], cfg, now)
+				}
+			}
+		}()
+	}
+	for index := range accounts {
+		select {
+		case jobs <- index:
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return nil
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if ctx.Err() != nil {
+		return nil
+	}
+	return results
+}
+
 func (s *OpenAIGatewayService) scanExpiredOpenAICodexTurnStates(ctx context.Context) {
 	if s == nil || s.accountRepo == nil || ctx == nil || ctx.Err() != nil {
 		return
@@ -108,30 +198,19 @@ func (s *OpenAIGatewayService) scanExpiredOpenAICodexTurnStates(ctx context.Cont
 			}
 			return
 		}
-		for index := range accounts {
-			if ctx.Err() != nil {
-				return
+		planned := s.planCodexTurnStateRenewalAccounts(ctx, accounts, cfg, time.Now())
+		if ctx.Err() != nil {
+			return
+		}
+		for _, result := range planned {
+			if result.cleanupFailed {
+				slog.Warn("openai_codex_turn_state_scope_cleanup_failed", "account_id", result.account.ID, "code", "scope_cleanup_failed")
 			}
-			account := &accounts[index]
-			if !codexTurnStateCollectionEligible(account) {
-				continue
+			if result.catalogFailed {
+				slog.Warn("openai_codex_turn_state_renewal_catalog_failed", "account_id", result.account.ID, "code", "model_catalog_unavailable")
 			}
-			// Scope changes must not leave old model slots eligible for the idle
-			// renewal scanner. Filter the snapshot before planning and remove the
-			// same records atomically when the repository supports it.
-			filtered, cleanupErr := s.cleanupCodexTurnStateScope(ctx, account, cfg)
-			if cleanupErr != nil && ctx.Err() == nil {
-				slog.Warn("openai_codex_turn_state_scope_cleanup_failed", "account_id", account.ID, "code", "scope_cleanup_failed")
-			}
-			if filtered != nil {
-				account = filtered
-			}
-			plans, catalogFailed := s.resolveCodexTurnStateExpiredRenewalPlans(ctx, account, cfg, time.Now())
-			if catalogFailed && ctx.Err() == nil {
-				slog.Warn("openai_codex_turn_state_renewal_catalog_failed", "account_id", account.ID, "code", "model_catalog_unavailable")
-			}
-			for _, plan := range plans {
-				candidates = append(candidates, codexTurnStateRenewalCandidate{account: *account, plan: plan})
+			for _, plan := range result.plans {
+				candidates = append(candidates, codexTurnStateRenewalCandidate{account: result.account, plan: plan})
 			}
 		}
 		if len(accounts) < codexTurnStateRenewalPageSize || pageInfo == nil || page >= pageInfo.Pages {
@@ -372,6 +451,13 @@ func (s *OpenAIGatewayService) scheduleExpiredCodexTurnStateRenewalWithContext(c
 
 	s.openaiTurnStateMu.Lock()
 	defer s.openaiTurnStateMu.Unlock()
+	// Manual, bulk, automatic, and renewal work share one account-level task
+	// admission boundary. A different owner must wait for the existing task;
+	// detached dirty persistence is not represented in the registry and remains
+	// independently retryable.
+	if s.codexTurnStateAccountCollectionTaskActive(account.ID, "") {
+		return false, false
+	}
 	if s.openaiTurnStateRenewalWorkers >= codexTurnStateRenewalMaxWorkers {
 		return false, true
 	}
@@ -383,10 +469,11 @@ func (s *OpenAIGatewayService) scheduleExpiredCodexTurnStateRenewalWithContext(c
 	expiresAt := codexTurnStateAutoExpiry(entry.token, entry.setAt, now)
 	expired := entry.token != "" && entry.setAt > 0 && entry.verifiedAt > 0 && expiresAt > 0 && now.UnixMilli() >= expiresAt
 	failed := entry.lastError != "" && entry.probeAt > 0
+	retryRecordedFailure := codexTurnStateEntryHasRecordedFailure(entry)
 	if (!expired && !failed) ||
 		entry.running || entry.reconciling || entry.dirty || entry.probe || entry.manualProbe ||
-		now.Before(entry.probeRetryAfter) || now.Before(time.UnixMilli(entry.probeNotBefore)) ||
-		codexTurnStateAutomaticFailureBackoffActive(entry, now) {
+		codexTurnStateAutomaticFailureBackoffActive(entry, now) ||
+		!retryRecordedFailure && (now.Before(entry.probeRetryAfter) || now.Before(time.UnixMilli(entry.probeNotBefore))) {
 		return false, false
 	}
 	if !replaceCodexTurnStateProbeModelsLocked(entry, plan.requestModel, plan.requestModel, plan.owner) {

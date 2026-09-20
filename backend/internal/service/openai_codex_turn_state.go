@@ -88,8 +88,11 @@ func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account
 		return
 	}
 	c.Writer.Header().Set(canonical, state)
-	// The response header is forwarded immediately for native client behavior,
-	// but provenance and promotion both wait for raw model evidence.
+	// The client owns the opaque value as soon as this header is committed. Record
+	// account ownership immediately so a stream that ends before response.completed
+	// still cannot echo the value through another account. Model ownership and
+	// persistence remain gated on raw lifecycle evidence below.
+	s.noteOpenAICodexTurnStateAccountProvenance(account, state)
 	s.stagePendingCodexTurnStateObservation(c, account, state, requests...)
 	s.commitPendingCodexTurnStateObservation(c, false)
 }
@@ -125,6 +128,7 @@ func (s *OpenAIGatewayService) noteStagedOpenAICodexTurnStateCommitted(c *gin.Co
 		return
 	}
 	state := extractOpenAICodexTurnState(staged)
+	s.noteOpenAICodexTurnStateAccountProvenance(account, state)
 	s.stagePendingCodexTurnStateObservation(c, account, state, requests...)
 	s.commitPendingCodexTurnStateObservation(c, false)
 }
@@ -150,6 +154,14 @@ func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context
 	s.noteOpenAICodexTurnStateProvenanceForModel(c, account, state, model)
 }
 
+// noteOpenAICodexTurnStateAccountProvenance records only process-local account
+// ownership at the response-header commit point. A nil Gin context deliberately
+// avoids treating unverified request-model metadata as session/model provenance;
+// completed lifecycle evidence upgrades the same digest and persists it later.
+func (s *OpenAIGatewayService) noteOpenAICodexTurnStateAccountProvenance(account *Account, state string) {
+	s.noteOpenAICodexTurnStateProvenanceForModel(nil, account, state, "")
+}
+
 func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenanceForModel(c *gin.Context, account *Account, state, model string) {
 	state = strings.TrimSpace(state)
 	if s == nil || account == nil || account.ID <= 0 || state == "" {
@@ -173,9 +185,19 @@ func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenanceForModel(c *gin
 	if persistent && model != "" && !s.codexTurnStateNativeScopeAllowed(ctx, account, model, state) {
 		origin.conflict = true
 	} else if previous, ok := s.openaiCodexTurnStateOrigins.Load(digestKey); ok {
-		if known, valid := previous.(openAICodexTurnStateOrigin); valid && now.Before(known.expiresAt) &&
-			(known.accountID != origin.accountID || !codexTurnStateResponseModelsMatch(known.model, origin.model)) {
-			origin.conflict = true
+		if known, valid := previous.(openAICodexTurnStateOrigin); valid && now.Before(known.expiresAt) {
+			switch {
+			case known.conflict || known.accountID != origin.accountID:
+				origin.conflict = true
+			case known.model == "":
+				// Upgrade account-only provenance after completed model evidence.
+			case origin.model == "":
+				// A repeated header commit must not weaken already verified model scope.
+				origin.model = known.model
+				origin.recheckAt = known.recheckAt
+			case !codexTurnStateResponseModelsMatch(known.model, origin.model):
+				origin.conflict = true
+			}
 		}
 	}
 	s.openaiCodexTurnStateOrigins.Store(digestKey, origin)

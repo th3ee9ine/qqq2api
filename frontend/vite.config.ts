@@ -124,8 +124,13 @@ export default defineConfig(({ mode }) => {
               return 'vendor-vue'
             }
 
-            // UI 工具库（较大，单独分离）
-            if (id.includes('/@vueuse/') || id.includes('/xlsx/')) {
+            // xlsx 只在导出时按需加载，避免拉大通用 UI vendor。
+            if (id.includes('/xlsx/')) {
+              return 'vendor-xlsx'
+            }
+
+            // 通用 UI 工具库
+            if (id.includes('/@vueuse/')) {
               return 'vendor-ui'
             }
 

@@ -52,6 +52,55 @@ func TestListCodexTurnStateCollectionTasksPutsUnfinishedTasksFirst(t *testing.T)
 	require.False(t, exists, "failed tasks must not be retained as an archive")
 }
 
+func TestCodexTurnStateCollectionTaskListUsesDetachedSummary(t *testing.T) {
+	s := &OpenAIGatewayService{}
+	task, _, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    7,
+		AccountName:  "account",
+		RequestModel: "gpt-5",
+		OwnerModel:   "gpt-5",
+		Source:       CodexTurnStateCollectionSourceManual,
+	})
+	require.NoError(t, err)
+	_, ok := s.StartCodexTurnStateCollectionTask(task.ID, CodexTurnStateCollectionTaskStageCollecting, 10)
+	require.True(t, ok)
+
+	list := s.ListCodexTurnStateCollectionTasks()
+	require.Len(t, list, 1)
+	require.Empty(t, list[0].Events, "list polling returns a compact task summary")
+
+	detail, ok := s.GetCodexTurnStateCollectionTask(task.ID)
+	require.True(t, ok)
+	require.NotEmpty(t, detail.Events, "detail reads retain the lifecycle event history")
+	detail.Events[0].Stage = "mutated"
+	detailAgain, ok := s.GetCodexTurnStateCollectionTask(task.ID)
+	require.True(t, ok)
+	require.NotEqual(t, "mutated", detailAgain.Events[0].Stage, "detail snapshots must not alias registry events")
+
+	list[0].AccountName = "mutated"
+	listAgain := s.ListCodexTurnStateCollectionTasks()
+	require.Equal(t, "account", listAgain[0].AccountName, "list snapshots must not alias registry fields")
+}
+
+func TestCodexTurnStateCollectionTaskRegistryTracksAccountWideActivity(t *testing.T) {
+	s := &OpenAIGatewayService{}
+	first, _, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    42,
+		AccountName:  "account",
+		RequestModel: "gpt-5",
+		OwnerModel:   "gpt-5",
+		Source:       CodexTurnStateCollectionSourceAutomatic,
+	})
+	require.NoError(t, err)
+	require.True(t, s.codexTurnStateAccountCollectionTaskActive(42, ""))
+	require.False(t, s.codexTurnStateAccountCollectionTaskActive(41, ""))
+	require.False(t, s.codexTurnStateAccountCollectionTaskActive(42, first.ID), "retry may reuse its reserved task")
+
+	_, err = s.CancelCodexTurnStateCollectionTask(first.ID)
+	require.NoError(t, err)
+	require.False(t, s.codexTurnStateAccountCollectionTaskActive(42, ""))
+}
+
 func TestCodexTurnStateCollectionTaskTerminalRemovalReleasesCapacity(t *testing.T) {
 	s := &OpenAIGatewayService{}
 	s.openaiTurnStateTasksOnce.Do(func() {

@@ -286,6 +286,9 @@ func TestCodexTurnStateScopedTTLAndLegacy(t *testing.T) {
 
 func TestCodexTurnStateScopedWorkersPersistIndependentModels(t *testing.T) {
 	s, repo, a := newTurnStateAutoService(t)
+	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+	settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-5.5,gpt-5.4"
+	s.settingService.InvalidateOpenAICodexTurnStateCache()
 	var mu sync.Mutex
 	seen := map[string]int{}
 	s.httpUpstream = &turnStateAutoUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
@@ -302,40 +305,39 @@ func TestCodexTurnStateScopedWorkersPersistIndependentModels(t *testing.T) {
 		}
 		return turnStateResponse(recoveryTestToken(time.Now(), 10, marker)), nil
 	}}
-	s.autoTurnStateForAccount(context.Background(), a, "alias-a", "gpt-5.5")
-	s.autoTurnStateForAccount(context.Background(), a, "alias-b", "gpt-5.4")
+	result, err := s.RequestCodexTurnStateCollection(context.Background(), a, "")
+	require.NoError(t, err)
+	require.Equal(t, CodexTurnStateManualStatusQueued, result.Status)
+	require.ElementsMatch(t, []string{"gpt-5.5", "gpt-5.4"}, result.QueuedModels)
 	waitTurnStateAutoIdle(t, s)
 	require.Equal(t, map[string]int{"gpt-5.5": 1, "gpt-5.4": 1}, seen)
 	stored, err := repo.GetByID(context.Background(), a.ID)
 	require.NoError(t, err)
 	first := codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.5"))
 	second := codexTurnStateAutoToken(codexTurnStateModelAccount(stored, "gpt-5.4"))
-	require.Empty(t, first, "maintenance candidates are not persisted as verified state")
-	require.Empty(t, second, "maintenance candidates are not persisted as verified state")
+	require.NotEmpty(t, first)
+	require.NotEmpty(t, second)
+	require.NotEqual(t, first, second)
 	s.openaiTurnStateMu.Lock()
 	firstCandidate := s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5.5"}].candidate
 	secondCandidate := s.openaiTurnStates[codexTurnStateKey{a.ID, "gpt-5.4"}].candidate
 	s.openaiTurnStateMu.Unlock()
-	require.NotEmpty(t, firstCandidate.state)
-	require.NotEmpty(t, secondCandidate.state)
-	require.NotEqual(t, firstCandidate.state, secondCandidate.state)
-	require.Equal(t, "gpt-5.5", firstCandidate.expectedResponseModel)
-	require.Equal(t, "gpt-5.4", secondCandidate.expectedResponseModel)
-	require.Empty(t, firstCandidate.requestID)
-	require.Empty(t, secondCandidate.requestID)
+	require.Empty(t, firstCandidate)
+	require.Empty(t, secondCandidate)
 	info := CodexTurnStateAutoInfoForAccount(stored, time.Now())
 	require.Len(t, info.Models, 2)
-	require.False(t, info.Models["gpt-5.5"].Configured)
-	require.Empty(t, info.Models["gpt-5.5"].VerifiedModel)
-	require.Zero(t, info.Models["gpt-5.5"].VerifiedAtMS)
-	require.Zero(t, info.Models["gpt-5.5"].StateLength)
-	require.False(t, info.Models["gpt-5.4"].Configured)
-	require.Empty(t, info.Models["gpt-5.4"].VerifiedModel)
-	require.Zero(t, info.Models["gpt-5.4"].StateLength)
+	require.True(t, info.Models["gpt-5.5"].Configured)
+	require.Equal(t, "gpt-5.5", info.Models["gpt-5.5"].VerifiedModel)
+	require.NotZero(t, info.Models["gpt-5.5"].VerifiedAtMS)
+	require.Equal(t, len(first), info.Models["gpt-5.5"].StateLength)
+	require.True(t, info.Models["gpt-5.4"].Configured)
+	require.Equal(t, "gpt-5.4", info.Models["gpt-5.4"].VerifiedModel)
+	require.NotZero(t, info.Models["gpt-5.4"].VerifiedAtMS)
+	require.Equal(t, len(second), info.Models["gpt-5.4"].StateLength)
 	encoded, err := json.Marshal(info)
 	require.NoError(t, err)
-	require.NotContains(t, string(encoded), firstCandidate.state)
-	require.NotContains(t, string(encoded), secondCandidate.state)
+	require.NotContains(t, string(encoded), first)
+	require.NotContains(t, string(encoded), second)
 }
 
 func TestCodexTurnStateScopedDispatchReloadAndUnverifiedResponseAttribution(t *testing.T) {

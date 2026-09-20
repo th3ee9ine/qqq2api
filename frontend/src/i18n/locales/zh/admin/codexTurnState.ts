@@ -4,6 +4,10 @@ export default {
     title: 'Codex Turn State',
     description: '配置 Codex Turn State 自动采集与专用 IP 池，并查看正常账号的脱敏采集结果。',
     refresh: '刷新',
+    refreshing: '正在刷新 Turn State 数据',
+    refreshPaused: '页面隐藏时已暂停刷新',
+    lastRefreshed: '最近刷新：{time}',
+    notRefreshed: '等待首次刷新',
     overview: {
       eligible: '符合条件账号',
       valid: '有效状态',
@@ -26,6 +30,7 @@ export default {
       detailDescription: '查看任务 {id} 的账号、模型、进度与完整事件时间线。',
       detailPageDescription: '查看 Codex Turn State 采集任务的进度与事件。',
       detailLoadFailed: '加载采集任务详情失败',
+      refreshDelayed: '实时任务刷新暂缓，约 {seconds} 秒后重试',
       taskNoLongerActive: '该任务已不再运行，结果请查看账号采集状态。',
       invalidTaskId: '采集任务 ID 无效',
       back: '返回 Turn State',

@@ -106,6 +106,11 @@ type codexTurnStateAutoEntry struct {
 	collectionTaskID      string
 	collectionTaskContext context.Context
 	collectionTaskProbeAt int64
+	// A new collection may claim an entry whose previous task already detached
+	// after exhausting persistence retries. Keep that older durable intent
+	// separate so canceling the replacement task cannot discard it.
+	collectionTaskInheritedDirty         bool
+	collectionTaskInheritedManualOutcome bool
 	// manualOutcomePending keeps terminal-write provenance separate from whether
 	// another upstream probe is queued, including across persistence retries.
 	manualOutcomePending bool
@@ -239,7 +244,8 @@ func codexTurnStateAutomaticCollectionDue(token string, setAt, verifiedAt int64,
 
 // The configurable interval controls successful renewal. This fixed backoff is
 // only for failed automatic rounds so request traffic cannot retry them in a
-// tight loop. Manual and forced recovery work bypass it.
+// tight loop. Manual and forced recovery work bypass it; a recorded failure may
+// bypass its own upstream Retry-After only after this local backoff expires.
 func codexTurnStateAutomaticFailureBackoffActive(entry *codexTurnStateAutoEntry, now time.Time) bool {
 	if entry == nil || entry.lastError == "" {
 		return false
@@ -249,6 +255,14 @@ func codexTurnStateAutomaticFailureBackoffActive(entry *codexTurnStateAutoEntry,
 		failureAt = entry.probeAt
 	}
 	return failureAt > 0 && now.Sub(time.UnixMilli(failureAt)) < codexTurnStateAutoProbeInterval
+}
+
+// codexTurnStateEntryHasRecordedFailure distinguishes a failed collection
+// result from a shared account-wide Retry-After boundary installed by another
+// model. Retries for the failed slot may bypass that upstream boundary, while
+// the local automatic failure backoff still prevents request-driven tight loops.
+func codexTurnStateEntryHasRecordedFailure(entry *codexTurnStateAutoEntry) bool {
+	return entry != nil && strings.TrimSpace(entry.lastError) != "" && entry.probeAt > 0
 }
 
 func codexTurnStateAutomaticRetryDue(entry *codexTurnStateAutoEntry, now time.Time, intervalMinutes int) bool {
@@ -368,7 +382,9 @@ func (s *OpenAIGatewayService) codexTurnStateAccountProbeBlocked(accountID int64
 // Refresh the durable account-wide boundary immediately before every upstream
 // maintenance request. A worker in another process may have received a 429
 // after this process selected its route; the narrow source read closes that
-// window before a new exit or same-exit replay is sent.
+// window before a new exit or same-exit replay is sent. Collection workers with
+// a recorded failure are admitted by their slot-level gate; this helper remains
+// strict for direct/non-round requests that have no such slot context.
 func (s *OpenAIGatewayService) refreshCodexTurnStateAccountProbeBoundary(ctx context.Context, accountID int64) (bool, error) {
 	if s == nil || s.accountRepo == nil || accountID <= 0 {
 		return false, nil
@@ -515,6 +531,8 @@ func (s *OpenAIGatewayService) bindCodexTurnStateCollectionTaskLocked(entry *cod
 		return false
 	}
 	if entry.collectionTaskID != taskID {
+		entry.collectionTaskInheritedDirty = entry.dirty
+		entry.collectionTaskInheritedManualOutcome = entry.manualOutcomePending
 		// A replacement collection owns a fresh persistence budget. Any wakeup
 		// left by the detached task is invalidated before the new task starts.
 		entry.persistenceRetryCount = 0
@@ -571,6 +589,8 @@ func (s *OpenAIGatewayService) clearCodexTurnStateCollectionTaskLocked(entry *co
 	entry.collectionTaskID = ""
 	entry.collectionTaskContext = nil
 	entry.collectionTaskProbeAt = 0
+	entry.collectionTaskInheritedDirty = false
+	entry.collectionTaskInheritedManualOutcome = false
 	return taskID
 }
 
@@ -670,13 +690,15 @@ func (s *OpenAIGatewayService) discardCanceledCodexTurnStateCollectionTaskLocked
 	if entry == nil || entry.collectionTaskContext == nil || entry.collectionTaskContext.Err() == nil {
 		return false
 	}
+	inheritedDirty := entry.collectionTaskInheritedDirty
+	inheritedManualOutcome := entry.collectionTaskInheritedManualOutcome
 	s.clearCodexTurnStateCollectionTaskLocked(entry)
-	entry.dirty = false
+	entry.dirty = inheritedDirty
 	entry.probe = false
 	entry.forceProbe = false
 	entry.manualProbe = false
 	entry.renewalProbe = false
-	entry.manualOutcomePending = false
+	entry.manualOutcomePending = inheritedDirty && inheritedManualOutcome
 	entry.retryAfter = time.Time{}
 	entry.retryWakeAt = time.Time{}
 	entry.probeRetryAfter = time.Time{}
@@ -1124,12 +1146,16 @@ func (s *OpenAIGatewayService) handleCodexTurnStateProbeCandidateLocked(cfg Open
 	}
 	publishAfterReplay := manual || renewal || entry.candidate.manual
 	if publishAfterReplay {
+		activeTaskID := entry.collectionTaskID
+		activeTaskContext := entry.collectionTaskContext
 		entry.candidate.manual = true
 		if !s.publishManualCodexTurnStateCandidateLocked(entry, now) {
 			// Keep an explicit administrator request runnable if publication lost
 			// its validity check. Scheduled work records the terminal error and lets
-			// the ordinary automatic backoff govern its next attempt.
-			if manual && !entry.probe {
+			// the ordinary automatic backoff govern its next attempt. Cancellation
+			// clears the binding and must never resurrect an untracked probe.
+			if manual && !entry.probe && activeTaskID != "" && entry.collectionTaskID == activeTaskID &&
+				activeTaskContext != nil && activeTaskContext.Err() == nil {
 				entry.probe = true
 				entry.forceProbe = true
 				entry.manualProbe = true
@@ -1204,7 +1230,10 @@ func (s *OpenAIGatewayService) autoTurnStateForAccount(ctx context.Context, acco
 	}
 	if !codexTurnStateManualVerification(ctx) && !candidatePending && codexTurnStateAutomaticRetryDue(entry, now, cfg.AutoIntervalMinutes) {
 		currentTaskAllowed := codexTurnStateEntryScopeAllowed(cfg, entry)
-		if !now.Before(time.UnixMilli(entry.probeNotBefore)) && (!currentTaskAllowed || entry.forceProbe || !codexTurnStateAutomaticFailureBackoffActive(entry, now)) {
+		retryRecordedFailure := codexTurnStateEntryHasRecordedFailure(entry)
+		if (retryRecordedFailure || !now.Before(time.UnixMilli(entry.probeNotBefore))) &&
+			(!currentTaskAllowed || entry.forceProbe || !codexTurnStateAutomaticFailureBackoffActive(entry, now)) &&
+			!s.codexTurnStateAccountCollectionTaskActive(account.ID, "") {
 			replaceCodexTurnStateProbeModelsLocked(entry, requestModel, scopeModels...)
 			if !currentTaskAllowed {
 				entry.forceProbe = true
@@ -1276,7 +1305,8 @@ func (s *OpenAIGatewayService) startCodexTurnStateWorkerLocked(id int64, entry *
 	if entry.dirty && now.Before(entry.retryAfter) {
 		return
 	}
-	if !entry.dirty && entry.probe && !entry.manualProbe && now.Before(entry.probeRetryAfter) {
+	if !entry.dirty && entry.probe && !entry.manualProbe && now.Before(entry.probeRetryAfter) &&
+		!codexTurnStateEntryHasRecordedFailure(entry) {
 		return
 	}
 	entry.running = true
@@ -1474,6 +1504,31 @@ func codexTurnStateProbeExecutionContext(taskCtx, renewalCtx context.Context, re
 	}
 }
 
+// codexTurnStateCollectionLeaseExecutionContext keeps the lease as the parent
+// so ownership loss is visible to persistence synchronously when the lease is
+// canceled. The already-composed task/renewal context is the secondary cancel
+// source and is bridged without changing the lease-parent relationship.
+func codexTurnStateCollectionLeaseExecutionContext(baseCtx, leaseCtx context.Context) (context.Context, func()) {
+	if leaseCtx == nil {
+		leaseCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancelCause(leaseCtx)
+	stopBase := func() bool { return false }
+	if baseCtx != nil {
+		stopBase = context.AfterFunc(baseCtx, func() {
+			cause := context.Cause(baseCtx)
+			if cause == nil {
+				cause = baseCtx.Err()
+			}
+			cancel(cause)
+		})
+	}
+	return ctx, func() {
+		stopBase()
+		cancel(context.Canceled)
+	}
+}
+
 func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTurnStateAutoEntry) {
 	s.openaiTurnStateMu.Lock()
 	renewalWorker := entry.renewalWorker
@@ -1486,6 +1541,15 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 	if renewalCtx == nil {
 		renewalCtx = context.Background()
 	}
+	var executionLease *codexTurnStateCollectionLease
+	// This is intentionally the first defer registered in the worker. It runs
+	// last, after state cleanup, account unlock, and cancellation propagation, so
+	// another instance cannot acquire the Redis lease while old work is unwinding.
+	defer func() {
+		if executionLease != nil {
+			executionLease.releaseRef()
+		}
+	}()
 
 	// Register cleanup before waiting for the account gate. A canceled queued task
 	// must release its running and renewal counters even if it never reaches the
@@ -1503,7 +1567,10 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 		}
 		canceled := s.discardCanceledCodexTurnStateCollectionTaskLocked(entry)
 		inScope := !canceled && s.enforceCodexTurnStateScopeLocked(cfg, entry)
-		if !canceled && (entry.dirty || inScope && (cfg.AutoEnabled || entry.manualProbe)) {
+		// A canceled replacement task may still leave durable state inherited
+		// from an older detached task. Persist that state without a task or
+		// lease; only new probe work is suppressed by cancellation.
+		if entry.dirty || (!canceled && inScope && (cfg.AutoEnabled || entry.manualProbe)) {
 			s.startCodexTurnStateWorkerLocked(id, entry)
 		}
 		if entry.dirty && !entry.running && time.Now().Before(entry.retryAfter) {
@@ -1530,6 +1597,27 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 	defer unlockAccount()
 
 	if initialTaskID != "" {
+		var leaseOwned bool
+		var leaseErr error
+		executionLease, leaseOwned, leaseErr = s.ensureCodexTurnStateCollectionTaskLease(accountCtx, id, initialTaskID)
+		if !leaseOwned {
+			if leaseErr != nil && !errors.Is(leaseErr, context.Canceled) {
+				slog.Warn("openai_codex_turn_state_collection_lease_acquire_failed", "account_id", id, "error", leaseErr)
+			}
+			// Contention and Redis failures are admission outcomes, not provider
+			// failures. Cancel the local task without persisting last_error.
+			_, _ = s.CancelCodexTurnStateCollectionTask(initialTaskID)
+			return
+		}
+		if executionLease != nil {
+			leaseCtx, releaseLeaseCtx := codexTurnStateCollectionLeaseExecutionContext(accountCtx, executionLease.Context())
+			defer releaseLeaseCtx()
+			accountCtx = leaseCtx
+			if accountCtx.Err() != nil {
+				_, _ = s.CancelCodexTurnStateCollectionTask(initialTaskID)
+				return
+			}
+		}
 		if task, ok := s.GetCodexTurnStateCollectionTask(initialTaskID); ok && task != nil && task.Status == CodexTurnStateCollectionTaskStatusQueued {
 			s.StartCodexTurnStateCollectionTask(initialTaskID, CodexTurnStateCollectionTaskStagePreparing, 100)
 		}
@@ -1549,6 +1637,12 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 	// Bound repeated persistence churn for one account/model. Independent accounts
 	// are not globally throttled; manual work keeps running when auto mode is off.
 	for n := 0; n < 16; n++ {
+		if accountCtx.Err() != nil {
+			if initialTaskID != "" {
+				_, _ = s.CancelCodexTurnStateCollectionTask(initialTaskID)
+			}
+			return
+		}
 		// Settings may require a cache fill or database read. Never perform that
 		// work while holding the Turn State map lock.
 		cfg := s.codexTurnStateRuntimeConfig(context.Background())
@@ -1561,6 +1655,9 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 		dirty, probe, manualRun, renewalRun := entry.dirty, entry.probe, entry.manualProbe, entry.renewalProbe
 		manualPersist := manualRun || entry.manualOutcomePending
 		task := codexTurnStateProbeTaskLocked(entry)
+		if task.collectionTaskID == initialTaskID && initialTaskID != "" {
+			task.collectionTaskContext = accountCtx
+		}
 		if !dirty && !cfg.AutoEnabled && !manualRun {
 			if renewalRun {
 				entry.probe = false
@@ -1642,6 +1739,10 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 				return
 			}
 			s.openaiTurnStateMu.Lock()
+			if entry.collectionTaskID == task.collectionTaskID {
+				entry.collectionTaskInheritedDirty = false
+				entry.collectionTaskInheritedManualOutcome = false
+			}
 			if entry.collectionTaskID == task.collectionTaskID && entry.collectionTaskProbeAt > 0 && !entry.probe {
 				if codexTurnStateEntryHasValidStateLocked(entry, time.Now()) && entry.lastError == "" {
 					s.completeCodexTurnStateCollectionTaskLocked(entry)
@@ -1956,8 +2057,10 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbe(id int64, entry *codexTurn
 
 // runCodexTurnStateProbeWithMode performs the bounded maintenance probe. The
 // manual mode bypasses the automatic-enable gate and a previously persisted
-// probe cooldown. Protocol/account lifecycle eligibility, configured model
-// scope, response validation and CAS publication remain mandatory.
+// probe cooldown. Automatic work still observes the local failure backoff, but
+// a recorded failure does not wait again for its own upstream Retry-After.
+// Protocol/account lifecycle eligibility, configured model scope, response
+// validation and CAS publication remain mandatory.
 func (s *OpenAIGatewayService) runCodexTurnStateProbeWithMode(id int64, entry *codexTurnStateAutoEntry, manual bool) {
 	s.openaiTurnStateMu.Lock()
 	task := codexTurnStateProbeTaskLocked(entry)
@@ -2154,15 +2257,19 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithIntentContext(paren
 		return
 	}
 	// Existing automatic cooldowns block a new round. An explicit administrator
-	// request bypasses both the durable boundary and local retry timer, but any
-	// new 429 it sees remains durable for later automatic rounds.
+	// request bypasses both the durable boundary and local retry timer. An
+	// automatic retry for a recorded failure ignores that slot's upstream
+	// Retry-After boundary after the local failure backoff has elapsed; a pure
+	// account-wide boundary from a sibling slot still blocks it.
 	durableCooldown := now.Before(time.UnixMilli(entry.probeNotBefore))
-	if !manualIntent && (now.Before(entry.probeRetryAfter) || durableCooldown) {
+	retryRecordedFailure := codexTurnStateEntryHasRecordedFailure(entry)
+	if !manualIntent && !retryRecordedFailure && (now.Before(entry.probeRetryAfter) || durableCooldown) {
 		s.failCodexTurnStateCollectionTaskLocked(entry, "request_failed")
 		s.openaiTurnStateMu.Unlock()
 		return
 	}
-	if !manualIntent && !task.force && (!codexTurnStateAutomaticRetryDue(entry, now, cfg.AutoIntervalMinutes) || codexTurnStateAutomaticFailureBackoffActive(entry, now)) {
+	if !manualIntent && !task.force && (!codexTurnStateAutomaticRetryDue(entry, now, cfg.AutoIntervalMinutes) ||
+		codexTurnStateAutomaticFailureBackoffActive(entry, now)) {
 		s.failCodexTurnStateCollectionTaskLocked(entry, "request_failed")
 		s.openaiTurnStateMu.Unlock()
 		return
@@ -2563,6 +2670,10 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithIntentContext(paren
 			published := staged
 			if publishAfterReplay {
 				published = staged && s.publishManualCodexTurnStateCandidateLocked(entry, now)
+				if !published && task.collectionTaskContext != nil && task.collectionTaskContext.Err() != nil {
+					s.openaiTurnStateMu.Unlock()
+					return
+				}
 				if renewal && !manual {
 					entry.manualProbe = false
 				}

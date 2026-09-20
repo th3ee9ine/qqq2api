@@ -355,21 +355,25 @@ func TestCodexTurnStateWorkersSerializePerAccountAndParallelizeAccounts(t *testi
 			return turnStateModelResponse(fmt.Sprintf("state-%d-%s", accountID, payload.Model), payload.Model), nil
 		}}
 
-		s.autoTurnStateForAccount(context.Background(), account, "gpt-5.5")
+		result, err := s.RequestCodexTurnStateCollection(context.Background(), account, "")
+		require.NoError(t, err)
+		require.Equal(t, CodexTurnStateManualStatusQueued, result.Status)
+		require.ElementsMatch(t, []string{"gpt-5.5", "gpt-5.4"}, result.QueuedModels)
+		var firstModel string
 		select {
-		case model := <-started:
-			require.Equal(t, "gpt-5.5", model)
+		case firstModel = <-started:
+			require.Contains(t, result.QueuedModels, firstModel)
 		case <-time.After(time.Second):
 			t.Fatal("first model worker did not start")
 		}
-		s.autoTurnStateForAccount(context.Background(), account, "gpt-5.4")
 		require.Never(t, func() bool { return len(started) > 0 }, 50*time.Millisecond, 5*time.Millisecond,
-			"a second model from the same account must remain queued")
+			"owners registered by one manual batch must remain serialized")
 
 		releaseOnce.Do(func() { close(release) })
 		select {
 		case model := <-started:
-			require.Equal(t, "gpt-5.4", model)
+			require.Contains(t, result.QueuedModels, model)
+			require.NotEqual(t, firstModel, model)
 		case <-time.After(time.Second):
 			t.Fatal("queued model worker did not start after the account became idle")
 		}
@@ -430,17 +434,170 @@ func TestCodexTurnStateWorkersSerializePerAccountAndParallelizeAccounts(t *testi
 	})
 }
 
+func TestCodexTurnStateAccountTaskAdmissionAcrossSources(t *testing.T) {
+	t.Run("automatic task blocks same-account manual batch only", func(t *testing.T) {
+		s, repo, first := newTurnStateAutoService(t)
+		t.Cleanup(s.StopCodexTurnStateCollectionTasks)
+		settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+		settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-5.5,gpt-5.4"
+		s.settingService.InvalidateOpenAICodexTurnStateCache()
+
+		second := *first
+		second.ID = first.ID + 1
+		second.Name = "other-account"
+		second.Credentials = mergeMap(nil, first.Credentials)
+		second.Extra = mergeMap(nil, first.Extra)
+		repo.mu.Lock()
+		repo.accounts[second.ID] = &second
+		repo.mu.Unlock()
+
+		firstStarted := make(chan struct{}, 1)
+		otherStarted := make(chan struct{}, 1)
+		s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, _ string, accountID int64) (*http.Response, error) {
+			var payload struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				return nil, err
+			}
+			if accountID == first.ID {
+				select {
+				case firstStarted <- struct{}{}:
+				default:
+				}
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}
+			select {
+			case otherStarted <- struct{}{}:
+			default:
+			}
+			return turnStateModelResponse("state-"+payload.Model, payload.Model), nil
+		}}
+
+		s.autoTurnStateForAccount(context.Background(), first, "gpt-5.5")
+		select {
+		case <-firstStarted:
+		case <-time.After(time.Second):
+			t.Fatal("automatic collection did not start")
+		}
+
+		rejected, err := s.RequestCodexTurnStateCollection(context.Background(), first, "")
+		require.NoError(t, err)
+		require.Equal(t, CodexTurnStateManualStatusRejected, rejected.Status)
+		require.Equal(t, "collection_already_in_flight", rejected.Reason)
+		tasks := s.ListCodexTurnStateCollectionTasks()
+		require.Len(t, tasks, 1)
+		require.Equal(t, first.ID, tasks[0].AccountID)
+		require.Equal(t, CodexTurnStateCollectionSourceAutomatic, tasks[0].Source)
+
+		queued, err := s.RequestCodexTurnStateCollection(context.Background(), &second, "")
+		require.NoError(t, err)
+		require.Equal(t, CodexTurnStateManualStatusQueued, queued.Status)
+		select {
+		case <-otherStarted:
+		case <-time.After(time.Second):
+			t.Fatal("a different account should not be blocked by the first account task")
+		}
+
+		_, err = s.CancelCodexTurnStateCollectionTask(tasks[0].ID)
+		require.NoError(t, err)
+		waitTurnStateAutoIdle(t, s)
+	})
+
+	t.Run("manual task blocks automatic and renewal until terminal", func(t *testing.T) {
+		s, repo, account := newTurnStateAutoService(t)
+		t.Cleanup(s.StopCodexTurnStateCollectionTasks)
+		settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+		settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-5.5"
+		s.settingService.InvalidateOpenAICodexTurnStateCache()
+
+		now := time.Now()
+		failedAt := now.Add(-codexTurnStateAutoProbeInterval - time.Second).UnixMilli()
+		account.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-5.4"): map[string]any{
+			CodexTurnStateAutoProbeAtExtraKey:          failedAt,
+			CodexTurnStateAutoProbeCompletedAtExtraKey: failedAt,
+			CodexTurnStateAutoLastErrorExtraKey:        "transport_failed",
+		}}
+		repo.mu.Lock()
+		repo.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
+		repo.mu.Unlock()
+
+		manualStarted := make(chan struct{}, 1)
+		automaticStarted := make(chan struct{}, 1)
+		s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
+			var payload struct {
+				Model string `json:"model"`
+			}
+			if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+				return nil, err
+			}
+			if payload.Model == "gpt-5.5" {
+				select {
+				case manualStarted <- struct{}{}:
+				default:
+				}
+				<-req.Context().Done()
+				return nil, req.Context().Err()
+			}
+			select {
+			case automaticStarted <- struct{}{}:
+			default:
+			}
+			return turnStateModelResponse("state-"+payload.Model, payload.Model), nil
+		}}
+
+		queued, err := s.RequestCodexTurnStateCollection(context.Background(), account, "")
+		require.NoError(t, err)
+		require.Equal(t, CodexTurnStateManualStatusQueued, queued.Status)
+		select {
+		case <-manualStarted:
+		case <-time.After(time.Second):
+			t.Fatal("manual collection did not start")
+		}
+
+		settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-5.5,gpt-5.4"
+		s.settingService.InvalidateOpenAICodexTurnStateCache()
+		s.autoTurnStateForAccount(context.Background(), account, "gpt-5.4")
+		require.Never(t, func() bool { return len(automaticStarted) > 0 }, 50*time.Millisecond, 5*time.Millisecond)
+
+		cfg := s.settingService.GetOpenAICodexTurnState(context.Background())
+		scheduled, saturated := s.scheduleExpiredCodexTurnStateRenewal(account, cfg, codexTurnStateRenewalPlan{
+			requestModel: "gpt-5.4",
+			owner:        "gpt-5.4",
+		}, now)
+		require.False(t, scheduled)
+		require.False(t, saturated)
+		tasks := s.ListCodexTurnStateCollectionTasks()
+		require.Len(t, tasks, 1)
+		require.Equal(t, CodexTurnStateCollectionSourceManual, tasks[0].Source)
+
+		_, err = s.CancelCodexTurnStateCollectionTask(tasks[0].ID)
+		require.NoError(t, err)
+		waitTurnStateAutoIdle(t, s)
+
+		s.autoTurnStateForAccount(context.Background(), account, "gpt-5.4")
+		select {
+		case <-automaticStarted:
+		case <-time.After(time.Second):
+			t.Fatal("automatic collection did not resume after the manual task became terminal")
+		}
+		waitTurnStateAutoIdle(t, s)
+	})
+}
+
 func TestCodexTurnStateQueuedWorkerCancellationIsPrompt(t *testing.T) {
 	s, _, account := newTurnStateAutoService(t)
 	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
 	settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-5.5,gpt-5.4"
 	s.settingService.InvalidateOpenAICodexTurnStateCache()
 
-	firstStarted := make(chan struct{})
+	firstStarted := make(chan string, 1)
 	releaseFirst := make(chan struct{})
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseFirst) }) })
-	var secondCalls atomic.Int32
+	var callsMu sync.Mutex
+	calls := make(map[string]int)
 	s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
 		var payload struct {
 			Model string `json:"model"`
@@ -448,65 +605,82 @@ func TestCodexTurnStateQueuedWorkerCancellationIsPrompt(t *testing.T) {
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 			return nil, err
 		}
-		if payload.Model == "gpt-5.5" && req.Header.Get(openAICodexTurnStateHeader) == "" {
-			close(firstStarted)
+		callsMu.Lock()
+		calls[payload.Model]++
+		callsMu.Unlock()
+		if req.Header.Get(openAICodexTurnStateHeader) == "" {
+			select {
+			case firstStarted <- payload.Model:
+			default:
+			}
 			select {
 			case <-releaseFirst:
 			case <-req.Context().Done():
 				return nil, req.Context().Err()
 			}
 		}
-		if payload.Model == "gpt-5.4" {
-			secondCalls.Add(1)
-		}
 		return turnStateModelResponse("state-"+payload.Model, payload.Model), nil
 	}}
 
-	s.autoTurnStateForAccount(context.Background(), account, "gpt-5.5")
+	result, err := s.RequestCodexTurnStateCollection(context.Background(), account, "")
+	require.NoError(t, err)
+	require.Equal(t, CodexTurnStateManualStatusQueued, result.Status)
+	require.ElementsMatch(t, []string{"gpt-5.5", "gpt-5.4"}, result.QueuedModels)
+	var firstModel string
 	select {
-	case <-firstStarted:
+	case firstModel = <-firstStarted:
 	case <-time.After(time.Second):
 		t.Fatal("first account worker did not start")
 	}
-	s.autoTurnStateForAccount(context.Background(), account, "gpt-5.4")
+	queuedModel := "gpt-5.4"
+	if firstModel == queuedModel {
+		queuedModel = "gpt-5.5"
+	}
 
 	var queuedTask *CodexTurnStateCollectionTask
 	require.Eventually(t, func() bool {
 		for _, task := range s.ListCodexTurnStateCollectionTasks() {
-			if task.OwnerModel == "gpt-5.4" && task.Status == CodexTurnStateCollectionTaskStatusQueued {
+			if task.OwnerModel == queuedModel && task.Status == CodexTurnStateCollectionTaskStatusQueued {
 				queuedTask = task
 				return true
 			}
 		}
 		return false
 	}, time.Second, time.Millisecond)
-	_, err := s.CancelCodexTurnStateCollectionTask(queuedTask.ID)
+	_, err = s.CancelCodexTurnStateCollectionTask(queuedTask.ID)
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
 		s.openaiTurnStateMu.Lock()
 		defer s.openaiTurnStateMu.Unlock()
-		entry := s.openaiTurnStates[codexTurnStateKey{accountID: account.ID, model: "gpt-5.4"}]
+		entry := s.openaiTurnStates[codexTurnStateKey{accountID: account.ID, model: queuedModel}]
 		return entry != nil && !entry.running && entry.collectionTaskID == "" && s.openaiTurnStateWorkers == 1
 	}, time.Second, time.Millisecond, "the canceled waiter must release its worker state while the first model is still active")
-	require.Zero(t, secondCalls.Load())
+	callsMu.Lock()
+	require.Zero(t, calls[queuedModel])
+	callsMu.Unlock()
 
-	// A fresh task may bind to the canceled owner immediately. It still waits for
-	// the first owner at the account gate and begins only after that worker exits.
-	s.autoTurnStateForAccount(context.Background(), account, "gpt-5.4")
-	require.Eventually(t, func() bool {
-		for _, task := range s.ListCodexTurnStateCollectionTasks() {
-			if task.ID != queuedTask.ID && task.OwnerModel == "gpt-5.4" && task.Status == CodexTurnStateCollectionTaskStatusQueued {
-				return true
-			}
-		}
-		return false
-	}, time.Second, time.Millisecond)
-	require.Zero(t, secondCalls.Load())
+	// The other owner is still active, so a separate request cannot recreate the
+	// canceled task until the account-level task set becomes idle.
+	rejected, err := s.RequestCodexTurnStateCollection(context.Background(), account, "")
+	require.NoError(t, err)
+	require.Equal(t, CodexTurnStateManualStatusRejected, rejected.Status)
+	require.Equal(t, "collection_already_in_flight", rejected.Reason)
+	callsMu.Lock()
+	require.Zero(t, calls[queuedModel])
+	callsMu.Unlock()
 
 	releaseOnce.Do(func() { close(releaseFirst) })
 	waitTurnStateAutoIdle(t, s)
-	require.GreaterOrEqual(t, secondCalls.Load(), int32(1), "the replacement must start after the account gate is released")
+
+	replacement, err := s.RequestCodexTurnStateCollection(context.Background(), account, "")
+	require.NoError(t, err)
+	require.Equal(t, CodexTurnStateManualStatusQueued, replacement.Status)
+	require.Equal(t, []string{queuedModel}, replacement.QueuedModels)
+	waitTurnStateAutoIdle(t, s)
+	callsMu.Lock()
+	require.GreaterOrEqual(t, calls[queuedModel], 1, "the replacement must start after the account gate is released")
+	callsMu.Unlock()
 	s.StopCodexTurnStateCollectionTasks()
 }
 
@@ -528,13 +702,15 @@ func TestStopCodexTurnStateCollectionTasksDrainsAccountWaiters(t *testing.T) {
 		return nil, req.Context().Err()
 	}}
 
-	s.autoTurnStateForAccount(context.Background(), account, "gpt-5.5")
+	result, err := s.RequestCodexTurnStateCollection(context.Background(), account, "")
+	require.NoError(t, err)
+	require.Equal(t, CodexTurnStateManualStatusQueued, result.Status)
+	require.ElementsMatch(t, []string{"gpt-5.5", "gpt-5.4"}, result.QueuedModels)
 	select {
 	case <-started:
 	case <-time.After(time.Second):
 		t.Fatal("first account worker did not start")
 	}
-	s.autoTurnStateForAccount(context.Background(), account, "gpt-5.4")
 	require.Eventually(t, func() bool {
 		s.openaiTurnStateMu.Lock()
 		defer s.openaiTurnStateMu.Unlock()

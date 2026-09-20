@@ -109,7 +109,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	if _, _, ok := codexTurnStateUsageVerificationIdentity(ctx); ok {
+	_, _, turnStateUsageVerification := codexTurnStateUsageVerificationIdentity(ctx)
+	if turnStateUsageVerification {
 		wsDecision = openAIWSHTTPDecision("codex_turn_state_usage_verification")
 	}
 	clientTransport := GetOpenAIClientTransport(c)
@@ -117,7 +118,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// Native Responses API-key accounts remain on HTTP. Standard OAuth accounts
 	// with WSv2 enabled use the existing WS forwarder as a REST JSON/SSE facade so
 	// their store=false response IDs remain attached to a reusable connection.
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, clientTransport, account)
+	if !turnStateUsageVerification {
+		wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, clientTransport, account)
+	}
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	compactPath := isOpenAIResponsesCompactPath(c)
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {

@@ -544,6 +544,7 @@ type OpenAIGatewayService struct {
 	openaiTurnStateWorkers         int
 	openaiTurnStateStopping        bool
 	openaiTurnStateWorkersWG       sync.WaitGroup
+	openaiTurnStateLeaseWG         sync.WaitGroup
 	openaiTurnStateSweep           time.Time
 	openaiTurnStateLoads           codexTurnStateSourceLoads
 	openaiTurnStateCollectionLocks sync.Map // key: int64(accountID), value: *codexTurnStateAccountLock
@@ -753,6 +754,7 @@ func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
 	s.StopCodexTurnStateCollectionTasks()
 	s.StopOpenAICodexTurnStateRenewal()
 	s.openaiTurnStateWorkersWG.Wait()
+	s.openaiTurnStateLeaseWG.Wait()
 	if s.openaiWSPool != nil {
 		s.openaiWSPool.Close()
 	}

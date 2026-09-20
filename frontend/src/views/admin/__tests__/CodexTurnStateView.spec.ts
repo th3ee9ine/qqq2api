@@ -126,6 +126,14 @@ function mountView() {
   })
 }
 
+function setDocumentVisibility(value: 'visible' | 'hidden', dispatch = true, listener?: EventListener) {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value })
+  if (dispatch) {
+    if (listener) listener(new window.Event('visibilitychange'))
+    else document.dispatchEvent(new window.Event('visibilitychange'))
+  }
+}
+
 describe('CodexTurnStateView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -163,13 +171,14 @@ describe('CodexTurnStateView', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    setDocumentVisibility('visible', false)
   })
 
   it('loads healthy accounts and appends to the reloaded URL pool without using proxy inventory', async () => {
     const wrapper = mountView()
     await flushPromises()
 
-    expect(mocks.listAccounts).toHaveBeenCalledWith(1, 200, { platform: 'openai', status: 'active' })
+    expect(mocks.listAccounts).toHaveBeenCalledWith(1, 200, { platform: 'openai', status: 'active' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.find('[data-testid="turn-state-account-11"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="turn-state-account-12"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="turn-state-account-13"]').exists()).toBe(false)
@@ -406,6 +415,491 @@ describe('CodexTurnStateView', () => {
     wrapper.unmount()
   })
 
+  it('discovers an externally-created task after the 15 second idle interval', async () => {
+    vi.useFakeTimers()
+    const automaticTask = {
+      id: 'task-idle-discovery',
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6-sol',
+      source: 'automatic',
+      status: 'running',
+      stage: 'collecting',
+      progress: 20,
+      progress_current: 1,
+      progress_total: 5,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([automaticTask])
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(14_999)
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-task-task-idle-discovery"]').text()).toContain('admin.codexTurnState.tasks.sources.automatic')
+    wrapper.unmount()
+  })
+
+  it('refreshes accounts every 60 seconds when a short external task starts and finishes between task-list samples', async () => {
+    vi.useFakeTimers()
+    mocks.listAccounts
+      .mockResolvedValueOnce({
+        items: [account(11, { codex_turn_state_auto: state({ configured: false, due: true, expires_at_ms: undefined }) })],
+        pages: 1,
+      })
+      .mockResolvedValueOnce({
+        items: [account(11, {
+          codex_turn_state_auto: state({
+            configured: true,
+            collection_succeeded: true,
+            successful_models: ['gpt-5.6-sol'],
+            verified_model: 'gpt-5.6-sol',
+            expires_at_ms: Date.now() + 10 * 60_000,
+          }),
+        })],
+        pages: 1,
+      })
+    mocks.listCodexTurnStateTasks.mockResolvedValue([])
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-account-11"]').text()).toContain('admin.codexTurnState.accounts.states.missing')
+    await vi.advanceTimersByTimeAsync(59_999)
+    await flushPromises()
+    expect(mocks.listAccounts).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(mocks.listAccounts).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-account-11"]').text()).toContain('admin.codexTurnState.accounts.states.valid')
+    expect(wrapper.get('[data-testid="turn-state-model-results-11"]').text()).toContain('gpt-5.6-sol')
+    wrapper.unmount()
+  })
+
+  it('retries a failed initial task-list request after four seconds', async () => {
+    vi.useFakeTimers()
+    mocks.listCodexTurnStateTasks
+      .mockRejectedValueOnce({ status: 503, message: 'temporary task-list failure' })
+      .mockResolvedValueOnce([])
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[role="alert"]').text()).toContain('temporary task-list failure')
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('refreshes an account when its externally-run task leaves the active list', async () => {
+    vi.useFakeTimers()
+    const runningTask = {
+      id: 'task-external-completion',
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6-sol',
+      source: 'renewal',
+      status: 'running',
+      stage: 'collecting',
+      progress: 80,
+      progress_current: 4,
+      progress_total: 5,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    mocks.listAccounts.mockResolvedValueOnce({
+      items: [account(11, { codex_turn_state_auto: state({ configured: false, due: true, expires_at_ms: undefined }) })],
+      pages: 1,
+    })
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([runningTask])
+      .mockResolvedValueOnce([])
+    mocks.getAccountById.mockResolvedValueOnce(account(11, {
+      codex_turn_state_auto: state({
+        configured: true,
+        collection_succeeded: true,
+        successful_models: ['gpt-5.6-sol'],
+        verified_model: 'gpt-5.6-sol',
+      }),
+    }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-account-11"]').text()).toContain('admin.codexTurnState.accounts.states.missing')
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+
+    expect(mocks.getAccountById).toHaveBeenCalledWith(11, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(wrapper.get('[data-testid="turn-state-account-11"]').text()).toContain('admin.codexTurnState.accounts.states.valid')
+    expect(wrapper.get('[data-testid="turn-state-model-results-11"]').text()).toContain('gpt-5.6-sol')
+    wrapper.unmount()
+  })
+
+  it('retries a transient terminal account refresh after 4, 8, and 15 seconds', async () => {
+    vi.useFakeTimers()
+    const runningTask = {
+      id: 'task-refresh-retry',
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6-sol',
+      source: 'automatic',
+      status: 'running',
+      stage: 'persisting',
+      progress: 90,
+      progress_current: 1,
+      progress_total: 1,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([runningTask])
+      .mockResolvedValueOnce([])
+    mocks.getAccountById
+      .mockRejectedValueOnce({ status: 503 })
+      .mockRejectedValueOnce({ status: 429 })
+      .mockRejectedValueOnce({ status: 500 })
+      .mockResolvedValueOnce(account(11, {
+        codex_turn_state_auto: state({
+          collection_succeeded: true,
+          successful_models: ['gpt-5.6-sol'],
+          verified_model: 'gpt-5.6-sol',
+        }),
+      }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(2)
+
+    await vi.advanceTimersByTimeAsync(7_999)
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(3)
+
+    await vi.advanceTimersByTimeAsync(14_999)
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(4)
+    expect(wrapper.get('[data-testid="turn-state-account-11"]').text()).toContain('admin.codexTurnState.accounts.states.valid')
+    wrapper.unmount()
+  })
+
+  it('keeps a trailing account refresh when multiple owner tasks finish in sequence', async () => {
+    vi.useFakeTimers()
+    const runningTask = (id: string, ownerModel: string) => ({
+      id,
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: ownerModel,
+      owner_model: ownerModel,
+      source: 'bulk',
+      status: 'running',
+      stage: 'collecting',
+      progress: 50,
+      progress_current: 1,
+      progress_total: 2,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    })
+    const firstTask = runningTask('task-owner-first', 'gpt-5.5')
+    const secondTask = runningTask('task-owner-second', 'gpt-5.4')
+    let resolveFirstRefresh!: (value: AccountListItem) => void
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([firstTask, secondTask])
+      .mockResolvedValueOnce([secondTask])
+      .mockResolvedValueOnce([])
+    mocks.getAccountById
+      .mockReturnValueOnce(new Promise(resolve => { resolveFirstRefresh = resolve }))
+      .mockResolvedValueOnce(account(11, {
+        codex_turn_state_auto: state({
+          configured: true,
+          collection_succeeded: true,
+          successful_models: ['gpt-5.5', 'gpt-5.4'],
+          models: {
+            'gpt-5.5': state({ verified_model: 'gpt-5.5', collection_succeeded: true }),
+            'gpt-5.4': state({ verified_model: 'gpt-5.4', collection_succeeded: true }),
+          },
+        }),
+      }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(1)
+
+    resolveFirstRefresh(account(11))
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-model-results-11"]').text()).toContain('gpt-5.5')
+    expect(wrapper.get('[data-testid="turn-state-model-results-11"]').text()).toContain('gpt-5.4')
+    wrapper.unmount()
+  })
+
+  it('replays a finished-task account refresh after collection polling releases the account', async () => {
+    vi.useFakeTimers()
+    const runningTask = {
+      id: 'task-polling-overlap',
+      account_id: 12,
+      account_name: 'Account 12',
+      request_model: 'gpt-5.5',
+      owner_model: 'gpt-5.5',
+      source: 'renewal',
+      status: 'running',
+      stage: 'collecting',
+      progress: 50,
+      progress_current: 1,
+      progress_total: 2,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    const completedAccount = account(12, {
+      type: 'setup-token',
+      codex_turn_state_auto: state({
+        configured: true,
+        collection_succeeded: true,
+        successful_models: ['gpt-5.5'],
+        verified_model: 'gpt-5.5',
+        probe_at_ms: Date.now() + 1,
+      }),
+    })
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([runningTask])
+      .mockResolvedValueOnce([])
+    mocks.getAccountById
+      .mockResolvedValueOnce(completedAccount)
+      .mockResolvedValueOnce(completedAccount)
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-12"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-account-12"]').text()).toContain('admin.codexTurnState.accounts.states.valid')
+    wrapper.unmount()
+  })
+
+  it('replays an aborted finished-task account refresh when the page becomes visible again', async () => {
+    vi.useFakeTimers()
+    const runningTask = {
+      id: 'task-hidden-account-refresh',
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6-sol',
+      source: 'automatic',
+      status: 'running',
+      stage: 'persisting',
+      progress: 90,
+      progress_current: 1,
+      progress_total: 1,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    let firstRefreshSignal!: AbortSignal
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([runningTask])
+      .mockResolvedValueOnce([])
+    mocks.getAccountById
+      .mockImplementationOnce((_accountId: number, options: { signal: AbortSignal }) => new Promise((_, reject) => {
+        firstRefreshSignal = options.signal
+        options.signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('canceled'), { name: 'AbortError' }))
+        }, { once: true })
+      }))
+      .mockResolvedValueOnce(account(11, {
+        codex_turn_state_auto: state({
+          collection_succeeded: true,
+          successful_models: ['gpt-5.6-sol'],
+          verified_model: 'gpt-5.6-sol',
+        }),
+      }))
+    const addListenerSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = mountView()
+    await flushPromises()
+    const visibilityListener = addListenerSpy.mock.calls
+      .filter(([type]) => type === 'visibilitychange')
+      .at(-1)?.[1] as EventListener | undefined
+    addListenerSpy.mockRestore()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(1)
+
+    setDocumentVisibility('hidden', true, visibilityListener)
+    await flushPromises()
+    expect(firstRefreshSignal.aborted).toBe(true)
+
+    setDocumentVisibility('visible', true, visibilityListener)
+    await flushPromises()
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-model-results-11"]').text()).toContain('gpt-5.6-sol')
+    wrapper.unmount()
+  })
+
+  it('defers every initial request while hidden and loads immediately when visible', async () => {
+    vi.useFakeTimers()
+    setDocumentVisibility('hidden', false)
+    const addListenerSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = mountView()
+    await flushPromises()
+    const visibilityListener = addListenerSpy.mock.calls
+      .filter(([type]) => type === 'visibilitychange')
+      .at(-1)?.[1] as EventListener | undefined
+    addListenerSpy.mockRestore()
+
+    expect(mocks.getSettings).not.toHaveBeenCalled()
+    expect(mocks.listAccounts).not.toHaveBeenCalled()
+    expect(mocks.listCodexTurnStateTasks).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+
+    setDocumentVisibility('visible', true, visibilityListener)
+    await flushPromises()
+    expect(mocks.getSettings).toHaveBeenCalledTimes(1)
+    expect(mocks.listAccounts).toHaveBeenCalledTimes(1)
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('pauses live task polling while hidden and refreshes immediately when visible again', async () => {
+    vi.useFakeTimers()
+    mocks.listCodexTurnStateTasks.mockResolvedValue([{
+      id: 'task-visibility-1',
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6-sol',
+      source: 'bulk',
+      status: 'running',
+      stage: 'collecting',
+      progress: 20,
+      progress_current: 1,
+      progress_total: 4,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }])
+    const addListenerSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = mountView()
+    await flushPromises()
+    const visibilityListener = addListenerSpy.mock.calls
+      .filter(([type]) => type === 'visibilitychange')
+      .at(-1)?.[1] as EventListener | undefined
+    addListenerSpy.mockRestore()
+
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+    setDocumentVisibility('hidden', true, visibilityListener)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="turn-state-refresh-status"]').text()).toContain('admin.codexTurnState.refreshPaused')
+    await vi.advanceTimersByTimeAsync(6_000)
+    await flushPromises()
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+
+    setDocumentVisibility('visible', true, visibilityListener)
+    await flushPromises()
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-refresh-status"]').text()).toContain('admin.codexTurnState.lastRefreshed')
+    wrapper.unmount()
+  })
+
+  it('coalesces simultaneous collection completions into one task refresh', async () => {
+    vi.useFakeTimers()
+    mocks.listAccounts.mockResolvedValueOnce({ items: [account(90), account(91)], pages: 1 })
+    mocks.collectCodexTurnState.mockImplementation(async (accountId: number) => ({
+      status: 'already_valid',
+      account_id: accountId,
+      target_models: ['gpt-5.5'],
+      queued_models: [],
+      successful_models: ['gpt-5.5'],
+      model_targets: [{ model: 'gpt-5.5', owner: 'gpt-5.5' }],
+      codex_turn_state_auto: state({ collection_succeeded: true, successful_models: ['gpt-5.5'], verified_model: 'gpt-5.5' }),
+    }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(99)
+    await flushPromises()
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('keeps a trailing task refresh when a collection completes during an in-flight refresh', async () => {
+    vi.useFakeTimers()
+    let resolveTaskRefresh!: (value: unknown[]) => void
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(new Promise((resolve) => { resolveTaskRefresh = resolve }))
+      .mockResolvedValueOnce([])
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-tasks-refresh"]').trigger('click')
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(2)
+    await wrapper.get('[data-testid="turn-state-collect-11"]').trigger('click')
+    await flushPromises()
+
+    resolveTaskRefresh([])
+    await flushPromises()
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(99)
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(mocks.listCodexTurnStateTasks).toHaveBeenCalledTimes(3)
+    wrapper.unmount()
+  })
+
   it('does not retain terminal task snapshots in the live task list', async () => {
     const task = (id: string, status: string, createdAt: number) => ({
       id,
@@ -488,6 +982,63 @@ describe('CodexTurnStateView', () => {
 
     expect(wrapper.find('[data-testid="turn-state-task-task-running-1"]').exists()).toBe(false)
     expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexTurnState.tasks.cancelSucceeded')
+    wrapper.unmount()
+  })
+
+  it('aborts a task-list refresh started during cancellation and refreshes the affected account', async () => {
+    let resolveCancellation!: (value: Record<string, unknown>) => void
+    let concurrentRefreshSignal!: AbortSignal
+    const activeTask = {
+      id: 'task-cancel-refresh-race',
+      account_id: 11,
+      account_name: 'Account 11',
+      request_model: 'gpt-5.6-sol',
+      owner_model: 'gpt-5.6-sol',
+      source: 'manual',
+      status: 'running',
+      stage: 'collecting',
+      progress: 40,
+      progress_current: 2,
+      progress_total: 5,
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+      can_cancel: true,
+      can_retry: false,
+    }
+    mocks.listCodexTurnStateTasks
+      .mockResolvedValueOnce([activeTask])
+      .mockImplementationOnce((options: { signal: AbortSignal }) => new Promise((_, reject) => {
+        concurrentRefreshSignal = options.signal
+        options.signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('canceled'), { name: 'AbortError' }))
+        }, { once: true })
+      }))
+    mocks.cancelCodexTurnStateTask.mockReturnValueOnce(new Promise(resolve => {
+      resolveCancellation = resolve
+    }))
+    mocks.getAccountById.mockResolvedValueOnce(account(11))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-task-cancel-task-cancel-refresh-race"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-dialog-confirm"]').trigger('click')
+    await wrapper.get('[data-testid="turn-state-tasks-refresh"]').trigger('click')
+    await flushPromises()
+    expect(concurrentRefreshSignal.aborted).toBe(false)
+
+    resolveCancellation({
+      ...activeTask,
+      status: 'canceled',
+      stage: 'canceled',
+      can_cancel: false,
+      can_retry: false,
+    })
+    await flushPromises()
+
+    expect(concurrentRefreshSignal.aborted).toBe(true)
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-tasks-refresh"]').element.disabled).toBe(false)
+    expect(mocks.getAccountById).toHaveBeenCalledWith(11, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(wrapper.find('[data-testid="turn-state-task-task-cancel-refresh-race"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -623,6 +1174,55 @@ describe('CodexTurnStateView', () => {
     wrapper.unmount()
   })
 
+  it('limits one-click collection to four concurrent account submissions', async () => {
+    const targetAccounts = Array.from({ length: 10 }, (_, index) => account(100 + index, {
+      codex_turn_state_auto: state({ configured: false, due: true, expires_at_ms: undefined }),
+    }))
+    mocks.listAccounts.mockResolvedValueOnce({ items: targetAccounts, pages: 1 })
+    let activeSubmissions = 0
+    let maximumActiveSubmissions = 0
+    const releases: Array<() => void> = []
+    mocks.collectCodexTurnState.mockImplementation((accountId: number) => new Promise((resolve) => {
+      activeSubmissions += 1
+      maximumActiveSubmissions = Math.max(maximumActiveSubmissions, activeSubmissions)
+      releases.push(() => {
+        activeSubmissions -= 1
+        resolve({
+          status: 'already_valid',
+          account_id: accountId,
+          target_models: ['gpt-5.5'],
+          queued_models: [],
+          successful_models: ['gpt-5.5'],
+          model_targets: [{ model: 'gpt-5.5', owner: 'gpt-5.5' }],
+          codex_turn_state_auto: state({
+            collection_succeeded: true,
+            successful_models: ['gpt-5.5'],
+            verified_model: 'gpt-5.5',
+          }),
+        })
+      })
+    }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(4)
+    expect(activeSubmissions).toBe(4)
+
+    while (releases.length > 0) {
+      const batch = releases.splice(0)
+      for (const release of batch) release()
+      await flushPromises()
+    }
+
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(10)
+    expect(maximumActiveSubmissions).toBe(4)
+    expect(activeSubmissions).toBe(0)
+    expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexTurnState.accounts.bulkFinishedSuccess 10 10')
+    wrapper.unmount()
+  })
+
   it('keeps a failed account immediately available to manual and bulk collection', async () => {
     const retryAt = Date.now() + 15 * 60_000
     mocks.listAccounts.mockResolvedValueOnce({
@@ -670,7 +1270,7 @@ describe('CodexTurnStateView', () => {
     wrapper.unmount()
   })
 
-  it('starts every account in parallel and keeps the batch active until every account is terminal', async () => {
+  it('uses four account workers and keeps the batch active until every account is terminal', async () => {
     vi.useFakeTimers()
     const accountIds = [70, 71, 72, 73, 74]
     const finished = new Set<number>()
@@ -734,21 +1334,22 @@ describe('CodexTurnStateView', () => {
 
     await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
     await flushPromises()
-    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual(accountIds)
-    expect(new Set(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).size).toBe(accountIds.length)
+    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual([70, 71, 72, 73])
+    expect(new Set(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).size).toBe(4)
     expect(wrapper.get('[data-testid="turn-state-account-progress-73"]').text()).toContain('admin.codexTurnState.accounts.progressPolling')
     expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(true)
 
     await vi.advanceTimersByTimeAsync(2_000)
     await flushPromises()
     expect(mocks.getAccountById).toHaveBeenCalledTimes(4)
-    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(5)
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(4)
     expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(true)
 
     finished.add(70)
     await vi.advanceTimersByTimeAsync(2_000)
     await flushPromises()
     expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(5)
+    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual(accountIds)
     expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(true)
 
     finished.add(71)
@@ -940,7 +1541,7 @@ describe('CodexTurnStateView', () => {
     await vi.advanceTimersByTimeAsync(2_000)
     await flushPromises()
 
-    expect(mocks.getAccountById).toHaveBeenCalledWith(12)
+    expect(mocks.getAccountById).toHaveBeenCalledWith(12, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(wrapper.get('[data-testid="turn-state-model-results-12"]').text()).toContain('gpt-5.6-sol')
     expect(wrapper.get('[data-testid="turn-state-model-results-12"]').text()).not.toContain('fallback-map-key')
     expect(wrapper.get('[data-testid="turn-state-model-results-12"]').text()).toContain('admin.codexTurnState.accounts.modelStates.success')
@@ -1962,7 +2563,7 @@ describe('CodexTurnStateView', () => {
       openai_codex_turn_state_proxy_urls: [],
       openai_codex_turn_state_proxy_urls_valid: true,
     })
-    mocks.listAccounts.mockResolvedValueOnce({
+    mocks.listAccounts.mockResolvedValue({
       items: [account(54, {
         codex_turn_state_auto: state({
           set_at_ms: verifiedAt - 51 * 60_000,
@@ -2007,7 +2608,7 @@ describe('CodexTurnStateView', () => {
       openai_codex_turn_state_proxy_urls: [],
       openai_codex_turn_state_proxy_urls_valid: true,
     })
-    mocks.listAccounts.mockResolvedValueOnce({
+    mocks.listAccounts.mockResolvedValue({
       items: [account(51, {
         codex_turn_state_auto: state({
           set_at_ms: Date.now(),

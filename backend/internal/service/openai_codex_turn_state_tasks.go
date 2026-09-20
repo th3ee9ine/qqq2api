@@ -97,6 +97,10 @@ type CodexTurnStateCollectionTaskInput struct {
 	OwnerModel   string
 	Source       string
 	RetryOf      string
+	// collectionLease is shared by every owner task created for one explicit
+	// account batch. Automatic and renewal tasks attach their lease immediately
+	// before the worker executes so request hot paths never block on Redis.
+	collectionLease *codexTurnStateCollectionLease
 }
 
 // CodexTurnStateCollectionTaskRetryInfo is the immutable, read-only input for
@@ -111,9 +115,11 @@ type CodexTurnStateCollectionTaskRetryInfo struct {
 }
 
 type codexTurnStateCollectionTaskRecord struct {
-	task   CodexTurnStateCollectionTask
-	ctx    context.Context
-	cancel context.CancelFunc
+	task           CodexTurnStateCollectionTask
+	ctx            context.Context
+	cancel         context.CancelFunc
+	lease          *codexTurnStateCollectionLease
+	stopLeaseWatch func() bool
 }
 
 type codexTurnStateCollectionTaskRegistry struct {
@@ -266,6 +272,20 @@ func cloneCodexTurnStateCollectionTask(task *CodexTurnStateCollectionTask) *Code
 	return &clone
 }
 
+// cloneCodexTurnStateCollectionTaskSummary copies only the scalar fields used
+// by the task list. Event history is intentionally detail-only; avoiding the
+// event slice copy keeps list polling cheap while the registry read lock is
+// held. The returned snapshot remains detached from the registry.
+func cloneCodexTurnStateCollectionTaskSummary(task *CodexTurnStateCollectionTask) *CodexTurnStateCollectionTask {
+	if task == nil {
+		return nil
+	}
+	clone := *task
+	clone.Events = nil
+	setCodexTurnStateCollectionTaskCapabilities(&clone)
+	return &clone
+}
+
 func appendCodexTurnStateCollectionTaskEvent(task *CodexTurnStateCollectionTask, nowMS int64) {
 	if task == nil {
 		return
@@ -299,6 +319,29 @@ func (r *codexTurnStateCollectionTaskRegistry) makeRoomLocked() bool {
 			delete(r.tasks, taskID)
 			copy(r.order[index:], r.order[index+1:])
 			r.order = r.order[:len(r.order)-1]
+			return true
+		}
+	}
+	return false
+}
+
+// hasActiveForAccount reports whether an account already owns a queued or
+// running collection task. Terminal tasks are removed from the registry, but
+// checking the status as well keeps this helper correct during a terminal
+// transition. exceptTaskID is used only by the compatibility retry path, which
+// reuses its reserved queued task instead of creating a duplicate.
+func (r *codexTurnStateCollectionTaskRegistry) hasActiveForAccount(accountID int64, exceptTaskID string) bool {
+	if r == nil || accountID <= 0 {
+		return false
+	}
+	exceptTaskID = strings.TrimSpace(exceptTaskID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for taskID, record := range r.tasks {
+		if taskID == exceptTaskID || record == nil || record.task.AccountID != accountID {
+			continue
+		}
+		if record.task.Status == CodexTurnStateCollectionTaskStatusQueued || record.task.Status == CodexTurnStateCollectionTaskStatusRunning {
 			return true
 		}
 	}
@@ -348,6 +391,121 @@ func (s *OpenAIGatewayService) codexTurnStateCollectionTasks() *codexTurnStateCo
 	return s.openaiTurnStateTasks
 }
 
+// attachCodexTurnStateCollectionTaskLease binds a previously acquired account
+// lease to one live task. The task owns one reference until its terminal
+// transition; losing Redis ownership cancels the registry task and therefore
+// every network/database operation using its context.
+func (s *OpenAIGatewayService) attachCodexTurnStateCollectionTaskLease(taskID string, lease *codexTurnStateCollectionLease) bool {
+	if lease == nil {
+		return true
+	}
+	registry := s.codexTurnStateCollectionTasks()
+	if registry == nil || !lease.retain() {
+		return false
+	}
+	taskID = strings.TrimSpace(taskID)
+	registry.mu.Lock()
+	record := registry.tasks[taskID]
+	if record == nil || codexTurnStateCollectionTaskTerminal(record.task.Status) {
+		registry.mu.Unlock()
+		lease.releaseRef()
+		return false
+	}
+	if record.lease != nil {
+		matches := record.lease == lease && record.lease.Context().Err() == nil
+		registry.mu.Unlock()
+		lease.releaseRef()
+		return matches
+	}
+	record.lease = lease
+	record.stopLeaseWatch = context.AfterFunc(lease.Context(), func() {
+		_, _ = s.CancelCodexTurnStateCollectionTask(taskID)
+	})
+	registry.mu.Unlock()
+	return true
+}
+
+// retainCodexTurnStateCollectionTaskLease acquires the worker execution
+// reference while the registry still proves the task is live. Cancellation can
+// then release the task reference without deleting the Redis key until the
+// worker has fully returned from upstream and persistence code.
+func (s *OpenAIGatewayService) retainCodexTurnStateCollectionTaskLease(taskID string) (*codexTurnStateCollectionLease, bool) {
+	registry := s.codexTurnStateCollectionTasks()
+	if registry == nil {
+		return nil, false
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	record := registry.tasks[strings.TrimSpace(taskID)]
+	if record == nil || codexTurnStateCollectionTaskTerminal(record.task.Status) {
+		return nil, false
+	}
+	if record.lease != nil && !record.lease.retain() {
+		return nil, false
+	}
+	return record.lease, true
+}
+
+// releaseCodexTurnStateCollectionTaskLeaseLocked drops exactly one task's
+// shared reference. Redis compare-and-delete is scheduled asynchronously by the
+// lease so this helper remains safe under the registry and Turn State locks.
+func releaseCodexTurnStateCollectionTaskLeaseLocked(record *codexTurnStateCollectionTaskRecord) {
+	if record == nil {
+		return
+	}
+	if record.stopLeaseWatch != nil {
+		record.stopLeaseWatch()
+		record.stopLeaseWatch = nil
+	}
+	if record.lease != nil {
+		record.lease.releaseRef()
+		record.lease = nil
+	}
+}
+
+// codexTurnStateAccountCollectionTaskActive is the account-level admission
+// gate shared by manual, automatic, and renewal scheduling. It intentionally
+// ignores detached dirty persistence: that work has no active collection task
+// and must not prevent a fresh probe from claiming the account.
+func (s *OpenAIGatewayService) codexTurnStateAccountCollectionTaskActive(accountID int64, exceptTaskID string) bool {
+	registry := s.codexTurnStateCollectionTasks()
+	return registry != nil && registry.hasActiveForAccount(accountID, exceptTaskID)
+}
+
+// withActiveCodexTurnStateCollectionTaskLocked linearizes a candidate publish
+// with task cancellation. The caller already holds openaiTurnStateMu; retaining
+// the registry read lock through publish means Cancel cannot remove the task and
+// return before the state transition finishes. Unbound entries are retained for
+// compatibility with direct verification helpers that do not create a task.
+func (s *OpenAIGatewayService) withActiveCodexTurnStateCollectionTaskLocked(entry *codexTurnStateAutoEntry, publish func() bool) bool {
+	if entry == nil || publish == nil {
+		return false
+	}
+	taskID := strings.TrimSpace(entry.collectionTaskID)
+	if taskID == "" {
+		return publish()
+	}
+	registry := s.codexTurnStateCollectionTasks()
+	if registry == nil {
+		return false
+	}
+	registry.mu.RLock()
+	record := registry.tasks[taskID]
+	active := record != nil &&
+		(record.task.Status == CodexTurnStateCollectionTaskStatusQueued || record.task.Status == CodexTurnStateCollectionTaskStatusRunning) &&
+		record.ctx != nil && record.ctx.Err() == nil &&
+		(record.lease == nil || record.lease.Context().Err() == nil) &&
+		entry.collectionTaskContext != nil && entry.collectionTaskContext.Err() == nil
+	if !active {
+		registry.mu.RUnlock()
+		s.discardCanceledCodexTurnStateCollectionTaskLocked(entry)
+		return false
+	}
+	published := publish()
+	registry.mu.RUnlock()
+	return published
+}
+
 // CreateCodexTurnStateCollectionTask registers one queued account/model task
 // and returns its cancelable worker context. The bound applies only to live
 // work because terminal snapshots are removed immediately; 500 simultaneously
@@ -374,6 +532,18 @@ func (s *OpenAIGatewayService) CreateCodexTurnStateCollectionTask(parent context
 	}
 	if source == "" {
 		source = CodexTurnStateCollectionSourceAutomatic
+	}
+	lease := input.collectionLease
+	leaseStored := false
+	if lease != nil {
+		if !lease.retain() {
+			return nil, nil, infraerrors.New(http.StatusServiceUnavailable, "CODEX_TURN_STATE_COLLECTION_LEASE_LOST", "Codex Turn State collection lease is no longer owned")
+		}
+		defer func() {
+			if !leaseStored {
+				lease.releaseRef()
+			}
+		}()
 	}
 
 	now := time.Now()
@@ -409,8 +579,15 @@ func (s *OpenAIGatewayService) CreateCodexTurnStateCollectionTask(parent context
 	}
 	setCodexTurnStateCollectionTaskCapabilities(&task)
 	appendCodexTurnStateCollectionTaskEvent(&task, now.UnixMilli())
-	registry.tasks[taskID] = &codexTurnStateCollectionTaskRecord{task: task, ctx: ctx, cancel: cancel}
+	record := &codexTurnStateCollectionTaskRecord{task: task, ctx: ctx, cancel: cancel, lease: lease}
+	if lease != nil {
+		record.stopLeaseWatch = context.AfterFunc(lease.Context(), func() {
+			_, _ = s.CancelCodexTurnStateCollectionTask(taskID)
+		})
+	}
+	registry.tasks[taskID] = record
 	registry.order = append(registry.order, taskID)
+	leaseStored = true
 	result := cloneCodexTurnStateCollectionTask(&task)
 	registry.mu.Unlock()
 	return result, ctx, nil
@@ -515,6 +692,7 @@ func (s *OpenAIGatewayService) finishCodexTurnStateCollectionTask(taskID, status
 	result := cloneCodexTurnStateCollectionTask(&record.task)
 	// Terminal snapshots are deliberately not archived. Keep only the detached
 	// result for this caller, then release the registry slot immediately.
+	releaseCodexTurnStateCollectionTaskLeaseLocked(record)
 	registry.removeLocked(taskID)
 	registry.mu.Unlock()
 	if cancel != nil {
@@ -543,8 +721,7 @@ func (s *OpenAIGatewayService) ListCodexTurnStateCollectionTasks() []*CodexTurnS
 	active := make([]*CodexTurnStateCollectionTask, 0, len(registry.order))
 	for index := len(registry.order) - 1; index >= 0; index-- {
 		if record := registry.tasks[registry.order[index]]; record != nil {
-			summary := cloneCodexTurnStateCollectionTask(&record.task)
-			summary.Events = nil
+			summary := cloneCodexTurnStateCollectionTaskSummary(&record.task)
 			if !codexTurnStateCollectionTaskTerminal(summary.Status) {
 				active = append(active, summary)
 			}
@@ -614,12 +791,16 @@ func (s *OpenAIGatewayService) CancelCodexTurnStateCollectionTask(taskID string)
 	cancel := record.cancel
 	record.cancel = nil
 	result := cloneCodexTurnStateCollectionTask(&record.task)
-	// Cancellation is a terminal outcome, not an archived task record.
-	registry.removeLocked(taskID)
-	registry.mu.Unlock()
+	// Publish cancellation to the bound entry before removing the registry
+	// admission record. Otherwise a scheduler can observe no active account task
+	// while the old context is still live and accidentally reuse the canceled ID.
 	if cancel != nil {
 		cancel()
 	}
+	// Cancellation is a terminal outcome, not an archived task record.
+	releaseCodexTurnStateCollectionTaskLeaseLocked(record)
+	registry.removeLocked(taskID)
+	registry.mu.Unlock()
 	return result, nil
 }
 
@@ -657,6 +838,7 @@ func (s *OpenAIGatewayService) StopCodexTurnStateCollectionTasks() {
 			cancels = append(cancels, record.cancel)
 			record.cancel = nil
 		}
+		releaseCodexTurnStateCollectionTaskLeaseLocked(record)
 		registry.removeLocked(taskID)
 	}
 	registry.mu.Unlock()

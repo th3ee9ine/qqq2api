@@ -132,6 +132,69 @@ func TestCodexTurnStatePendingProvenanceRequiresVerifiedLifecycle(t *testing.T) 
 	require.Equal(t, []string{codexTurnStateCanonicalDigest(verifiedState)}, repo.recorded)
 }
 
+func TestCodexTurnStateCommittedHeaderProtectsBeforeCompletedAndUpgradesProvenance(t *testing.T) {
+	issuer := &Account{ID: 42}
+	const state = "committed-before-completed-native-state"
+	digest := codexTurnStateCanonicalDigest(state)
+
+	for _, tc := range []struct {
+		name   string
+		staged bool
+	}{
+		{name: "direct"},
+		{name: "staged", staged: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &turnStateProvenanceRepoStub{}
+			service := &OpenAIGatewayService{accountRepo: repo}
+			c, _ := newTurnStateTestContext(t, 7, "commit-before-completed-"+tc.name)
+			upstream := turnStateHeader(state)
+			request := turnStateModelRequest("gpt-6-astra")
+			if tc.staged {
+				var staged http.Header
+				stageOpenAICodexTurnState(&staged, upstream)
+				service.noteStagedOpenAICodexTurnStateCommitted(c, issuer, staged, request)
+			} else {
+				service.relayOpenAICodexTurnState(c, issuer, upstream, request)
+			}
+
+			repo.mu.Lock()
+			require.Empty(t, repo.recorded, "account-only provenance must stay process-local")
+			repo.mu.Unlock()
+			raw, ok := service.openaiCodexTurnStateOrigins.Load(openAICodexTurnStateDigestKey(digest))
+			require.True(t, ok)
+			origin := raw.(openAICodexTurnStateOrigin)
+			require.Equal(t, issuer.ID, origin.accountID)
+			require.Empty(t, origin.model)
+			require.False(t, origin.conflict)
+
+			foreign := turnStateHeader(state)
+			service.guardOpenAICodexTurnStateEcho(c, &Account{ID: issuer.ID + 1}, foreign, "gpt-6-astra")
+			require.Empty(t, foreign.Get(openAICodexTurnStateHeader), "a disconnected stream must not leak its committed state through failover")
+
+			observer := beginUpstreamResponseModelObservation(c)
+			observer.ObserveOpenAI([]byte(`{"type":"response.created","response":{"model":"gpt-6-astra"}}`), "response.created")
+			observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"model":"gpt-6-astra"}}`), "response.completed")
+			service.commitPendingCodexTurnStateObservation(c, true)
+
+			raw, ok = service.openaiCodexTurnStateOrigins.Load(openAICodexTurnStateDigestKey(digest))
+			require.True(t, ok)
+			origin = raw.(openAICodexTurnStateOrigin)
+			require.Equal(t, "gpt-6-astra", origin.model)
+			require.False(t, origin.conflict, "same-account unknown provenance must upgrade without conflict")
+			service.noteOpenAICodexTurnStateAccountProvenance(issuer, state)
+			raw, ok = service.openaiCodexTurnStateOrigins.Load(openAICodexTurnStateDigestKey(digest))
+			require.True(t, ok)
+			origin = raw.(openAICodexTurnStateOrigin)
+			require.Equal(t, "gpt-6-astra", origin.model, "a repeated header commit must not downgrade verified model scope")
+			require.False(t, origin.conflict)
+			repo.mu.Lock()
+			require.Contains(t, repo.recorded, digest)
+			repo.mu.Unlock()
+		})
+	}
+}
+
 func TestCodexTurnStateNativeProvenanceSurvivesRestartAndSeparatesScope(t *testing.T) {
 	const state = "restart-persistent-native-state"
 	repo := &turnStateProvenanceRepoStub{}

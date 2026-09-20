@@ -106,6 +106,14 @@ function mountView() {
   })
 }
 
+function setDocumentVisibility(value: 'visible' | 'hidden', dispatch = true, listener?: EventListener) {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, value })
+  if (dispatch) {
+    if (listener) listener(new window.Event('visibilitychange'))
+    else document.dispatchEvent(new window.Event('visibilitychange'))
+  }
+}
+
 describe('CodexTurnStateTaskView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -117,13 +125,14 @@ describe('CodexTurnStateTaskView', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    setDocumentVisibility('visible', false)
   })
 
   it('renders account, models, source, timing, safe error, progress, and a chronological event timeline', async () => {
     const wrapper = mountView()
     await flushPromises()
 
-    expect(mocks.getTask).toHaveBeenCalledWith('task-1')
+    expect(mocks.getTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ signal: expect.any(AbortSignal) }))
     const summary = wrapper.get('[data-testid="turn-state-task-summary"]')
     expect(summary.text()).toContain('Codex Account')
     expect(summary.text()).toContain('#17')
@@ -157,6 +166,133 @@ describe('CodexTurnStateTaskView', () => {
     await vi.advanceTimersByTimeAsync(10_000)
     await flushPromises()
     expect(mocks.getTask).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('keeps the last task snapshot visible while a transient refresh backs off', async () => {
+    vi.useFakeTimers()
+    mocks.getTask
+      .mockResolvedValueOnce(task({ status: 'running', stage: 'collecting', progress: 40, finished_at_ms: undefined, can_cancel: true, can_retry: false }))
+      .mockRejectedValueOnce({ status: 503, message: 'temporary upstream failure' })
+      .mockResolvedValueOnce(task({ status: 'succeeded', stage: 'completed', progress: 100, error: undefined, can_cancel: false, can_retry: false }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-task-refresh-warning"]').text()).toContain('admin.codexTurnState.tasks.refreshDelayed 4')
+    expect(wrapper.get('[data-testid="turn-state-task-summary"]').exists()).toBe(true)
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('40')
+
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(3)
+    expect(wrapper.find('[data-testid="turn-state-task-refresh-warning"]').exists()).toBe(false)
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
+    wrapper.unmount()
+  })
+
+  it('keeps the last task snapshot and waits 15 seconds after a non-transient refresh error', async () => {
+    vi.useFakeTimers()
+    mocks.getTask
+      .mockResolvedValueOnce(task({ status: 'running', stage: 'collecting', progress: 40, finished_at_ms: undefined, can_cancel: true, can_retry: false }))
+      .mockRejectedValueOnce({ status: 403, message: 'forbidden' })
+      .mockResolvedValueOnce(task({ status: 'succeeded', stage: 'completed', progress: 100, error: undefined, can_cancel: false, can_retry: false }))
+    const wrapper = mountView()
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-task-refresh-warning"]').text()).toContain('admin.codexTurnState.tasks.refreshDelayed 15')
+    expect(wrapper.get('[data-testid="turn-state-task-summary"]').exists()).toBe(true)
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('40')
+
+    await vi.advanceTimersByTimeAsync(14_999)
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(3)
+    expect(wrapper.find('[data-testid="turn-state-task-refresh-warning"]').exists()).toBe(false)
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
+    wrapper.unmount()
+  })
+
+  it('pauses task polling while hidden and refreshes immediately after visibility returns', async () => {
+    vi.useFakeTimers()
+    mocks.getTask.mockResolvedValue(task({ status: 'running', stage: 'collecting', progress: 40, finished_at_ms: undefined, can_cancel: true, can_retry: false }))
+    const addListenerSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = mountView()
+    await flushPromises()
+    const visibilityListener = addListenerSpy.mock.calls
+      .filter(([type]) => type === 'visibilitychange')
+      .at(-1)?.[1] as EventListener | undefined
+    addListenerSpy.mockRestore()
+
+    expect(mocks.getTask).toHaveBeenCalledTimes(1)
+    setDocumentVisibility('hidden', true, visibilityListener)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="turn-state-task-refresh-status"]').text()).toContain('admin.codexTurnState.refreshPaused')
+    await vi.advanceTimersByTimeAsync(6_000)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
+
+    setDocumentVisibility('visible', true, visibilityListener)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-task-refresh-status"]').text()).toContain('admin.codexTurnState.lastRefreshed')
+    wrapper.unmount()
+  })
+
+  it('defers the initial task request and clock while mounted hidden', async () => {
+    vi.useFakeTimers()
+    setDocumentVisibility('hidden', false)
+    const addListenerSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = mountView()
+    await flushPromises()
+    const visibilityListener = addListenerSpy.mock.calls
+      .filter(([type]) => type === 'visibilitychange')
+      .at(-1)?.[1] as EventListener | undefined
+    addListenerSpy.mockRestore()
+
+    expect(mocks.getTask).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+
+    setDocumentVisibility('visible', true, visibilityListener)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="turn-state-task-summary"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('retries the initial task load when it was aborted while the page was hidden', async () => {
+    mocks.getTask
+      .mockImplementationOnce((_id: string, options: { signal: AbortSignal }) => new Promise<CodexTurnStateTask>((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(Object.assign(new Error('canceled'), { name: 'AbortError' })), { once: true })
+      }))
+      .mockResolvedValueOnce(task({ status: 'running', stage: 'collecting', progress: 40, finished_at_ms: undefined, can_cancel: true, can_retry: false }))
+    const addListenerSpy = vi.spyOn(document, 'addEventListener')
+    const wrapper = mountView()
+    await flushPromises()
+    const visibilityListener = addListenerSpy.mock.calls
+      .filter(([type]) => type === 'visibilitychange')
+      .at(-1)?.[1] as EventListener | undefined
+    addListenerSpy.mockRestore()
+
+    expect(mocks.getTask).toHaveBeenCalledTimes(1)
+    setDocumentVisibility('hidden', true, visibilityListener)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="turn-state-task-refresh-status"]').text()).toContain('admin.codexTurnState.refreshPaused')
+
+    setDocumentVisibility('visible', true, visibilityListener)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+    expect(wrapper.get('[data-testid="turn-state-task-summary"]').exists()).toBe(true)
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('40')
     wrapper.unmount()
   })
 
