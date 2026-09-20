@@ -519,7 +519,9 @@ func TestCodexTurnStateProbeBurstCountsFullRouteRoundAcrossRestart(t *testing.T)
 	// Simulate the ordinary five-minute scheduler boundary and a process restart.
 	// A new full-pool round consumes the second durable attempt.
 	scope := codexTurnStateModelAccount(stored, model)
-	scope.Extra[CodexTurnStateAutoProbeAtExtraKey] = time.Now().Add(-6 * time.Minute).UnixMilli()
+	retryAt := time.Now().Add(-6 * time.Minute).UnixMilli()
+	scope.Extra[CodexTurnStateAutoProbeAtExtraKey] = retryAt
+	scope.Extra[CodexTurnStateAutoProbeCompletedAtExtraKey] = retryAt
 	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), time.Second)
 	require.NoError(t, repo.UpdateExtra(updateCtx, account.ID, map[string]any{codexTurnStateModelExtraKey(model): scope.Extra}))
 	cancelUpdate()

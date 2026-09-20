@@ -726,6 +726,10 @@ func newCodexTurnStateAccountLock() *codexTurnStateAccountLock {
 	return &codexTurnStateAccountLock{token: make(chan struct{}, 1)}
 }
 
+// lockCodexTurnStateAccountContext serializes the complete collection worker
+// for one account. Different account IDs use independent locks and therefore
+// continue concurrently. Waiting is context-aware so cancellation never leaves
+// a queued worker or renewal counter stranded behind another model.
 func (s *OpenAIGatewayService) lockCodexTurnStateAccountContext(ctx context.Context, accountID int64) (func(), bool) {
 	if s == nil || accountID <= 0 {
 		return func() {}, true
@@ -733,7 +737,7 @@ func (s *OpenAIGatewayService) lockCodexTurnStateAccountContext(ctx context.Cont
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	value, _ := s.openaiTurnStateManualLocks.LoadOrStore(accountID, newCodexTurnStateAccountLock())
+	value, _ := s.openaiTurnStateCollectionLocks.LoadOrStore(accountID, newCodexTurnStateAccountLock())
 	lock := value.(*codexTurnStateAccountLock)
 	select {
 	case lock.token <- struct{}{}:
@@ -741,12 +745,6 @@ func (s *OpenAIGatewayService) lockCodexTurnStateAccountContext(ctx context.Cont
 	case <-ctx.Done():
 		return func() {}, false
 	}
-
-}
-
-func (s *OpenAIGatewayService) lockCodexTurnStateManualAccount(accountID int64) func() {
-	unlock, _ := s.lockCodexTurnStateAccountContext(context.Background(), accountID)
-	return unlock
 }
 
 // Caller must hold openaiTurnStateMu. This check may prune a separately staged
@@ -1175,6 +1173,7 @@ func (s *OpenAIGatewayService) setCodexTurnStateLocked(entry *codexTurnStateAuto
 	markCodexTurnStateProbeCompletedLocked(entry, now)
 	s.rememberCodexTurnStateLocked(entry, now)
 }
+
 func (s *OpenAIGatewayService) startCodexTurnStateWorkerLocked(id int64, entry *codexTurnStateAutoEntry) {
 	if s.openaiTurnStateStopping || s.accountRepo == nil || entry.running || entry.reconciling || (!entry.dirty && !entry.probe) {
 		return
@@ -1376,17 +1375,17 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 	renewalWorker := entry.renewalWorker
 	renewalCtx := entry.renewalContext
 	initialTaskID := entry.collectionTaskID
+	taskCtx := entry.collectionTaskContext
 	entry.renewalWorker = false
 	entry.renewalContext = nil
 	s.openaiTurnStateMu.Unlock()
 	if renewalCtx == nil {
 		renewalCtx = context.Background()
 	}
-	if initialTaskID != "" {
-		if task, ok := s.GetCodexTurnStateCollectionTask(initialTaskID); ok && task != nil && task.Status == CodexTurnStateCollectionTaskStatusQueued {
-			s.StartCodexTurnStateCollectionTask(initialTaskID, CodexTurnStateCollectionTaskStagePreparing, 100)
-		}
-	}
+
+	// Register cleanup before waiting for the account gate. A canceled queued task
+	// must release its running and renewal counters even if it never reaches the
+	// upstream.
 	defer func() {
 		cfg := s.codexTurnStateRuntimeConfig(context.Background())
 		s.openaiTurnStateMu.Lock()
@@ -1414,6 +1413,23 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 			s.openaiTurnStateRenewalWG.Done()
 		}
 	}()
+
+	accountCtx, releaseAccountCtx := codexTurnStateProbeExecutionContext(taskCtx, renewalCtx, renewalWorker)
+	defer releaseAccountCtx()
+	unlockAccount, acquired := s.lockCodexTurnStateAccountContext(accountCtx, id)
+	if !acquired {
+		if renewalWorker && renewalCtx.Err() != nil && initialTaskID != "" {
+			_, _ = s.CancelCodexTurnStateCollectionTask(initialTaskID)
+		}
+		return
+	}
+	defer unlockAccount()
+
+	if initialTaskID != "" {
+		if task, ok := s.GetCodexTurnStateCollectionTask(initialTaskID); ok && task != nil && task.Status == CodexTurnStateCollectionTaskStatusQueued {
+			s.StartCodexTurnStateCollectionTask(initialTaskID, CodexTurnStateCollectionTaskStagePreparing, 100)
+		}
+	}
 	if renewalWorker && renewalCtx.Err() != nil {
 		if initialTaskID != "" {
 			_, _ = s.CancelCodexTurnStateCollectionTask(initialTaskID)
@@ -1426,7 +1442,7 @@ func (s *OpenAIGatewayService) runCodexTurnStateWorker(id int64, entry *codexTur
 		s.openaiTurnStateMu.Unlock()
 		return
 	}
-	// Bound repeated persistence churn for one account/model. Independent slots
+	// Bound repeated persistence churn for one account/model. Independent accounts
 	// are not globally throttled; manual work keeps running when auto mode is off.
 	for n := 0; n < 16; n++ {
 		// Settings may require a cache fill or database read. Never perform that
@@ -1834,31 +1850,6 @@ func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithIntent(id int64, en
 func (s *OpenAIGatewayService) runCodexTurnStateProbeTaskWithIntentContext(parent context.Context, id int64, entry *codexTurnStateAutoEntry, manual, renewal bool, task codexTurnStateProbeTask) {
 	if parent == nil {
 		parent = context.Background()
-	}
-	if manual {
-		unlock, acquired := s.lockCodexTurnStateAccountContext(parent, id)
-		if !acquired {
-			if task.collectionTaskID != "" {
-				_, _ = s.CancelCodexTurnStateCollectionTask(task.collectionTaskID)
-				s.openaiTurnStateMu.Lock()
-				s.discardCanceledCodexTurnStateCollectionTaskLocked(entry)
-				s.openaiTurnStateMu.Unlock()
-			}
-			return
-		}
-		defer unlock()
-	} else if renewal {
-		unlock, acquired := s.lockCodexTurnStateAccountContext(parent, id)
-		if !acquired {
-			if task.collectionTaskID != "" {
-				_, _ = s.CancelCodexTurnStateCollectionTask(task.collectionTaskID)
-				s.openaiTurnStateMu.Lock()
-				s.discardCanceledCodexTurnStateCollectionTaskLocked(entry)
-				s.openaiTurnStateMu.Unlock()
-			}
-			return
-		}
-		defer unlock()
 	}
 	if task.collectionTaskID != "" {
 		s.UpdateCodexTurnStateCollectionTask(task.collectionTaskID, CodexTurnStateCollectionTaskStageLoadingAccount, 5, 100)

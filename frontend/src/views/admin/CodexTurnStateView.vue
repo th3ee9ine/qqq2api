@@ -457,7 +457,6 @@ interface BulkCollectionProgress {
 const POLL_INTERVAL_MS = 2_000
 const MAX_POLL_RETRY_DELAY_MS = 30_000
 const CLOCK_TICK_MS = 30_000
-const BULK_COLLECTION_CONCURRENCY = 3
 const TASK_POLL_INTERVAL_MS = 2_000
 const RECENT_TASK_LIMIT = 10
 const TASK_SOURCES = new Set(['manual', 'bulk', 'automatic', 'renewal', 'retry'])
@@ -1536,31 +1535,19 @@ async function collectAllAccounts() {
   bulkCollectionActive.value = true
   for (const account of targetAccounts) beginAccountCollection(account.id, 'queued')
 
-  let cursor = 0
-  const worker = async () => {
-    while (componentActive) {
-      const index = cursor
-      cursor += 1
-      if (index >= targetAccounts.length) return
-      const snapshot = targetAccounts[index]
-      const current = accounts.value.find(account => account.id === snapshot.id)
-      if (!current || !isCodexTurnStateEligibleAccount(current)) {
-        markAccountCollectionTerminal(snapshot.id, 'skipped')
-        continue
-      }
-      try {
-        const outcome = await collectAccount(current, { notify: false, source: 'bulk' })
-        // A skipped submitted round may still be winding down server-side.
-        // Retire this worker so its concurrency slot is not immediately reused.
-        if (outcome === 'skipped') return
-      } catch {
-        markAccountCollectionTerminal(current.id, 'failure')
-      }
+  await Promise.all(targetAccounts.map(async (snapshot) => {
+    if (!componentActive) return
+    const current = accounts.value.find(account => account.id === snapshot.id)
+    if (!current || !isCodexTurnStateEligibleAccount(current)) {
+      markAccountCollectionTerminal(snapshot.id, 'skipped')
+      return
     }
-  }
-
-  const workerCount = Math.min(BULK_COLLECTION_CONCURRENCY, targetAccounts.length)
-  await Promise.all(Array.from({ length: workerCount }, () => worker()))
+    try {
+      await collectAccount(current, { notify: false, source: 'bulk' })
+    } catch {
+      markAccountCollectionTerminal(current.id, 'failure')
+    }
+  }))
   if (!componentActive) return
   for (const accountId of bulkAccountIds.value) {
     const run = accountCollectionRuns[accountId]

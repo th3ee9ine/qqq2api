@@ -628,7 +628,7 @@ describe('CodexTurnStateView', () => {
     wrapper.unmount()
   })
 
-  it('limits bulk collection to three active account rounds and waits for a terminal poll before starting another', async () => {
+  it('starts every account in parallel and keeps the batch active until every account is terminal', async () => {
     vi.useFakeTimers()
     const accountIds = [70, 71, 72, 73, 74]
     const finished = new Set<number>()
@@ -638,7 +638,7 @@ describe('CodexTurnStateView', () => {
     })
     mocks.collectCodexTurnState.mockImplementation(async (accountId: number) => {
       const model = `model-${accountId}`
-      if (accountId >= 73) {
+      if (accountId === 74) {
         return {
           status: 'already_valid',
           account_id: accountId,
@@ -692,29 +692,35 @@ describe('CodexTurnStateView', () => {
 
     await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
     await flushPromises()
-    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual([70, 71, 72])
-    expect(wrapper.get('[data-testid="turn-state-account-progress-73"]').text()).toContain('admin.codexTurnState.accounts.progressQueued')
+    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual(accountIds)
+    expect(new Set(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).size).toBe(accountIds.length)
+    expect(wrapper.get('[data-testid="turn-state-account-progress-73"]').text()).toContain('admin.codexTurnState.accounts.progressPolling')
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(true)
 
     await vi.advanceTimersByTimeAsync(2_000)
     await flushPromises()
-    expect(mocks.getAccountById).toHaveBeenCalledTimes(3)
-    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(3)
+    expect(mocks.getAccountById).toHaveBeenCalledTimes(4)
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(5)
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(true)
 
     finished.add(70)
     await vi.advanceTimersByTimeAsync(2_000)
     await flushPromises()
-    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual([70, 71, 72, 73, 74])
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(5)
+    expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(true)
 
     finished.add(71)
     finished.add(72)
+    finished.add(73)
     await vi.advanceTimersByTimeAsync(2_000)
     await flushPromises()
+    expect(mocks.collectCodexTurnState.mock.calls.map(([accountId]) => accountId)).toEqual([70, 71, 72, 73, 74])
     expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkAccounts 5 5')
     expect(wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-all"]').element.disabled).toBe(false)
     wrapper.unmount()
   })
 
-  it('settles submitting workers when a refresh removes their accounts and does not count an unsubmitted skip', async () => {
+  it('settles every submitted account when a refresh removes the bulk targets', async () => {
     const accountIds = [75, 76, 77, 78]
     mocks.listAccounts
       .mockResolvedValueOnce({ items: accountIds.map(id => account(id)), pages: 1 })
@@ -725,17 +731,17 @@ describe('CodexTurnStateView', () => {
 
     await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
     await flushPromises()
-    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(3)
-    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkSubmitted 3 4')
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(4)
+    expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkSubmitted 4 4')
 
     await wrapper.get('[data-testid="turn-state-refresh"]').trigger('click')
     await flushPromises()
     await flushPromises()
 
-    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(3)
+    expect(mocks.collectCodexTurnState).toHaveBeenCalledTimes(4)
     const progress = wrapper.get('[data-testid="turn-state-bulk-progress"]')
     expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkComplete')
-    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkSubmitted 3 4')
+    expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkSubmitted 4 4')
     expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkAccounts 4 4')
     expect(progress.text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 0 0 4')
     wrapper.unmount()

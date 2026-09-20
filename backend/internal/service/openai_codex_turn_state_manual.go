@@ -304,8 +304,9 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 	}
 
 	// Record every owner before starting any worker. A second manual request sees
-	// the complete batch as busy, and all workers serialize on the account-level
-	// manual lock so a broad model scope cannot create unbounded upstream load.
+	// the complete batch as busy, and all workers serialize on the shared
+	// account-level collection gate so a broad model scope cannot create
+	// unbounded upstream load.
 	source := CodexTurnStateCollectionSourceFromContext(ctx)
 	if source == "" {
 		source = CodexTurnStateCollectionSourceManual

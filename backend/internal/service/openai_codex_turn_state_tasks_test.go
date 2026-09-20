@@ -50,6 +50,27 @@ func TestListCodexTurnStateCollectionTasksPutsUnfinishedTasksFirst(t *testing.T)
 	require.Empty(t, tasks[0].Events)
 }
 
+func TestCodexTurnStateCollectionTaskRegistryIsProcessLocal(t *testing.T) {
+	first := &OpenAIGatewayService{}
+	task, _, err := first.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    42,
+		AccountName:  "account",
+		RequestModel: "gpt-6-astra",
+		OwnerModel:   "gpt-6-astra",
+		Source:       CodexTurnStateCollectionSourceManual,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, task)
+	require.Len(t, first.ListCodexTurnStateCollectionTasks(), 1)
+
+	// A fresh service represents a restarted process. Task diagnostics must not
+	// be restored through the account repository or any other durable storage.
+	restarted := &OpenAIGatewayService{}
+	require.Empty(t, restarted.ListCodexTurnStateCollectionTasks())
+	_, exists := restarted.GetCodexTurnStateCollectionTask(task.ID)
+	require.False(t, exists)
+}
+
 func codexTurnStateCollectionTaskIDs(tasks []*CodexTurnStateCollectionTask) []string {
 	ids := make([]string, 0, len(tasks))
 	for _, task := range tasks {

@@ -814,7 +814,9 @@ func TestCodexTurnStateProbe429ContinuesRoundAndSetsNextRoundBoundary(t *testing
 			// A process restart must reload the upstream boundary rather than fall
 			// back to the shorter five-minute probe cadence.
 			restartScope := mergeMap(nil, storedScope.Extra)
-			restartScope[CodexTurnStateAutoProbeAtExtraKey] = started.Add(-6 * time.Minute).UnixMilli()
+			retryAtMS := started.Add(-6 * time.Minute).UnixMilli()
+			restartScope[CodexTurnStateAutoProbeAtExtraKey] = retryAtMS
+			restartScope[CodexTurnStateAutoProbeCompletedAtExtraKey] = retryAtMS
 			persistCtx, cancelPersist := context.WithTimeout(context.Background(), time.Second)
 			require.NoError(t, repo.UpdateExtra(persistCtx, account.ID, map[string]any{codexTurnStateModelExtraKey(model): restartScope}))
 			cancelPersist()
@@ -932,17 +934,17 @@ func TestCodexTurnStateProbe429CooldownIsSharedAcrossAccountModels(t *testing.T)
 				t.Fatal("the held model probe did not start")
 			}
 			s.autoTurnStateForAccount(context.Background(), account, tc.limitedModel)
-			require.Eventually(t, func() bool {
-				s.openaiTurnStateMu.Lock()
-				defer s.openaiTurnStateMu.Unlock()
-				return s.codexTurnStateAccountProbeNotBeforeLocked(account.ID) > time.Now().UnixMilli()
-			}, time.Second, time.Millisecond, "the 429 must install the account-wide boundary before releasing the other model")
+			require.Never(t, func() bool {
+				callsMu.Lock()
+				defer callsMu.Unlock()
+				return calls[tc.limitedModel] > 0
+			}, 50*time.Millisecond, 5*time.Millisecond, "a second model from the same account must remain queued")
 			releaseOnce.Do(func() { close(releaseHeld) })
 			waitTurnStateAutoIdle(t, s)
 
 			callsMu.Lock()
 			require.Equal(t, 3, calls[tc.limitedModel], "the active 429 round must visit every route once")
-			require.Equal(t, 2, calls[tc.heldModel], "a concurrently active round must finish collection and replay")
+			require.Equal(t, 2, calls[tc.heldModel], "the first serial round must finish collection and replay")
 			callsMu.Unlock()
 
 			stored, err := repo.GetByID(context.Background(), account.ID)

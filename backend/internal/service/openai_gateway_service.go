@@ -537,20 +537,20 @@ type OpenAIGatewayService struct {
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
 	// 记录最近一次向该会话下发 x-codex-turn-state 的铸造账号，供出站守卫
 	// 剥离跨账号回带（openai_codex_turn_state.go）。
-	openaiCodexTurnStateOrigins sync.Map
-	openaiCodexTurnStateWrites  atomic.Uint64
-	openaiTurnStateMu           sync.Mutex
-	openaiTurnStates            map[codexTurnStateKey]*codexTurnStateAutoEntry
-	openaiTurnStateWorkers      int
-	openaiTurnStateStopping     bool
-	openaiTurnStateWorkersWG    sync.WaitGroup
-	openaiTurnStateSweep        time.Time
-	openaiTurnStateLoads        codexTurnStateSourceLoads
-	openaiTurnStateManualLocks  sync.Map // key: int64(accountID), value: *codexTurnStateAccountLock
-	openaiTurnStateRenewalMu    sync.Mutex
-	openaiTurnStateRenewalStop  context.CancelFunc
-	openaiTurnStateRenewalDone  chan struct{}
-	openaiTurnStateRenewalWG    sync.WaitGroup
+	openaiCodexTurnStateOrigins    sync.Map
+	openaiCodexTurnStateWrites     atomic.Uint64
+	openaiTurnStateMu              sync.Mutex
+	openaiTurnStates               map[codexTurnStateKey]*codexTurnStateAutoEntry
+	openaiTurnStateWorkers         int
+	openaiTurnStateStopping        bool
+	openaiTurnStateWorkersWG       sync.WaitGroup
+	openaiTurnStateSweep           time.Time
+	openaiTurnStateLoads           codexTurnStateSourceLoads
+	openaiTurnStateCollectionLocks sync.Map // key: int64(accountID), value: *codexTurnStateAccountLock
+	openaiTurnStateRenewalMu       sync.Mutex
+	openaiTurnStateRenewalStop     context.CancelFunc
+	openaiTurnStateRenewalDone     chan struct{}
+	openaiTurnStateRenewalWG       sync.WaitGroup
 	// The remaining renewal fields are guarded by openaiTurnStateMu.
 	openaiTurnStateRenewalWorkers  int
 	openaiTurnStateRenewalAccounts map[int64]struct{}
