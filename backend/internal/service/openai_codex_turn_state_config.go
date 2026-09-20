@@ -355,6 +355,14 @@ func (s *OpenAIGatewayService) applyOpenAICodexTurnState(ctx context.Context, ac
 	}
 	ctx = withCodexTurnStateModel(ctx, model)
 	if !codexTurnStateScopeAllows(cfg, scopeModels...) {
+		// An out-of-scope request is unambiguous and can trigger lazy cleanup of
+		// stale slots. For an in-scope request, retain the account snapshot until
+		// the maintenance scanner/diagnostics can resolve aliases and mappings;
+		// otherwise a client alias (for example friendly-codex -> gpt-5.1) could
+		// make a valid slot look unrelated when older records lack alias metadata.
+		if filtered, _ := s.cleanupCodexTurnStateScope(ctx, account, cfg); filtered != nil {
+			account = filtered
+		}
 		s.enforceCodexTurnStateScopeForAccount(cfg, account.ID, model)
 		// The configured range gates managed collection and injection only. A
 		// native client continuation remains authoritative for its own request.

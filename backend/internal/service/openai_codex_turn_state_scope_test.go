@@ -15,6 +15,25 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
+type codexTurnStateScopeCleanupRepo struct {
+	*turnStateAutoRepo
+	deleted []string
+}
+
+func (r *codexTurnStateScopeCleanupRepo) DeleteCodexTurnStateScopeExtras(_ context.Context, id int64, keys []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	account := r.accounts[id]
+	if account == nil {
+		return ErrAccountNotFound
+	}
+	for _, key := range keys {
+		delete(account.Extra, key)
+		r.deleted = append(r.deleted, key)
+	}
+	return nil
+}
+
 func seedScopedTurnState(repo *turnStateAutoRepo, a *Account, model, token string) {
 	seedAutomaticTurnState(a, token, model)
 	repo.mu.Lock()
@@ -72,6 +91,108 @@ func TestCodexTurnStateModelFamilyCanonicalSlotsAndLegacyFallback(t *testing.T) 
 		codexTurnStateRawModelExtraKey("gpt-6-astra-2026-09-18"): verifiedTurnStateSlot("gpt-6-astra-2026-09-18", "must-not-override-canonical", now),
 	}}
 	require.Empty(t, codexTurnStateAutoToken(codexTurnStateModelAccount(canonicalWins, "gpt-6")), "an existing canonical slot always wins over legacy fallback")
+}
+
+func TestCodexTurnStateScopeCleanupKeysRetainsConfiguredAliasesAndFamilies(t *testing.T) {
+	account := &Account{Extra: map[string]any{
+		codexTurnStateModelExtraKey("gpt-5"): map[string]any{},
+		codexTurnStateModelExtraKey("gpt-4"): map[string]any{},
+		codexTurnStateModelExtraKey("gpt-6-astra"): map[string]any{
+			CodexTurnStateAutoProbeModelExtraKey: "gpt-6-astra-2026-09-19",
+		},
+		codexTurnStateModelExtraKey("gpt-6-sol"):        map[string]any{},
+		codexTurnStateProbeBurstBudgetExtraKey("gpt-5"): map[string]any{},
+		codexTurnStateProbeBurstBudgetExtraKey("gpt-4"): map[string]any{},
+		CodexTurnStateModelExtraPrefix + "malformed":    map[string]any{},
+		CodexTurnStateNativeProvenanceExtraKey:          map[string]any{"digest": "kept"},
+		"unrelated":                                     "kept",
+	}}
+	cfg := OpenAICodexTurnStateConfig{Models: "gpt-5,gpt-6-astra-*", ModelScopeValid: true}
+	keys := codexTurnStateScopeCleanupKeys(account, cfg)
+	require.Equal(t, []string{
+		codexTurnStateModelExtraKey("gpt-4"),
+		codexTurnStateModelExtraKey("gpt-6-sol"),
+		CodexTurnStateModelExtraPrefix + "malformed",
+		codexTurnStateProbeBurstBudgetExtraKey("gpt-4"),
+	}, keys)
+	filtered, filteredKeys := codexTurnStateAccountWithoutScopeRecords(account, cfg)
+	require.Equal(t, keys, filteredKeys)
+	require.NotContains(t, filtered.Extra, codexTurnStateModelExtraKey("gpt-4"))
+	require.Contains(t, filtered.Extra, codexTurnStateModelExtraKey("gpt-5"))
+	require.Contains(t, filtered.Extra, codexTurnStateModelExtraKey("gpt-6-astra"))
+	require.Contains(t, filtered.Extra, CodexTurnStateNativeProvenanceExtraKey)
+	require.Equal(t, "kept", filtered.Extra["unrelated"])
+}
+
+func TestCodexTurnStateScopeCleanupFailsClosedForInvalidOrEmptyScope(t *testing.T) {
+	account := &Account{Extra: map[string]any{
+		codexTurnStateModelExtraKey("gpt-4"):            map[string]any{},
+		codexTurnStateProbeBurstBudgetExtraKey("gpt-4"): map[string]any{},
+	}}
+	for _, cfg := range []OpenAICodexTurnStateConfig{
+		{Models: "gpt-5", ModelScopeValid: false},
+		{Models: "", ModelScopeValid: true},
+	} {
+		filtered, keys := codexTurnStateAccountWithoutScopeRecords(account, cfg)
+		require.Empty(t, keys)
+		require.Same(t, account, filtered)
+	}
+}
+
+func TestCodexTurnStateScopeCleanupDeletesPersistedOutOfScopeRecords(t *testing.T) {
+	s, base, account := newTurnStateAutoService(t)
+	account.Extra = map[string]any{
+		codexTurnStateModelExtraKey("gpt-5"):            map[string]any{},
+		codexTurnStateModelExtraKey("gpt-4"):            map[string]any{},
+		codexTurnStateProbeBurstBudgetExtraKey("gpt-4"): map[string]any{},
+	}
+	base.mu.Lock()
+	base.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
+	base.mu.Unlock()
+	repo := &codexTurnStateScopeCleanupRepo{turnStateAutoRepo: base}
+	s.accountRepo = repo
+	cfg := OpenAICodexTurnStateConfig{Models: "gpt-5", ModelScopeValid: true}
+	filtered, err := s.cleanupCodexTurnStateScope(context.Background(), account, cfg)
+	require.NoError(t, err)
+	require.NotContains(t, filtered.Extra, codexTurnStateModelExtraKey("gpt-4"))
+	require.Contains(t, filtered.Extra, codexTurnStateModelExtraKey("gpt-5"))
+	require.ElementsMatch(t, []string{
+		codexTurnStateModelExtraKey("gpt-4"),
+		codexTurnStateProbeBurstBudgetExtraKey("gpt-4"),
+	}, repo.deleted)
+	stored, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.NotContains(t, stored.Extra, codexTurnStateModelExtraKey("gpt-4"))
+	require.NotContains(t, stored.Extra, codexTurnStateProbeBurstBudgetExtraKey("gpt-4"))
+}
+
+func TestCodexTurnStateScopeCleanupSkipsActiveOwnerUntilWorkerFinishes(t *testing.T) {
+	s, base, account := newTurnStateAutoService(t)
+	account.Extra = map[string]any{codexTurnStateModelExtraKey("gpt-4"): map[string]any{}}
+	base.mu.Lock()
+	base.accounts[account.ID].Extra = mergeMap(nil, account.Extra)
+	base.mu.Unlock()
+	repo := &codexTurnStateScopeCleanupRepo{turnStateAutoRepo: base}
+	s.accountRepo = repo
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, time.Now(), "gpt-4")
+	entry.running = true
+	s.openaiTurnStateMu.Unlock()
+
+	filtered, err := s.cleanupCodexTurnStateScope(context.Background(), account, OpenAICodexTurnStateConfig{Models: "gpt-5", ModelScopeValid: true})
+	require.NoError(t, err)
+	require.NotContains(t, filtered.Extra, codexTurnStateModelExtraKey("gpt-4"))
+	require.Empty(t, repo.deleted, "an active owner must not be deleted while its worker can still persist")
+	stored, err := repo.GetByID(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Contains(t, stored.Extra, codexTurnStateModelExtraKey("gpt-4"))
+
+	s.openaiTurnStateMu.Lock()
+	entry.running = false
+	s.openaiTurnStateMu.Unlock()
+	_, err = s.cleanupCodexTurnStateScope(context.Background(), account, OpenAICodexTurnStateConfig{Models: "gpt-5", ModelScopeValid: true})
+	require.NoError(t, err)
+	require.Contains(t, repo.deleted, codexTurnStateModelExtraKey("gpt-4"))
 }
 
 func TestCodexTurnStateScopedAccountModelAndIP(t *testing.T) {

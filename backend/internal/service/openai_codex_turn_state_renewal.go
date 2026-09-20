@@ -116,6 +116,16 @@ func (s *OpenAIGatewayService) scanExpiredOpenAICodexTurnStates(ctx context.Cont
 			if !codexTurnStateCollectionEligible(account) {
 				continue
 			}
+			// Scope changes must not leave old model slots eligible for the idle
+			// renewal scanner. Filter the snapshot before planning and remove the
+			// same records atomically when the repository supports it.
+			filtered, cleanupErr := s.cleanupCodexTurnStateScope(ctx, account, cfg)
+			if cleanupErr != nil && ctx.Err() == nil {
+				slog.Warn("openai_codex_turn_state_scope_cleanup_failed", "account_id", account.ID, "code", "scope_cleanup_failed")
+			}
+			if filtered != nil {
+				account = filtered
+			}
 			plans, catalogFailed := s.resolveCodexTurnStateExpiredRenewalPlans(ctx, account, cfg, time.Now())
 			if catalogFailed && ctx.Err() == nil {
 				slog.Warn("openai_codex_turn_state_renewal_catalog_failed", "account_id", account.ID, "code", "model_catalog_unavailable")

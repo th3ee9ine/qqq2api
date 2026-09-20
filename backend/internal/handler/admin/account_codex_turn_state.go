@@ -102,8 +102,8 @@ func (h *AccountHandler) CollectCodexTurnState(c *gin.Context) {
 	}
 }
 
-// ListCodexTurnStateCollectionTasks returns the bounded in-memory history of
-// background collection and renewal work.
+// ListCodexTurnStateCollectionTasks returns currently active background
+// collection and renewal work. Terminal task snapshots are not archived.
 // GET /api/v1/admin/accounts/codex-turn-state/tasks
 func (h *AccountHandler) ListCodexTurnStateCollectionTasks(c *gin.Context) {
 	if h.codexTurnStateService == nil {

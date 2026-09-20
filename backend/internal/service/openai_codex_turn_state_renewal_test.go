@@ -330,6 +330,22 @@ func TestCodexTurnStateExpiredRenewalPlansSkipHealthyUnexpiredSlot(t *testing.T)
 	require.Empty(t, codexTurnStateExpiredRenewalPlans(account, codexTurnStateRenewalTestConfig(), now))
 }
 
+func TestCodexTurnStateExpiredRenewalPlansSkipOutOfScopeSlot(t *testing.T) {
+	now := time.Now()
+	failedAt := now.Add(-codexTurnStateAutoProbeInterval - time.Second).UnixMilli()
+	account := codexTurnStateRenewalTestAccount(map[string]any{
+		CodexTurnStateAutoProbeAtExtraKey:   failedAt,
+		CodexTurnStateAutoLastErrorExtraKey: "transport_failed",
+	})
+	account.Extra[codexTurnStateModelExtraKey("gpt-4")] = map[string]any{
+		CodexTurnStateAutoProbeAtExtraKey:   failedAt,
+		CodexTurnStateAutoLastErrorExtraKey: "transport_failed",
+	}
+
+	require.Equal(t, []codexTurnStateRenewalPlan{{requestModel: "gpt-5", owner: "gpt-5"}},
+		codexTurnStateExpiredRenewalPlans(account, codexTurnStateRenewalTestConfig(), now))
+}
+
 func TestCodexTurnStateFailedRenewalUsesDurableBurstBudgetWithValidOldState(t *testing.T) {
 	now := time.Now()
 	entry := &codexTurnStateAutoEntry{

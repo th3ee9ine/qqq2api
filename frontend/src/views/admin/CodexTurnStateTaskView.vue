@@ -26,17 +26,6 @@
             <Icon :name="actionPending === 'cancel' ? 'refresh' : 'x'" size="sm" :class="{ 'animate-spin': actionPending === 'cancel' }" />
             {{ actionPending === 'cancel' ? t('admin.codexTurnState.tasks.canceling') : t('admin.codexTurnState.tasks.cancel') }}
           </button>
-          <button
-            v-if="task?.can_retry"
-            type="button"
-            class="btn btn-primary"
-            :disabled="loading || actionPending !== null"
-            data-testid="turn-state-task-retry"
-            @click="retryConfirmOpen = true"
-          >
-            <Icon name="refresh" size="sm" :class="{ 'animate-spin': actionPending === 'retry' }" />
-            {{ actionPending === 'retry' ? t('admin.codexTurnState.tasks.retrying') : t('admin.codexTurnState.tasks.retry') }}
-          </button>
         </template>
       </AdminPageHeader>
 
@@ -203,14 +192,6 @@
         @cancel="cancelConfirmOpen = false"
         @confirm="cancelTask"
       />
-      <ConfirmDialog
-        :show="retryConfirmOpen"
-        :title="t('admin.codexTurnState.tasks.retryConfirmTitle')"
-        :message="t('admin.codexTurnState.tasks.retryConfirmMessage')"
-        :confirm-text="t('admin.codexTurnState.tasks.retry')"
-        @cancel="retryConfirmOpen = false"
-        @confirm="retryTask"
-      />
     </div>
   </AppLayout>
 </template>
@@ -218,7 +199,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AdminPageHeader from '@/components/admin/AdminPageHeader.vue'
 import AdminOverviewStrip from '@/components/admin/AdminOverviewStrip.vue'
@@ -229,7 +210,7 @@ import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import type { CodexTurnStateTask, CodexTurnStateTaskEvent } from '@/api/admin/accounts'
 
-type TaskAction = 'cancel' | 'retry'
+type TaskAction = 'cancel'
 
 const TASK_POLL_INTERVAL_MS = 2_000
 const TASK_SOURCES = new Set(['manual', 'bulk', 'automatic', 'renewal', 'retry'])
@@ -249,7 +230,6 @@ const TASK_STAGES = new Set([
 ])
 
 const route = useRoute()
-const router = useRouter()
 const { t, locale } = useI18n()
 const appStore = useAppStore()
 const task = ref<CodexTurnStateTask | null>(null)
@@ -257,7 +237,6 @@ const loading = ref(false)
 const error = ref('')
 const actionPending = ref<TaskAction | null>(null)
 const cancelConfirmOpen = ref(false)
-const retryConfirmOpen = ref(false)
 const clock = ref(Date.now())
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let clockTimer: ReturnType<typeof setInterval> | undefined
@@ -279,6 +258,14 @@ const overviewItems = computed(() => task.value ? [
 
 function isActiveTask(value: CodexTurnStateTask | null): boolean {
   return value?.status === 'queued' || value?.status === 'running'
+}
+
+function isTaskNoLongerActive(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const error = value as { status?: unknown; code?: unknown; reason?: unknown; response?: { status?: unknown } }
+  return Number(error.status ?? error.response?.status) === 404
+    || String(error.code || '') === 'CODEX_TURN_STATE_TASK_NOT_FOUND'
+    || String(error.reason || '') === 'CODEX_TURN_STATE_TASK_NOT_FOUND'
 }
 
 function normalizeProgress(value?: number): number {
@@ -374,8 +361,16 @@ async function loadTask({ background = false }: { background?: boolean } = {}) {
     task.value = result
     error.value = ''
   } catch (loadError) {
-    if (componentActive && generation === requestGeneration && (!background || !task.value)) {
-      error.value = extractApiErrorMessage(loadError, t('admin.codexTurnState.tasks.detailLoadFailed'))
+    if (componentActive && generation === requestGeneration) {
+      if (isTaskNoLongerActive(loadError)) {
+        // Terminal tasks are intentionally removed from the server registry.
+        // Drop the last active snapshot so a 404 cannot leave the page frozen
+        // at its previous progress while polling the same missing task forever.
+        task.value = null
+        error.value = t('admin.codexTurnState.tasks.taskNoLongerActive')
+      } else if (!background || !task.value) {
+        error.value = extractApiErrorMessage(loadError, t('admin.codexTurnState.tasks.detailLoadFailed'))
+      }
     }
   } finally {
     if (componentActive && generation === requestGeneration) {
@@ -411,43 +406,12 @@ async function cancelTask() {
   }
 }
 
-async function retryTask() {
-  retryConfirmOpen.value = false
-  if (!task.value?.can_retry || actionPending.value) return
-  const id = task.value.id
-  if (pollTimer) clearTimeout(pollTimer)
-  pollTimer = undefined
-  requestGeneration += 1
-  const generation = ++actionGeneration
-  actionPending.value = 'retry'
-  try {
-    const retriedTask = await adminAPI.accounts.retryCodexTurnStateTask(id)
-    if (!componentActive || generation !== actionGeneration || taskId.value !== id) return
-    appStore.showSuccess(t('admin.codexTurnState.tasks.retrySucceeded'))
-    if (retriedTask?.id) {
-      await router.push({ name: 'AdminCodexTurnStateTask', params: { taskId: retriedTask.id } })
-    } else {
-      await loadTask()
-    }
-  } catch (retryError) {
-    if (componentActive && generation === actionGeneration && taskId.value === id) {
-      appStore.showError(extractApiErrorMessage(retryError, t('admin.codexTurnState.tasks.retryFailed')))
-    }
-  } finally {
-    if (componentActive && generation === actionGeneration) {
-      actionPending.value = null
-      schedulePoll()
-    }
-  }
-}
-
 watch(taskId, () => {
   if (pollTimer) clearTimeout(pollTimer)
   pollTimer = undefined
   task.value = null
   error.value = ''
   cancelConfirmOpen.value = false
-  retryConfirmOpen.value = false
   actionGeneration += 1
   actionPending.value = null
   void loadTask()

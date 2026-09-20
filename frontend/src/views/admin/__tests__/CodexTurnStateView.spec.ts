@@ -374,7 +374,7 @@ describe('CodexTurnStateView', () => {
     wrapper.unmount()
   })
 
-  it('renders recent task status, progress, source, and details navigation', async () => {
+  it('renders active task status, progress, source, and details navigation', async () => {
     mocks.listCodexTurnStateTasks.mockResolvedValueOnce([{
       id: 'task-recent-1',
       account_id: 11,
@@ -382,15 +382,14 @@ describe('CodexTurnStateView', () => {
       request_model: 'gpt-5.6-sol',
       owner_model: 'gpt-5.6',
       source: 'bulk',
-      status: 'succeeded',
-      stage: 'completed',
-      progress: 100,
-      progress_current: 4,
+      status: 'running',
+      stage: 'collecting',
+      progress: 60,
+      progress_current: 3,
       progress_total: 4,
       created_at_ms: Date.now(),
       updated_at_ms: Date.now(),
-      finished_at_ms: Date.now(),
-      can_cancel: false,
+      can_cancel: true,
       can_retry: false,
     }])
     const wrapper = mountView()
@@ -401,13 +400,13 @@ describe('CodexTurnStateView', () => {
     expect(row.text()).toContain('gpt-5.6-sol')
     expect(row.text()).toContain('gpt-5.6')
     expect(row.text()).toContain('admin.codexTurnState.tasks.sources.bulk')
-    expect(row.text()).toContain('admin.codexTurnState.tasks.statuses.succeeded')
-    expect(row.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('100')
+    expect(row.text()).toContain('admin.codexTurnState.tasks.statuses.running')
+    expect(row.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('60')
     expect(row.get('[data-testid="router-link"]').text()).toContain('admin.codexTurnState.tasks.viewDetails')
     wrapper.unmount()
   })
 
-  it('shows unfinished tasks before newer terminal tasks while preserving newest-first order within each group', async () => {
+  it('does not retain terminal task snapshots in the live task list', async () => {
     const task = (id: string, status: string, createdAt: number) => ({
       id,
       account_id: 11,
@@ -437,13 +436,11 @@ describe('CodexTurnStateView', () => {
     expect(wrapper.findAll('.task-row').map(row => row.attributes('data-testid'))).toEqual([
       'turn-state-task-active-newer',
       'turn-state-task-active-older',
-      'turn-state-task-terminal-newest',
-      'turn-state-task-terminal-older',
     ])
     wrapper.unmount()
   })
 
-  it('confirms and terminates an unfinished task once, then updates its row', async () => {
+  it('confirms and terminates an unfinished task once, then removes its row', async () => {
     let resolveCancellation!: (value: Record<string, unknown>) => void
     const activeTask = {
       id: 'task-running-1',
@@ -489,9 +486,7 @@ describe('CodexTurnStateView', () => {
     })
     await flushPromises()
 
-    const row = wrapper.get('[data-testid="turn-state-task-task-running-1"]')
-    expect(row.text()).toContain('admin.codexTurnState.tasks.statuses.canceled')
-    expect(row.find('[data-testid="turn-state-task-cancel-task-running-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="turn-state-task-task-running-1"]').exists()).toBe(false)
     expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexTurnState.tasks.cancelSucceeded')
     wrapper.unmount()
   })
@@ -625,6 +620,53 @@ describe('CodexTurnStateView', () => {
     expect(mocks.collectCodexTurnState.mock.calls.every(([, source]) => source === 'bulk')).toBe(true)
     expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkAccounts 3 3')
     expect(wrapper.get('[data-testid="turn-state-bulk-progress"]').text()).toContain('admin.codexTurnState.accounts.bulkOutcomes 3 0 0')
+    wrapper.unmount()
+  })
+
+  it('keeps a failed account immediately available to manual and bulk collection', async () => {
+    const retryAt = Date.now() + 15 * 60_000
+    mocks.listAccounts.mockResolvedValueOnce({
+      items: [account(64, {
+        codex_turn_state_auto: state({
+          configured: false,
+          due: true,
+          expires_at_ms: undefined,
+          collection_succeeded: false,
+          last_error: 'transport_failed',
+          probe_at_ms: Date.now() - 10_000,
+          probe_not_before_ms: retryAt,
+        }),
+      })],
+      pages: 1,
+    })
+    mocks.collectCodexTurnState.mockResolvedValue({
+      status: 'already_valid',
+      account_id: 64,
+      target_models: ['gpt-5.5'],
+      queued_models: [],
+      already_valid_models: ['gpt-5.5'],
+      model_targets: [{ model: 'gpt-5.5', owner: 'gpt-5.5' }],
+      codex_turn_state_auto: state({
+        configured: true,
+        collection_succeeded: true,
+        successful_models: ['gpt-5.5'],
+        verified_model: 'gpt-5.5',
+      }),
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const collect = wrapper.get<HTMLButtonElement>('[data-testid="turn-state-collect-64"]')
+    expect(collect.element.disabled).toBe(false)
+    expect(wrapper.get('[data-testid="turn-state-account-64"]').text()).toContain('admin.codexTurnState.accounts.states.cooldown')
+
+    await collect.trigger('click')
+    await flushPromises()
+    expect(mocks.collectCodexTurnState).toHaveBeenNthCalledWith(1, 64, 'manual', expect.anything())
+
+    await wrapper.get('[data-testid="turn-state-collect-all"]').trigger('click')
+    await flushPromises()
+    expect(mocks.collectCodexTurnState).toHaveBeenNthCalledWith(2, 64, 'bulk', expect.anything())
     wrapper.unmount()
   })
 

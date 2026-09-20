@@ -557,10 +557,14 @@ const filteredAccounts = computed(() => {
   })
 })
 
-const recentTasks = computed(() => [...collectionTasks.value]
+// The task registry is intentionally a live-work registry, not an archive.
+// Keep the client defensive when talking to an older server that may still
+// return terminal snapshots: once a task reaches a terminal state the account
+// row is the durable source of truth and the task must disappear from this
+// list.
+const recentTasks = computed(() => collectionTasks.value
+  .filter(isActiveTask)
   .sort((left, right) => {
-    const activeOrder = Number(isActiveTask(right)) - Number(isActiveTask(left))
-    if (activeOrder !== 0) return activeOrder
     return Number(right.created_at_ms || 0) - Number(left.created_at_ms || 0)
   })
   .slice(0, RECENT_TASK_LIMIT))
@@ -639,7 +643,7 @@ async function loadRecentTasks({ background = false }: { background?: boolean } 
   try {
     const response = await adminAPI.accounts.listCodexTurnStateTasks()
     if (!componentActive || requestGeneration !== taskListRequestGeneration) return
-    collectionTasks.value = Array.isArray(response) ? response : []
+    collectionTasks.value = (Array.isArray(response) ? response : []).filter(isActiveTask)
     if (cancelTaskTargetId.value) {
       const cancelTarget = collectionTasks.value.find(task => task.id === cancelTaskTargetId.value)
       if (!cancelTarget?.can_cancel || !isActiveTask(cancelTarget)) cancelTaskTargetId.value = null
@@ -668,6 +672,10 @@ function closeTaskCancelConfirm() {
 
 function replaceCollectionTask(nextTask: CodexTurnStateTask) {
   const taskIndex = collectionTasks.value.findIndex(task => task.id === nextTask.id)
+  if (!isActiveTask(nextTask)) {
+    if (taskIndex >= 0) collectionTasks.value.splice(taskIndex, 1)
+    return
+  }
   if (taskIndex < 0) {
     collectionTasks.value = [nextTask, ...collectionTasks.value]
     return

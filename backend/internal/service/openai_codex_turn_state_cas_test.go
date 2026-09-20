@@ -259,11 +259,12 @@ func TestCodexTurnStateWorkerCompletesTaskAfterCASReconciliationLoadsValidOlderW
 
 	s.runCodexTurnStateWorker(account.ID, entry)
 
-	finished, ok := s.GetCodexTurnStateCollectionTask(task.ID)
-	require.True(t, ok)
-	require.Equal(t, CodexTurnStateCollectionTaskStatusSucceeded, finished.Status)
-	require.Equal(t, CodexTurnStateCollectionTaskStageCompleted, finished.Stage)
-	require.Equal(t, 100, finished.Progress)
+	// Terminal task snapshots are intentionally ephemeral. The worker must
+	// still reconcile the durable winner and detach the task, but the registry
+	// must not retain a completed record for later history or retry.
+	_, ok := s.GetCodexTurnStateCollectionTask(task.ID)
+	require.False(t, ok)
+	require.Empty(t, s.ListCodexTurnStateCollectionTasks())
 	s.openaiTurnStateMu.Lock()
 	require.Equal(t, winnerState, entry.token, "the valid database winner satisfies the task even when it is older than the losing local value")
 	require.Empty(t, entry.collectionTaskID, "a reconciled task must not remain attached forever")

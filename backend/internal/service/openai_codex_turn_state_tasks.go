@@ -81,7 +81,10 @@ type CodexTurnStateCollectionTask struct {
 	RetryOf         string                              `json:"retry_of,omitempty"`
 	Events          []CodexTurnStateCollectionTaskEvent `json:"events,omitempty"`
 	CanCancel       bool                                `json:"can_cancel"`
-	CanRetry        bool                                `json:"can_retry"`
+	// CanRetry is retained for wire compatibility with older clients. Terminal
+	// tasks are not archived, so retries must come through the account's normal
+	// manual, automatic, or bulk collection entry points instead.
+	CanRetry bool `json:"can_retry"`
 }
 
 // CodexTurnStateCollectionTaskInput contains only immutable task identity.
@@ -247,7 +250,10 @@ func setCodexTurnStateCollectionTaskCapabilities(task *CodexTurnStateCollectionT
 		return
 	}
 	task.CanCancel = task.Status == CodexTurnStateCollectionTaskStatusQueued || task.Status == CodexTurnStateCollectionTaskStatusRunning
-	task.CanRetry = task.Status == CodexTurnStateCollectionTaskStatusFailed || task.Status == CodexTurnStateCollectionTaskStatusCanceled
+	// Terminal task snapshots are returned only to the operation that finished
+	// them and are immediately removed from the registry. There is therefore no
+	// stable task ID from which a task-center retry could be resumed.
+	task.CanRetry = false
 }
 
 func cloneCodexTurnStateCollectionTask(task *CodexTurnStateCollectionTask) *CodexTurnStateCollectionTask {
@@ -299,6 +305,37 @@ func (r *codexTurnStateCollectionTaskRegistry) makeRoomLocked() bool {
 	return false
 }
 
+// removeLocked drops a task from the in-memory registry. Collection task
+// snapshots are deliberately ephemeral: only queued/running work needs a
+// registry entry for cancellation and progress reporting. Terminal outcomes
+// are returned to the operation that produced them, but are never retained as
+// an archive or used as a retry source.
+//
+// Caller must hold r.mu.
+func (r *codexTurnStateCollectionTaskRegistry) removeLocked(taskID string) *codexTurnStateCollectionTaskRecord {
+	if r == nil {
+		return nil
+	}
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil
+	}
+	record := r.tasks[taskID]
+	if record == nil {
+		return nil
+	}
+	delete(r.tasks, taskID)
+	for index, id := range r.order {
+		if id != taskID {
+			continue
+		}
+		copy(r.order[index:], r.order[index+1:])
+		r.order = r.order[:len(r.order)-1]
+		break
+	}
+	return record
+}
+
 func (s *OpenAIGatewayService) codexTurnStateCollectionTasks() *codexTurnStateCollectionTaskRegistry {
 	if s == nil {
 		return nil
@@ -312,9 +349,9 @@ func (s *OpenAIGatewayService) codexTurnStateCollectionTasks() *codexTurnStateCo
 }
 
 // CreateCodexTurnStateCollectionTask registers one queued account/model task
-// and returns its cancelable worker context. At capacity, completed history is
-// evicted oldest-first; 500 simultaneously active tasks are rejected rather
-// than silently losing their cancellation handles.
+// and returns its cancelable worker context. The bound applies only to live
+// work because terminal snapshots are removed immediately; 500 simultaneously
+// active tasks are rejected rather than silently losing cancellation handles.
 func (s *OpenAIGatewayService) CreateCodexTurnStateCollectionTask(parent context.Context, input CodexTurnStateCollectionTaskInput) (*CodexTurnStateCollectionTask, context.Context, error) {
 	registry := s.codexTurnStateCollectionTasks()
 	if registry == nil {
@@ -476,6 +513,9 @@ func (s *OpenAIGatewayService) finishCodexTurnStateCollectionTask(taskID, status
 	cancel := record.cancel
 	record.cancel = nil
 	result := cloneCodexTurnStateCollectionTask(&record.task)
+	// Terminal snapshots are deliberately not archived. Keep only the detached
+	// result for this caller, then release the registry slot immediately.
+	registry.removeLocked(taskID)
 	registry.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -491,8 +531,8 @@ func (s *OpenAIGatewayService) FailCodexTurnStateCollectionTask(taskID, errorCod
 	return s.finishCodexTurnStateCollectionTask(taskID, CodexTurnStateCollectionTaskStatusFailed, CodexTurnStateCollectionTaskStageFailed, errorCode)
 }
 
-// ListCodexTurnStateCollectionTasks returns detached snapshots with unfinished
-// work first. Unfinished and terminal groups are each ordered newest-first.
+// ListCodexTurnStateCollectionTasks returns detached snapshots for active work.
+// Terminal task history is intentionally not archived in memory.
 func (s *OpenAIGatewayService) ListCodexTurnStateCollectionTasks() []*CodexTurnStateCollectionTask {
 	registry := s.codexTurnStateCollectionTasks()
 	if registry == nil {
@@ -500,20 +540,17 @@ func (s *OpenAIGatewayService) ListCodexTurnStateCollectionTasks() []*CodexTurnS
 	}
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
-	unfinished := make([]*CodexTurnStateCollectionTask, 0, len(registry.order))
-	terminal := make([]*CodexTurnStateCollectionTask, 0, len(registry.order))
+	active := make([]*CodexTurnStateCollectionTask, 0, len(registry.order))
 	for index := len(registry.order) - 1; index >= 0; index-- {
 		if record := registry.tasks[registry.order[index]]; record != nil {
 			summary := cloneCodexTurnStateCollectionTask(&record.task)
 			summary.Events = nil
-			if codexTurnStateCollectionTaskTerminal(summary.Status) {
-				terminal = append(terminal, summary)
-				continue
+			if !codexTurnStateCollectionTaskTerminal(summary.Status) {
+				active = append(active, summary)
 			}
-			unfinished = append(unfinished, summary)
 		}
 	}
-	return append(unfinished, terminal...)
+	return active
 }
 
 // GetCodexTurnStateCollectionTask returns a detached task snapshot.
@@ -577,6 +614,8 @@ func (s *OpenAIGatewayService) CancelCodexTurnStateCollectionTask(taskID string)
 	cancel := record.cancel
 	record.cancel = nil
 	result := cloneCodexTurnStateCollectionTask(&record.task)
+	// Cancellation is a terminal outcome, not an archived task record.
+	registry.removeLocked(taskID)
 	registry.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -585,8 +624,7 @@ func (s *OpenAIGatewayService) CancelCodexTurnStateCollectionTask(taskID string)
 }
 
 // StopCodexTurnStateCollectionTasks cancels every queued/running task during
-// gateway shutdown. It is idempotent and retains their terminal snapshots for
-// the details page.
+// gateway shutdown. It is idempotent and drops terminal snapshots immediately.
 func (s *OpenAIGatewayService) StopCodexTurnStateCollectionTasks() {
 	if s == nil {
 		return
@@ -603,7 +641,7 @@ func (s *OpenAIGatewayService) StopCodexTurnStateCollectionTasks() {
 	cancels := make([]context.CancelFunc, 0)
 	registry.mu.Lock()
 	registry.stopped = true
-	for _, taskID := range registry.order {
+	for _, taskID := range append([]string(nil), registry.order...) {
 		record := registry.tasks[taskID]
 		if record == nil || codexTurnStateCollectionTaskTerminal(record.task.Status) {
 			continue
@@ -619,6 +657,7 @@ func (s *OpenAIGatewayService) StopCodexTurnStateCollectionTasks() {
 			cancels = append(cancels, record.cancel)
 			record.cancel = nil
 		}
+		registry.removeLocked(taskID)
 	}
 	registry.mu.Unlock()
 	for _, cancel := range cancels {
@@ -626,8 +665,10 @@ func (s *OpenAIGatewayService) StopCodexTurnStateCollectionTasks() {
 	}
 }
 
-// CodexTurnStateCollectionTaskRetryInfo returns immutable scheduling data only
-// for terminal tasks that the UI is allowed to retry.
+// CodexTurnStateCollectionTaskRetryInfo is kept for source compatibility with
+// older callers. Terminal tasks are no longer archived, so this returns false
+// for every completed task; callers should use the account collection entry
+// points for a fresh manual, automatic, or bulk round.
 func (s *OpenAIGatewayService) CodexTurnStateCollectionTaskRetryInfo(taskID string) (*CodexTurnStateCollectionTaskRetryInfo, bool) {
 	task, ok := s.GetCodexTurnStateCollectionTask(taskID)
 	if !ok || task == nil || !task.CanRetry {
@@ -643,9 +684,10 @@ func (s *OpenAIGatewayService) CodexTurnStateCollectionTaskRetryInfo(taskID stri
 	}, true
 }
 
-// RetryCodexTurnStateCollectionTask reserves a traceable retry task and submits
-// it through the same administrator collection entry point. The manual
-// scheduler binds the task ID from context to the matching owner-model worker.
+// RetryCodexTurnStateCollectionTask remains as a compatibility endpoint for
+// clients that still send the old task-center retry request. Since terminal
+// tasks are not archived, new requests normally receive TASK_NOT_FOUND and
+// should instead use the account's manual or bulk collection entry point.
 func (s *OpenAIGatewayService) RetryCodexTurnStateCollectionTask(ctx context.Context, taskID string) (*CodexTurnStateCollectionTask, error) {
 	retry, ok := s.CodexTurnStateCollectionTaskRetryInfo(taskID)
 	if !ok {

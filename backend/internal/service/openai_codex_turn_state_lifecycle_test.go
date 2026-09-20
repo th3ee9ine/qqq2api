@@ -551,9 +551,9 @@ func TestStopCodexTurnStateCollectionTasksDrainsAccountWaiters(t *testing.T) {
 		require.Empty(t, entry.collectionTaskID)
 	}
 	s.openaiTurnStateMu.Unlock()
-	for _, task := range s.ListCodexTurnStateCollectionTasks() {
-		require.Equal(t, CodexTurnStateCollectionTaskStatusCanceled, task.Status)
-	}
+	// Shutdown cancellation is terminal and is not retained in the live task
+	// registry. The account workers above are the durable observable outcome.
+	require.Empty(t, s.ListCodexTurnStateCollectionTasks())
 }
 
 func TestManualCodexTurnStateCollectionRejectsWholeBatchWhenAnyOwnerIsBusy(t *testing.T) {
@@ -747,6 +747,143 @@ func TestManualCodexTurnStateCollectionRetriesValidStateWithLastError(t *testing
 	stored, err := repo.GetByID(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.Equal(t, candidate, codexTurnStateAutoToken(codexTurnStateModelAccount(stored, model)))
+}
+
+func TestFailedCodexTurnStateTaskCanBeReplacedByManualCollection(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	settings := s.settingService.settingRepo.(*codexHeaderSettingRepoStub)
+	settings.values[SettingKeyOpenAICodexTurnStateModels] = "gpt-5"
+	s.settingService.InvalidateOpenAICodexTurnStateCache()
+	s.httpUpstream = &turnStateRawUpstream{call: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
+		if req.Header.Get(openAICodexTurnStateHeader) == "" {
+			return turnStateModelResponse("replacement-state", "gpt-5"), nil
+		}
+		return turnStateModelResponse("", "gpt-5"), nil
+	}}
+
+	// Exhaust the bounded persistence attempts. The admin-visible task must be
+	// failed and detached, while the dirty outcome remains eligible for an
+	// independent background write.
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, time.Now(), "gpt-5")
+	task, taskCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: "gpt-5",
+		OwnerModel:   "gpt-5",
+		Source:       CodexTurnStateCollectionSourceAutomatic,
+	})
+	require.NoError(t, err)
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, task.ID, taskCtx))
+	entry.lastError = "request_failed"
+	s.openaiTurnStateMu.Unlock()
+	repo.mu.Lock()
+	repo.fail = true
+	repo.mu.Unlock()
+	require.False(t, s.persistCodexTurnStateProbeOutcomeContext(taskCtx, account.ID, entry, true))
+	_, exists := s.GetCodexTurnStateCollectionTask(task.ID)
+	require.False(t, exists, "persistence failure must not leave a task at retry_wait/90%")
+	s.openaiTurnStateMu.Lock()
+	require.Empty(t, entry.collectionTaskID)
+	require.Nil(t, entry.collectionTaskContext)
+	require.True(t, entry.dirty, "the database write remains pending independently of the task")
+	require.True(t, entry.manualOutcomePending)
+	require.False(t, entry.retryAfter.IsZero())
+	require.False(t, entry.retryWakeAt.IsZero())
+	s.openaiTurnStateMu.Unlock()
+	repo.mu.Lock()
+	require.Equal(t, codexTurnStateProbePersistAttempts, repo.writes)
+	repo.fail = false
+	repo.mu.Unlock()
+
+	result, err := s.RequestCodexTurnStateCollection(context.Background(), account, "gpt-5")
+	require.NoError(t, err)
+	require.Equal(t, CodexTurnStateManualStatusQueued, result.Status)
+	waitTurnStateAutoIdle(t, s)
+	s.openaiTurnStateMu.Lock()
+	require.False(t, entry.dirty)
+	require.Empty(t, entry.collectionTaskID)
+	require.True(t, entry.retryWakeAt.IsZero())
+	s.openaiTurnStateMu.Unlock()
+}
+
+func TestCodexTurnStateWorkerDetachesTaskAfterPersistenceRetryBudget(t *testing.T) {
+	s, repo, account := newTurnStateAutoService(t)
+	repo.mu.Lock()
+	repo.fail = true
+	repo.mu.Unlock()
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, time.Now(), "gpt-5")
+	task, taskCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: "gpt-5",
+		OwnerModel:   "gpt-5",
+		Source:       CodexTurnStateCollectionSourceAutomatic,
+	})
+	require.NoError(t, err)
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, task.ID, taskCtx))
+	entry.dirty = true
+	entry.persistenceRetryCount = codexTurnStateProbePersistAttempts - 1
+	entry.running = true
+	s.openaiTurnStateWorkers = 1
+	s.openaiTurnStateMu.Unlock()
+
+	s.runCodexTurnStateWorker(account.ID, entry)
+	_, exists := s.GetCodexTurnStateCollectionTask(task.ID)
+	require.False(t, exists, "the worker must detach a task after bounded persistence failure")
+	s.openaiTurnStateMu.Lock()
+	require.False(t, entry.running)
+	require.Empty(t, entry.collectionTaskID)
+	require.True(t, entry.dirty)
+	// Stop the test retry timer without touching the dirty outcome.
+	entry.retryWakeAt = time.Time{}
+	entry.persistenceRetryGeneration++
+	s.openaiTurnStateMu.Unlock()
+}
+
+func TestCodexTurnStatePersistenceRetryTimerCannotClaimReplacementTask(t *testing.T) {
+	s, _, account := newTurnStateAutoService(t)
+	s.openaiTurnStateMu.Lock()
+	entry := s.codexTurnStateEntryLocked(account, time.Now(), "gpt-5")
+	oldTask, oldCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: "gpt-5",
+		OwnerModel:   "gpt-5",
+		Source:       CodexTurnStateCollectionSourceAutomatic,
+	})
+	require.NoError(t, err)
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, oldTask.ID, oldCtx))
+	entry.dirty = true
+	entry.retryAfter = time.Now().Add(20 * time.Millisecond)
+	s.scheduleCodexTurnStatePersistenceRetryLocked(account.ID, entry, entry.retryAfter)
+	oldGeneration := entry.persistenceRetryGeneration
+	// Simulate the bounded-failure detach before a replacement task arrives.
+	s.clearCodexTurnStateCollectionTaskLocked(entry)
+	newTask, newCtx, err := s.CreateCodexTurnStateCollectionTask(context.Background(), CodexTurnStateCollectionTaskInput{
+		AccountID:    account.ID,
+		AccountName:  account.Name,
+		RequestModel: "gpt-5",
+		OwnerModel:   "gpt-5",
+		Source:       CodexTurnStateCollectionSourceManual,
+	})
+	require.NoError(t, err)
+	require.True(t, s.bindCodexTurnStateCollectionTaskLocked(entry, newTask.ID, newCtx))
+	require.Greater(t, entry.persistenceRetryGeneration, oldGeneration)
+	s.openaiTurnStateMu.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+	replacement, ok := s.GetCodexTurnStateCollectionTask(newTask.ID)
+	require.True(t, ok)
+	require.Equal(t, CodexTurnStateCollectionTaskStatusQueued, replacement.Status)
+	s.openaiTurnStateMu.Lock()
+	require.Equal(t, newTask.ID, entry.collectionTaskID)
+	require.False(t, entry.running, "a stale timer must not start the replacement worker")
+	s.clearCodexTurnStateCollectionTaskLocked(entry)
+	s.openaiTurnStateMu.Unlock()
+	_, _ = s.CancelCodexTurnStateCollectionTask(oldTask.ID)
+	_, _ = s.CancelCodexTurnStateCollectionTask(newTask.ID)
 }
 
 func TestManualCodexTurnStateSameTokenRefreshesEvidenceWithoutResettingAge(t *testing.T) {

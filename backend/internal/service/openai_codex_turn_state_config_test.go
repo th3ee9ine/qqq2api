@@ -80,7 +80,10 @@ func TestCodexTurnStateLegacyManualValueNeverInjected(t *testing.T) {
 }
 func TestCodexTurnStateAutomaticHTTPAndCompactBuilders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	settings, _ := turnStateTestSettings("legacy-private", "alias")
+	// The request carries the client-facing alias while the body contains the
+	// actual upstream model. Both values must be inside the configured scope;
+	// out-of-scope persisted slots are intentionally cleaned before injection.
+	settings, _ := turnStateTestSettings("legacy-private", "alias,gpt-5")
 	svc := &OpenAIGatewayService{settingService: settings, cfg: &config.Config{}}
 	a := &Account{ID: 73, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "access", "chatgpt_account_id": "id"}}
 	seedAutomaticTurnState(a, "account-state", "gpt-5")

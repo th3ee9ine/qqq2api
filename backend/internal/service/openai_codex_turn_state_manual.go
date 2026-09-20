@@ -200,6 +200,12 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 	if s.settingService != nil {
 		cfg = s.settingService.GetOpenAICodexTurnState(ctx)
 	}
+	// A scope update can leave historical model slots in account Extra. Remove
+	// only records that are provably outside the current collection range before
+	// deciding whether an existing state is already valid.
+	if filtered, _ := s.cleanupCodexTurnStateScope(ctx, account, cfg); filtered != nil {
+		account = filtered
+	}
 	retryTaskID := CodexTurnStateCollectionTaskIDFromContext(ctx)
 	var retryTask *CodexTurnStateCollectionTask
 	if retryTaskID != "" {
@@ -278,7 +284,10 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 		}
 		s.discardCanceledCodexTurnStateCollectionTaskLocked(entry)
 		candidatePending := s.codexTurnStateUsageCandidateActiveLocked(entry, now)
-		if entry.running || entry.reconciling || entry.dirty || entry.probe || entry.manualProbe || entry.collectionTaskID != "" || candidatePending {
+		// A detached dirty entry only represents a pending database write. It
+		// must not block a fresh manual/bulk collection; only an active worker,
+		// probe, candidate, or task binding makes the owner busy.
+		if entry.running || entry.reconciling || entry.probe || entry.manualProbe || entry.collectionTaskID != "" || candidatePending {
 			busy = true
 			break
 		}
@@ -369,6 +378,7 @@ func (s *OpenAIGatewayService) RequestCodexTurnStateCollection(ctx context.Conte
 		entry.renewalProbe = false
 		entry.retryAfter = time.Time{}
 		entry.retryWakeAt = time.Time{}
+		entry.persistenceRetryGeneration++
 		result.QueuedModels = append(result.QueuedModels, plan.Owner)
 	}
 	for _, item := range queued {

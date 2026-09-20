@@ -160,6 +160,26 @@ describe('CodexTurnStateTaskView', () => {
     wrapper.unmount()
   })
 
+  it('clears the stale progress snapshot when the active task is removed', async () => {
+    vi.useFakeTimers()
+    mocks.getTask
+      .mockResolvedValueOnce(task({ status: 'running', stage: 'persisting', progress: 90, can_cancel: true, can_retry: false }))
+      .mockRejectedValueOnce({ status: 404, code: 'CODEX_TURN_STATE_TASK_NOT_FOUND', message: 'not found' })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[role="progressbar"]').attributes('aria-valuenow')).toBe('90')
+    await vi.advanceTimersByTimeAsync(2_000)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="turn-state-task-summary"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('admin.codexTurnState.tasks.taskNoLongerActive')
+    await vi.advanceTimersByTimeAsync(10_000)
+    await flushPromises()
+    expect(mocks.getTask).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
   it('confirms and cancels a queued or running task', async () => {
     mocks.getTask.mockResolvedValueOnce(task({ status: 'running', stage: 'collecting', can_cancel: true, can_retry: false }))
     const wrapper = mountView()
@@ -206,17 +226,12 @@ describe('CodexTurnStateTaskView', () => {
     wrapper.unmount()
   })
 
-  it('confirms a terminal retry and opens the new task', async () => {
+  it('does not expose a terminal retry action because terminal tasks are not archived', async () => {
     const wrapper = mountView()
     await flushPromises()
 
-    await wrapper.get('[data-testid="turn-state-task-retry"]').trigger('click')
-    await wrapper.get('[data-testid="confirm-dialog-confirm"]').trigger('click')
-    await flushPromises()
-
-    expect(mocks.retryTask).toHaveBeenCalledWith('task-1')
-    expect(mocks.showSuccess).toHaveBeenCalledWith('admin.codexTurnState.tasks.retrySucceeded')
-    expect(mocks.push).toHaveBeenCalledWith({ name: 'AdminCodexTurnStateTask', params: { taskId: 'task-2' } })
+    expect(wrapper.find('[data-testid="turn-state-task-retry"]').exists()).toBe(false)
+    expect(mocks.retryTask).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

@@ -18,6 +18,15 @@ import (
 // through UpdateExtra without replacing another model's state.
 const CodexTurnStateModelExtraPrefix = "codex_turn_state_auto_model:"
 
+// CodexTurnStateScopeCleanupRepository removes account-owned Turn State
+// records without replacing the account's unrelated Extra fields. It is kept
+// optional so lightweight repository implementations used by tests and
+// alternate deployments can continue to provide the AccountRepository
+// contract without a model-specific SQL operation.
+type CodexTurnStateScopeCleanupRepository interface {
+	DeleteCodexTurnStateScopeExtras(context.Context, int64, []string) error
+}
+
 type codexTurnStateKey struct {
 	accountID int64
 	model     string
@@ -44,6 +53,244 @@ func codexTurnStateModelExtraKey(model string) string {
 
 func codexTurnStateRawModelExtraKey(model string) string {
 	return CodexTurnStateModelExtraPrefix + base64.RawURLEncoding.EncodeToString([]byte(strings.TrimSpace(model)))
+}
+
+// codexTurnStateScopeAllowsOwner is a conservative scope check for persisted
+// owner slots. A canonical owner (for example gpt-6-astra) can represent a
+// configured dated alias (for example gpt-6-astra-2026-09-19), so checking only
+// the owner string would incorrectly delete an otherwise in-scope slot when
+// its request-model metadata is missing from an older record.
+func codexTurnStateScopeAllowsOwner(cfg OpenAICodexTurnStateConfig, owner string, models ...string) bool {
+	if !cfg.ModelScopeValid {
+		return false
+	}
+	owner = strings.TrimSpace(owner)
+	if owner == "" || codexTurnStateScopeAllows(cfg, models...) {
+		return true
+	}
+	for _, raw := range strings.Split(cfg.Models, ",") {
+		pattern := strings.TrimSpace(raw)
+		if pattern == "" {
+			continue
+		}
+		body := strings.TrimSuffix(pattern, "*")
+		if body != "" && codexTurnStateOwnerModel(body) == owner {
+			return true
+		}
+	}
+	return false
+}
+
+func codexTurnStateScopeStringValue(raw any, key string) string {
+	values, ok := raw.(map[string]any)
+	if !ok || values == nil {
+		return ""
+	}
+	value, _ := values[key].(string)
+	return strings.TrimSpace(value)
+}
+
+// codexTurnStateScopeCleanupKeys returns only model-scoped records that are
+// provably outside the configured collection range. Invalid settings fail
+// closed and return no keys; an empty valid scope means all models and also
+// returns no keys. Legacy unscoped fields and native provenance are retained.
+// The result is stable to make repository writes and tests deterministic.
+func codexTurnStateScopeCleanupKeys(account *Account, cfg OpenAICodexTurnStateConfig) []string {
+	if account == nil || len(account.Extra) == 0 || !cfg.ModelScopeValid || strings.TrimSpace(cfg.Models) == "" {
+		return nil
+	}
+	keys := make([]string, 0)
+	for key, raw := range account.Extra {
+		switch {
+		case strings.HasPrefix(key, CodexTurnStateModelExtraPrefix):
+			if key == CodexTurnStateNativeProvenanceExtraKey {
+				continue
+			}
+			decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(key, CodexTurnStateModelExtraPrefix))
+			if err != nil || len(decoded) == 0 {
+				// The prefix is reserved for generated model slots; a malformed
+				// key cannot be in the configured collection range.
+				keys = append(keys, key)
+				continue
+			}
+			decodedModel := strings.TrimSpace(string(decoded))
+			owner := codexTurnStateOwnerModel(decodedModel)
+			candidates := []string{decodedModel, owner}
+			candidates = append(candidates,
+				codexTurnStateScopeStringValue(raw, CodexTurnStateAutoProbeModelExtraKey),
+				codexTurnStateScopeStringValue(raw, CodexTurnStateAutoVerifiedModelExtraKey),
+			)
+			// A persisted slot may predate probe-model metadata. Account-level
+			// aliases still identify its owner, so retain the slot when either
+			// side of a configured model mapping belongs to that owner.
+			for alias, target := range account.GetModelMapping() {
+				if codexTurnStateOwnerModel(alias) == owner || codexTurnStateOwnerModel(target) == owner {
+					candidates = append(candidates, alias, target)
+				}
+			}
+			if !codexTurnStateScopeAllowsOwner(cfg, owner, candidates...) {
+				keys = append(keys, key)
+			}
+		case strings.HasPrefix(key, CodexTurnStateProbeBurstBudgetExtraPrefix):
+			encoded := strings.TrimPrefix(key, CodexTurnStateProbeBurstBudgetExtraPrefix)
+			decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+			if err != nil || len(decoded) == 0 {
+				keys = append(keys, key)
+				continue
+			}
+			model := strings.TrimSpace(string(decoded))
+			owner := codexTurnStateOwnerModel(model)
+			if !codexTurnStateScopeAllowsOwner(cfg, owner, model, owner) {
+				keys = append(keys, key)
+			}
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func codexTurnStateAccountWithoutScopeRecords(account *Account, cfg OpenAICodexTurnStateConfig, preserveOwners ...string) (*Account, []string) {
+	if account == nil {
+		return nil, nil
+	}
+	keys := codexTurnStateScopeCleanupKeys(account, cfg)
+	if len(keys) > 0 && len(preserveOwners) > 0 {
+		kept := keys[:0]
+		for _, key := range keys {
+			owner := codexTurnStateScopeCleanupOwner(key)
+			if owner != "" && codexTurnStateScopeOwnerMatches(owner, preserveOwners...) {
+				continue
+			}
+			kept = append(kept, key)
+		}
+		keys = kept
+	}
+	if len(keys) == 0 {
+		return account, nil
+	}
+	copy := *account
+	copy.Extra = make(map[string]any, len(account.Extra)-len(keys))
+	remove := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		remove[key] = struct{}{}
+	}
+	for key, value := range account.Extra {
+		if _, drop := remove[key]; !drop {
+			copy.Extra[key] = value
+		}
+	}
+	return &copy, keys
+}
+
+func codexTurnStateScopeOwnerMatches(owner string, candidates ...string) bool {
+	owner = strings.TrimSpace(codexTurnStateOwnerModel(owner))
+	if owner == "" {
+		return false
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(codexTurnStateOwnerModel(candidate))
+		if candidate != "" && strings.EqualFold(owner, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func codexTurnStateScopeCleanupOwner(key string) string {
+	var encoded string
+	switch {
+	case strings.HasPrefix(key, CodexTurnStateModelExtraPrefix):
+		if key == CodexTurnStateNativeProvenanceExtraKey {
+			return ""
+		}
+		encoded = strings.TrimPrefix(key, CodexTurnStateModelExtraPrefix)
+	case strings.HasPrefix(key, CodexTurnStateProbeBurstBudgetExtraPrefix):
+		encoded = strings.TrimPrefix(key, CodexTurnStateProbeBurstBudgetExtraPrefix)
+	default:
+		return ""
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil || len(decoded) == 0 {
+		return ""
+	}
+	return codexTurnStateOwnerModel(string(decoded))
+}
+
+func codexTurnStateEntryIdleForScopeCleanup(entry *codexTurnStateAutoEntry) bool {
+	return entry != nil && !entry.running && !entry.reconciling && !entry.dirty && !entry.probe &&
+		!entry.manualProbe && !entry.renewalProbe && !entry.manualOutcomePending &&
+		entry.collectionTaskID == "" && entry.candidate.state == "" && entry.pendingOwner.version <= 0 &&
+		entry.retryWakeAt.IsZero() && entry.probeWakeAt.IsZero()
+}
+
+// cleanupCodexTurnStateScope removes stale persisted model records while
+// preserving unrelated account extras. The returned account is a filtered
+// snapshot even when the optional repository cleanup is unavailable or fails,
+// so the current request/scan cannot accidentally collect an out-of-scope
+// model. Active local workers are excluded from the delete set and continue
+// through the existing scope-change terminal handling.
+func (s *OpenAIGatewayService) cleanupCodexTurnStateScope(ctx context.Context, account *Account, cfg OpenAICodexTurnStateConfig, preserveOwners ...string) (*Account, error) {
+	cleaned, keys := codexTurnStateAccountWithoutScopeRecords(account, cfg, preserveOwners...)
+	if len(keys) == 0 || s == nil || s.accountRepo == nil || account == nil {
+		return cleaned, nil
+	}
+	activeOwners := make(map[string]struct{})
+	s.openaiTurnStateMu.Lock()
+	for _, key := range keys {
+		owner := codexTurnStateScopeCleanupOwner(key)
+		if owner == "" {
+			continue
+		}
+		if entry := s.openaiTurnStates[codexTurnStateKey{accountID: account.ID, model: owner}]; entry != nil && !codexTurnStateEntryIdleForScopeCleanup(entry) {
+			activeOwners[owner] = struct{}{}
+		}
+	}
+	s.openaiTurnStateMu.Unlock()
+	deleteKeys := make([]string, 0, len(keys))
+	for _, key := range keys {
+		owner := codexTurnStateScopeCleanupOwner(key)
+		if owner != "" {
+			if _, active := activeOwners[owner]; active {
+				continue
+			}
+		}
+		deleteKeys = append(deleteKeys, key)
+	}
+	if len(deleteKeys) == 0 {
+		return cleaned, nil
+	}
+	// Clear idle process-local slots even when an alternate repository cannot
+	// perform the durable delete. Otherwise a later scope expansion could
+	// resurrect a state that this request already treated as out of scope.
+	s.openaiTurnStateMu.Lock()
+	for _, key := range deleteKeys {
+		owner := codexTurnStateScopeCleanupOwner(key)
+		if owner == "" {
+			continue
+		}
+		entryKey := codexTurnStateKey{accountID: account.ID, model: owner}
+		if entry := s.openaiTurnStates[entryKey]; codexTurnStateEntryIdleForScopeCleanup(entry) {
+			delete(s.openaiTurnStates, entryKey)
+		}
+	}
+	s.openaiTurnStateMu.Unlock()
+	repo, ok := s.accountRepo.(CodexTurnStateScopeCleanupRepository)
+	if !ok {
+		// Alternate repositories may not support atomic JSONB key deletion yet.
+		// Do not issue nil-valued UpdateExtra writes: those create JSON nulls and
+		// make a supposedly removed record visible to later readers.
+		return cleaned, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
+	err := repo.DeleteCodexTurnStateScopeExtras(cleanupCtx, account.ID, deleteKeys)
+	cancel()
+	if err != nil {
+		return cleaned, err
+	}
+	return cleaned, nil
 }
 
 // codexTurnStateOwnerModel affects only state ownership. The requested model
