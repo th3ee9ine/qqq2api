@@ -567,7 +567,9 @@ func (s *OpenAIGatewayService) ForwardImages(
 	body []byte,
 	parsed *OpenAIImagesRequest,
 	channelMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, err error) {
+	ctx, identityCapture := withUpstreamIdentityCapture(ctx)
+	defer func() { applyCapturedUpstreamIdentityToOpenAIResult(identityCapture, result, c) }()
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}

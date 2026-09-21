@@ -341,6 +341,38 @@ describe('admin UsageView large usage export', () => {
     expect(saveAs).toHaveBeenCalledWith(expect.any(Blob), expect.stringMatching(/^usage_.*\.xlsx$/))
   })
 
+  it('exports the complete upstream identity fields with their matching headers', async () => {
+    const row = {
+      ...usageRow(1),
+      upstream_turn_state: 'turn-state-export',
+      upstream_originator: 'originator-export',
+      upstream_user_agent: 'agent/export',
+      upstream_version: 'version-export',
+    }
+    exportList.mockResolvedValueOnce({ items: [row], total: 1, pages: 1, page_size: 1_000 })
+
+    const wrapper = mountView()
+    vi.advanceTimersByTime(120)
+    await flushPromises()
+
+    await (wrapper.vm as { exportToExcel: () => Promise<void> }).exportToExcel()
+    await flushPromises()
+
+    const headers = aoaToSheet.mock.calls[0][0][0] as string[]
+    const exportedRow = sheetAddAoa.mock.calls[0][1][0] as unknown[]
+    const expected = [
+      ['admin.usage.upstreamTurnState', row.upstream_turn_state],
+      ['admin.usage.upstreamOriginator', row.upstream_originator],
+      ['admin.usage.upstreamUserAgent', row.upstream_user_agent],
+      ['admin.usage.upstreamVersion', row.upstream_version],
+    ] as const
+    for (const [header, value] of expected) {
+      const index = headers.indexOf(header)
+      expect(index).toBeGreaterThanOrEqual(0)
+      expect(exportedRow[index]).toBe(value)
+    }
+  })
+
   it('keeps paging when a later response repeats a stale earlier-page total', async () => {
     // A compatible gateway caps the effective page size at two. Page two
     // repeats a stale earlier-page total (3), even though four rows have

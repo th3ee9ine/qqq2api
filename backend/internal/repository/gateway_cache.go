@@ -422,6 +422,18 @@ func (c *gatewayCache) SaveLiveCall(ctx context.Context, record *service.LiveCal
 		"inbound_endpoint": record.InboundEndpoint,
 		"attestation":      record.AttestationCiphertext,
 	}
+	if record.UpstreamTurnState != nil {
+		values["upstream_turn_state"] = *record.UpstreamTurnState
+	}
+	if record.UpstreamOriginator != nil {
+		values["upstream_originator"] = *record.UpstreamOriginator
+	}
+	if record.UpstreamUserAgent != nil {
+		values["upstream_user_agent"] = *record.UpstreamUserAgent
+	}
+	if record.UpstreamVersion != nil {
+		values["upstream_version"] = *record.UpstreamVersion
+	}
 	key := liveCallKey(record.CallHash)
 	pipe := c.rdb.TxPipeline()
 	pipe.HSet(ctx, key, values)
@@ -442,6 +454,13 @@ func (c *gatewayCache) GetLiveCall(ctx context.Context, callHash string) (*servi
 		value, _ := strconv.ParseInt(values[field], 10, 64)
 		return value
 	}
+	optionalString := func(field string) *string {
+		value, exists := values[field]
+		if !exists {
+			return nil
+		}
+		return &value
+	}
 	createdAt := time.UnixMilli(parseInt("created_at"))
 	expiresAt := time.UnixMilli(parseInt("expires_at"))
 	return &service.LiveCallRecord{
@@ -461,6 +480,10 @@ func (c *gatewayCache) GetLiveCall(ctx context.Context, callHash string) (*servi
 		UserAgent:             values["user_agent"],
 		IPAddress:             values["ip_address"],
 		InboundEndpoint:       values["inbound_endpoint"],
+		UpstreamTurnState:     optionalString("upstream_turn_state"),
+		UpstreamOriginator:    optionalString("upstream_originator"),
+		UpstreamUserAgent:     optionalString("upstream_user_agent"),
+		UpstreamVersion:       optionalString("upstream_version"),
 		AttestationCiphertext: values["attestation"],
 	}, nil
 }

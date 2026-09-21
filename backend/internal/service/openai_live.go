@@ -243,6 +243,10 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			UserAgent:             identity.UserAgent,
 			IPAddress:             identity.IPAddress,
 			InboundEndpoint:       identity.InboundEndpoint,
+			UpstreamTurnState:     created.UpstreamTurnState,
+			UpstreamOriginator:    created.UpstreamOriginator,
+			UpstreamUserAgent:     created.UpstreamUserAgent,
+			UpstreamVersion:       created.UpstreamVersion,
 			AttestationCiphertext: attestationCiphertext,
 		}
 		mappingTTL := s.liveMaxSessionDuration() + 5*time.Minute
@@ -345,11 +349,18 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	if err != nil {
 		return nil, err
 	}
-	return &LiveCallCreated{
+	created := &LiveCallCreated{
 		SDP:      responseBody,
 		CallID:   callID,
 		Location: resp.Header.Get("Location"),
-	}, nil
+	}
+	if identity := upstreamIdentityFromResponse(resp); identity != nil {
+		created.UpstreamTurnState = identity.turnState
+		created.UpstreamOriginator = identity.originator
+		created.UpstreamUserAgent = identity.userAgent
+		created.UpstreamVersion = identity.version
+	}
+	return created, nil
 }
 
 func logLiveCreateStageFailure(ctx context.Context, accountID int64, stage string, err error) {
@@ -854,22 +865,26 @@ func (s *OpenAIGatewayService) finalizeLiveCall(record *LiveCallRecord) {
 	// 这是该会话唯一一次落库机会（MarkLiveCallClosed 已标记 first），失败即永久
 	// 丢失，因此走带日志与同步兜底的 writeUsageLogBestEffort（issue #3656）。
 	writeUsageLogBestEffort(context.Background(), s.usageLogRepo, &UsageLog{
-		UserID:           record.UserID,
-		APIKeyID:         record.APIKeyID,
-		AccountID:        record.AccountID,
-		RequestID:        record.CallHash,
-		Model:            record.Model,
-		RequestedModel:   record.Model,
-		GroupID:          liveOptionalID(record.GroupID),
-		SubscriptionID:   liveOptionalID(record.SubscriptionID),
-		RateMultiplier:   1,
-		BillingType:      billingType,
-		RequestType:      RequestTypeLive,
-		DurationMs:       &duration,
-		UserAgent:        &userAgent,
-		IPAddress:        &ipAddress,
-		InboundEndpoint:  &inboundEndpoint,
-		UpstreamEndpoint: &upstreamEndpoint,
-		CreatedAt:        record.CreatedAt,
+		UserID:             record.UserID,
+		APIKeyID:           record.APIKeyID,
+		AccountID:          record.AccountID,
+		RequestID:          record.CallHash,
+		Model:              record.Model,
+		RequestedModel:     record.Model,
+		GroupID:            liveOptionalID(record.GroupID),
+		SubscriptionID:     liveOptionalID(record.SubscriptionID),
+		RateMultiplier:     1,
+		BillingType:        billingType,
+		RequestType:        RequestTypeLive,
+		DurationMs:         &duration,
+		UserAgent:          &userAgent,
+		IPAddress:          &ipAddress,
+		InboundEndpoint:    &inboundEndpoint,
+		UpstreamEndpoint:   &upstreamEndpoint,
+		UpstreamTurnState:  record.UpstreamTurnState,
+		UpstreamOriginator: record.UpstreamOriginator,
+		UpstreamUserAgent:  record.UpstreamUserAgent,
+		UpstreamVersion:    record.UpstreamVersion,
+		CreatedAt:          record.CreatedAt,
 	}, "service.openai_live")
 }

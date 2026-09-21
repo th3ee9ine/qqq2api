@@ -480,7 +480,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 	}
 	resultWithUsage := func() *OpenAIForwardResult {
-		return &OpenAIForwardResult{
+		result := &OpenAIForwardResult{
 			RequestID:                     responseID,
 			ResponseID:                    responseID,
 			Usage:                         *usage,
@@ -499,6 +499,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			FirstTokenMs:                  firstTokenMs,
 			ClientDisconnect:              clientDisconnected,
 		}
+		lease.SentIdentity().applyToOpenAIResult(result)
+		return result
 	}
 
 	var flusher http.Flusher
@@ -733,6 +735,7 @@ readLoop:
 
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
+			lease.SentIdentity().applyToCyberPolicyMark(GetOpsCyberPolicy(c))
 		}
 
 		if eventType == "error" {

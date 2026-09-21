@@ -143,3 +143,48 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 
 	require.Contains(t, usageLogSelectColumns, "upstream_request_id")
 }
+
+func TestPrepareUsageLogInsert_UpstreamIdentityArgWiring(t *testing.T) {
+	turnState := "turn-state-sentinel"
+	emptyOriginator := ""
+	userAgent := "codex-cli/sentinel"
+	version := "1.2.3-sentinel"
+	prepared := prepareUsageLogInsert(&service.UsageLog{
+		UserID:             1,
+		APIKeyID:           2,
+		RequestID:          "client:identity-wiring",
+		Model:              "gpt-5",
+		UpstreamTurnState:  &turnState,
+		UpstreamOriginator: &emptyOriginator,
+		UpstreamUserAgent:  &userAgent,
+		UpstreamVersion:    &version,
+		CreatedAt:          time.Now().UTC(),
+	})
+	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
+
+	identityStart := len(prepared.args) - 8
+	want := []string{turnState, emptyOriginator, userAgent, version}
+	for offset, expected := range want {
+		arg, ok := prepared.args[identityStart+offset].(sql.NullString)
+		require.True(t, ok, "identity arg %d should be sql.NullString, got %T", offset, prepared.args[identityStart+offset])
+		require.True(t, arg.Valid, "identity arg %d should preserve observed empty values", offset)
+		require.Equal(t, expected, arg.String, "identity arg %d is out of order", offset)
+		require.Equal(t, "text", usageLogInsertArgTypes[identityStart+offset])
+	}
+
+	absent := prepareUsageLogInsert(&service.UsageLog{
+		UserID:    1,
+		APIKeyID:  2,
+		RequestID: "client:identity-absent",
+		Model:     "gpt-5",
+		CreatedAt: time.Now().UTC(),
+	})
+	for offset := range want {
+		arg, ok := absent.args[identityStart+offset].(sql.NullString)
+		require.True(t, ok)
+		require.False(t, arg.Valid, "unobserved identity arg %d must be NULL", offset)
+	}
+
+	require.Contains(t, usageLogSelectColumns,
+		"account_stats_cost, upstream_turn_state, upstream_originator, upstream_user_agent, upstream_version, upstream_request_id")
+}

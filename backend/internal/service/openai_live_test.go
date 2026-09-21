@@ -155,6 +155,21 @@ func TestCreateUpstreamLiveCallPreservesSession(t *testing.T) {
 	require.Empty(t, upstream.request.Header.Get("OpenAI-Beta"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.request.Context()))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.request.Context()))
+
+	require.NotNil(t, created.UpstreamTurnState)
+	require.NotNil(t, created.UpstreamOriginator)
+	require.NotNil(t, created.UpstreamUserAgent)
+	require.NotNil(t, created.UpstreamVersion)
+	require.Equal(t, upstream.request.Header.Get(openAICodexTurnStateHeader), *created.UpstreamTurnState)
+	require.Equal(t, upstream.request.Header.Get("Originator"), *created.UpstreamOriginator)
+	require.Equal(t, upstream.request.Header.Get("User-Agent"), *created.UpstreamUserAgent)
+	require.Equal(t, upstream.request.Header.Get("Version"), *created.UpstreamVersion)
+
+	// The returned identity is an immutable snapshot of the request that was
+	// dispatched, not a view of the request header map retained by the transport.
+	userAgent := *created.UpstreamUserAgent
+	upstream.request.Header.Set("User-Agent", "mutated-after-response")
+	require.Equal(t, userAgent, *created.UpstreamUserAgent)
 }
 
 func TestCreateUpstreamLiveCallOAuth429PersistsCooldownWithoutResponsesRetry(t *testing.T) {

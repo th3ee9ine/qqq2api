@@ -23,7 +23,9 @@ func (s *OpenAIGatewayService) ForwardEmbeddings(
 	account *Account,
 	body []byte,
 	defaultMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, err error) {
+	ctx, identityCapture := withUpstreamIdentityCapture(ctx)
+	defer func() { applyCapturedUpstreamIdentityToOpenAIResult(identityCapture, result, c) }()
 	startTime := time.Now()
 
 	originalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())

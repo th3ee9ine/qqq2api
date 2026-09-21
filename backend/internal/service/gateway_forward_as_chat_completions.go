@@ -32,7 +32,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	account *Account,
 	body []byte,
 	parsed *ParsedRequest,
-) (*ForwardResult, error) {
+) (result *ForwardResult, err error) {
+	ctx, identityCapture := withUpstreamIdentityCapture(ctx)
+	defer func() { applyCapturedUpstreamIdentityToForwardResult(identityCapture, result) }()
 	startTime := time.Now()
 
 	// 1. Parse Chat Completions request
@@ -127,6 +129,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 
 	// 11. Send request
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	upstreamReq = snapshotDispatchedUpstreamRequest(upstreamReq, resp)
 	if err != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
@@ -182,7 +185,6 @@ func (s *GatewayService) ForwardAsChatCompletions(
 
 	// 14. Handle normal response
 	// Read Anthropic SSE → convert to Responses events → convert to CC format
-	var result *ForwardResult
 	var handleErr error
 	if clientStream {
 		result, handleErr = s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)

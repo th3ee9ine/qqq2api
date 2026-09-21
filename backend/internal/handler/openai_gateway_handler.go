@@ -4400,6 +4400,10 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		}
 		if forwardErrored && gwSvc != nil {
 			gwSvc.RecordCyberPolicyUsageLog(ctx, service.CyberPolicyUsageInput{
+				UpstreamTurnState:  mark.UpstreamTurnState,
+				UpstreamOriginator: mark.UpstreamOriginator,
+				UpstreamUserAgent:  mark.UpstreamUserAgent,
+				UpstreamVersion:    mark.UpstreamVersion,
 				APIKey:             apiKey,
 				Account:            account,
 				Subscription:       subscription,

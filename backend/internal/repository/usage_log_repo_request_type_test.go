@@ -99,6 +99,10 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // billing_tier
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
+			sqlmock.AnyArg(), // upstream_turn_state
+			sqlmock.AnyArg(), // upstream_originator
+			sqlmock.AnyArg(), // upstream_user_agent
+			sqlmock.AnyArg(), // upstream_version
 			sqlmock.AnyArg(), // upstream_request_id
 			sqlmock.AnyArg(), // session_id
 			log.NativeCompactionV2,
@@ -194,6 +198,10 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // billing_tier
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
+			sqlmock.AnyArg(), // upstream_turn_state
+			sqlmock.AnyArg(), // upstream_originator
+			sqlmock.AnyArg(), // upstream_user_agent
+			sqlmock.AnyArg(), // upstream_version
 			sqlmock.AnyArg(), // upstream_request_id
 			sqlmock.AnyArg(), // session_id
 			log.NativeCompactionV2,
@@ -957,6 +965,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},
 			sql.NullString{},
 			sql.NullFloat64{},
+			sql.NullString{Valid: true, String: "turn-state-sentinel"}, // upstream_turn_state
+			sql.NullString{Valid: true, String: ""},                    // upstream_originator (observed, omitted)
+			sql.NullString{Valid: true, String: "ua-sentinel"},         // upstream_user_agent
+			sql.NullString{Valid: true, String: "version-sentinel"},    // upstream_version
 			sql.NullString{}, // upstream_request_id
 			sql.NullString{},
 			false, // native_compaction_v2
@@ -973,6 +985,14 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 		require.NotNil(t, log.ImageSizeSource)
 		require.Equal(t, "output", *log.ImageSizeSource)
 		require.Equal(t, map[string]int{"4K": 2}, log.ImageSizeBreakdown)
+		require.NotNil(t, log.UpstreamTurnState)
+		require.Equal(t, "turn-state-sentinel", *log.UpstreamTurnState)
+		require.NotNil(t, log.UpstreamOriginator)
+		require.Equal(t, "", *log.UpstreamOriginator)
+		require.NotNil(t, log.UpstreamUserAgent)
+		require.Equal(t, "ua-sentinel", *log.UpstreamUserAgent)
+		require.NotNil(t, log.UpstreamVersion)
+		require.Equal(t, "version-sentinel", *log.UpstreamVersion)
 	})
 
 	t.Run("request_type_ws_v2_overrides_legacy", func(t *testing.T) {
@@ -1037,6 +1057,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_tier
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
+			sql.NullString{},  // upstream_turn_state
+			sql.NullString{},  // upstream_originator
+			sql.NullString{},  // upstream_user_agent
+			sql.NullString{},  // upstream_version
 			sql.NullString{},  // upstream_request_id
 			sql.NullString{},  // session_id
 			false,             // native_compaction_v2
@@ -1100,6 +1124,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_tier
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
+			sql.NullString{},  // upstream_turn_state
+			sql.NullString{},  // upstream_originator
+			sql.NullString{},  // upstream_user_agent
+			sql.NullString{},  // upstream_version
 			sql.NullString{},  // upstream_request_id
 			sql.NullString{},  // session_id
 			true,              // native_compaction_v2
@@ -1164,6 +1192,10 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_tier
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
+			sql.NullString{},  // upstream_turn_state
+			sql.NullString{},  // upstream_originator
+			sql.NullString{},  // upstream_user_agent
+			sql.NullString{},  // upstream_version
 			sql.NullString{},  // upstream_request_id
 			sql.NullString{},  // session_id
 			false,             // native_compaction_v2

@@ -63,9 +63,28 @@ const messages: Record<string, string> = {
   'admin.usage.billingModeImage': 'Image',
 	'admin.usage.requestIdCopied': 'Request ID copied',
 	'admin.usage.upstreamRequestIdCopied': 'Upstream ID copied',
+	'admin.usage.upstreamTurnState': 'Upstream Turn State',
+	'admin.usage.turnStateNotSent': 'Not sent',
+	'admin.usage.turnStateUnknown': 'Not recorded',
+	'admin.usage.turnStateCopied': 'Turn State copied',
+	'admin.usage.turnStateViewDetails': 'View Turn State details',
+	'admin.usage.turnStateDetails': 'Turn State details',
+	'admin.usage.turnStateLength': 'Length',
+	'admin.usage.turnStateHandshakeHint': 'Handshake hint',
+	'admin.usage.upstreamOriginator': 'Upstream Originator',
+	'admin.usage.upstreamUserAgent': 'Upstream User-Agent',
+	'admin.usage.upstreamVersion': 'Upstream Version',
+	'admin.usage.upstreamOriginatorDetails': 'Upstream Originator details',
+	'admin.usage.upstreamUserAgentDetails': 'Upstream User-Agent details',
+	'admin.usage.upstreamVersionDetails': 'Upstream Version details',
+	'admin.usage.upstreamHeaderViewDetails': 'View upstream header details',
+	'admin.usage.upstreamHeaderNotSent': 'Not sent',
+	'admin.usage.upstreamHeaderUnknown': 'Not recorded',
+	'admin.usage.upstreamHeaderCopied': 'Upstream header copied',
 	'keys.copied': 'Copied',
 	'keys.copyToClipboard': 'Copy to clipboard',
 	'common.copyFailed': 'Copy failed',
+	'common.close': 'Close',
 	'usage.requestedModel': 'Requested',
 	'usage.sentUpstreamModel': 'Sent upstream',
 	'usage.upstreamResponseModel': 'Upstream response',
@@ -95,6 +114,10 @@ const DataTableStub = {
         <slot name="cell-cost" :row="row" />
         <slot name="cell-request_id" :row="row" />
         <slot name="cell-upstream_request_id" :row="row" />
+        <slot name="cell-upstream_turn_state" :row="row" />
+        <slot name="cell-upstream_originator" :row="row" />
+        <slot name="cell-upstream_user_agent" :row="row" />
+        <slot name="cell-upstream_version" :row="row" />
       </div>
     </div>
   `,
@@ -764,5 +787,117 @@ describe('admin UsageTable IP geolocation batch toolbar', () => {
     })
     expect(wrapper.text()).toContain('121.35.47.43')
     expect(wrapper.text()).toContain('CN · Guangdong · Shenzhen')
+  })
+})
+
+describe('admin UsageTable upstream request diagnostics', () => {
+  const mountDiagnostics = (data: Record<string, unknown>[]) => mount(UsageTable, {
+    props: { data, loading: false, columns: [] },
+    global: {
+      stubs: {
+        DataTable: DataTableStub,
+        EmptyState: true,
+        Icon: true,
+        Teleport: true,
+      },
+    },
+  })
+
+  it('shows only Turn State length until the detail dialog is opened', async () => {
+    const turnState = `{"state":"${'x'.repeat(280)}"}`
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const wrapper = mountDiagnostics([
+      { ...baseImageRow, request_id: 'turn-sent', upstream_turn_state: turnState, openai_ws_mode: true },
+      { ...baseImageRow, request_id: 'turn-empty', upstream_turn_state: '' },
+      { ...baseImageRow, request_id: 'turn-historical', upstream_turn_state: null },
+    ])
+
+    const button = wrapper.get('[data-testid="turn-state-length"]')
+    expect(button.text()).toBe(String(turnState.length))
+    expect(wrapper.html()).not.toContain(turnState)
+    expect(wrapper.text()).toContain('Not sent')
+    expect(wrapper.text()).toContain('Not recorded')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+
+    await button.trigger('click')
+    expect(wrapper.get('[data-testid="upstream-header-detail-value"]').text()).toBe(turnState)
+    expect(wrapper.get('[role="dialog"]').text()).toContain('Handshake hint')
+    await wrapper.get('[data-testid="upstream-header-copy"]').trigger('click')
+    expect(writeText).toHaveBeenCalledWith(turnState)
+    await wrapper.get('[aria-label="Close modal"]').trigger('click')
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps upstream identity cells compact and reveals the exact value on click', async () => {
+    const originator = `client-${'o'.repeat(48)}`
+    const userAgent = `Codex Desktop/0.200.1 (${('Mac OS 26.2.0; arm64 ').repeat(3)}) terminal`
+    const version = `0.200.1-${'v'.repeat(24)}`
+    const wrapper = mountDiagnostics([
+      {
+        ...baseImageRow,
+        request_id: 'identity-full',
+        upstream_originator: originator,
+        upstream_user_agent: userAgent,
+        upstream_version: version,
+      },
+      {
+        ...baseImageRow,
+        request_id: 'identity-empty',
+        upstream_originator: '',
+        upstream_user_agent: null,
+        upstream_version: '',
+      },
+    ])
+
+    expect(wrapper.get('[data-testid="upstream-originator-summary"]').text()).not.toBe(originator)
+    expect(wrapper.get('[data-testid="upstream-user-agent-summary"]').text()).toBe('Codex Desktop/0.200.1')
+    expect(wrapper.get('[data-testid="upstream-version-summary"]').text()).not.toBe(version)
+    expect(wrapper.html()).not.toContain(originator)
+    expect(wrapper.html()).not.toContain(userAgent)
+    expect(wrapper.html()).not.toContain(version)
+    expect(wrapper.text()).toContain('Not sent')
+    expect(wrapper.text()).toContain('Not recorded')
+
+    const cases = [
+      ['upstream-originator-summary', originator, 'Upstream Originator details'],
+      ['upstream-user-agent-summary', userAgent, 'Upstream User-Agent details'],
+      ['upstream-version-summary', version, 'Upstream Version details'],
+    ] as const
+    for (const [testId, value, title] of cases) {
+      await wrapper.get(`[data-testid="${testId}"]`).trigger('click')
+      expect(wrapper.get('[role="dialog"]').text()).toContain(title)
+      expect(wrapper.get('[data-testid="upstream-header-detail-value"]').text()).toBe(value)
+      await wrapper.get('[aria-label="Close modal"]').trigger('click')
+    }
+  })
+
+  it('shows short upstream identity values directly and keeps them clickable', async () => {
+    const originator = 'codex-origin'
+    const userAgent = 'Agent Seven'
+    const version = 'v9'
+    const wrapper = mountDiagnostics([{
+      ...baseImageRow,
+      request_id: 'identity-short',
+      upstream_originator: originator,
+      upstream_user_agent: userAgent,
+      upstream_version: version,
+    }])
+
+    const cases = [
+      ['upstream-originator-summary', originator],
+      ['upstream-user-agent-summary', userAgent],
+      ['upstream-version-summary', version],
+    ] as const
+    for (const [testId, value] of cases) {
+      const button = wrapper.get(`[data-testid="${testId}"]`)
+      expect(button.text()).toBe(value)
+      expect(button.attributes('aria-label')).toContain(value)
+
+      await button.trigger('click')
+      expect(wrapper.get('[data-testid="upstream-header-detail-value"]').text()).toBe(value)
+      await wrapper.get('[aria-label="Close modal"]').trigger('click')
+    }
   })
 })

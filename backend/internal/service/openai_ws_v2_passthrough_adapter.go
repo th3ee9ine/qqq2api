@@ -947,12 +947,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
 	var handshakeHeaders http.Header
+	var sentIdentity *upstreamIdentitySnapshot
 	for {
 		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
 		SanitizeOutboundGatewayIdentity(headers)
+		sentIdentity = snapshotUpstreamIdentity(headers)
+		captureUpstreamIdentity(ctx, sentIdentity)
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
@@ -1313,6 +1316,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					Duration:                      turn.Duration,
 					FirstTokenMs:                  turn.FirstTokenMs,
 				}
+				sentIdentity.applyToOpenAIResult(turnResult)
 				logOpenAIWSV2Passthrough(
 					"relay_turn_completed account_id=%d turn=%d request_id=%s terminal_event=%s turn_requested_model=%s turn_upstream_model=%s duration_ms=%d first_token_ms=%d input_tokens=%d output_tokens=%d cache_read_tokens=%d",
 					account.ID,
@@ -1366,7 +1370,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				if eventType == "response.created" {
 					failureAccountSideEffectsApplied = false
 				}
-				if (eventType == "error" || eventType == "response.failed") && markOpenAIWSV2PassthroughCyberPolicy(c, payload) {
+				if (eventType == "error" || eventType == "response.failed") && markOpenAIWSV2PassthroughCyberPolicy(c, payload, sentIdentity) {
 					return nil
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
@@ -1452,6 +1456,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		Duration:                      relayResult.Duration,
 		FirstTokenMs:                  relayResult.FirstTokenMs,
 	}
+	sentIdentity.applyToOpenAIResult(result)
 
 	turnCount := int(completedTurns.Load())
 	if relayExit == nil {
@@ -1572,10 +1577,12 @@ func openAIWSPassthroughRelayClientClose(exit openaiwsv2.RelayExit, completedTur
 	return 0, "", false
 }
 
-func markOpenAIWSV2PassthroughCyberPolicy(c *gin.Context, payload []byte) bool {
+func markOpenAIWSV2PassthroughCyberPolicy(c *gin.Context, payload []byte, sentIdentity *upstreamIdentitySnapshot) bool {
 	usage := OpenAIUsage{}
 	parseOpenAIWSResponseUsageFromCompletedEvent(payload, &usage)
-	return markOpenAICyberPolicyEvent(c, payload, http.StatusOK, &usage)
+	marked := markOpenAICyberPolicyEvent(c, payload, http.StatusOK, &usage)
+	sentIdentity.applyToCyberPolicyMark(GetOpsCyberPolicy(c))
+	return marked
 }
 
 func (s *OpenAIGatewayService) mapOpenAIWSPassthroughDialError(

@@ -103,6 +103,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	if request != nil {
 		normalizeLegacyOpenAIOutboundRequestBody(request)
 		SanitizeOutboundGatewayIdentity(request.Header)
+		request = snapshotUpstreamRequestIdentity(request)
 	}
 	var capture *DebugWorkbenchAttemptCapture
 	if request != nil && account != nil {
@@ -118,6 +119,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		s.tlsFPProfileService,
 		false,
 	)
+	request = snapshotDispatchedUpstreamRequest(request, response)
 	if handled {
 		capture.MarkPlugin()
 	}

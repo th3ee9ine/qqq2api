@@ -33,6 +33,10 @@ const messages: Record<string, string> = {
   'admin.dashboard.hour': 'Hour',
 	'admin.usage.requestId': 'Request ID',
 	'admin.usage.upstreamRequestId': 'Upstream ID',
+	'admin.usage.upstreamTurnState': 'Upstream Turn State',
+	'admin.usage.upstreamOriginator': 'Upstream Originator',
+	'admin.usage.upstreamUserAgent': 'Upstream User-Agent',
+	'admin.usage.upstreamVersion': 'Upstream Version',
 	'usage.requestedModel': 'Requested model',
 	'usage.sentUpstreamModel': 'Sent upstream model',
 	'usage.upstreamResponseModel': 'Upstream response model',
@@ -480,6 +484,52 @@ describe('admin UsageView request ID column visibility', () => {
 
     expect(usageTable.props('columns')).toEqual(
       expect.arrayContaining([expect.objectContaining({ key: 'upstream_request_id', label: 'Upstream ID' })]),
+    )
+  })
+
+  it('exposes all upstream identity columns and persists an explicit hidden choice', async () => {
+    const wrapper = mount(UsageView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          UsageStatsCards: true,
+          UsageFilters: UsageFiltersStub,
+          UsageTable: UsageTableStub,
+          UsageExportProgress: true,
+          UsageCleanupDialog: true,
+          AuditLogModal: true,
+          Pagination: true,
+          Select: true,
+          DateRangePicker: true,
+          Icon: true,
+          TokenUsageTrend: true,
+          ModelDistributionChart: true,
+          GroupDistributionChart: true,
+          EndpointDistributionChart: true,
+        },
+      },
+    })
+    await wrapper.vm.$nextTick()
+
+    const usageTable = wrapper.findComponent(UsageTableStub)
+    expect(usageTable.props('columns')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'upstream_turn_state', label: 'Upstream Turn State' }),
+      expect.objectContaining({ key: 'upstream_originator', label: 'Upstream Originator' }),
+      expect.objectContaining({ key: 'upstream_user_agent', label: 'Upstream User-Agent' }),
+      expect.objectContaining({ key: 'upstream_version', label: 'Upstream Version' }),
+    ]))
+
+    await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
+    const turnStateToggle = wrapper.findAll('button').find((button) => button.text() === 'Upstream Turn State')
+    expect(turnStateToggle).toBeDefined()
+    await turnStateToggle!.trigger('click')
+
+    expect(usageTable.props('columns')).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'upstream_turn_state' })]),
+    )
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      'usage-hidden-columns',
+      expect.stringContaining('upstream_turn_state'),
     )
   })
 })

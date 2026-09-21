@@ -66,15 +66,26 @@ type LiveCallRecord struct {
 	UserAgent       string
 	IPAddress       string
 	InboundEndpoint string
+	// Upstream identity is the request that successfully created this Live
+	// call. Nil means the outbound request was not observed; a non-nil empty
+	// value means it was observed without that header.
+	UpstreamTurnState  *string
+	UpstreamOriginator *string
+	UpstreamUserAgent  *string
+	UpstreamVersion    *string
 	// AttestationCiphertext 仅用于让同一会话的 Sideband 复用创建时的证明。
 	AttestationCiphertext string
 }
 
 type LiveCallCreated struct {
-	SDP      []byte
-	CallID   string
-	Location string
-	Account  *Account
+	SDP                []byte
+	CallID             string
+	Location           string
+	Account            *Account
+	UpstreamTurnState  *string
+	UpstreamOriginator *string
+	UpstreamUserAgent  *string
+	UpstreamVersion    *string
 }
 
 // LiveCallStore 由 GatewayCache 的 Redis 实现可选提供，避免扩大旧缓存接口。

@@ -222,8 +222,9 @@ func TestProxyResponsesWebSocketFromClient_MarksCyberPolicyBeforeEarlyReturn(t *
 			cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 
 			captureConn := &openAIWSCaptureConn{events: [][]byte{append([]byte(nil), tt.upstreamEvent...)}}
+			captureDialer := &openAIWSCaptureDialer{conn: captureConn}
 			pool := newOpenAIWSConnPool(cfg)
-			pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn})
+			pool.setClientDialerForTest(captureDialer)
 			svc := &OpenAIGatewayService{
 				cfg:              cfg,
 				httpUpstream:     &httpUpstreamRecorder{},
@@ -262,6 +263,8 @@ func TestProxyResponsesWebSocketFromClient_MarksCyberPolicyBeforeEarlyReturn(t *
 				recorder := httptest.NewRecorder()
 				ginCtx, _ := gin.CreateTestContext(recorder)
 				ginCtx.Request = r.Clone(r.Context())
+				ginCtx.Request.Header.Set(openAIWSTurnStateHeader, "ingress-turn-state")
+				ginCtx.Request.Header.Set("User-Agent", "ingress-agent/9.9.9")
 				hooks := &OpenAIWSIngressHooks{AfterTurn: func(_ int, _ *OpenAIForwardResult, _ error) {
 					markCh <- GetOpsCyberPolicy(ginCtx)
 				}}
@@ -294,6 +297,20 @@ func TestProxyResponsesWebSocketFromClient_MarksCyberPolicyBeforeEarlyReturn(t *
 				require.Equal(t, "cyber_policy", mark.Code)
 				require.Equal(t, tt.wantInput, mark.UpstreamInTok)
 				require.Equal(t, tt.wantOutput, mark.UpstreamOutTok)
+				require.NotNil(t, mark.UpstreamTurnState)
+				require.Equal(t, "ingress-turn-state", *mark.UpstreamTurnState)
+				require.NotNil(t, mark.UpstreamOriginator)
+				require.NotNil(t, mark.UpstreamUserAgent)
+				require.Equal(t, "ingress-agent/9.9.9", *mark.UpstreamUserAgent)
+				require.NotNil(t, mark.UpstreamVersion)
+
+				captureDialer.mu.Lock()
+				dialHeaders := captureDialer.lastHeaders.Clone()
+				captureDialer.mu.Unlock()
+				require.Equal(t, *mark.UpstreamTurnState, dialHeaders.Get(openAIWSTurnStateHeader))
+				require.Equal(t, *mark.UpstreamOriginator, dialHeaders.Get("Originator"))
+				require.Equal(t, *mark.UpstreamUserAgent, dialHeaders.Get("User-Agent"))
+				require.Equal(t, *mark.UpstreamVersion, dialHeaders.Get("Version"))
 			case <-time.After(3 * time.Second):
 				t.Fatal("AfterTurn did not observe the cyber mark")
 			}

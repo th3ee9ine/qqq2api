@@ -194,6 +194,16 @@ func (l *openAIWSConnLease) HandshakeHeaders() http.Header {
 	return cloneHeader(l.conn.handshakeHeaders)
 }
 
+// SentIdentity returns the immutable outbound headers used to establish this
+// connection. Reused leases deliberately report the original handshake rather
+// than the current request's candidate headers.
+func (l *openAIWSConnLease) SentIdentity() *upstreamIdentitySnapshot {
+	if l == nil || l.conn == nil {
+		return nil
+	}
+	return l.conn.sentIdentity
+}
+
 func (l *openAIWSConnLease) IsPrewarmed() bool {
 	if l == nil || l.conn == nil {
 		return false
@@ -296,6 +306,7 @@ type openAIWSConn struct {
 	id string
 	ws openAIWSClientConn
 
+	sentIdentity           *upstreamIdentitySnapshot
 	handshakeHeaders       http.Header
 	handshakeCompatibility openAIWSHandshakeCompatibilityKey
 	routingAffinity        string
@@ -2328,6 +2339,9 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 			return nil, err
 		}
 	}
+	SanitizeOutboundGatewayIdentity(headers)
+	sentIdentity := snapshotUpstreamIdentity(headers)
+	captureUpstreamIdentity(ctx, sentIdentity)
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
 	if err != nil {
 		var handshakeErr *openAIWSHandshakeError
@@ -2351,6 +2365,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	id := p.nextConnID(req.Account.ID)
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
+	pooledConn.sentIdentity = sentIdentity
 	accountID := req.Account.ID
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)
