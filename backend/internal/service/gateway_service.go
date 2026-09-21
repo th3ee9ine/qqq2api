@@ -285,6 +285,8 @@ func safeHeaderValueForLog(key string, v string) string {
 	switch key {
 	case "authorization", "x-api-key":
 		return redactAuthHeaderValue(v)
+	case "x-codex-turn-state":
+		return "[redacted]"
 	default:
 		return strings.TrimSpace(v)
 	}
@@ -611,8 +613,11 @@ type ForwardResult struct {
 	RequestID string
 	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
 	UpstreamHeaders http.Header
-	// Upstream* fields are immutable snapshots of the final outbound attempt.
-	UpstreamTurnState  *string `json:"-"`
+	// UpstreamTurnState is a deprecated compatibility field. Production capture
+	// deliberately leaves it nil so the opaque value cannot reach usage storage.
+	UpstreamTurnState *string `json:"-"`
+	// The remaining Upstream* fields are immutable non-secret snapshots of the
+	// final outbound attempt.
 	UpstreamOriginator *string `json:"-"`
 	UpstreamUserAgent  *string `json:"-"`
 	UpstreamVersion    *string `json:"-"`

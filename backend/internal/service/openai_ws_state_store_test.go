@@ -84,6 +84,28 @@ func TestOpenAIWSStateStore_SessionTurnStateTTL(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestOpenAIWSStateStore_SessionTurnStateIsolatedByModel(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	const accountID int64 = 42
+	store.BindSessionTurnState(9, accountID, "session_hash_model", "state-a", time.Minute, "gpt-5.6-sol")
+	store.BindSessionTurnState(9, accountID, "session_hash_model", "state-b", time.Minute, "gpt-6-astra")
+
+	stateA, ok := store.GetSessionTurnState(9, accountID, "session_hash_model", "GPT-5.6-SOL")
+	require.True(t, ok)
+	require.Equal(t, "state-a", stateA)
+	stateB, ok := store.GetSessionTurnState(9, accountID, "session_hash_model", "gpt-6-astra")
+	require.True(t, ok)
+	require.Equal(t, "state-b", stateB)
+	_, ok = store.GetSessionTurnState(9, accountID, "session_hash_model", "gpt-5.6-terra")
+	require.False(t, ok)
+
+	store.DeleteSessionTurnState(9, "session_hash_model")
+	_, ok = store.GetSessionTurnState(9, accountID, "session_hash_model", "gpt-5.6-sol")
+	require.False(t, ok)
+	_, ok = store.GetSessionTurnState(9, accountID, "session_hash_model", "gpt-6-astra")
+	require.False(t, ok)
+}
+
 func TestOpenAIWSStateStore_SessionConnTTL(t *testing.T) {
 	store := NewOpenAIWSStateStore(nil)
 	store.BindSessionConn(9, "session_hash_conn_1", "conn_1", 30*time.Millisecond)

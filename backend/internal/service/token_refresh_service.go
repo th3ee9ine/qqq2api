@@ -935,7 +935,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 				s.postRefreshStateSyncWithCleanup(ctx, account)
 				return nil
 			}
-			s.postRefreshActions(ctx, account)
+			s.postRefreshActions(ctx, account, credentialsPersisted)
 			return nil
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -1144,7 +1144,7 @@ func (s *TokenRefreshService) retryBackoff(accountID int64, attempt int) time.Du
 }
 
 // postRefreshActions 刷新成功后的后续动作（清除错误状态、缓存失效、调度器同步等）
-func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *Account) {
+func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *Account, credentialsPersisted bool) {
 	s.clearAntigravityForceTokenRefresh(ctx, account, "success")
 
 	// Antigravity 账户：如果之前是因为缺少 project_id 而标记为 error，现在成功获取到了，清除错误状态
@@ -1182,7 +1182,7 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 			}
 		}
 	}
-	s.postRefreshStateSync(ctx, account)
+	s.postRefreshStateSync(ctx, account, credentialsPersisted)
 	// OpenAI OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则尝试关闭训练数据共享
 	s.ensureOpenAIPrivacy(ctx, account)
 	// Antigravity OAuth: 刷新成功后，检查是否已设置 privacy_mode，未设置则调用 setUserSettings
@@ -1200,10 +1200,17 @@ func (s *TokenRefreshService) postRefreshStateSyncWithCleanup(parent context.Con
 	}
 	ctx, cancel := context.WithTimeout(cleanupParent, defaultTokenRefreshCleanupTimeout)
 	defer cancel()
-	s.postRefreshStateSync(ctx, account)
+	s.postRefreshStateSync(ctx, account, true)
 }
 
-func (s *TokenRefreshService) postRefreshStateSync(ctx context.Context, account *Account) {
+func (s *TokenRefreshService) postRefreshStateSync(ctx context.Context, account *Account, credentialsPersisted bool) {
+	// A successful credential persistence changes the upstream identity lease.
+	// Invalidate parent and shadow connection/turn-state caches before publishing
+	// the refreshed account to other runtime caches, so an old response cannot
+	// repopulate state during the synchronization window.
+	if credentialsPersisted {
+		invalidateOpenAIAccountRuntimeStateWithShadows(ctx, s.runtimeBlocker, s.accountRepo, account)
+	}
 	// 对所有 OAuth 账号调用缓存失效（InvalidateToken 内部根据平台判断是否需要处理）
 	if s.cacheInvalidator != nil && account.Type == AccountTypeOAuth {
 		if err := s.cacheInvalidator.InvalidateToken(ctx, account); err != nil {

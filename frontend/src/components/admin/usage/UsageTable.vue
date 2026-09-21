@@ -273,22 +273,6 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
-        <template #cell-upstream_turn_state="{ row }">
-          <button
-            v-if="row.upstream_turn_state"
-            type="button"
-            class="rounded px-1 py-0.5 font-mono text-xs tabular-nums text-primary-600 underline decoration-dotted underline-offset-4 hover:bg-primary-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-900/20"
-            data-testid="turn-state-length"
-            :title="t('admin.usage.turnStateViewDetails')"
-            :aria-label="`${t('admin.usage.turnStateDetails')}: ${row.upstream_turn_state.length}`"
-            aria-haspopup="dialog"
-            @click="openTurnStateDetails(row.upstream_turn_state, !!row.openai_ws_mode)"
-          >{{ row.upstream_turn_state.length }}</button>
-          <span v-else class="text-xs text-gray-400 dark:text-gray-500">
-            {{ row.upstream_turn_state === '' ? t('admin.usage.turnStateNotSent') : t('admin.usage.turnStateUnknown') }}
-          </span>
-        </template>
-
         <template #cell-upstream_originator="{ row }">
           <button
             v-if="hasUpstreamHeaderValue(row.upstream_originator)"
@@ -355,12 +339,6 @@
     @close="headerDetails = null"
   >
     <div v-if="headerDetails" class="space-y-3">
-      <p v-if="headerDetails.kind === 'turn_state'" class="text-sm text-gray-500 dark:text-gray-400">
-        {{ t('admin.usage.turnStateLength') }}: <span class="font-mono">{{ headerDetails.value.length }}</span>
-      </p>
-      <p v-if="headerDetails.websocket" class="text-xs text-gray-500 dark:text-gray-400">
-        {{ t('admin.usage.turnStateHandshakeHint') }}
-      </p>
       <pre data-testid="upstream-header-detail-value" class="max-h-72 select-all overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-gray-100 p-3 font-mono text-xs text-gray-700 dark:bg-dark-800 dark:text-gray-200">{{ headerDetails.value }}</pre>
     </div>
     <template #footer>
@@ -370,7 +348,7 @@
         type="button"
         class="btn btn-primary"
         data-testid="upstream-header-copy"
-        @click="copyIdentifier(headerDetails.value, headerCopiedMessage(headerDetails.kind))"
+        @click="copyIdentifier(headerDetails.value, headerCopiedMessage())"
       >
         {{ copiedRequestId === headerDetails.value ? t('keys.copied') : t('keys.copyToClipboard') }}
       </button>
@@ -684,8 +662,8 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const copiedRequestId = ref<string | null>(null)
-type HeaderDetailKind = 'turn_state' | 'originator' | 'user_agent' | 'version'
-const headerDetails = ref<{ kind: HeaderDetailKind; value: string; websocket?: boolean } | null>(null)
+type HeaderDetailKind = 'originator' | 'user_agent' | 'version'
+const headerDetails = ref<{ kind: HeaderDetailKind; value: string } | null>(null)
 const showAccountBilling = props.showAccountBilling
 const showUpstreamEndpoint = props.showUpstreamEndpoint
 const ipGeoBatchLoading = ref(false)
@@ -772,7 +750,7 @@ const truncateHeaderSummary = (value: string, maxLength: number): string => {
 /** Show short identities directly while keeping long header values scannable. */
 const headerSummary = (
   value: string | null | undefined,
-  kind: Exclude<HeaderDetailKind, 'turn_state'>,
+  kind: HeaderDetailKind,
 ): string => {
   const normalized = value?.trim() || ''
   if (!normalized) return ''
@@ -788,12 +766,8 @@ const headerSummary = (
   return truncateHeaderSummary(normalized, maxLength)
 }
 
-const openTurnStateDetails = (value: string, websocket: boolean) => {
-  headerDetails.value = { kind: 'turn_state', value, websocket }
-}
-
 const openUpstreamHeaderDetails = (
-  kind: Exclude<HeaderDetailKind, 'turn_state'>,
+  kind: HeaderDetailKind,
   value: string | null | undefined,
 ) => {
   const raw = value ?? ''
@@ -802,16 +776,12 @@ const openUpstreamHeaderDetails = (
 }
 
 const headerDetailTitle = (kind: HeaderDetailKind): string => {
-  if (kind === 'turn_state') return t('admin.usage.turnStateDetails')
   if (kind === 'originator') return t('admin.usage.upstreamOriginatorDetails')
   if (kind === 'user_agent') return t('admin.usage.upstreamUserAgentDetails')
   return t('admin.usage.upstreamVersionDetails')
 }
 
-const headerCopiedMessage = (kind: HeaderDetailKind): string => {
-  if (kind === 'turn_state') return t('admin.usage.turnStateCopied')
-  return t('admin.usage.upstreamHeaderCopied')
-}
+const headerCopiedMessage = (): string => t('admin.usage.upstreamHeaderCopied')
 
 // Tooltip state - cost
 const tooltipVisible = ref(false)

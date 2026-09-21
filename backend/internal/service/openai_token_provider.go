@@ -197,6 +197,9 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		} else if result.Refreshed {
 			p.metrics.refreshSuccess.Add(1)
 			account = result.Account
+			if result.NewCredentials != nil {
+				invalidateOpenAIAccountRuntimeStateWithShadows(ctx, p.runtimeBlocker, p.accountRepo, account)
+			}
 			expiresAt = account.GetCredentialAsTime("expires_at")
 		} else {
 			account = result.Account

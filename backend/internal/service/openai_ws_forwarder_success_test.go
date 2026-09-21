@@ -1325,7 +1325,7 @@ func TestOpenAIGatewayService_Forward_WSv1_Unsupported(t *testing.T) {
 	require.Nil(t, upstream.lastReq, "WSv1 不支持时不应触发 HTTP 上游请求")
 }
 
-func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2_APIKeyDoesNotReplayTurnStateOnReconnect(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var connIndex atomic.Int64
@@ -1381,6 +1381,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 0
+	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,
@@ -1389,6 +1390,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
 		toolCorrector:    NewCodexToolCorrector(),
 	}
+	svc.initCodexTurnStateCollector()
 
 	account := &Account{
 		ID:          49,
@@ -1421,9 +1423,8 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	sessionHash, _ := resolveOpenAIWSExecutionScope(c1, reqBody, getAPIKeyIDFromContext(c1))
 	require.NotEmpty(t, sessionHash)
 	store := svc.getOpenAIWSStateStore()
-	turnState, ok := store.GetSessionTurnState(0, account.ID, sessionHash)
-	require.True(t, ok)
-	require.Equal(t, "turn_state_first", turnState)
+	_, ok := store.GetSessionTurnState(0, account.ID, sessionHash, "gpt-5.1")
+	require.False(t, ok, "API-key accounts must not write the Codex turn-state store")
 
 	// 主动淘汰连接，模拟下一次请求发生重连。
 	connID, hasConn := store.GetResponseConn(result1.RequestID)
@@ -1443,7 +1444,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	secondHandshakeHeaders := <-headersCh
 	require.Equal(t, "turn_meta_1", firstHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
 	require.Equal(t, "turn_meta_2", secondHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
-	require.Equal(t, "turn_state_first", secondHandshakeHeaders.Get("X-Codex-Turn-State"))
+	require.Empty(t, secondHandshakeHeaders.Get("X-Codex-Turn-State"))
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {

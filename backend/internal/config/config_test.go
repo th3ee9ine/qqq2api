@@ -2647,3 +2647,97 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 		t.Fatalf("image stream timeout = %d, want greater than ordinary stream timeout %d", cfg.Gateway.ImageStreamDataIntervalTimeout, cfg.Gateway.StreamDataIntervalTimeout)
 	}
 }
+
+func TestLoadDefaultGatewayCodexTurnStateConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	turnState := cfg.Gateway.CodexTurnState
+	require.True(t, turnState.Enabled)
+	require.False(t, turnState.InjectionEnabled)
+	require.Equal(t, 15, turnState.ProbeTimeoutSeconds)
+	require.Equal(t, 1200, turnState.RefreshBeforeSeconds)
+	require.Equal(t, 180, turnState.CooldownSeconds)
+	require.Equal(t, 3600, turnState.TTLSeconds)
+	require.Zero(t, turnState.ExpectedBlocks)
+	require.Equal(t, 2048, turnState.MaxEntries)
+	require.Equal(t, 2048, turnState.MaxTokenBytes)
+	require.Equal(t, int64(256*1024), turnState.MaxProbeResponseBytes)
+	require.False(t, turnState.HoldActive)
+}
+
+func TestValidateGatewayCodexTurnStateConfig(t *testing.T) {
+	loadValid := func(t *testing.T) *Config {
+		t.Helper()
+		resetViperWithJWTSecret(t)
+		cfg, err := Load()
+		require.NoError(t, err)
+		return cfg
+	}
+
+	for _, test := range []struct {
+		name    string
+		mutate  func(*GatewayCodexTurnStateConfig)
+		wantErr string
+	}{
+		{name: "probe timeout zero", mutate: func(c *GatewayCodexTurnStateConfig) { c.ProbeTimeoutSeconds = 0 }, wantErr: "probe_timeout_seconds"},
+		{name: "probe timeout too large", mutate: func(c *GatewayCodexTurnStateConfig) { c.ProbeTimeoutSeconds = 121 }, wantErr: "probe_timeout_seconds"},
+		{name: "ttl too small", mutate: func(c *GatewayCodexTurnStateConfig) { c.TTLSeconds = 119 }, wantErr: "ttl_seconds"},
+		{name: "ttl too large", mutate: func(c *GatewayCodexTurnStateConfig) { c.TTLSeconds = 86401 }, wantErr: "ttl_seconds"},
+		{name: "negative refresh", mutate: func(c *GatewayCodexTurnStateConfig) { c.RefreshBeforeSeconds = -1 }, wantErr: "refresh_before_seconds"},
+		{name: "refresh reaches ttl", mutate: func(c *GatewayCodexTurnStateConfig) { c.RefreshBeforeSeconds = c.TTLSeconds }, wantErr: "refresh_before_seconds"},
+		{name: "negative cooldown", mutate: func(c *GatewayCodexTurnStateConfig) { c.CooldownSeconds = -1 }, wantErr: "cooldown_seconds"},
+		{name: "cooldown too large", mutate: func(c *GatewayCodexTurnStateConfig) { c.CooldownSeconds = 3601 }, wantErr: "cooldown_seconds"},
+		{name: "negative expected blocks", mutate: func(c *GatewayCodexTurnStateConfig) { c.ExpectedBlocks = -1 }, wantErr: "expected_blocks"},
+		{name: "expected blocks too large", mutate: func(c *GatewayCodexTurnStateConfig) { c.ExpectedBlocks = 65 }, wantErr: "expected_blocks"},
+		{name: "max entries zero", mutate: func(c *GatewayCodexTurnStateConfig) { c.MaxEntries = 0 }, wantErr: "max_entries"},
+		{name: "max entries too large", mutate: func(c *GatewayCodexTurnStateConfig) { c.MaxEntries = 65537 }, wantErr: "max_entries"},
+		{name: "max token bytes zero", mutate: func(c *GatewayCodexTurnStateConfig) { c.MaxTokenBytes = 0 }, wantErr: "max_token_bytes"},
+		{name: "max token bytes too large", mutate: func(c *GatewayCodexTurnStateConfig) { c.MaxTokenBytes = 8193 }, wantErr: "max_token_bytes"},
+		{name: "max probe response bytes zero", mutate: func(c *GatewayCodexTurnStateConfig) { c.MaxProbeResponseBytes = 0 }, wantErr: "max_probe_response_bytes"},
+		{name: "max probe response bytes too large", mutate: func(c *GatewayCodexTurnStateConfig) { c.MaxProbeResponseBytes = 16*1024*1024 + 1 }, wantErr: "max_probe_response_bytes"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := loadValid(t)
+			test.mutate(&cfg.Gateway.CodexTurnState)
+			err := cfg.Validate()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "gateway.codex_turn_state."+test.wantErr)
+		})
+	}
+
+	t.Run("inclusive boundaries", func(t *testing.T) {
+		cfg := loadValid(t)
+		cfg.Gateway.CodexTurnState = GatewayCodexTurnStateConfig{
+			Enabled:               true,
+			InjectionEnabled:      true,
+			ProbeTimeoutSeconds:   120,
+			RefreshBeforeSeconds:  86399,
+			CooldownSeconds:       3600,
+			TTLSeconds:            86400,
+			ExpectedBlocks:        64,
+			MaxEntries:            65536,
+			MaxTokenBytes:         8192,
+			MaxProbeResponseBytes: 16 * 1024 * 1024,
+			HoldActive:            true,
+		}
+		require.NoError(t, cfg.Validate())
+	})
+
+	t.Run("disabled ignores collector-only bounds", func(t *testing.T) {
+		cfg := loadValid(t)
+		cfg.Gateway.CodexTurnState = GatewayCodexTurnStateConfig{
+			Enabled:               false,
+			ProbeTimeoutSeconds:   -1,
+			RefreshBeforeSeconds:  -1,
+			CooldownSeconds:       -1,
+			TTLSeconds:            -1,
+			ExpectedBlocks:        -1,
+			MaxEntries:            -1,
+			MaxTokenBytes:         -1,
+			MaxProbeResponseBytes: -1,
+		}
+		require.NoError(t, cfg.Validate())
+	})
+}

@@ -161,10 +161,10 @@ func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *test
 	require.Contains(t, string(adminJSON), `"upstream_model_mismatch":true`)
 }
 
-func TestUsageLogFromService_KeepsUpstreamIdentityAdminOnlyAndPreservesEmpty(t *testing.T) {
+func TestUsageLogFromService_NeverExposesTurnStateAndKeepsNonSecretIdentityAdminOnly(t *testing.T) {
 	t.Parallel()
 
-	turnState := "encrypted-turn-state"
+	turnState := "secret-turn-state-must-not-reach-api"
 	emptyOriginator := ""
 	userAgent := "codex-cli/1.2.3"
 	version := "1.2.3"
@@ -184,14 +184,14 @@ func TestUsageLogFromService_KeepsUpstreamIdentityAdminOnlyAndPreservesEmpty(t *
 	}
 
 	adminDTO := UsageLogFromServiceAdmin(log)
-	require.Equal(t, log.UpstreamTurnState, adminDTO.UpstreamTurnState)
 	require.Equal(t, log.UpstreamOriginator, adminDTO.UpstreamOriginator)
 	require.Equal(t, log.UpstreamUserAgent, adminDTO.UpstreamUserAgent)
 	require.Equal(t, log.UpstreamVersion, adminDTO.UpstreamVersion)
 
 	adminJSON, err := json.Marshal(adminDTO)
 	require.NoError(t, err)
-	require.Contains(t, string(adminJSON), `"upstream_turn_state":"encrypted-turn-state"`)
+	require.NotContains(t, string(adminJSON), "upstream_turn_state")
+	require.NotContains(t, string(adminJSON), turnState)
 	require.Contains(t, string(adminJSON), `"upstream_originator":""`)
 	require.Contains(t, string(adminJSON), `"upstream_user_agent":"codex-cli/1.2.3"`)
 	require.Contains(t, string(adminJSON), `"upstream_version":"1.2.3"`)

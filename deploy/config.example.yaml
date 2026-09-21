@@ -276,6 +276,38 @@ gateway:
   # 默认 false：保持纯文本 Codex 请求不被改写；客户端显式提供 image_generation tool 时，
   # 仍会在分组允许图片生成的情况下正常转发。
   codex_image_generation_bridge_enabled: false
+  # Collect and reuse the opaque X-Codex-Turn-State issued by the official
+  # ChatGPT Codex endpoint. This applies only to OpenAI OAuth and Setup Token
+  # accounts; API-key and third-party relay traffic is never enrolled.
+  # 采集并复用 ChatGPT Codex 官方端点签发的不透明 X-Codex-Turn-State。
+  # 仅适用于 OpenAI OAuth 与 Setup Token 账号；API Key 和第三方中转不会接入。
+  #
+  # State stays in bounded process memory and is isolated by account, immutable
+  # execution scope, and final upstream model. Raw values are never exposed by
+  # the reliability API. Envelope/block checks are shape heuristics only, not
+  # signature, entitlement, quota, or model-quality proof.
+  # 状态仅保存在有界进程内存中，按账号、不可变执行作用域和最终上游模型隔离；
+  # 可靠性 API 不暴露原始值。封装/块数检查仅是形状筛选，不代表签名、权限、配额或模型质量。
+  codex_turn_state:
+    enabled: true
+    # Opt in to active probes and collector injection. A cold cache miss sends
+    # one bounded model request, which consumes upstream quota and can add up to
+    # probe_timeout_seconds of latency. False keeps passive collection and valid
+    # native client-state forwarding without issuing extra model requests.
+    # 主动探测与缓存注入需显式开启。缓存冷启动会发送一次受限模型请求，消耗上游额度，
+    # 并可能增加最长 probe_timeout_seconds 的延迟。false 仍保留被动采集及合法原生状态透传。
+    injection_enabled: false
+    probe_timeout_seconds: 15
+    refresh_before_seconds: 1200
+    cooldown_seconds: 180
+    ttl_seconds: 3600
+    # 0 disables the encrypted-block-count shape heuristic.
+    # 0 表示关闭密文块数形状筛选。
+    expected_blocks: 0
+    max_entries: 2048
+    max_token_bytes: 2048
+    max_probe_response_bytes: 262144
+    hold_active: false
   # Optional: template file used to build the final top-level Codex `instructions`.
   # 可选：用于构建最终 Codex 顶层 `instructions` 的模板文件路径。
   #

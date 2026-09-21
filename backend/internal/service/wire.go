@@ -374,8 +374,8 @@ func ProvideOpenAICodexVersionSyncService(
 }
 
 // ProvideProxyExpiryService creates and starts ProxyExpiryService.
-func ProvideProxyExpiryService(proxyRepo ProxyRepository) *ProxyExpiryService {
-	svc := NewProxyExpiryService(proxyRepo, time.Minute)
+func ProvideProxyExpiryService(proxyRepo ProxyRepository, runtimeBlocker AccountRuntimeBlocker) *ProxyExpiryService {
+	svc := NewProxyExpiryService(proxyRepo, time.Minute, runtimeBlocker)
 	svc.Start()
 	return svc
 }

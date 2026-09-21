@@ -823,7 +823,6 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		ChannelID:               l.ChannelID,
 		ModelMappingChain:       l.ModelMappingChain,
 		UpstreamRequestID:       l.UpstreamRequestID,
-		UpstreamTurnState:       l.UpstreamTurnState,
 		UpstreamOriginator:      l.UpstreamOriginator,
 		UpstreamUserAgent:       l.UpstreamUserAgent,
 		UpstreamVersion:         l.UpstreamVersion,

@@ -30,16 +30,18 @@ type OpsReliabilityStatus struct {
 	Notes               []string                           `json:"notes"`
 }
 
-// OpsReliabilityTurnState reports native gateway capabilities only. It does
-// not claim an active collector or expose an opaque state value, session key,
-// account identifier, or heuristic quality score.
+// OpsReliabilityTurnState reports native gateway capabilities and, when the
+// optional collector is installed, its bounded aggregate health. It never
+// exposes an opaque state value, session key, account identifier, or heuristic
+// quality score.
 type OpsReliabilityTurnState struct {
-	Supported                       bool `json:"supported"`
-	HTTPEnabled                     bool `json:"http_enabled"`
-	WebSocketEnabled                bool `json:"websocket_enabled"`
-	CrossAccountProtection          bool `json:"cross_account_protection"`
-	HTTPCrossAccountProtection      bool `json:"http_cross_account_protection"`
-	WebSocketCrossAccountProtection bool `json:"websocket_cross_account_protection"`
+	Supported                       bool                              `json:"supported"`
+	HTTPEnabled                     bool                              `json:"http_enabled"`
+	WebSocketEnabled                bool                              `json:"websocket_enabled"`
+	CrossAccountProtection          bool                              `json:"cross_account_protection"`
+	HTTPCrossAccountProtection      bool                              `json:"http_cross_account_protection"`
+	WebSocketCrossAccountProtection bool                              `json:"websocket_cross_account_protection"`
+	Collector                       *OpsReliabilityTurnStateCollector `json:"collector,omitempty"`
 }
 
 type OpsReliabilityCooldown struct {
@@ -279,6 +281,7 @@ func (s *OpsService) GetReliabilityStatus(ctx context.Context) (*OpsReliabilityS
 			"Response-header, connection-establishment, first-output, and stream-interval timeouts are separate controls.",
 		},
 	}
+	status.TurnState.Collector = s.reliabilityTurnStateCollectorStatus(ctx)
 	var settingsErrors []string
 	status.Cooldowns, status.Limits, settingsErrors = s.reliabilitySettings(ctx)
 	status.Diagnostics.SourceErrors = append(status.Diagnostics.SourceErrors, settingsErrors...)
@@ -677,7 +680,7 @@ func reliabilityTurnStateFromConfig(cfg *config.Config) OpsReliabilityTurnState 
 	webSocketEnabled := false
 	if cfg != nil {
 		ws := cfg.Gateway.OpenAIWS
-		webSocketEnabled = ws.Enabled && !ws.ForceHTTP && (ws.OAuthEnabled || ws.APIKeyEnabled)
+		webSocketEnabled = ws.Enabled && !ws.ForceHTTP && ws.OAuthEnabled
 	}
 	return OpsReliabilityTurnState{
 		Supported:                       true,

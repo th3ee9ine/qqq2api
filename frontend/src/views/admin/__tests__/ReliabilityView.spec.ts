@@ -143,6 +143,91 @@ describe('ReliabilityView', () => {
     expect(wrapper.get('[data-testid="turn-state-websocket-protection"]').text()).toContain('admin.reliability.turnState.unprotectedValue')
   })
 
+  it('shows aggregate collector health without rendering an opaque state value', async () => {
+    setAggregateStatus({
+      turn_state: {
+        supported: true,
+        http_enabled: true,
+        websocket_enabled: true,
+        collector: {
+          enabled: true,
+          injection_enabled: true,
+          status: 'ready',
+          ready: true,
+          collecting: false,
+          active_entries: 3,
+          ready_candidates: 1,
+          observations: 12,
+          successes: 8,
+          failures: 2,
+          last_success_at: '2026-09-21T02:00:00Z',
+          last_failure_at: '2026-09-21T02:01:00Z',
+          last_error_code: 'probe_timeout',
+        },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-collector"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="turn-state-collector-status"]').text()).toContain('admin.reliability.turnState.collectorStatus.ready')
+    expect(wrapper.get('[data-testid="turn-state-collector-injection"]').text()).toContain('admin.reliability.turnState.collectorInjectionEnabled')
+    expect(wrapper.get('[data-testid="turn-state-collector-last-success"]').text()).not.toBe('UNAVAILABLE')
+    expect(wrapper.get('[data-testid="turn-state-collector-last-failure"]').text()).not.toBe('UNAVAILABLE')
+    expect(wrapper.text()).toContain('12')
+    expect(wrapper.text()).toContain('admin.reliability.turnState.collectorErrors.probe_timeout')
+    expect(wrapper.text()).not.toContain('X-Codex-Turn-State')
+  })
+
+  it.each(['cooldown', 'degraded'])('shows the %s collector state with injection disabled', async (collectorStatus) => {
+    setAggregateStatus({
+      turn_state: {
+        supported: true,
+        collector: {
+          enabled: true,
+          injection_enabled: false,
+          status: collectorStatus,
+          ready: false,
+          collecting: false,
+        },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-collector-status"]').text()).toContain(`admin.reliability.turnState.collectorStatus.${collectorStatus}`)
+    expect(wrapper.get('[data-testid="turn-state-collector-injection"]').text()).toContain('admin.reliability.turnState.collectorInjectionDisabled')
+  })
+
+  it('does not render unknown collector text or identity-bearing response fields', async () => {
+    const sensitiveValues = ['opaque-state-value', 'account-42', 'scope-secret', 'route-secret', 'proxy-secret', 'upstream free-form error']
+    setAggregateStatus({
+      turn_state: {
+        supported: true,
+        collector: {
+          enabled: true,
+          injection_enabled: true,
+          status: sensitiveValues[5],
+          last_error_code: sensitiveValues[5],
+          state: sensitiveValues[0],
+          account: sensitiveValues[1],
+          scope: sensitiveValues[2],
+          route: sensitiveValues[3],
+          proxy: sensitiveValues[4],
+        },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-collector-status"]').text()).toContain('admin.reliability.turnState.collectorUnknown')
+    expect(wrapper.get('[data-testid="turn-state-collector-last-error"]').text()).toContain('admin.reliability.turnState.collectorUnknown')
+    for (const value of sensitiveValues) expect(wrapper.text()).not.toContain(value)
+  })
+
   it('reloads aggregate status from the refresh action', async () => {
     const wrapper = mountView()
     await flushPromises()

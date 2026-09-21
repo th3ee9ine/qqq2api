@@ -165,11 +165,29 @@ export interface ReliabilityTurnStateSummary {
   cross_account_protection?: boolean
   http_cross_account_protection?: boolean
   websocket_cross_account_protection?: boolean
+  collector?: ReliabilityTurnStateCollectorSummary
   /** Optional aliases accepted while the aggregate projection is rolled out. */
   http_supported?: boolean
   websocket_supported?: boolean
   cross_account_protected?: boolean
   [key: string]: unknown
+}
+
+/** Aggregate collector health only; the opaque state value is never returned. */
+export interface ReliabilityTurnStateCollectorSummary {
+  enabled?: boolean
+  injection_enabled?: boolean
+  status?: string
+  ready?: boolean
+  collecting?: boolean
+  active_entries?: number
+  ready_candidates?: number
+  observations?: number
+  successes?: number
+  failures?: number
+  last_success_at?: string
+  last_failure_at?: string
+  last_error_code?: string
 }
 
 export interface ReliabilityDiagnostic {

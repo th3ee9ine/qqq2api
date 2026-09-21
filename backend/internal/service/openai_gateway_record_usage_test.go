@@ -294,6 +294,7 @@ func max(a, b int) int {
 }
 
 func TestOpenAIGatewayServiceRecordUsage_ZeroUsageStillWritesUsageLog(t *testing.T) {
+	secretTurnState := "secret-turn-state-must-not-be-persisted"
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	userRepo := &openAIRecordUsageUserRepoStub{}
@@ -303,10 +304,11 @@ func TestOpenAIGatewayServiceRecordUsage_ZeroUsageStillWritesUsageLog(t *testing
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 		Result: &OpenAIForwardResult{
-			RequestID: "resp_zero_usage",
-			Usage:     OpenAIUsage{},
-			Model:     "gpt-5.1",
-			Duration:  time.Second,
+			RequestID:         "resp_zero_usage",
+			UpstreamTurnState: &secretTurnState,
+			Usage:             OpenAIUsage{},
+			Model:             "gpt-5.1",
+			Duration:          time.Second,
 		},
 		APIKey:        &APIKey{ID: 1000, Quota: 100, Group: &Group{RateMultiplier: 1}},
 		User:          &User{ID: 2000},
@@ -323,6 +325,7 @@ func TestOpenAIGatewayServiceRecordUsage_ZeroUsageStillWritesUsageLog(t *testing
 	require.Equal(t, 0, quotaSvc.rateLimitCalls)
 
 	require.NotNil(t, usageRepo.lastLog)
+	require.Nil(t, usageRepo.lastLog.UpstreamTurnState)
 	require.Equal(t, "resp_zero_usage", usageRepo.lastLog.RequestID)
 	require.Zero(t, usageRepo.lastLog.InputTokens)
 	require.Zero(t, usageRepo.lastLog.OutputTokens)

@@ -9,10 +9,11 @@ import (
 )
 
 func TestSnapshotDispatchedUpstreamRequestCapturesFinalHeaders(t *testing.T) {
+	const secretTurnState = "secret-turn-state-must-not-be-captured"
 	ctx, capture := withUpstreamIdentityCapture(context.Background())
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://example.com/v1/responses", nil)
 	require.NoError(t, err)
-	request.Header.Set(openAICodexTurnStateHeader, "turn-before-transport")
+	request.Header.Set(openAICodexTurnStateHeader, secretTurnState)
 	request.Header.Set("Originator", "origin-before-transport")
 	request.Header.Set("User-Agent", "ua-before-transport")
 	request.Header.Set("Version", "version-before-transport")
@@ -20,35 +21,34 @@ func TestSnapshotDispatchedUpstreamRequestCapturesFinalHeaders(t *testing.T) {
 	request = snapshotUpstreamRequestIdentity(request)
 	beforeTransport := upstreamIdentityFromRequest(request)
 
-	request.Header.Set(openAICodexTurnStateHeader, "turn-final")
+	request.Header.Set(openAICodexTurnStateHeader, secretTurnState)
 	request.Header.Set("Originator", "origin-final")
 	request.Header.Set("User-Agent", "ua-final")
 	request.Header.Set("Version", "version-final")
 	response := &http.Response{Request: request}
 	request = snapshotDispatchedUpstreamRequest(request, response)
 
-	require.Equal(t, "turn-before-transport", *beforeTransport.turnState, "the pre-dispatch snapshot must remain immutable")
 	require.Equal(t, "origin-before-transport", *beforeTransport.originator)
 	require.Equal(t, "ua-before-transport", *beforeTransport.userAgent)
 	require.Equal(t, "version-before-transport", *beforeTransport.version)
 
 	final := capture.load()
 	require.NotNil(t, final)
-	require.Equal(t, "turn-final", *final.turnState)
 	require.Equal(t, "origin-final", *final.originator)
 	require.Equal(t, "ua-final", *final.userAgent)
 	require.Equal(t, "version-final", *final.version)
 	require.Same(t, request, response.Request)
 	require.Same(t, final, upstreamIdentityFromResponse(response))
+	result := &OpenAIForwardResult{}
+	final.applyToOpenAIResult(result)
+	require.Nil(t, result.UpstreamTurnState)
 }
 
 func TestSnapshotUpstreamIdentityDistinguishesObservedMissingHeaders(t *testing.T) {
 	snapshot := snapshotUpstreamIdentity(nil)
-	require.NotNil(t, snapshot.turnState)
 	require.NotNil(t, snapshot.originator)
 	require.NotNil(t, snapshot.userAgent)
 	require.NotNil(t, snapshot.version)
-	require.Empty(t, *snapshot.turnState)
 	require.Empty(t, *snapshot.originator)
 	require.Empty(t, *snapshot.userAgent)
 	require.Empty(t, *snapshot.version)

@@ -1320,7 +1320,10 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	modelMappingChain := nullString(log.ModelMappingChain)
 	billingTier := nullString(log.BillingTier)
 	billingMode := nullString(log.BillingMode)
-	upstreamTurnState := nullableStringPreserveEmpty(log.UpstreamTurnState)
+	// Turn State is an opaque bearer-like value. Keep the historical column in
+	// the INSERT shape for schema compatibility, but make non-persistence a
+	// repository invariant instead of relying on every caller to leave it nil.
+	upstreamTurnState := sql.NullString{}
 	upstreamOriginator := nullableStringPreserveEmpty(log.UpstreamOriginator)
 	upstreamUserAgent := nullableStringPreserveEmpty(log.UpstreamUserAgent)
 	upstreamVersion := nullableStringPreserveEmpty(log.UpstreamVersion)

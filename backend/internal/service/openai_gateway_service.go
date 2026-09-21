@@ -259,10 +259,13 @@ type OpenAIForwardResult struct {
 	ResponseID string
 	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
 	UpstreamHeaders http.Header
-	// Upstream* fields are immutable snapshots of the final outbound attempt.
+	// UpstreamTurnState is a deprecated compatibility field. Production capture
+	// deliberately leaves it nil so the opaque value cannot reach usage storage.
+	UpstreamTurnState *string `json:"-"`
+	// The remaining Upstream* fields are immutable non-secret snapshots of the
+	// final outbound attempt.
 	// Nil means the request path could not observe an outbound attempt; a pointer
 	// to an empty string means the attempt was observed without that header.
-	UpstreamTurnState  *string `json:"-"`
 	UpstreamOriginator *string `json:"-"`
 	UpstreamUserAgent  *string `json:"-"`
 	UpstreamVersion    *string `json:"-"`
@@ -540,6 +543,17 @@ type OpenAIGatewayService struct {
 	// and state digest. The raw opaque blob is never retained.
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
+	// codexTurnStateCollector is an in-memory, account/scope/model isolated
+	// cache. It is intentionally optional so hand-built test services and
+	// API-key-only deployments keep the pre-existing behavior.
+	codexTurnStateCollector       *OpenAICodexTurnStateCollector
+	codexTurnStateEnabled         bool
+	codexTurnStateInjection       bool
+	codexTurnStateProbeSuccesses  atomic.Uint64
+	codexTurnStateProbeFailures   atomic.Uint64
+	codexTurnStateLastSuccessUnix atomic.Int64
+	codexTurnStateLastFailureUnix atomic.Int64
+	codexTurnStateLastError       atomic.Value
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -610,6 +624,7 @@ func NewOpenAIGatewayService(
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
 	}
+	svc.initCodexTurnStateCollector()
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
 	}
@@ -738,9 +753,7 @@ func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
 }
 
 func (s *OpenAIGatewayService) InvalidateAgentIdentityWSConnections(accountID int64) {
-	if pool := s.getOpenAIWSConnPool(); pool != nil {
-		pool.ClearAccount(accountID)
-	}
+	s.InvalidateOpenAIAccountRuntimeState(accountID)
 }
 
 func (s *OpenAIGatewayService) logOpenAIWSModeBootstrap() {

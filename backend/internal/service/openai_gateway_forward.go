@@ -1532,6 +1532,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 保证不被覆盖丢失）。
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
+	if account.UsesOpenAICodexProtocol() {
+		stateModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, true); ok && req.Header.Get(openAICodexTurnStateHeader) == "" && s.codexTurnStateInjection {
+			req.Header.Set(openAICodexTurnStateHeader, snapshot.Token.Value)
+		}
+	}
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 
 	return req, nil

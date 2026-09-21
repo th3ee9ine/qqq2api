@@ -123,6 +123,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
+	turnStateScope := strings.TrimSpace(executionScope)
+	turnStateModel := codexTurnStateModel(mappedModel)
 	sessionHash := s.GenerateSessionHash(c, nil)
 	if sessionHash == "" {
 		var legacySessionHash string
@@ -132,12 +134,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	// 与 WS 接入路径共用执行作用域：codex 多智能体共用 session-id，turn state 与
 	// store=false 的连接绑定必须按线程隔离，同一线程在两条路径之间也才能共享状态。
 	// 作用域由 Forward 从改写前的原始请求算出后传入，reqBody 此时已带账号 namespace。
-	if executionScope = strings.TrimSpace(executionScope); executionScope != "" {
-		sessionHash = executionScope
+	if turnStateScope != "" {
+		sessionHash = turnStateScope
 	}
-	if turnState == "" && stateStore != nil && sessionHash != "" {
-		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, account.ID, sessionHash); ok {
-			turnState = savedTurnState
+	if turnState == "" && stateStore != nil && s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, turnStateModel) {
+		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, account.ID, turnStateScope, turnStateModel); ok {
+			if s.openAIWSSessionTurnStateUsable(account, savedTurnState) {
+				turnState = savedTurnState
+			}
 		}
 	}
 	preferredConnID := ""
@@ -180,6 +184,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 	if buildHdrErr != nil {
 		return nil, fmt.Errorf("build ws headers: %w", buildHdrErr)
+	}
+	if account.UsesOpenAICodexProtocol() {
+		turnState = s.resolveOpenAIWSCodexTurnState(ctx, c, account, mappedModel, turnState, true, wsHeaders)
+		if turnState == "" {
+			wsHeaders.Del(openAIWSTurnStateHeader)
+		} else {
+			wsHeaders.Set(openAIWSTurnStateHeader, turnState)
+		}
 	}
 	logOpenAIWSModeDebug(
 		"acquire_start account_id=%d account_type=%s transport=%s preferred_conn_id=%s has_previous_response_id=%v session_hash=%s has_turn_state=%v turn_state_len=%d has_turn_metadata=%v turn_metadata_len=%d store_disabled=%v store_disabled_conn_mode=%s retry_last_reason=%s force_new_conn=%v header_user_agent=%s header_openai_beta=%s header_originator=%s header_accept_language=%s header_session_id=%s header_conversation_id=%s session_id_source=%s conversation_id_source=%s has_prompt_cache_key=%v has_chatgpt_account_id=%v has_authorization=%v has_session_id=%v has_conversation_id=%v proxy_enabled=%v",
@@ -341,10 +353,13 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		handshakeTurnState != "",
 		len(handshakeTurnState),
 	)
-	if handshakeTurnState != "" {
-		if stateStore != nil && sessionHash != "" {
-			stateStore.BindSessionTurnState(groupID, account.ID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
+	commitHandshakeTurnState := func() {
+		if handshakeTurnState == "" || stateStore == nil ||
+			!s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, turnStateModel) ||
+			!s.canCommitOpenAIWSSessionTurnState(c, account, handshakeTurnState) {
+			return
 		}
+		stateStore.BindSessionTurnState(groupID, account.ID, turnStateScope, handshakeTurnState, s.openAIWSSessionStickyTTL(), turnStateModel)
 	}
 
 	if err := s.performOpenAIWSGeneratePrewarm(
@@ -420,7 +435,8 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	turnStateHeaderStaged := false
 	turnStateProvenanceCommitted := false
 	stageTurnStateHeader := func() {
-		if turnStateHeaderStaged || handshakeTurnState == "" || c == nil {
+		if turnStateHeaderStaged || handshakeTurnState == "" || c == nil ||
+			!s.canCommitOpenAIWSSessionTurnState(c, account, handshakeTurnState) {
 			return
 		}
 		c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
@@ -900,10 +916,29 @@ readLoop:
 		}
 
 		stageTurnStateHeader()
+		writeErrorsBefore := len(c.Errors)
 		c.Data(http.StatusOK, "application/json", finalResponse)
-		commitTurnStateProvenance()
+		if len(c.Errors) > writeErrorsBefore {
+			markClientDisconnected("downstream_write_error")
+		}
+		// Gin records render write failures on c.Errors rather than returning them.
+		// Also re-check the request context so a disconnect during a successful
+		// writer call cannot confirm an otherwise successful upstream state.
+		markClientRequestCanceled()
+		if !clientDisconnected {
+			commitTurnStateProvenance()
+		}
+		if !clientDisconnected && (lastEventType == "response.completed" || lastEventType == "response.done") {
+			commitHandshakeTurnState()
+			s.observeCodexTurnStateResponse(c, account, mappedModel, lease.HandshakeHeaders())
+		}
 	} else {
 		flushStreamWriter(true)
+		markClientRequestCanceled()
+		if !clientDisconnected && (lastEventType == "response.completed" || lastEventType == "response.done") {
+			commitHandshakeTurnState()
+			s.observeCodexTurnStateResponse(c, account, mappedModel, lease.HandshakeHeaders())
+		}
 	}
 	firstTokenMsValue := -1
 	if firstTokenMs != nil {

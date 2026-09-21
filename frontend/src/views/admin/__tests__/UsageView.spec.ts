@@ -513,24 +513,15 @@ describe('admin UsageView request ID column visibility', () => {
 
     const usageTable = wrapper.findComponent(UsageTableStub)
     expect(usageTable.props('columns')).toEqual(expect.arrayContaining([
-      expect.objectContaining({ key: 'upstream_turn_state', label: 'Upstream Turn State' }),
       expect.objectContaining({ key: 'upstream_originator', label: 'Upstream Originator' }),
       expect.objectContaining({ key: 'upstream_user_agent', label: 'Upstream User-Agent' }),
       expect.objectContaining({ key: 'upstream_version', label: 'Upstream Version' }),
     ]))
 
-    await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
-    const turnStateToggle = wrapper.findAll('button').find((button) => button.text() === 'Upstream Turn State')
-    expect(turnStateToggle).toBeDefined()
-    await turnStateToggle!.trigger('click')
-
     expect(usageTable.props('columns')).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ key: 'upstream_turn_state' })]),
     )
-    expect(localStorage.setItem).toHaveBeenCalledWith(
-      'usage-hidden-columns',
-      expect.stringContaining('upstream_turn_state'),
-    )
+    expect(wrapper.text()).not.toContain('Upstream Turn State')
   })
 })
 

@@ -34,7 +34,7 @@ func TestBothProxyUpdateServicesUseRepositoryUpdateBoundary(t *testing.T) {
 			proxyRepoStub: &proxyRepoStub{},
 			proxy:         &Proxy{ID: 9, Protocol: "http", Host: "old.example", Port: 8080, Status: StatusActive},
 		}
-		svc := NewProxyService(repo)
+		svc := NewProxyService(repo, nil)
 		host := "new.example"
 		maxAccounts := 25
 
@@ -79,7 +79,7 @@ func TestBothProxyUpdateServicesUseRepositoryUpdateBoundary(t *testing.T) {
 func TestProxyServicesRejectNegativeMaxAccountsBeforeRepositoryWrite(t *testing.T) {
 	negative := -1
 
-	_, err := NewProxyService(nil).Create(context.Background(), CreateProxyRequest{MaxAccounts: negative})
+	_, err := NewProxyService(nil, nil).Create(context.Background(), CreateProxyRequest{MaxAccounts: negative})
 	require.Error(t, err)
 	require.Equal(t, "PROXY_MAX_ACCOUNTS_INVALID", infraerrors.Reason(err))
 
@@ -91,7 +91,7 @@ func TestProxyServicesRejectNegativeMaxAccountsBeforeRepositoryWrite(t *testing.
 		proxyRepoStub: &proxyRepoStub{},
 		proxy:         &Proxy{ID: 9, Protocol: "http", Host: "old.example", Port: 8080, Status: StatusActive},
 	}
-	_, err = NewProxyService(repo).Update(context.Background(), 9, UpdateProxyRequest{MaxAccounts: &negative})
+	_, err = NewProxyService(repo, nil).Update(context.Background(), 9, UpdateProxyRequest{MaxAccounts: &negative})
 	require.Error(t, err)
 	require.Equal(t, "PROXY_MAX_ACCOUNTS_INVALID", infraerrors.Reason(err))
 	require.Zero(t, repo.updateCalls)

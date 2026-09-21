@@ -1029,7 +1029,6 @@ func (s *GatewayService) buildRecordUsageLog(
 		AccountID:                account.ID,
 		RequestID:                requestID,
 		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, false),
-		UpstreamTurnState:        result.UpstreamTurnState,
 		UpstreamOriginator:       result.UpstreamOriginator,
 		UpstreamUserAgent:        result.UpstreamUserAgent,
 		UpstreamVersion:          result.UpstreamVersion,

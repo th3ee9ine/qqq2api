@@ -163,13 +163,18 @@ func TestPrepareUsageLogInsert_UpstreamIdentityArgWiring(t *testing.T) {
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
 
 	identityStart := len(prepared.args) - 8
-	want := []string{turnState, emptyOriginator, userAgent, version}
+	turnStateArg, ok := prepared.args[identityStart].(sql.NullString)
+	require.True(t, ok, "turn-state arg should remain a nullable text slot, got %T", prepared.args[identityStart])
+	require.False(t, turnStateArg.Valid, "raw turn state must be forced to SQL NULL at the repository boundary")
+
+	want := []string{emptyOriginator, userAgent, version}
 	for offset, expected := range want {
-		arg, ok := prepared.args[identityStart+offset].(sql.NullString)
-		require.True(t, ok, "identity arg %d should be sql.NullString, got %T", offset, prepared.args[identityStart+offset])
+		idx := identityStart + 1 + offset
+		arg, ok := prepared.args[idx].(sql.NullString)
+		require.True(t, ok, "identity arg %d should be sql.NullString, got %T", offset, prepared.args[idx])
 		require.True(t, arg.Valid, "identity arg %d should preserve observed empty values", offset)
 		require.Equal(t, expected, arg.String, "identity arg %d is out of order", offset)
-		require.Equal(t, "text", usageLogInsertArgTypes[identityStart+offset])
+		require.Equal(t, "text", usageLogInsertArgTypes[idx])
 	}
 
 	absent := prepareUsageLogInsert(&service.UsageLog{
@@ -179,7 +184,7 @@ func TestPrepareUsageLogInsert_UpstreamIdentityArgWiring(t *testing.T) {
 		Model:     "gpt-5",
 		CreatedAt: time.Now().UTC(),
 	})
-	for offset := range want {
+	for offset := 0; offset < 4; offset++ {
 		arg, ok := absent.args[identityStart+offset].(sql.NullString)
 		require.True(t, ok)
 		require.False(t, arg.Valid, "unobserved identity arg %d must be NULL", offset)

@@ -24,9 +24,10 @@ const openAICodexTurnStateExecutionScopeContextKey = "openai_codex_turn_state_ex
 // 永远不会产生的矛盾信号。溯源表记录每个下游会话最近一次铸造该 blob 的
 // 账号，出站守卫据此剥离已知异账号的回带值。
 type openAICodexTurnStateOrigin struct {
-	accountID int64
-	stateHash [sha256.Size]byte
-	expiresAt time.Time
+	accountID  int64
+	stateHash  [sha256.Size]byte
+	expiresAt  time.Time
+	generation uint64
 }
 
 // BindOpenAICodexTurnStateExecutionScope resolves the immutable client
@@ -101,6 +102,12 @@ func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account
 		c.Writer.Header().Del(canonical)
 		return
 	}
+	if account != nil {
+		if _, current := s.codexTurnStateRequestGenerationCurrent(c, account.ID); !current {
+			c.Writer.Header().Del(canonical)
+			return
+		}
+	}
 	c.Writer.Header().Set(canonical, state)
 	s.noteOpenAICodexTurnStateProvenance(c, account, state)
 }
@@ -128,12 +135,77 @@ func stageOpenAICodexTurnState(dst *http.Header, upstream http.Header) {
 	dst.Set(canonical, state)
 }
 
+// prepareOpenAICodexTurnStateForWrite places the staged state on the pending
+// downstream headers without recording provenance. The caller must invoke
+// commitOpenAICodexTurnStateAfterWrite only after the response body write has
+// completed successfully.
+func (s *OpenAIGatewayService) prepareOpenAICodexTurnStateForWrite(c *gin.Context, account *Account, upstream http.Header) (http.Header, bool) {
+	var staged http.Header
+	stageOpenAICodexTurnState(&staged, upstream)
+	if c == nil || c.Writer == nil {
+		return staged, false
+	}
+	// Freeze the compact heartbeat before inspecting pending headers. If it has
+	// already emitted a beat, HTTP headers are immutable and a newly learned
+	// upstream state cannot have reached the client.
+	headersAlreadyCommitted := StopOpenAICompactSSEKeepaliveCommitted(c) || c.Writer.Written()
+
+	deleteOpenAIHeaderEqualFold(c.Writer.Header(), openAICodexTurnStateHeader)
+	state := strings.TrimSpace(staged.Get(openAICodexTurnStateHeader))
+	if state == "" {
+		return staged, !headersAlreadyCommitted
+	}
+	if account != nil {
+		if _, current := s.codexTurnStateRequestGenerationCurrent(c, account.ID); !current {
+			staged.Del(openAICodexTurnStateHeader)
+			return staged, !headersAlreadyCommitted
+		}
+	}
+	if !headersAlreadyCommitted {
+		c.Writer.Header().Set(openAICodexTurnStateHeader, state)
+	}
+	return staged, !headersAlreadyCommitted
+}
+
+func (s *OpenAIGatewayService) commitOpenAICodexTurnStateAfterWrite(
+	c *gin.Context,
+	account *Account,
+	model string,
+	upstream http.Header,
+	staged http.Header,
+	responseCompleted bool,
+	downstreamWriteSucceeded bool,
+	turnStateHeaderDelivered bool,
+) {
+	if !downstreamWriteSucceeded || c == nil {
+		return
+	}
+	if c.Request != nil && c.Request.Context().Err() != nil {
+		return
+	}
+	if turnStateHeaderDelivered {
+		s.noteStagedOpenAICodexTurnStateCommitted(c, account, staged)
+	}
+	if responseCompleted {
+		s.observeCodexTurnStateResponse(c, account, model, upstream)
+	}
+}
+
 // noteStagedOpenAICodexTurnStateCommitted 在暂存响应头真正写入下游时记录
 // 铸造账号——只有此刻客户端才确定收到了该 blob，溯源表才与客户端持有的
 // 值一致（否则被 failover 丢弃的 attempt 会污染溯源，导致后续误剥离）。
 func (s *OpenAIGatewayService) noteStagedOpenAICodexTurnStateCommitted(c *gin.Context, account *Account, staged http.Header) {
 	if staged == nil || strings.TrimSpace(staged.Get(openAICodexTurnStateHeader)) == "" {
 		return
+	}
+	if account != nil {
+		if _, current := s.codexTurnStateRequestGenerationCurrent(c, account.ID); !current {
+			staged.Del(openAICodexTurnStateHeader)
+			if c != nil && c.Writer != nil && !c.Writer.Written() {
+				c.Writer.Header().Del(openAICodexTurnStateHeader)
+			}
+			return
+		}
 	}
 	s.noteOpenAICodexTurnStateProvenance(c, account, staged.Get(openAICodexTurnStateHeader))
 }
@@ -156,10 +228,18 @@ func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context
 	if seed == "" || state == "" {
 		return
 	}
+	generation, current := s.codexTurnStateRequestGenerationCurrent(c, account.ID)
+	if !current {
+		if c != nil && c.Writer != nil && !c.Writer.Written() {
+			c.Writer.Header().Del(openAICodexTurnStateHeader)
+		}
+		return
+	}
 	s.openaiCodexTurnStateOrigins.Store(seed, openAICodexTurnStateOrigin{
-		accountID: account.ID,
-		stateHash: sha256.Sum256([]byte(state)),
-		expiresAt: time.Now().Add(s.openAIWSSessionStickyTTL()),
+		accountID:  account.ID,
+		stateHash:  sha256.Sum256([]byte(state)),
+		expiresAt:  time.Now().Add(s.openAIWSSessionStickyTTL()),
+		generation: generation,
 	})
 	s.sweepOpenAICodexTurnStateOrigins()
 }
@@ -192,6 +272,14 @@ func (s *OpenAIGatewayService) guardOpenAICodexTurnStateEcho(c *gin.Context, acc
 	if !origin.expiresAt.IsZero() && time.Now().After(origin.expiresAt) {
 		s.openaiCodexTurnStateOrigins.Delete(seed)
 		return
+	}
+	if origin.generation != 0 && s.codexTurnStateCollector != nil {
+		originKey := OpenAICodexTurnStateKey{AccountID: origin.accountID, generation: origin.generation}
+		if !s.codexTurnStateCollector.IsCurrentKey(originKey) {
+			s.openaiCodexTurnStateOrigins.Delete(seed)
+			h.Del(openAICodexTurnStateHeader)
+			return
+		}
 	}
 	if origin.accountID != account.ID || origin.stateHash != sha256.Sum256([]byte(state)) {
 		h.Del(openAICodexTurnStateHeader)

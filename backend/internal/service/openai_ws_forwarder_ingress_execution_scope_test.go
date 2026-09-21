@@ -63,40 +63,39 @@ func writeOpenAIWSExecutionScopeRequest(t *testing.T, conn *coderws.Conn, body s
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StateBoundToExecutionScope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSExecutionScopeTestConfig()
+	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	expectedTurnState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 101)
 
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_exec_scope","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_exec_scope","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
 	}
 	handshake := http.Header{}
-	handshake.Set(openAIWSTurnStateHeader, "turn-state-from-upstream")
+	handshake.Set(openAIWSTurnStateHeader, expectedTurnState)
 	pool := newOpenAIWSConnPool(cfg)
 	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn, handshake: handshake})
 	defer pool.Close()
 
 	stateStore := NewOpenAIWSStateStore(nil)
 	svc := &OpenAIGatewayService{
-		cfg:                cfg,
-		httpUpstream:       &httpUpstreamRecorder{},
-		cache:              &stubGatewayCache{},
-		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:      NewCodexToolCorrector(),
-		openaiWSPool:       pool,
-		openaiWSStateStore: stateStore,
+		cfg:                     cfg,
+		httpUpstream:            &httpUpstreamRecorder{},
+		cache:                   &stubGatewayCache{},
+		openaiWSResolver:        NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:           NewCodexToolCorrector(),
+		openaiWSPool:            pool,
+		openaiWSStateStore:      stateStore,
+		codexTurnStateInjection: true,
 	}
+	svc.initCodexTurnStateCollector()
 	groupID := int64(9)
-	account := &Account{
-		ID:          454,
-		Name:        "openai-ingress-exec-scope",
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeAPIKey,
-		Status:      StatusActive,
-		Schedulable: true,
-		Concurrency: 1,
-		Credentials: map[string]any{"api_key": "sk-test"},
-		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
-	}
+	account := codexTurnStateGatewayTestAccount(454)
+	account.Name = "openai-ingress-exec-scope"
+	account.Status = StatusActive
+	account.Schedulable = true
+	account.Concurrency = 1
+	account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
 
 	serverErrCh := make(chan error, 1)
 	keysCh := make(chan [2]string, 1)
@@ -129,7 +128,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StateBoundToExec
 
 	clientConn := dialOpenAIWSExecutionScopeClient(t, wsServer.URL, "child-thread")
 	defer func() { _ = clientConn.CloseNow() }()
-	writeOpenAIWSExecutionScopeRequest(t, clientConn, `{"type":"response.create","model":"gpt-5.1","stream":false,"store":false,"input":[{"role":"user","content":"first"}]}`)
+	writeOpenAIWSExecutionScopeRequest(t, clientConn, `{"type":"response.create","model":"gpt-5.5","stream":false,"store":false,"input":[{"role":"user","content":"first"}]}`)
 
 	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 	_, completed, readErr := clientConn.Read(readCtx)
@@ -154,11 +153,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StateBoundToExec
 	require.False(t, connBoundToLegacy, "上游连接不得绑定到按 session-id 算出的会话哈希")
 	_, connBoundToScope := stateStore.GetSessionConn(groupID, scope)
 	require.True(t, connBoundToScope, "上游连接应绑定到执行作用域")
-	_, turnStateOnLegacy := stateStore.GetSessionTurnState(groupID, account.ID, legacyHash)
+	_, turnStateOnLegacy := stateStore.GetSessionTurnState(groupID, account.ID, legacyHash, "gpt-5.5")
 	require.False(t, turnStateOnLegacy, "turn state 不得绑定到会话哈希")
-	turnState, turnStateOnScope := stateStore.GetSessionTurnState(groupID, account.ID, scope)
+	turnState, turnStateOnScope := stateStore.GetSessionTurnState(groupID, account.ID, scope, "gpt-5.5")
 	require.True(t, turnStateOnScope, "turn state 应绑定到执行作用域")
-	require.Equal(t, "turn-state-from-upstream", turnState)
+	require.Equal(t, expectedTurnState, turnState)
 }
 
 // openAIWSGatedConn 是只回一个事件的假上游连接：收到请求后关闭 sent，

@@ -77,8 +77,8 @@ type OpenAIWSStateStore interface {
 	GetResponseConn(responseID string) (string, bool)
 	DeleteResponseConn(responseID string)
 
-	BindSessionTurnState(groupID, accountID int64, sessionHash, turnState string, ttl time.Duration)
-	GetSessionTurnState(groupID, accountID int64, sessionHash string) (string, bool)
+	BindSessionTurnState(groupID, accountID int64, sessionHash, turnState string, ttl time.Duration, model ...string)
+	GetSessionTurnState(groupID, accountID int64, sessionHash string, model ...string) (string, bool)
 	DeleteSessionTurnState(groupID int64, sessionHash string)
 
 	BindSessionConn(groupID int64, sessionHash, connID string, ttl time.Duration)
@@ -332,8 +332,8 @@ func (s *defaultOpenAIWSStateStore) DeleteResponseConn(responseID string) {
 	s.responseToConnMu.Unlock()
 }
 
-func (s *defaultOpenAIWSStateStore) BindSessionTurnState(groupID, accountID int64, sessionHash, turnState string, ttl time.Duration) {
-	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+func (s *defaultOpenAIWSStateStore) BindSessionTurnState(groupID, accountID int64, sessionHash, turnState string, ttl time.Duration, model ...string) {
+	key := openAIWSSessionModelTurnStateKey(groupID, sessionHash, model...)
 	state := strings.TrimSpace(turnState)
 	if key == "" || accountID <= 0 || state == "" {
 		return
@@ -351,8 +351,8 @@ func (s *defaultOpenAIWSStateStore) BindSessionTurnState(groupID, accountID int6
 	s.sessionToTurnStateMu.Unlock()
 }
 
-func (s *defaultOpenAIWSStateStore) GetSessionTurnState(groupID, accountID int64, sessionHash string) (string, bool) {
-	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
+func (s *defaultOpenAIWSStateStore) GetSessionTurnState(groupID, accountID int64, sessionHash string, model ...string) (string, bool) {
+	key := openAIWSSessionModelTurnStateKey(groupID, sessionHash, model...)
 	if key == "" {
 		return "", false
 	}
@@ -369,12 +369,34 @@ func (s *defaultOpenAIWSStateStore) GetSessionTurnState(groupID, accountID int64
 }
 
 func (s *defaultOpenAIWSStateStore) DeleteSessionTurnState(groupID int64, sessionHash string) {
-	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
-	if key == "" {
+	baseKey := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	if baseKey == "" {
 		return
 	}
 	s.sessionToTurnStateMu.Lock()
-	delete(s.sessionToTurnState, key)
+	prefix := baseKey + "\x00"
+	for key := range s.sessionToTurnState {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.sessionToTurnState, key)
+		}
+	}
+	s.sessionToTurnStateMu.Unlock()
+}
+
+// DeleteAccountTurnStates removes every in-process session binding minted by
+// one upstream account. It is intentionally an optional concrete capability,
+// rather than part of OpenAIWSStateStore, so narrow test stores and alternate
+// implementations remain source-compatible.
+func (s *defaultOpenAIWSStateStore) DeleteAccountTurnStates(accountID int64) {
+	if s == nil || accountID <= 0 {
+		return
+	}
+	s.sessionToTurnStateMu.Lock()
+	for key, binding := range s.sessionToTurnState {
+		if binding.accountID == accountID {
+			delete(s.sessionToTurnState, key)
+		}
+	}
 	s.sessionToTurnStateMu.Unlock()
 }
 
@@ -658,6 +680,28 @@ func openAIWSSessionTurnStateKey(groupID int64, sessionHash string) string {
 		return ""
 	}
 	return fmt.Sprintf("%d:%s", groupID, hash)
+}
+
+func openAIWSSessionModelTurnStateKey(groupID int64, sessionHash string, model ...string) string {
+	baseKey := openAIWSSessionTurnStateKey(groupID, sessionHash)
+	if baseKey == "" {
+		return ""
+	}
+	// Calls without a model are retained only for narrow legacy tests and
+	// migrations. Production forwarding always supplies one explicit final model;
+	// an explicitly empty model fails closed instead of sharing a cache bucket.
+	modelKey := "legacy"
+	if len(model) > 0 {
+		modelKey = strings.ToLower(strings.TrimSpace(model[0]))
+		if modelKey == "" {
+			return ""
+		}
+	}
+	if len(modelKey) > openAICodexTurnStateCollectorMaxModelLength {
+		sum := sha256.Sum256([]byte(modelKey))
+		modelKey = "sha256:" + hex.EncodeToString(sum[:])
+	}
+	return baseKey + "\x00" + modelKey
 }
 
 func withOpenAIWSStateStoreRedisTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

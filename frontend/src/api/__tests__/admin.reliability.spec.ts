@@ -13,6 +13,7 @@ describe('normalizeReliabilityStatus', () => {
         account_availability: { total: 7, available: 5 },
         traffic: { current_concurrency: 3 },
         connection: { dial_timeout: 10, openai_ws: { dial_timeout_seconds: 8 } },
+        turn_state: { supported: true, collector: { injection_enabled: false, status: 'cooldown' } },
       },
       account_availability: { total: 99, available: 99 },
       traffic: { current_concurrency: 99 },
@@ -21,6 +22,7 @@ describe('normalizeReliabilityStatus', () => {
     expect(normalized.account_availability).toEqual({ total: 7, available: 5 })
     expect(normalized.traffic).toEqual({ current_concurrency: 3 })
     expect(normalized.connection).toEqual({ dial_timeout: 10, openai_ws: { dial_timeout_seconds: 8 } })
+    expect(normalized.turn_state).toEqual({ supported: true, collector: { injection_enabled: false, status: 'cooldown' } })
   })
 
   it('normalizes the flat aggregate response used by earlier backends', () => {
@@ -29,12 +31,14 @@ describe('normalizeReliabilityStatus', () => {
       account_availability: { total_accounts: 4, available_count: 2 },
       traffic: { concurrency: 6 },
       connection: { status: 'unknown' },
+      turn_state: { supported: true, collector: { status: 'degraded' } },
       diagnostics: { warnings: ['no_schedulable_accounts'] },
     })
 
     expect(normalized.account_availability).toEqual({ total_accounts: 4, available_count: 2 })
     expect(normalized.traffic).toEqual({ concurrency: 6 })
     expect(normalized.connection).toEqual({ status: 'unknown' })
+    expect(normalized.turn_state).toEqual({ supported: true, collector: { status: 'degraded' } })
     expect(normalized.diagnostics).toEqual({ warnings: ['no_schedulable_accounts'] })
   })
 })

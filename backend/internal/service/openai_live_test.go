@@ -156,11 +156,9 @@ func TestCreateUpstreamLiveCallPreservesSession(t *testing.T) {
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.request.Context()))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.request.Context()))
 
-	require.NotNil(t, created.UpstreamTurnState)
 	require.NotNil(t, created.UpstreamOriginator)
 	require.NotNil(t, created.UpstreamUserAgent)
 	require.NotNil(t, created.UpstreamVersion)
-	require.Equal(t, upstream.request.Header.Get(openAICodexTurnStateHeader), *created.UpstreamTurnState)
 	require.Equal(t, upstream.request.Header.Get("Originator"), *created.UpstreamOriginator)
 	require.Equal(t, upstream.request.Header.Get("User-Agent"), *created.UpstreamUserAgent)
 	require.Equal(t, upstream.request.Header.Get("Version"), *created.UpstreamVersion)

@@ -66,10 +66,8 @@ type LiveCallRecord struct {
 	UserAgent       string
 	IPAddress       string
 	InboundEndpoint string
-	// Upstream identity is the request that successfully created this Live
-	// call. Nil means the outbound request was not observed; a non-nil empty
-	// value means it was observed without that header.
-	UpstreamTurnState  *string
+	// Non-secret upstream identity is captured from the request that
+	// successfully created this Live call.
 	UpstreamOriginator *string
 	UpstreamUserAgent  *string
 	UpstreamVersion    *string
@@ -82,7 +80,6 @@ type LiveCallCreated struct {
 	CallID             string
 	Location           string
 	Account            *Account
-	UpstreamTurnState  *string
 	UpstreamOriginator *string
 	UpstreamUserAgent  *string
 	UpstreamVersion    *string

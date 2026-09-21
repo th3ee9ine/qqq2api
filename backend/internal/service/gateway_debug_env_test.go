@@ -1,6 +1,11 @@
 package service
 
-import "testing"
+import (
+	"net/http"
+	"os"
+	"strings"
+	"testing"
+)
 
 func TestParseDebugEnvBool(t *testing.T) {
 	t.Run("empty is false", func(t *testing.T) {
@@ -28,4 +33,35 @@ func TestParseDebugEnvBool(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestDebugLogGatewaySnapshotRedactsCodexTurnState(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "gateway-debug-*.log")
+	if err != nil {
+		t.Fatalf("create debug log: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	const secret = "opaque-turn-state-secret-marker"
+	svc := &GatewayService{}
+	svc.debugGatewayBodyFile.Store(f)
+	defer svc.debugGatewayBodyFile.Store(nil)
+
+	headers := make(http.Header)
+	headers.Set("X-Codex-Turn-State", secret)
+	svc.debugLogGatewaySnapshot("CLIENT_ORIGINAL", headers, []byte(`{"model":"gpt-5"}`), nil)
+	if err := f.Sync(); err != nil {
+		t.Fatalf("sync debug log: %v", err)
+	}
+	content, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatalf("read debug log: %v", err)
+	}
+	text := string(content)
+	if strings.Contains(text, secret) {
+		t.Fatalf("debug log leaked raw turn state: %s", text)
+	}
+	if !strings.Contains(text, "X-Codex-Turn-State: [redacted]") {
+		t.Fatalf("debug log did not retain the redacted header marker: %s", text)
+	}
 }

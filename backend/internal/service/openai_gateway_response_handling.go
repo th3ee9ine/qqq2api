@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -42,6 +43,38 @@ type openaiNonStreamingResult struct {
 	imageCount       int
 	imageOutputSizes []string
 	searchCount      int
+}
+
+// writeOpenAINonStreamingResponse preserves gin.Data's response shape while
+// exposing the write result so state learned from the upstream cannot be
+// published after a downstream disconnect or short write.
+func writeOpenAINonStreamingResponse(c *gin.Context, statusCode int, contentType string, body []byte) bool {
+	if c == nil || c.Writer == nil {
+		return false
+	}
+
+	handled, err := writeOpenAICompactSSEBridgeResult(c, statusCode, body)
+	if !handled {
+		if contentType != "" && len(c.Writer.Header().Values("Content-Type")) == 0 {
+			c.Writer.Header().Set("Content-Type", contentType)
+		}
+		c.Status(statusCode)
+		if (statusCode >= 100 && statusCode <= 199) || statusCode == http.StatusNoContent || statusCode == http.StatusNotModified {
+			c.Writer.WriteHeaderNow()
+			return c.Request == nil || c.Request.Context().Err() == nil
+		}
+		var written int
+		written, err = c.Writer.Write(body)
+		if err == nil && written != len(body) {
+			err = io.ErrShortWrite
+		}
+	}
+	if err != nil {
+		_ = c.Error(err)
+		c.Abort()
+		return false
+	}
+	return c.Request == nil || c.Request.Context().Err() == nil
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string) (*openaiStreamingResult, error) {
@@ -407,6 +440,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if sawFailedEvent {
 			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 		}
+		if !clientDisconnected && (terminalEventType == "response.completed" || terminalEventType == "response.done") {
+			s.observeCodexTurnStateResponse(c, account, mappedModel, resp.Header)
+		}
 		logOpenAISuccessMissingUsage(ctx, c, account, resp, usage, terminalEventType, clientDisconnected)
 		return resultWithUsage(), nil
 	}
@@ -500,9 +536,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			// 初始上游 data 的 type 只解析一次：原始值保持终止事件的精确匹配，规范化值供后续分支复用。
 			if openAIStreamEventIsTerminalWithType(data, eventType) {
 				sawTerminalEvent = true
-				terminalEventType = eventType
-				if strings.TrimSpace(data) == "[DONE]" {
+				if eventType == "response.completed" || eventType == "response.done" {
+					terminalEventType = eventType
+				} else if strings.TrimSpace(data) == "[DONE]" &&
+					terminalEventType != "response.completed" && terminalEventType != "response.done" {
 					terminalEventType = "[DONE]"
+				} else if strings.TrimSpace(data) != "[DONE]" {
+					terminalEventType = eventType
 				}
 			}
 			if responseID == "" {
@@ -1695,8 +1735,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	// Codex 协议要求 /responses/compact JSON 响应携带 x-codex-turn-state
-	// （codex-api/src/endpoint/compact.rs 从响应头捕获），显式回传。
-	s.relayOpenAICodexTurnState(c, account, resp.Header)
+	// （codex-api/src/endpoint/compact.rs 从响应头捕获）。先只写入待提交响应头，
+	// provenance 与 collector 必须等最终 body 确认写入后才发布。
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header)
+	responseCompleted := openAIJSONResponseCompleted(resp.StatusCode, body)
 
 	contentType := "application/json"
 	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
@@ -1705,9 +1747,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
-	}
+	downstreamWriteSucceeded := writeOpenAINonStreamingResponse(c, resp.StatusCode, contentType, body)
+	s.commitOpenAICodexTurnStateAfterWrite(
+		c, account, mappedModel, resp.Header, stagedTurnState, responseCompleted, downstreamWriteSucceeded, turnStateHeaderDeliverable,
+	)
 
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
@@ -1811,7 +1854,8 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, usage, terminalType, false)
-	s.relayOpenAICodexTurnState(c, account, resp.Header)
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header)
+	responseCompleted := terminalType == "response.completed" || terminalType == "response.done"
 
 	contentType := "application/json; charset=utf-8"
 	if !ok {
@@ -1820,9 +1864,10 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			contentType = "text/event-stream"
 		}
 	}
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
-	}
+	downstreamWriteSucceeded := writeOpenAINonStreamingResponse(c, resp.StatusCode, contentType, body)
+	s.commitOpenAICodexTurnStateAfterWrite(
+		c, account, mappedModel, resp.Header, stagedTurnState, responseCompleted, downstreamWriteSucceeded, turnStateHeaderDeliverable,
+	)
 
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,

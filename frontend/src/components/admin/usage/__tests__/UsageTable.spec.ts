@@ -803,31 +803,14 @@ describe('admin UsageTable upstream request diagnostics', () => {
     },
   })
 
-  it('shows only Turn State length until the detail dialog is opened', async () => {
-    const turnState = `{"state":"${'x'.repeat(280)}"}`
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    vi.stubGlobal('navigator', { clipboard: { writeText } })
+  it('never renders a raw Turn State field supplied by an unexpected API response', () => {
+    const turnState = 'secret-turn-state-must-not-render'
     const wrapper = mountDiagnostics([
       { ...baseImageRow, request_id: 'turn-sent', upstream_turn_state: turnState, openai_ws_mode: true },
-      { ...baseImageRow, request_id: 'turn-empty', upstream_turn_state: '' },
-      { ...baseImageRow, request_id: 'turn-historical', upstream_turn_state: null },
     ])
 
-    const button = wrapper.get('[data-testid="turn-state-length"]')
-    expect(button.text()).toBe(String(turnState.length))
     expect(wrapper.html()).not.toContain(turnState)
-    expect(wrapper.text()).toContain('Not sent')
-    expect(wrapper.text()).toContain('Not recorded')
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-
-    await button.trigger('click')
-    expect(wrapper.get('[data-testid="upstream-header-detail-value"]').text()).toBe(turnState)
-    expect(wrapper.get('[role="dialog"]').text()).toContain('Handshake hint')
-    await wrapper.get('[data-testid="upstream-header-copy"]').trigger('click')
-    expect(writeText).toHaveBeenCalledWith(turnState)
-    await wrapper.get('[aria-label="Close modal"]').trigger('click')
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-    vi.unstubAllGlobals()
+    expect(wrapper.find('[data-testid="turn-state-length"]').exists()).toBe(false)
   })
 
   it('keeps upstream identity cells compact and reveals the exact value on click', async () => {

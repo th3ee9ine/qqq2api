@@ -141,3 +141,76 @@ func TestReadOpenAIWSClientMessage_ParentCancellationStillJoinsRead(t *testing.T
 		t.Fatal("server read goroutine leaked after parent cancellation")
 	}
 }
+
+func TestOpenAIWSClientReadAhead_LeaseLossWaitsForTurnCompleted(t *testing.T) {
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+
+	readAheadCh := make(chan struct {
+		readAhead *openAIWSClientReadAhead
+		err       error
+	}, 1)
+	handlerDone := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			readAheadCh <- struct {
+				readAhead *openAIWSClientReadAhead
+				err       error
+			}{err: err}
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+
+		readAheadCh <- struct {
+			readAhead *openAIWSClientReadAhead
+			err       error
+		}{readAhead: startOpenAIWSClientReadAhead(controlCtx, conn, 0)}
+		<-handlerDone
+	}))
+	defer server.Close()
+	defer close(handlerDone)
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	readAheadResult := <-readAheadCh
+	require.NoError(t, readAheadResult.err)
+	readAhead := readAheadResult.readAhead
+	require.NotNil(t, readAhead)
+	cancelControl(ErrOpenAIWSIngressLeaseLost)
+	require.Never(t, func() bool {
+		_, ready := readAhead.Poll()
+		return ready
+	}, 50*time.Millisecond, 5*time.Millisecond, "lease loss must not close the client before the terminal event is delivered")
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1"}`))
+	cancelWrite()
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		result, ready := readAhead.Poll()
+		return ready && result.err == nil
+	}, time.Second, 5*time.Millisecond, "the next request should be buffered without overriding lease loss")
+
+	readAhead.MarkTurnCompleted()
+	serverResultCh := make(chan openAIWSClientReadResult, 1)
+	go func() {
+		serverResultCh <- readAhead.Wait()
+	}()
+	readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
+	_, _, err = clientConn.Read(readCtx)
+	cancelRead()
+	var clientClose coderws.CloseError
+	require.ErrorAs(t, err, &clientClose)
+	require.Equal(t, coderws.StatusTryAgainLater, clientClose.Code)
+	require.Equal(t, "websocket ingress capacity lease lost; please reconnect", clientClose.Reason)
+
+	result := <-serverResultCh
+	var serverClose *OpenAIWSClientCloseError
+	require.ErrorAs(t, result.err, &serverClose)
+	require.ErrorIs(t, result.err, ErrOpenAIWSIngressLeaseLost)
+}

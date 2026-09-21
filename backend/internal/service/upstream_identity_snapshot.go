@@ -13,7 +13,6 @@ import (
 // request with an empty header from a historical row where no outbound request
 // was available.
 type upstreamIdentitySnapshot struct {
-	turnState  *string
 	originator *string
 	userAgent  *string
 	version    *string
@@ -72,7 +71,6 @@ func stringPointer(value string) *string {
 
 func snapshotUpstreamIdentity(headers http.Header) *upstreamIdentitySnapshot {
 	return &upstreamIdentitySnapshot{
-		turnState:  stringPointer(headers.Get(openAICodexTurnStateHeader)),
 		originator: stringPointer(headers.Get("originator")),
 		userAgent:  stringPointer(headers.Get("user-agent")),
 		version:    stringPointer(headers.Get("version")),
@@ -141,14 +139,13 @@ func (snapshot *upstreamIdentitySnapshot) applyToOpenAIResult(result *OpenAIForw
 	if snapshot == nil || result == nil {
 		return
 	}
-	result.UpstreamTurnState = snapshot.turnState
 	result.UpstreamOriginator = snapshot.originator
 	result.UpstreamUserAgent = snapshot.userAgent
 	result.UpstreamVersion = snapshot.version
 }
 
 func (snapshot *upstreamIdentitySnapshot) applyToOpenAIResultIfUnset(result *OpenAIForwardResult) {
-	if result == nil || result.UpstreamTurnState != nil || result.UpstreamOriginator != nil ||
+	if result == nil || result.UpstreamOriginator != nil ||
 		result.UpstreamUserAgent != nil || result.UpstreamVersion != nil {
 		return
 	}
@@ -159,14 +156,13 @@ func (snapshot *upstreamIdentitySnapshot) applyToForwardResult(result *ForwardRe
 	if snapshot == nil || result == nil {
 		return
 	}
-	result.UpstreamTurnState = snapshot.turnState
 	result.UpstreamOriginator = snapshot.originator
 	result.UpstreamUserAgent = snapshot.userAgent
 	result.UpstreamVersion = snapshot.version
 }
 
 func (snapshot *upstreamIdentitySnapshot) applyToForwardResultIfUnset(result *ForwardResult) {
-	if result == nil || result.UpstreamTurnState != nil || result.UpstreamOriginator != nil ||
+	if result == nil || result.UpstreamOriginator != nil ||
 		result.UpstreamUserAgent != nil || result.UpstreamVersion != nil {
 		return
 	}
@@ -177,7 +173,6 @@ func (snapshot *upstreamIdentitySnapshot) applyToCyberPolicyMark(mark *CyberPoli
 	if snapshot == nil || mark == nil {
 		return
 	}
-	mark.UpstreamTurnState = snapshot.turnState
 	mark.UpstreamOriginator = snapshot.originator
 	mark.UpstreamUserAgent = snapshot.userAgent
 	mark.UpstreamVersion = snapshot.version

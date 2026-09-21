@@ -341,10 +341,11 @@ describe('admin UsageView large usage export', () => {
     expect(saveAs).toHaveBeenCalledWith(expect.any(Blob), expect.stringMatching(/^usage_.*\.xlsx$/))
   })
 
-  it('exports the complete upstream identity fields with their matching headers', async () => {
+  it('excludes raw Turn State while exporting non-secret upstream identity fields', async () => {
+    const secretTurnState = 'secret-turn-state-must-not-export'
     const row = {
       ...usageRow(1),
-      upstream_turn_state: 'turn-state-export',
+      upstream_turn_state: secretTurnState,
       upstream_originator: 'originator-export',
       upstream_user_agent: 'agent/export',
       upstream_version: 'version-export',
@@ -361,7 +362,6 @@ describe('admin UsageView large usage export', () => {
     const headers = aoaToSheet.mock.calls[0][0][0] as string[]
     const exportedRow = sheetAddAoa.mock.calls[0][1][0] as unknown[]
     const expected = [
-      ['admin.usage.upstreamTurnState', row.upstream_turn_state],
       ['admin.usage.upstreamOriginator', row.upstream_originator],
       ['admin.usage.upstreamUserAgent', row.upstream_user_agent],
       ['admin.usage.upstreamVersion', row.upstream_version],
@@ -371,6 +371,8 @@ describe('admin UsageView large usage export', () => {
       expect(index).toBeGreaterThanOrEqual(0)
       expect(exportedRow[index]).toBe(value)
     }
+    expect(headers).not.toContain('admin.usage.upstreamTurnState')
+    expect(exportedRow).not.toContain(secretTurnState)
   })
 
   it('keeps paging when a later response repeats a stale earlier-page total', async () => {

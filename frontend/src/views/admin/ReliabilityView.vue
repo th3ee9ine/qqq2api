@@ -123,6 +123,70 @@
             <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100" data-testid="turn-state-websocket-protection">{{ protectionLabel(turnStateWebSocketCrossAccountProtection) }}</dd>
           </div>
         </dl>
+        <div
+          v-if="turnStateCollector"
+          class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+          data-testid="turn-state-collector"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-400">
+              {{ t('admin.reliability.turnState.collectorTitle') }}
+            </h3>
+            <span
+              class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium"
+              :class="collectorStatusToneClass"
+              data-testid="turn-state-collector-status"
+            >
+              {{ collectorStatusLabel }}
+            </span>
+          </div>
+          <dl class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorReady') }}</dt>
+              <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ collectorReadyLabel(collectorReady) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorInjection') }}</dt>
+              <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100" data-testid="turn-state-collector-injection">{{ collectorInjectionLabel(collectorInjection) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorCollecting') }}</dt>
+              <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100">{{ collectorCollectingLabel(collectorCollecting) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorEntries') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums text-gray-900 dark:text-gray-100">{{ formatCount(turnStateCollector.active_entries) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorCandidates') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums text-gray-900 dark:text-gray-100">{{ formatCount(turnStateCollector.ready_candidates) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorObservations') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums text-gray-900 dark:text-gray-100">{{ formatCount(turnStateCollector.observations) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorSuccesses') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums text-gray-900 dark:text-gray-100">{{ formatCount(turnStateCollector.successes) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorFailures') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums" :class="numeric(turnStateCollector.failures) > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-900 dark:text-gray-100'">{{ formatCount(turnStateCollector.failures) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorLastSuccess') }}</dt>
+              <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100" data-testid="turn-state-collector-last-success">{{ formatTimestamp(turnStateCollector.last_success_at) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorLastFailure') }}</dt>
+              <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100" data-testid="turn-state-collector-last-failure">{{ formatTimestamp(turnStateCollector.last_failure_at) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorLastError') }}</dt>
+              <dd class="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-300" data-testid="turn-state-collector-last-error">{{ collectorLastErrorLabel }}</dd>
+            </div>
+          </dl>
+        </div>
         <p class="mt-4 flex items-start gap-2 rounded-xl bg-gray-50 px-3 py-2.5 text-xs leading-5 text-gray-600 dark:bg-dark-800/70 dark:text-dark-300">
           <Icon name="shield" size="sm" class="mt-0.5 shrink-0 text-teal-700 dark:text-teal-300" />
           {{ t('admin.reliability.turnState.privacy') }}
@@ -160,6 +224,10 @@ const accountSummary = computed(() => summary.value.account_availability ?? summ
 const traffic = computed(() => summary.value.traffic ?? {})
 const connection = computed(() => summary.value.connection ?? {})
 const turnState = computed(() => summary.value.turn_state ?? {})
+const turnStateCollector = computed(() => {
+  const collector = turnState.value.collector
+  return collector && typeof collector === 'object' ? collector : null
+})
 
 function numeric(value: unknown, fallback = 0): number {
   if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) return fallback
@@ -208,6 +276,34 @@ const turnStateHTTP = computed(() => optionalBoolean(turnState.value.http_enable
 const turnStateWebSocket = computed(() => optionalBoolean(turnState.value.websocket_enabled, turnState.value.websocket_supported))
 const turnStateHTTPCrossAccountProtection = computed(() => optionalBoolean(turnState.value.http_cross_account_protection))
 const turnStateWebSocketCrossAccountProtection = computed(() => optionalBoolean(turnState.value.websocket_cross_account_protection))
+const collectorReady = computed(() => optionalBoolean(turnStateCollector.value?.ready))
+const collectorInjection = computed(() => optionalBoolean(turnStateCollector.value?.injection_enabled))
+const collectorCollecting = computed(() => optionalBoolean(turnStateCollector.value?.collecting))
+const collectorStatusLabel = computed(() => {
+  const status = String(turnStateCollector.value?.status || '').trim().toLowerCase()
+  if (!status) return t('admin.reliability.turnState.collectorUnknown')
+  const supported = new Set(['disabled', 'unavailable', 'idle', 'collecting', 'warming', 'ready', 'stale', 'cooldown', 'degraded', 'error'])
+  if (!supported.has(status)) return t('admin.reliability.turnState.collectorUnknown')
+  return t(`admin.reliability.turnState.collectorStatus.${status}`)
+})
+const collectorStatusToneClass = computed(() => {
+  const status = String(turnStateCollector.value?.status || '').trim().toLowerCase()
+  if (status === 'ready') return 'bg-green-50 text-green-700 dark:bg-green-950/40 dark:text-green-300'
+  if (status === 'collecting' || status === 'warming') return 'bg-teal-50 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300'
+  if (status === 'cooldown' || status === 'degraded' || status === 'stale') return 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+  if (status === 'error' || status === 'unavailable') return 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300'
+  return 'bg-gray-100 text-gray-600 dark:bg-dark-800 dark:text-dark-300'
+})
+const collectorLastErrorLabel = computed(() => {
+  const code = String(turnStateCollector.value?.last_error_code || '').trim().toLowerCase()
+  const supported = new Set([
+    'probe_timeout', 'transport_error', 'upstream_401', 'upstream_403', 'upstream_429', 'upstream_5xx',
+    'model_capacity', 'upstream_rate_limited', 'response_failed', 'response_model_mismatch', 'invalid_state',
+    'invalid_model', 'incomplete_stream', 'state_time_rejected', 'cooldown', 'cancelled', 'disabled', 'unavailable', 'other',
+  ])
+  if (!supported.has(code)) return t('admin.reliability.turnState.collectorUnknown')
+  return t(`admin.reliability.turnState.collectorErrors.${code}`)
+})
 
 const connectionStatus = computed(() => {
   if (connection.value.status) return String(connection.value.status).toLowerCase()
@@ -261,9 +357,31 @@ function formatCount(value: unknown): string {
   return Number.isFinite(parsed) ? formatNumber(parsed) : t('admin.reliability.unavailable')
 }
 
+function formatTimestamp(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim()) return t('admin.reliability.unavailable')
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return t('admin.reliability.unavailable')
+  return new Intl.DateTimeFormat(locale.value, { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+
 function supportLabel(value: boolean | null): string {
   if (value === null) return t('admin.reliability.turnState.unknownValue')
   return value ? t('admin.reliability.turnState.supportedValue') : t('admin.reliability.turnState.unsupportedValue')
+}
+
+function collectorReadyLabel(value: boolean | null): string {
+  if (value === null) return t('admin.reliability.turnState.unknownValue')
+  return value ? t('admin.reliability.turnState.collectorReadyValue') : t('admin.reliability.turnState.collectorNotReadyValue')
+}
+
+function collectorInjectionLabel(value: boolean | null): string {
+  if (value === null) return t('admin.reliability.turnState.unknownValue')
+  return value ? t('admin.reliability.turnState.collectorInjectionEnabled') : t('admin.reliability.turnState.collectorInjectionDisabled')
+}
+
+function collectorCollectingLabel(value: boolean | null): string {
+  if (value === null) return t('admin.reliability.turnState.unknownValue')
+  return value ? t('admin.reliability.turnState.collectorCollectingValue') : t('admin.reliability.turnState.collectorIdleValue')
 }
 
 function protectionLabel(value: boolean | null): string {

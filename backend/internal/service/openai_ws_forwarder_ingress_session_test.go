@@ -4475,17 +4475,21 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ClientDisconnect
 			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_disconnect","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":1}}}`),
 		},
 	}
-	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
+	handshake := make(http.Header)
+	handshake.Set(openAIWSTurnStateHeader, "state-before-client-disconnect")
+	captureDialer := &openAIWSCaptureDialer{conn: captureConn, handshake: handshake}
 	pool := newOpenAIWSConnPool(cfg)
 	pool.setClientDialerForTest(captureDialer)
+	stateStore := NewOpenAIWSStateStore(nil)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
-		openaiWSPool:     pool,
+		cfg:                cfg,
+		httpUpstream:       &httpUpstreamRecorder{},
+		cache:              &stubGatewayCache{},
+		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:      NewCodexToolCorrector(),
+		openaiWSPool:       pool,
+		openaiWSStateStore: stateStore,
 	}
 
 	account := &Account{
@@ -4509,6 +4513,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ClientDisconnect
 
 	serverErrCh := make(chan error, 1)
 	resultCh := make(chan *OpenAIForwardResult, 1)
+	scopeCh := make(chan string, 1)
 	hooks := &OpenAIWSIngressHooks{
 		AfterTurn: func(_ int, result *OpenAIForwardResult, turnErr error) {
 			if turnErr == nil && result != nil {
@@ -4547,12 +4552,17 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ClientDisconnect
 			return
 		}
 
-		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, hooks)
+		proxyErr := svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, hooks)
+		scope, _ := boundOpenAICodexTurnStateExecutionScope(ginCtx)
+		scopeCh <- scope
+		serverErrCh <- proxyErr
 	}))
 	defer wsServer.Close()
 
 	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
-	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	clientHeaders := make(http.Header)
+	clientHeaders.Set("session-id", "ingress-client-disconnect")
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), &coderws.DialOptions{HTTPHeader: clientHeaders})
 	cancelDial()
 	require.NoError(t, err)
 
@@ -4580,6 +4590,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ClientDisconnect
 	case <-time.After(2 * time.Second):
 		t.Fatal("未收到断连后的 turn 结果回调")
 	}
+
+	scope := <-scopeCh
+	require.NotEmpty(t, scope)
+	_, turnStateStored := stateStore.GetSessionTurnState(0, account.ID, scope, "gpt-5.1")
+	require.False(t, turnStateStored, "client disconnect must prevent handshake turn state confirmation")
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_InvalidEncryptedContentLineageStripsNextTurn(t *testing.T) {

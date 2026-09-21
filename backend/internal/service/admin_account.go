@@ -696,6 +696,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if account == nil {
 		return nil, ErrAccountNotFound
 	}
+	runtimeIdentityBefore := snapshotOpenAIAccountRuntimeIdentity(account)
+	runtimeStatePersisted := false
+	defer func() {
+		if runtimeStatePersisted {
+			invalidateOpenAIAccountRuntimeStateWithShadows(ctx, s.runtimeBlocker, s.accountRepo, account)
+		}
+	}()
 	accountAdminID, supplyRateMultiplier, accountAdminScoped, err := s.accountAdminSupplyScope(ctx)
 	if err != nil {
 		return nil, err
@@ -1046,6 +1053,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
+	runtimeStateChanged := account.Platform == PlatformOpenAI &&
+		(input.AutoAssignProxy || runtimeIdentityBefore != snapshotOpenAIAccountRuntimeIdentity(account))
 	billingSettingsAppliedAtomically := false
 	if input.AutoAssignProxy {
 		if automaticRepo, ok := s.accountRepo.(AccountAutomaticProxyRepository); ok {
@@ -1058,6 +1067,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			); err != nil {
 				return nil, err
 			}
+			runtimeStatePersisted = runtimeStateChanged
 			billingSettingsAppliedAtomically = true
 		}
 	} else {
@@ -1078,6 +1088,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			); err != nil {
 				return nil, err
 			}
+			runtimeStatePersisted = runtimeStateChanged
 			billingSettingsAppliedAtomically = true
 		}
 	}
@@ -1085,6 +1096,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err := s.accountRepo.Update(ctx, account); err != nil {
 			return nil, err
 		}
+		runtimeStatePersisted = runtimeStateChanged
 		if (requestedProbeEnabledUpdate != nil || requestedRateSyncEnabledUpdate != nil) &&
 			isUpstreamBillingProbeAccount(account) {
 			settings := make(map[string]any, 2)
@@ -1169,7 +1181,14 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	if len(updates) == 0 {
 		return nil
 	}
-	return s.accountRepo.UpdateExtra(ctx, id, updates)
+	runtimeStateChanged := account.Platform == PlatformOpenAI && updatesOpenAIAccountRuntimeIdentityExtra(updates)
+	if err := s.accountRepo.UpdateExtra(ctx, id, updates); err != nil {
+		return err
+	}
+	if runtimeStateChanged {
+		invalidateOpenAIAccountRuntimeStateWithShadows(ctx, s.runtimeBlocker, s.accountRepo, account)
+	}
+	return nil
 }
 
 // BulkUpdateAccounts updates multiple accounts in one request.
@@ -1280,6 +1299,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			targetsByID[account.ID] = account
 		}
 	}
+	runtimeStateChanged := len(input.Credentials) > 0 || input.ProxyID != nil || input.AutoAssignProxy ||
+		updatesOpenAIAccountRuntimeIdentityExtra(input.Extra)
+	runtimeStatePersisted := false
+	defer func() {
+		if !runtimeStatePersisted || !runtimeStateChanged {
+			return
+		}
+		for _, account := range cachedTargets {
+			invalidateOpenAIAccountRuntimeStateWithShadows(ctx, s.runtimeBlocker, s.accountRepo, account)
+		}
+	}()
 	if accountAdminScoped {
 		for _, accountID := range input.AccountIDs {
 			if _, ok := targetsByID[accountID]; !ok {
@@ -1497,6 +1527,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
 		return nil, err
 	}
+	runtimeStatePersisted = true
 
 	// Source-bound moves update parents and spark shadows in the repository's
 	// transaction. Keep the legacy propagation path for ordinary bulk edits.
@@ -1620,10 +1651,12 @@ func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
 		if err := s.accountRepo.Delete(ctx, shadow.ID); err != nil {
 			return fmt.Errorf("cascade delete spark shadow %d: %w", shadow.ID, err)
 		}
+		invalidateOpenAIAccountRuntimeState(s.runtimeBlocker, shadow.ID)
 	}
 	if err := s.accountRepo.Delete(ctx, id); err != nil {
 		return err
 	}
+	invalidateOpenAIAccountRuntimeState(s.runtimeBlocker, id)
 	return nil
 }
 
@@ -1705,9 +1738,16 @@ func (s *adminServiceImpl) RevertAccountProxyFallback(ctx context.Context, id in
 	if err := requireActiveAccountPlatform(account.Platform); err != nil {
 		return err
 	}
+	runtimeStatePersisted := false
+	defer func() {
+		if runtimeStatePersisted {
+			invalidateOpenAIAccountRuntimeStateWithShadows(ctx, s.runtimeBlocker, s.accountRepo, account)
+		}
+	}()
 	if err := s.accountRepo.RevertProxyFallback(ctx, id); err != nil {
 		return err
 	}
+	runtimeStatePersisted = account.Platform == PlatformOpenAI
 	// 加载回退后的账号以获取实际 ProxyID，再传播到影子账号
 	account, err = s.accountRepo.GetByID(ctx, id)
 	if err != nil {

@@ -125,6 +125,7 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
+	proxyRuntimeIdentityBefore := snapshotOpenAIProxyRuntimeIdentity(proxy)
 
 	// Merge only supplied fields, then validate the resulting fallback configuration.
 	mode = proxy.FallbackMode
@@ -172,13 +173,31 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 		proxy.MaxAccounts = *input.MaxAccounts
 	}
 
+	var runtimeAccounts []ProxyAccountSummary
+	_, canInvalidateRuntime := s.runtimeBlocker.(OpenAIAccountRuntimeStateInvalidator)
+	if canInvalidateRuntime && !proxyRuntimeIdentityBefore.equal(snapshotOpenAIProxyRuntimeIdentity(proxy)) {
+		runtimeAccounts, err = snapshotOpenAIProxyRuntimeAccounts(s.proxyRepo, id)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
 	}
+	invalidateOpenAIProxyRuntimeAccounts(s.runtimeBlocker, runtimeAccounts)
 	return proxy, nil
 }
 
 func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
+	var runtimeAccounts []ProxyAccountSummary
+	if _, canInvalidateRuntime := s.runtimeBlocker.(OpenAIAccountRuntimeStateInvalidator); canInvalidateRuntime {
+		var err error
+		runtimeAccounts, err = snapshotOpenAIProxyRuntimeAccounts(s.proxyRepo, id)
+		if err != nil {
+			return err
+		}
+	}
 	count, err := s.proxyRepo.CountAccountsByProxyID(ctx, id)
 	if err != nil {
 		return err
@@ -186,7 +205,11 @@ func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
 	if count > 0 {
 		return ErrProxyInUse
 	}
-	return s.proxyRepo.Delete(ctx, id)
+	if err := s.proxyRepo.Delete(ctx, id); err != nil {
+		return err
+	}
+	invalidateOpenAIProxyRuntimeAccounts(s.runtimeBlocker, runtimeAccounts)
+	return nil
 }
 
 func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) (*ProxyBatchDeleteResult, error) {
@@ -196,6 +219,15 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 	}
 
 	for _, id := range ids {
+		var runtimeAccounts []ProxyAccountSummary
+		if _, canInvalidateRuntime := s.runtimeBlocker.(OpenAIAccountRuntimeStateInvalidator); canInvalidateRuntime {
+			accounts, err := snapshotOpenAIProxyRuntimeAccounts(s.proxyRepo, id)
+			if err != nil {
+				result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{ID: id, Reason: err.Error()})
+				continue
+			}
+			runtimeAccounts = accounts
+		}
 		count, err := s.proxyRepo.CountAccountsByProxyID(ctx, id)
 		if err != nil {
 			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
@@ -218,6 +250,7 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 			})
 			continue
 		}
+		invalidateOpenAIProxyRuntimeAccounts(s.runtimeBlocker, runtimeAccounts)
 		result.DeletedIDs = append(result.DeletedIDs, id)
 	}
 

@@ -521,7 +521,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if err != nil {
 		return err
 	}
-	BindOpenAICodexTurnStateExecutionScope(c, firstPayload.rawForHash)
+	turnStateScope := BindOpenAICodexTurnStateExecutionScope(c, firstPayload.rawForHash)
 
 	useHTTPBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
 	if c != nil && c.Request != nil {
@@ -530,6 +530,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		s.guardOpenAICodexTurnStateEcho(c, account, c.Request.Header)
 	}
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
+	turnStateModel := codexTurnStateModel(gjson.GetBytes(firstPayload.payloadRaw, "model").String())
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
 	apiKeyID := getAPIKeyIDFromContext(c)
@@ -538,8 +539,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	preferredConnID := ""
 	storeDisabled := false
 	refreshIngressRouteState := func(payload openAIWSClientPayload) {
-		// 会话级状态按执行作用域隔离：codex 多智能体共用 session-id，只有线程标识能把
-		// 父线程与子智能体区分开；没有声明身份时沿用原会话哈希。账号粘性仍由 handler 决定。
+		// 连接亲和仍可回退到会话/内容哈希；Turn State 只能使用首帧绑定的
+		// 可靠执行作用域，不得使用这个 fallback sessionHash。
 		sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
 		if scope, bound := boundOpenAICodexTurnStateExecutionScope(c); bound && scope != "" {
 			sessionHash = scope
@@ -553,9 +554,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// inherit another connection's native WS turn state or socket binding.
 			return
 		}
-		if turnState == "" && stateStore != nil && sessionHash != "" {
-			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, account.ID, sessionHash); ok {
-				turnState = savedTurnState
+		if turnState == "" && stateStore != nil && s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, turnStateModel) {
+			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, account.ID, turnStateScope, turnStateModel); ok {
+				if s.openAIWSSessionTurnStateUsable(account, savedTurnState) {
+					turnState = savedTurnState
+				}
 			}
 		}
 
@@ -781,6 +784,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
+	turnStateModel = codexTurnStateModel(firstRoutingFields[0].String())
 	wsHeaders, _, buildHdrErr := s.buildOpenAIWSHeaders(
 		ctx,
 		c,
@@ -796,6 +800,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	)
 	if buildHdrErr != nil {
 		return fmt.Errorf("build ws headers: %w", buildHdrErr)
+	}
+	if account.UsesOpenAICodexProtocol() {
+		turnState = s.resolveOpenAIWSCodexTurnState(ctx, c, account, turnStateModel, turnState, true, wsHeaders)
+		if turnState == "" {
+			wsHeaders.Del(openAIWSTurnStateHeader)
+		} else {
+			wsHeaders.Set(openAIWSTurnStateHeader, turnState)
+		}
 	}
 	baseAcquireReq := openAIWSAcquireRequest{
 		Account: account,
@@ -868,6 +880,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	agentTaskRecoveryTried := false
+	pendingHandshakeTurnState := ""
+	confirmedTurnStateBound := strings.TrimSpace(turnState) != ""
+	turnStateBoundToConnection := confirmedTurnStateBound
 	var acquireTurnLease func(int, string, bool, bool) (*openAIWSConnLease, error)
 	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool, forceNewConn bool) (*openAIWSConnLease, error) {
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
@@ -935,18 +950,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			return nil, acquireErr
 		}
+		// A handshake state is only eligible for confirmation on the lease that
+		// returned it. Reset any unconfirmed state left by a failed prior lease.
+		pendingHandshakeTurnState = ""
+		turnStateBoundToConnection = confirmedTurnStateBound
 		connID := strings.TrimSpace(lease.ConnID())
 		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
-			turnState = handshakeTurnState
-			if stateStore != nil && sessionHash != "" {
-				stateStore.BindSessionTurnState(groupID, account.ID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
-			}
-			updatedHeaders := cloneHeader(baseAcquireReq.Headers)
-			if updatedHeaders == nil {
-				updatedHeaders = make(http.Header)
-			}
-			updatedHeaders.Set(openAIWSTurnStateHeader, handshakeTurnState)
-			baseAcquireReq.Headers = updatedHeaders
+			pendingHandshakeTurnState = handshakeTurnState
+			turnStateBoundToConnection = true
 		}
 		logOpenAIWSModeInfo(
 			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_idle_ms=%d conn_age_ms=%d upstream_pings=%d conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s",
@@ -965,6 +976,22 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	var rejectedFieldRetryState *openAIResponsesRejectedFieldRetryState
+	clientReadCtx, cancelClientRead := context.WithCancel(ctx)
+	defer cancelClientRead()
+	var nextClientRead *openAIWSClientReadAhead
+	clientReadResultError := func(result openAIWSClientReadResult) error {
+		if result.err != nil {
+			return result.err
+		}
+		if result.messageType != coderws.MessageText && result.messageType != coderws.MessageBinary {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				fmt.Sprintf("unsupported websocket client message type: %s", result.messageType.String()),
+				nil,
+			)
+		}
+		return nil
+	}
 	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
 		responseModelObserver := &upstreamResponseModelObserver{}
 		if lease == nil {
@@ -1168,6 +1195,22 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			imageCounter.AddSSEData(upstreamMessage)
 
+			if !clientDisconnected && nextClientRead != nil {
+				if clientRead, ready := nextClientRead.Poll(); ready {
+					if clientReadErr := clientReadResultError(clientRead); clientReadErr != nil {
+						clientDisconnected = true
+						closeStatus, closeReason := summarizeOpenAIWSReadCloseError(clientReadErr)
+						logOpenAIWSModeInfo(
+							"ingress_ws_client_disconnected_drain account_id=%d turn=%d conn_id=%s close_status=%s close_reason=%s",
+							account.ID,
+							turn,
+							truncateOpenAIWSLogValue(lease.ConnID(), openAIWSIDValueMaxLen),
+							closeStatus,
+							truncateOpenAIWSLogValue(closeReason, openAIWSHeaderValueMaxLen),
+						)
+					}
+				}
+			}
 			if !clientDisconnected {
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
@@ -1220,7 +1263,30 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 			if isTerminalEvent {
+				if nextClientRead != nil {
+					nextClientRead.MarkTurnCompleted()
+				}
 				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
+				if !clientDisconnected && (eventType == "response.completed" || eventType == "response.done") {
+					if pendingHandshakeTurnState != "" && stateStore != nil &&
+						s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, mappedModel) &&
+						strings.EqualFold(mappedModel, turnStateModel) && s.canCommitOpenAIWSSessionTurnState(c, account, pendingHandshakeTurnState) {
+						confirmedState := pendingHandshakeTurnState
+						stateStore.BindSessionTurnState(groupID, account.ID, turnStateScope, confirmedState, s.openAIWSSessionStickyTTL(), mappedModel)
+						turnState = confirmedState
+						updatedHeaders := cloneHeader(baseAcquireReq.Headers)
+						if updatedHeaders == nil {
+							updatedHeaders = make(http.Header)
+						}
+						updatedHeaders.Set(openAIWSTurnStateHeader, confirmedState)
+						baseAcquireReq.Headers = updatedHeaders
+						confirmedTurnStateBound = true
+					}
+					pendingHandshakeTurnState = ""
+					s.observeCodexTurnStateResponse(c, account, mappedModel, lease.HandshakeHeaders())
+				} else {
+					pendingHandshakeTurnState = ""
+				}
 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
 				if clientDisconnected {
 					lease.MarkBroken()
@@ -1481,6 +1547,21 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		skipBeforeTurn = false
+		if nextClientRead == nil {
+			nextClientRead = startOpenAIWSClientReadAhead(
+				clientReadCtx,
+				clientConn,
+				s.openAIWSIngressInterTurnIdleTimeout(),
+			)
+		}
+		currentTurnStateModel := codexTurnStateModel(gjson.GetBytes(currentPayload, "model").String())
+		if turnStateBoundToConnection && (turnStateModel == "" || currentTurnStateModel == "" || !strings.EqualFold(turnStateModel, currentTurnStateModel)) {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"upstream turn-state is bound to a different model; reconnect before switching models",
+				nil,
+			)
+		}
 		// 剥离本会话已知失效的加密项，阻断同一失效密文随历史反复触发上游拒绝。
 		// 历史序列须同步剥离，否则与已剥离的当前 input 项错位，prefix 复用失配。
 		if invalidDigests := s.sessionInvalidEncryptedContentDigests(groupID, sessionHash); len(invalidDigests) > 0 {
@@ -1870,7 +1951,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			preferredConnID = connID
 		}
 
-		nextClientMessage, readErr := readClientMessage()
+		clientRead := nextClientRead.Wait()
+		nextClientRead = nil
+		readErr := clientReadResultError(clientRead)
 		if readErr != nil {
 			if isOpenAIWSSessionPreempted(ctx) {
 				return errOpenAIWSSessionPreempted
@@ -1888,6 +1971,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			return fmt.Errorf("read client websocket request: %w", readErr)
 		}
+		nextClientMessage := clientRead.payload
 
 		nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
 		if parseErr != nil {

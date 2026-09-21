@@ -280,7 +280,6 @@ func TestFinalizeLiveCallIsIdempotentAndWritesZeroUsage(t *testing.T) {
 		ExpiresAt:          time.Now().Add(time.Hour),
 		Controller:         LiveControllerPending,
 		InboundEndpoint:    "/v1/live",
-		UpstreamTurnState:  stringPointer(" live-turn-state "),
 		UpstreamOriginator: stringPointer(""),
 		UpstreamUserAgent:  stringPointer("live-user-agent"),
 		UpstreamVersion:    stringPointer(" live-version "),
@@ -313,7 +312,7 @@ func TestFinalizeLiveCallIsIdempotentAndWritesZeroUsage(t *testing.T) {
 	require.Zero(t, log.OutputTokens)
 	require.Zero(t, log.TotalCost)
 	require.Zero(t, log.ActualCost)
-	require.Equal(t, record.UpstreamTurnState, log.UpstreamTurnState)
+	require.Nil(t, log.UpstreamTurnState)
 	require.Equal(t, record.UpstreamOriginator, log.UpstreamOriginator)
 	require.Equal(t, record.UpstreamUserAgent, log.UpstreamUserAgent)
 	require.Equal(t, record.UpstreamVersion, log.UpstreamVersion)

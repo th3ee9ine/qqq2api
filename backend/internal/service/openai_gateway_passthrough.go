@@ -727,6 +727,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 保证不被覆盖丢失）。
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
+	if account.UsesOpenAICodexProtocol() {
+		stateModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, true); ok && req.Header.Get(openAICodexTurnStateHeader) == "" && s.codexTurnStateInjection {
+			req.Header.Set(openAICodexTurnStateHeader, snapshot.Token.Value)
+		}
+	}
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 
 	return req, nil
@@ -1838,7 +1844,10 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 	}
+	var stagedTurnState http.Header
+	stageOpenAICodexTurnState(&stagedTurnState, resp.Header)
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	deleteOpenAIPassthroughHeader(c.Writer.Header(), openAICodexTurnStateHeader)
 
 	// SSE headers
 	c.Header("Content-Type", "text/event-stream")
@@ -1866,6 +1875,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	sawFailedEvent := false
 	sawBareError := false
 	sawResponseFailed := false
+	sawTurnStateTerminal := false
 	terminalEventType := ""
 	semanticOutputSeen := false
 	capacityFailoverSuppressedLogged := false
@@ -1878,6 +1888,24 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	var bareErrorPayload []byte
 	bareErrorAccountSideEffectsPending := false
 	upstreamRequestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
+	turnStateModel := firstNonEmpty(mappedModel, originalModel)
+	turnStateCommitted := false
+	commitTurnState := func() {
+		if turnStateCommitted || c.Writer.Written() || strings.TrimSpace(stagedTurnState.Get(openAICodexTurnStateHeader)) == "" {
+			return
+		}
+		c.Writer.Header().Set(openAICodexTurnStateHeader, stagedTurnState.Get(openAICodexTurnStateHeader))
+		s.noteStagedOpenAICodexTurnStateCommitted(c, account, stagedTurnState)
+		turnStateCommitted = true
+	}
+	turnStateObserved := false
+	observeCompletedTurnState := func() {
+		if turnStateObserved || !sawTurnStateTerminal || sawFailedEvent || clientDisconnected {
+			return
+		}
+		s.observeCodexTurnStateResponse(c, account, turnStateModel, resp.Header)
+		turnStateObserved = true
+	}
 	// pendingLines 在首个可见输出前保留前导事件，确保无输出失败仍可安全 failover。
 	pendingLines := make([]string, 0, 8)
 
@@ -1984,6 +2012,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 
 	for documentScanner.Scan() {
 		line := documentScanner.Text()
+		lineCommitsTurnState := false
 		if eventType, ok := extractOpenAISSEEventLine(line); ok {
 			pendingSSEEventType = eventType
 			eventType = strings.TrimSpace(eventType)
@@ -2129,6 +2158,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 					terminalEventType = eventType
 				}
 			}
+			if eventType == "response.completed" || eventType == "response.done" {
+				// Keep the authoritative completion sticky. A conventional [DONE]
+				// marker may follow it and must not erase the evidence required for
+				// collector admission.
+				sawTurnStateTerminal = true
+			}
 			if responseID == "" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
 				if err := s.bindHTTPResponseAccountBeforeWrite(ctx, c, account, responseID); err != nil {
@@ -2158,6 +2193,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				openAIResponsesCompletedEventIsEmpty(dataBytes, usage) {
 				return resultWithUsage(), newOpenAIResponsesEmptyCompletedFailoverError(c, account, upstreamRequestID)
 			}
+			lineCommitsTurnState = !sawFailedEvent && lineStartsClientOutput &&
+				(!openAIStreamEventTypeIsTerminal(eventType) || eventType == "response.completed" || eventType == "response.done")
 			if firstTokenMs == nil && openAIStreamDataStartsTTFT(trimmedData, eventType, forceFlushFailedEvent, ttftMode) {
 				ms := int(time.Since(startTime).Milliseconds())
 				firstTokenMs = &ms
@@ -2182,6 +2219,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			// 建立 happens-before —— 之后 ResponseWriter 由本循环独占。
 			if !clientOutputStarted {
 				stopKeepalive()
+			}
+			if !clientOutputStarted && lineCommitsTurnState {
+				commitTurnState()
 			}
 			if !clientOutputStarted && len(pendingLines) > 0 {
 				if !writePendingLines() {
@@ -2208,6 +2248,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	if err := documentScanner.Err(); err != nil {
 		if (sawDone || sawTerminalEvent) && !sawFailedEvent {
 			s.clearOpenAIProxyStreamDisconnect(account)
+			observeCompletedTurnState()
 			return resultWithUsage(), nil
 		}
 		if sawFailedEvent {
@@ -2259,6 +2300,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	if (sawDone || sawTerminalEvent) && !sawFailedEvent {
 		s.clearOpenAIProxyStreamDisconnect(account)
 	}
+	observeCompletedTurnState()
 	logOpenAISuccessMissingUsage(ctx, c, account, resp, usage, terminalEventType, clientDisconnected)
 
 	return resultWithUsage(), nil
@@ -2330,9 +2372,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err := s.bindHTTPResponseAccountBeforeWrite(ctx, c, account, responseID); err != nil {
 		return nil, err
 	}
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
-	}
+	turnStateModel := firstNonEmpty(mappedModel, originalModel)
+	responseCompleted := openAIJSONResponseCompleted(resp.StatusCode, body)
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header)
+	downstreamWriteSucceeded := writeOpenAINonStreamingResponse(c, resp.StatusCode, contentType, body)
+	s.commitOpenAICodexTurnStateAfterWrite(
+		c, account, turnStateModel, resp.Header, stagedTurnState, responseCompleted, downstreamWriteSucceeded, turnStateHeaderDeliverable,
+	)
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
 		usage:            usage,
@@ -2403,6 +2449,8 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		return nil, err
 	}
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header)
+	responseCompleted := ok && (terminalType == "response.completed" || terminalType == "response.done")
 	logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, usage, terminalType, false)
 
 	contentType := "application/json; charset=utf-8"
@@ -2412,9 +2460,17 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 			contentType = "text/event-stream"
 		}
 	}
-	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
-	}
+	downstreamWriteSucceeded := writeOpenAINonStreamingResponse(c, resp.StatusCode, contentType, body)
+	s.commitOpenAICodexTurnStateAfterWrite(
+		c,
+		account,
+		firstNonEmpty(mappedModel, originalModel),
+		resp.Header,
+		stagedTurnState,
+		responseCompleted,
+		downstreamWriteSucceeded,
+		turnStateHeaderDeliverable,
+	)
 
 	return &openaiNonStreamingResultPassthrough{
 		OpenAIUsage:      usage,
@@ -2480,4 +2536,45 @@ func writeOpenAIPassthroughResponseHeaders(dst http.Header, src http.Header, fil
 	for _, v := range getCaseInsensitiveValues(src, openAICodexTurnStateHeader) {
 		dst.Add(turnStateKey, v)
 	}
+}
+
+func deleteOpenAIPassthroughHeader(headers http.Header, name string) {
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			delete(headers, key)
+		}
+	}
+}
+
+func openAIJSONResponseCompleted(statusCode int, body []byte) bool {
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices || !gjson.ValidBytes(body) {
+		return false
+	}
+	eventType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "type").String()))
+	switch eventType {
+	case "error", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "status").String()))
+	if status == "" {
+		status = strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "response.status").String()))
+	}
+	switch status {
+	case "failed", "incomplete", "cancelled", "canceled":
+		return false
+	}
+	if status != "" && status != "completed" {
+		return false
+	}
+	if status != "completed" && eventType != "response.completed" && eventType != "response.done" {
+		return false
+	}
+	for _, path := range []string{"error", "response.error"} {
+		errorValue := gjson.GetBytes(body, path)
+		raw := strings.TrimSpace(errorValue.Raw)
+		if errorValue.Exists() && raw != "" && raw != "null" && raw != "{}" {
+			return false
+		}
+	}
+	return true
 }

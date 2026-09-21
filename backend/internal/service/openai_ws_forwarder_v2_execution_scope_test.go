@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -13,10 +14,10 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
-// 场景：codex 子智能体经 HTTP 入站、网关内部走 WS 池转发时，与父线程共用 session_id 头。
-// turn state 必须落在执行作用域键下，而不是按 session_id 算出的会话哈希下，
-// 否则子智能体会覆盖父线程的绑定；同一线程在 WS 接入与 HTTP 路径之间也才能共享状态。
-func TestOpenAIGatewayService_Forward_WSv2_TurnStateBoundToExecutionScope(t *testing.T) {
+// API-key WebSocket forwarding may still use the execution scope for
+// connection affinity, but the Codex turn-state store is restricted to
+// official OAuth/setup-token accounts.
+func TestOpenAIGatewayService_Forward_WSv2_APIKeyDoesNotPersistTurnState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
@@ -57,14 +58,17 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateBoundToExecutionScope(t *tes
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 0
+	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
 
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     &httpUpstreamRecorder{},
-		cache:            &stubGatewayCache{},
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		cfg:                     cfg,
+		httpUpstream:            &httpUpstreamRecorder{},
+		cache:                   &stubGatewayCache{},
+		openaiWSResolver:        NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:           NewCodexToolCorrector(),
+		codexTurnStateInjection: true,
 	}
+	svc.initCodexTurnStateCollector()
 	groupID := int64(9)
 	account := &Account{
 		ID:          456,
@@ -97,11 +101,10 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateBoundToExecutionScope(t *tes
 	require.NotEqual(t, legacyHash, scope)
 
 	store := svc.getOpenAIWSStateStore()
-	_, turnStateOnLegacy := store.GetSessionTurnState(groupID, account.ID, legacyHash)
+	_, turnStateOnLegacy := store.GetSessionTurnState(groupID, account.ID, legacyHash, "gpt-5.1")
 	require.False(t, turnStateOnLegacy, "turn state 不得绑定到按 session_id 算出的会话哈希")
-	turnState, turnStateOnScope := store.GetSessionTurnState(groupID, account.ID, scope)
-	require.True(t, turnStateOnScope, "turn state 应绑定到执行作用域")
-	require.Equal(t, "turn-state-from-upstream", turnState)
+	_, turnStateOnScope := store.GetSessionTurnState(groupID, account.ID, scope, "gpt-5.1")
+	require.False(t, turnStateOnScope, "non-eligible API-key accounts must not write the Codex turn-state store")
 }
 
 // Forward 在转发前会按账号 namespace 改写请求体里的 client_metadata，指纹 full 模式还会给每个
@@ -121,27 +124,31 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
 
 	completed := func(id string) []byte {
 		return []byte(`{"type":"response.completed","response":{"id":"` + id + `","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
 	}
 	captureConn := &openAIWSCaptureConn{events: [][]byte{completed("resp_a"), completed("resp_b"), completed("resp_c")}}
+	handshakeState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 102)
 	handshake := http.Header{}
-	handshake.Set(openAIWSTurnStateHeader, "turn-state-from-upstream")
+	handshake.Set(openAIWSTurnStateHeader, handshakeState)
 	pool := newOpenAIWSConnPool(cfg)
 	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn, handshake: handshake})
 	defer pool.Close()
 
 	stateStore := NewOpenAIWSStateStore(nil)
 	svc := &OpenAIGatewayService{
-		cfg:                cfg,
-		httpUpstream:       &httpUpstreamRecorder{},
-		cache:              &stubGatewayCache{},
-		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:      NewCodexToolCorrector(),
-		openaiWSPool:       pool,
-		openaiWSStateStore: stateStore,
+		cfg:                     cfg,
+		httpUpstream:            &httpUpstreamRecorder{},
+		cache:                   &stubGatewayCache{},
+		openaiWSResolver:        NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:           NewCodexToolCorrector(),
+		openaiWSPool:            pool,
+		openaiWSStateStore:      stateStore,
+		codexTurnStateInjection: true,
 	}
+	svc.initCodexTurnStateCollector()
 	groupID := int64(9)
 	const apiKeyID = int64(21)
 	account := &Account{
@@ -179,23 +186,25 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 
 	scopeA, _ := resolveOpenAIWSExecutionScope(cA, rawA, apiKeyID)
 	scopeB, _ := resolveOpenAIWSExecutionScope(cB, rawB, apiKeyID)
+	finalModel := ResolveOpenAIAccountUpstreamModelForRequest(account, "gpt-5.1", false)
+	require.NotEmpty(t, finalModel)
 	require.NotEmpty(t, scopeA)
 	require.NotEqual(t, scopeA, scopeB, "不同 session_id 的会话必须落在不同的作用域")
-	_, boundA := stateStore.GetSessionTurnState(groupID, account.ID, scopeA)
+	_, boundA := stateStore.GetSessionTurnState(groupID, account.ID, scopeA, finalModel)
 	require.True(t, boundA, "会话 A 的 turn state 应落在按原始 session_id 算出的作用域")
-	_, boundB := stateStore.GetSessionTurnState(groupID, account.ID, scopeB)
+	_, boundB := stateStore.GetSessionTurnState(groupID, account.ID, scopeB, finalModel)
 	require.True(t, boundB, "会话 B 的 turn state 应落在按原始 session_id 算出的作用域")
 
 	injected := resolveCodexFingerprintIDs(account, "", codexFingerprintFull)
 	require.NotNil(t, injected)
 	injectedScope, _ := deriveOpenAISessionHashes(fmt.Sprintf("openai_ws_exec:%d|thread=%s", apiKeyID, injected.threadID))
-	_, boundToInjected := stateStore.GetSessionTurnState(groupID, account.ID, injectedScope)
+	_, boundToInjected := stateStore.GetSessionTurnState(groupID, account.ID, injectedScope, finalModel)
 	require.False(t, boundToInjected, "指纹收敛注入的固定 thread_id 不得成为状态键")
 
 	threadBody := `{"model":"gpt-5.1","stream":false,"client_metadata":{"thread_id":"child-thread"},"input":[{"type":"input_text","text":"hello"}]}`
 	cC, rawC := forward("session-c", threadBody)
 	scopeC, threadC := resolveOpenAIWSExecutionScope(cC, rawC, apiKeyID)
 	require.Equal(t, "child-thread", threadC)
-	_, boundC := stateStore.GetSessionTurnState(groupID, account.ID, scopeC)
+	_, boundC := stateStore.GetSessionTurnState(groupID, account.ID, scopeC, finalModel)
 	require.True(t, boundC, "客户端自带线程标识时，键必须与按原始报文算出的一致，不受账号 namespace 改写影响")
 }

@@ -1873,8 +1873,6 @@ export interface AdminUsageLog extends UsageLog {
   upstream_model_mismatch?: boolean | null
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
-  /** Snapshot of the opaque Turn State header sent to the upstream. */
-  upstream_turn_state?: string | null
   /** Codex identity headers sent to the upstream request. */
   upstream_originator?: string | null
   upstream_user_agent?: string | null

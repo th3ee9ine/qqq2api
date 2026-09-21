@@ -67,14 +67,17 @@ type UpdateProxyRequest struct {
 
 // ProxyService 代理管理服务
 type ProxyService struct {
-	proxyRepo ProxyRepository
+	proxyRepo      ProxyRepository
+	runtimeBlocker AccountRuntimeBlocker
 }
 
 // NewProxyService 创建代理服务实例
-func NewProxyService(proxyRepo ProxyRepository) *ProxyService {
-	return &ProxyService{
-		proxyRepo: proxyRepo,
+func NewProxyService(proxyRepo ProxyRepository, runtimeBlockers ...AccountRuntimeBlocker) *ProxyService {
+	service := &ProxyService{proxyRepo: proxyRepo}
+	if len(runtimeBlockers) > 0 {
+		service.runtimeBlocker = runtimeBlockers[0]
 	}
+	return service
 }
 
 // Create 创建代理
@@ -134,6 +137,7 @@ func (s *ProxyService) Update(ctx context.Context, id int64, req UpdateProxyRequ
 	if err != nil {
 		return nil, fmt.Errorf("get proxy: %w", err)
 	}
+	proxyRuntimeIdentityBefore := snapshotOpenAIProxyRuntimeIdentity(proxy)
 
 	// 更新字段
 	if req.Name != nil {
@@ -171,9 +175,19 @@ func (s *ProxyService) Update(ctx context.Context, id int64, req UpdateProxyRequ
 		proxy.MaxAccounts = *req.MaxAccounts
 	}
 
+	var runtimeAccounts []ProxyAccountSummary
+	_, canInvalidateRuntime := s.runtimeBlocker.(OpenAIAccountRuntimeStateInvalidator)
+	if canInvalidateRuntime && !proxyRuntimeIdentityBefore.equal(snapshotOpenAIProxyRuntimeIdentity(proxy)) {
+		runtimeAccounts, err = snapshotOpenAIProxyRuntimeAccounts(s.proxyRepo, id)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, fmt.Errorf("update proxy: %w", err)
 	}
+	invalidateOpenAIProxyRuntimeAccounts(s.runtimeBlocker, runtimeAccounts)
 
 	return proxy, nil
 }
@@ -185,10 +199,18 @@ func (s *ProxyService) Delete(ctx context.Context, id int64) error {
 	if err != nil {
 		return fmt.Errorf("get proxy: %w", err)
 	}
+	var runtimeAccounts []ProxyAccountSummary
+	if _, canInvalidateRuntime := s.runtimeBlocker.(OpenAIAccountRuntimeStateInvalidator); canInvalidateRuntime {
+		runtimeAccounts, err = snapshotOpenAIProxyRuntimeAccounts(s.proxyRepo, id)
+		if err != nil {
+			return err
+		}
+	}
 
 	if err := s.proxyRepo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("delete proxy: %w", err)
 	}
+	invalidateOpenAIProxyRuntimeAccounts(s.runtimeBlocker, runtimeAccounts)
 
 	return nil
 }
