@@ -1088,7 +1088,7 @@ const exportToExcel = async () => {
 
 // Column visibility
 const ALWAYS_VISIBLE = ['created_at']
-const DEFAULT_HIDDEN_COLUMNS = ['reasoning_effort', 'request_id', 'upstream_request_id', 'user_agent']
+const DEFAULT_HIDDEN_COLUMNS = ['reasoning_effort', 'request_id', 'upstream_request_id']
 const HIDDEN_COLUMNS_KEY = 'usage-hidden-columns'
 const HIDDEN_COLUMNS_VERSION_KEY = 'usage-hidden-columns-version'
 // Hidden-column versions are additive so a user's explicit visibility choices
@@ -1112,9 +1112,7 @@ const allColumns = computed(() => [
   { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },
   { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },
   { key: 'upstream_turn_state', label: t('admin.usage.upstreamTurnState'), sortable: false },
-  { key: 'upstream_originator', label: t('admin.usage.upstreamOriginator'), sortable: false },
   { key: 'upstream_user_agent', label: t('admin.usage.upstreamUserAgent'), sortable: false },
-  { key: 'upstream_version', label: t('admin.usage.upstreamVersion'), sortable: false },
   { key: 'user_agent', label: t('usage.userAgent'), sortable: false },
   { key: 'ip_address', label: t('admin.usage.ipAddress'), sortable: false }
 ])

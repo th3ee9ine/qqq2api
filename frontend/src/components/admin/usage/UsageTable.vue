@@ -289,50 +289,31 @@
           </span>
         </template>
 
-        <template #cell-upstream_originator="{ row }">
-          <button
-            v-if="hasUpstreamHeaderValue(row.upstream_originator)"
-            type="button"
-            class="max-w-[180px] truncate rounded px-1 py-0.5 text-left text-xs text-primary-600 underline decoration-dotted underline-offset-4 hover:bg-primary-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-900/20"
-            data-testid="upstream-originator-summary"
-            :title="t('admin.usage.upstreamHeaderViewDetails')"
-            :aria-label="`${t('admin.usage.upstreamOriginator')}: ${headerSummary(row.upstream_originator, 'originator')}`"
-            aria-haspopup="dialog"
-            @click="openUpstreamHeaderDetails('originator', row.upstream_originator)"
-          >{{ headerSummary(row.upstream_originator, 'originator') }}</button>
-          <span v-else class="text-xs text-gray-400 dark:text-gray-500">{{ emptyUpstreamHeaderLabel(row.upstream_originator) }}</span>
-        </template>
-
         <template #cell-upstream_user_agent="{ row }">
           <button
-            v-if="hasUpstreamHeaderValue(row.upstream_user_agent)"
+            v-if="hasHeaderValue(row.upstream_user_agent)"
             type="button"
             class="max-w-[220px] truncate rounded px-1 py-0.5 text-left text-xs text-primary-600 underline decoration-dotted underline-offset-4 hover:bg-primary-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-900/20"
             data-testid="upstream-user-agent-summary"
             :title="t('admin.usage.upstreamHeaderViewDetails')"
-            :aria-label="`${t('admin.usage.upstreamUserAgent')}: ${headerSummary(row.upstream_user_agent, 'user_agent')}`"
+            :aria-label="`${t('admin.usage.upstreamUserAgent')}: ${headerSummary(row.upstream_user_agent)}`"
             aria-haspopup="dialog"
-            @click="openUpstreamHeaderDetails('user_agent', row.upstream_user_agent)"
-          >{{ headerSummary(row.upstream_user_agent, 'user_agent') }}</button>
-          <span v-else class="text-xs text-gray-400 dark:text-gray-500">{{ emptyUpstreamHeaderLabel(row.upstream_user_agent) }}</span>
-        </template>
-
-        <template #cell-upstream_version="{ row }">
-          <button
-            v-if="hasUpstreamHeaderValue(row.upstream_version)"
-            type="button"
-            class="max-w-[140px] truncate rounded px-1 py-0.5 text-left text-xs text-primary-600 underline decoration-dotted underline-offset-4 hover:bg-primary-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-900/20"
-            data-testid="upstream-version-summary"
-            :title="t('admin.usage.upstreamHeaderViewDetails')"
-            :aria-label="`${t('admin.usage.upstreamVersion')}: ${headerSummary(row.upstream_version, 'version')}`"
-            aria-haspopup="dialog"
-            @click="openUpstreamHeaderDetails('version', row.upstream_version)"
-          >{{ headerSummary(row.upstream_version, 'version') }}</button>
-          <span v-else class="text-xs text-gray-400 dark:text-gray-500">{{ emptyUpstreamHeaderLabel(row.upstream_version) }}</span>
+            @click="openHeaderDetails('upstream_user_agent', row.upstream_user_agent)"
+          >{{ headerSummary(row.upstream_user_agent) }}</button>
+          <span v-else class="text-xs text-gray-400 dark:text-gray-500">{{ emptyHeaderLabel(row.upstream_user_agent) }}</span>
         </template>
 
         <template #cell-user_agent="{ row }">
-          <span v-if="row.user_agent" class="text-sm text-gray-600 dark:text-gray-400 block max-w-[320px] truncate" :title="row.user_agent">{{ formatUserAgent(row.user_agent) }}</span>
+          <button
+            v-if="hasHeaderValue(row.user_agent)"
+            type="button"
+            class="block max-w-[320px] truncate rounded px-1 py-0.5 text-left text-xs text-primary-600 underline decoration-dotted underline-offset-4 hover:bg-primary-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-primary-400 dark:hover:bg-primary-900/20"
+            data-testid="user-agent-summary"
+            :title="t('usage.userAgentViewDetails')"
+            :aria-label="`${t('usage.userAgent')}: ${headerSummary(row.user_agent)}`"
+            aria-haspopup="dialog"
+            @click="openHeaderDetails('user_agent', row.user_agent)"
+          >{{ headerSummary(row.user_agent) }}</button>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
@@ -684,7 +665,8 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const copiedRequestId = ref<string | null>(null)
-type HeaderDetailKind = 'turn_state' | 'originator' | 'user_agent' | 'version'
+type HeaderDetailKind = 'turn_state' | 'upstream_user_agent' | 'user_agent'
+type UserAgentDetailKind = Exclude<HeaderDetailKind, 'turn_state'>
 const headerDetails = ref<{ kind: HeaderDetailKind; value: string; websocket?: boolean } | null>(null)
 const showAccountBilling = props.showAccountBilling
 const showUpstreamEndpoint = props.showUpstreamEndpoint
@@ -758,10 +740,10 @@ const copyRequestId = (requestId: string) => copyIdentifier(requestId, t('admin.
 const copyUpstreamRequestId = (upstreamRequestId: string) =>
   copyIdentifier(upstreamRequestId, t('admin.usage.upstreamRequestIdCopied'))
 
-const hasUpstreamHeaderValue = (value: string | null | undefined): boolean =>
+const hasHeaderValue = (value: string | null | undefined): boolean =>
   value != null && value.trim() !== ''
 
-const emptyUpstreamHeaderLabel = (value: string | null | undefined): string =>
+const emptyHeaderLabel = (value: string | null | undefined): string =>
   value === '' ? t('admin.usage.upstreamHeaderNotSent') : t('admin.usage.upstreamHeaderUnknown')
 
 const openTurnStateDetails = (value: string, websocket: boolean) => {
@@ -774,26 +756,20 @@ const truncateHeaderSummary = (value: string, maxLength: number): string => {
 }
 
 /** Show short identities directly while keeping long header values scannable. */
-const headerSummary = (
-  value: string | null | undefined,
-  kind: HeaderDetailKind,
-): string => {
+const headerSummary = (value: string | null | undefined): string => {
   const normalized = value?.trim() || ''
   if (!normalized) return ''
-  const maxLength = kind === 'user_agent' ? 36 : kind === 'originator' ? 28 : 18
+  const maxLength = 36
   if (normalized.length <= maxLength) return normalized
-  if (kind === 'user_agent') {
-    // The leading product/version segment is useful for scanning (client
-    // names such as "Codex Desktop" contain a space); platform and terminal
-    // trailers remain available from the detail dialog.
-    const productVersion = normalized.match(/^(.{1,96}?\/[^\s(]+)/u)?.[1]
-    return truncateHeaderSummary(productVersion || normalized.split(/\s+/u, 1)[0] || normalized, maxLength)
-  }
-  return truncateHeaderSummary(normalized, maxLength)
+  // The leading product/version segment is useful for scanning (client names
+  // such as "Codex Desktop" contain a space); platform and terminal trailers
+  // remain available from the detail dialog.
+  const productVersion = normalized.match(/^(.{1,96}?\/[^\s(]+)/u)?.[1]
+  return truncateHeaderSummary(productVersion || normalized.split(/\s+/u, 1)[0] || normalized, maxLength)
 }
 
-const openUpstreamHeaderDetails = (
-  kind: HeaderDetailKind,
+const openHeaderDetails = (
+  kind: UserAgentDetailKind,
   value: string | null | undefined,
 ) => {
   const raw = value ?? ''
@@ -803,13 +779,16 @@ const openUpstreamHeaderDetails = (
 
 const headerDetailTitle = (kind: HeaderDetailKind): string => {
   if (kind === 'turn_state') return t('admin.usage.turnStateDetails')
-  if (kind === 'originator') return t('admin.usage.upstreamOriginatorDetails')
-  if (kind === 'user_agent') return t('admin.usage.upstreamUserAgentDetails')
-  return t('admin.usage.upstreamVersionDetails')
+  if (kind === 'upstream_user_agent') return t('admin.usage.upstreamUserAgentDetails')
+  return t('usage.userAgentDetails')
 }
 
 const headerCopiedMessage = (kind: HeaderDetailKind): string =>
-  kind === 'turn_state' ? t('admin.usage.turnStateCopied') : t('admin.usage.upstreamHeaderCopied')
+  kind === 'turn_state'
+    ? t('admin.usage.turnStateCopied')
+    : kind === 'upstream_user_agent'
+      ? t('admin.usage.upstreamHeaderCopied')
+      : t('usage.userAgentCopied')
 
 // Tooltip state - cost
 const tooltipVisible = ref(false)
@@ -842,10 +821,6 @@ const getRequestTypeBadgeClass = (row: AdminUsageLog): string => {
 }
 
 
-
-const formatUserAgent = (ua: string): string => {
-  return ua
-}
 
 // 超过 1 分钟简化为 "Xm Ys"，免去人工换算（超过 1 小时再进位为 "Xh Ym"）
 const formatDuration = (ms: number | null | undefined): string => {

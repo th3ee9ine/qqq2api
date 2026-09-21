@@ -37,6 +37,7 @@ const messages: Record<string, string> = {
 	'admin.usage.upstreamOriginator': 'Upstream Originator',
 	'admin.usage.upstreamUserAgent': 'Upstream User-Agent',
 	'admin.usage.upstreamVersion': 'Upstream Version',
+	'usage.userAgent': 'User-Agent',
 	'usage.requestedModel': 'Requested model',
 	'usage.sentUpstreamModel': 'Sent upstream model',
 	'usage.upstreamResponseModel': 'Upstream response model',
@@ -487,7 +488,7 @@ describe('admin UsageView request ID column visibility', () => {
     )
   })
 
-  it('exposes all upstream identity columns and persists an explicit hidden choice', async () => {
+  it('exposes Turn State and User-Agent columns while omitting Originator and Version', async () => {
     const wrapper = mount(UsageView, {
       global: {
         stubs: {
@@ -514,9 +515,12 @@ describe('admin UsageView request ID column visibility', () => {
     const usageTable = wrapper.findComponent(UsageTableStub)
     expect(usageTable.props('columns')).toEqual(expect.arrayContaining([
       expect.objectContaining({ key: 'upstream_turn_state', label: 'Upstream Turn State' }),
-      expect.objectContaining({ key: 'upstream_originator', label: 'Upstream Originator' }),
       expect.objectContaining({ key: 'upstream_user_agent', label: 'Upstream User-Agent' }),
-      expect.objectContaining({ key: 'upstream_version', label: 'Upstream Version' }),
+      expect.objectContaining({ key: 'user_agent', label: 'User-Agent' }),
+    ]))
+    expect(usageTable.props('columns')).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 'upstream_originator' }),
+      expect.objectContaining({ key: 'upstream_version' }),
     ]))
 
     await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')

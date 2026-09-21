@@ -426,6 +426,9 @@ export default {
     exportExcelFailed: 'Failed to export usage data',
     imageUnit: ' images',
     userAgent: 'User-Agent',
+    userAgentViewDetails: 'View User-Agent details',
+    userAgentDetails: 'User-Agent details',
+    userAgentCopied: 'User-Agent copied',
     ipAddress: 'IP address',
     ipGeo: {
       fetch: 'Fetch region',

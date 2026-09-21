@@ -431,6 +431,9 @@ export default {
     exportExcelFailed: '使用数据导出失败',
     imageUnit: '张',
     userAgent: 'User-Agent',
+    userAgentViewDetails: '点击查看 User-Agent 详情',
+    userAgentDetails: 'User-Agent 详情',
+    userAgentCopied: 'User-Agent 已复制',
     ipAddress: 'IP 地址',
     ipGeo: {
       fetch: '获取地区',
