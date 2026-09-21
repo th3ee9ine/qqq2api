@@ -186,6 +186,30 @@ describe('feature route guard', () => {
     expect(next).toHaveBeenCalledWith('/admin/accounts')
   })
 
+  it('keeps the reliability workbench exclusive to super administrators', async () => {
+    const route = routerHarness.routes.find((item) => item.path === '/admin/reliability')
+    expect(route).toMatchObject({
+      name: 'AdminReliability',
+      meta: {
+        requiresAuth: true,
+        requiresAdmin: true,
+        titleKey: 'admin.reliability.title',
+        descriptionKey: 'admin.reliability.description',
+      },
+    })
+
+    authStore.isAdmin = false
+    authStore.isAccountAdmin = true
+    authStore.panelHomePath = '/admin/accounts'
+    authStore.user = { role: 'account_admin' }
+
+    const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/reliability')
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/admin/accounts')
+  })
+
   it.each([
     ['risk control', { requiresRiskControl: true }, '/admin/risk-control'],
   ])('does not treat a failed %s settings load as explicitly disabled', async (_name, meta, path) => {

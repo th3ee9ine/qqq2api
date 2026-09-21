@@ -756,12 +756,12 @@ func isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw string) bool {
 	return false
 }
 
-func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string, canonicalModel ...string) {
+func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string, canonicalModel ...string) (shouldDisable bool) {
 	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI {
-		return
+		return false
 	}
 	if !isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
-		return
+		return false
 	}
 	model := firstNonEmpty(canonicalModel...)
 	if model == "" {
@@ -773,7 +773,7 @@ func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Contex
 	if len(responseBody) > 0 {
 		headers = openAIWSSemantic429Headers(account, model, headers)
 	}
-	s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody, model)
+	return s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody, model)
 }
 
 func openAIWSSemantic429Headers(account *Account, model string, headers http.Header) http.Header {
@@ -783,15 +783,16 @@ func openAIWSSemantic429Headers(account *Account, model string, headers http.Hea
 	return nil
 }
 
-func (s *OpenAIGatewayService) newOpenAIWSRateLimitFailoverError(account *Account, headers http.Header, responseBody []byte, message string) *UpstreamFailoverError {
+func (s *OpenAIGatewayService) newOpenAIWSRateLimitFailoverError(account *Account, headers http.Header, responseBody []byte, message string, shouldDisable bool) *UpstreamFailoverError {
+	retryableOnSameAccount := !shouldDisable && account != nil && account.IsPoolMode() && account.IsPoolModeRetryableStatus(http.StatusTooManyRequests)
 	return s.newOpenAIAccountFailoverError(
 		account,
 		http.StatusTooManyRequests,
 		headers,
 		responseBody,
 		strings.TrimSpace(message),
-		false,
-		false,
+		shouldDisable,
+		retryableOnSameAccount,
 	)
 }
 

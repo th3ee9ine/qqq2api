@@ -22,6 +22,7 @@ import auditAPI from './audit'
 import imageStorageAPI from './imageStorage'
 import pluginsAPI from './plugins'
 import accountAdminsAPI from './accountAdmins'
+import reliabilityAPI from './reliability'
 
 /**
  * Unified admin API object for convenient access
@@ -45,7 +46,8 @@ export const adminAPI = {
   audit: auditAPI,
   imageStorage: imageStorageAPI,
   plugins: pluginsAPI,
-  accountAdmins: accountAdminsAPI
+  accountAdmins: accountAdminsAPI,
+  reliability: reliabilityAPI,
 }
 
 export {
@@ -67,7 +69,8 @@ export {
   auditAPI,
   imageStorageAPI,
   pluginsAPI,
-  accountAdminsAPI
+  accountAdminsAPI,
+  reliabilityAPI,
 }
 
 export default adminAPI

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
 // 回归：上游 Transport 必须显式配置建连超时。
@@ -22,14 +23,14 @@ func TestBuildUpstreamTransportSetsDialTimeout(t *testing.T) {
 	transport, err := buildUpstreamTransport(settings, nil, upstreamProtocolModeDefault)
 	require.NoError(t, err)
 	require.NotNil(t, transport.DialContext, "DialContext 缺失会退化为无超时的零值 dialer")
-	require.Equal(t, defaultUpstreamTLSHandshakeTimeout, transport.TLSHandshakeTimeout)
+	require.Equal(t, config.DefaultGatewayUpstreamTLSHandshakeTimeout, transport.TLSHandshakeTimeout)
 }
 
 func TestNewUpstreamDialerHasBoundedTimeout(t *testing.T) {
 	dialer := newUpstreamDialer()
 
 	require.Greater(t, dialer.Timeout, time.Duration(0), "建连超时必须有上限")
-	require.Equal(t, defaultUpstreamDialTimeout, dialer.Timeout)
+	require.Equal(t, config.DefaultGatewayUpstreamDialTimeout, dialer.Timeout)
 	require.Equal(t, defaultUpstreamDialKeepAlive, dialer.KeepAlive)
 }
 

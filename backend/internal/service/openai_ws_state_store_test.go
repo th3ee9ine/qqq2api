@@ -64,18 +64,23 @@ func TestOpenAIWSStateStore_ResponseConnTTL(t *testing.T) {
 
 func TestOpenAIWSStateStore_SessionTurnStateTTL(t *testing.T) {
 	store := NewOpenAIWSStateStore(nil)
-	store.BindSessionTurnState(9, "session_hash_1", "turn_state_1", 30*time.Millisecond)
+	const accountID = int64(41)
+	store.BindSessionTurnState(9, accountID, "session_hash_1", "turn_state_1", 30*time.Millisecond)
 
-	state, ok := store.GetSessionTurnState(9, "session_hash_1")
+	state, ok := store.GetSessionTurnState(9, accountID, "session_hash_1")
 	require.True(t, ok)
 	require.Equal(t, "turn_state_1", state)
 
+	// account 隔离：同一分组和会话下，不允许将 A 的上游状态回放给 B。
+	_, ok = store.GetSessionTurnState(9, accountID+1, "session_hash_1")
+	require.False(t, ok)
+
 	// group 隔离
-	_, ok = store.GetSessionTurnState(10, "session_hash_1")
+	_, ok = store.GetSessionTurnState(10, accountID, "session_hash_1")
 	require.False(t, ok)
 
 	time.Sleep(60 * time.Millisecond)
-	_, ok = store.GetSessionTurnState(9, "session_hash_1")
+	_, ok = store.GetSessionTurnState(9, accountID, "session_hash_1")
 	require.False(t, ok)
 }
 

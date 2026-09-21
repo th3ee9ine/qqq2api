@@ -1,6 +1,7 @@
 package service
 
 import (
+	"crypto/sha256"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ import (
 // codex-api/src/sse/responses.rs 与 endpoint/compact.rs）。
 const openAICodexTurnStateHeader = "x-codex-turn-state"
 
+const openAICodexTurnStateExecutionScopeContextKey = "openai_codex_turn_state_execution_scope"
+
 // turn-state blob 是上游在"出站身份"（含 #5553 指纹收敛改写后的
 // installation/session/thread 标识）下铸造的，同账号回放自洽；跨账号回放
 // （failover 换号后客户端仍回带旧账号的 blob）是代理链独有、真实 Codex
@@ -22,16 +25,59 @@ const openAICodexTurnStateHeader = "x-codex-turn-state"
 // 账号，出站守卫据此剥离已知异账号的回带值。
 type openAICodexTurnStateOrigin struct {
 	accountID int64
+	stateHash [sha256.Size]byte
 	expiresAt time.Time
 }
 
-// openAICodexTurnStateSeed 返回溯源表键：API Key + 客户端原始会话标识。
+// BindOpenAICodexTurnStateExecutionScope resolves the immutable client
+// execution identity before account-specific request rewriting. An explicitly
+// bound empty value is significant: requests without a reliable identity must
+// not fall back to content-derived hashes for provenance decisions.
+func BindOpenAICodexTurnStateExecutionScope(c *gin.Context, body []byte) string {
+	if c == nil {
+		return ""
+	}
+	if scope, bound := boundOpenAICodexTurnStateExecutionScope(c); bound {
+		return scope
+	}
+	scope, _ := resolveOpenAIWSExecutionScope(c, body, getAPIKeyIDFromContext(c))
+	return bindOpenAICodexTurnStateExecutionScopeValue(c, scope)
+}
+
+func bindOpenAICodexTurnStateExecutionScopeValue(c *gin.Context, scope string) string {
+	if c == nil {
+		return ""
+	}
+	if existing, bound := boundOpenAICodexTurnStateExecutionScope(c); bound {
+		return existing
+	}
+	scope = strings.TrimSpace(scope)
+	c.Set(openAICodexTurnStateExecutionScopeContextKey, scope)
+	return scope
+}
+
+func boundOpenAICodexTurnStateExecutionScope(c *gin.Context) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	value, exists := c.Get(openAICodexTurnStateExecutionScopeContextKey)
+	if !exists {
+		return "", false
+	}
+	scope, _ := value.(string)
+	return strings.TrimSpace(scope), true
+}
+
+// openAICodexTurnStateSeed 返回溯源表基础键：API Key + 客户端原始会话标识。
 // 客户端会话标识取自请求头（与指纹收敛的 thread 派生同源，见
 // extractClientSessionID），确保同一下游会话的记录/守卫两侧使用同一键。
 // 无会话标识时返回空串，表示不做跟踪（保持透传现状）。
 func openAICodexTurnStateSeed(c *gin.Context) string {
 	if c == nil || c.Request == nil {
 		return ""
+	}
+	if scope, bound := boundOpenAICodexTurnStateExecutionScope(c); bound {
+		return scope
 	}
 	sessionID := extractClientSessionID(c.Request.Header)
 	if sessionID == "" {
@@ -56,7 +102,7 @@ func (s *OpenAIGatewayService) relayOpenAICodexTurnState(c *gin.Context, account
 		return
 	}
 	c.Writer.Header().Set(canonical, state)
-	s.noteOpenAICodexTurnStateProvenance(c, account)
+	s.noteOpenAICodexTurnStateProvenance(c, account, state)
 }
 
 // stageOpenAICodexTurnState 将上游 turn-state 暂存到延迟提交的响应头集合
@@ -89,7 +135,7 @@ func (s *OpenAIGatewayService) noteStagedOpenAICodexTurnStateCommitted(c *gin.Co
 	if staged == nil || strings.TrimSpace(staged.Get(openAICodexTurnStateHeader)) == "" {
 		return
 	}
-	s.noteOpenAICodexTurnStateProvenance(c, account)
+	s.noteOpenAICodexTurnStateProvenance(c, account, staged.Get(openAICodexTurnStateHeader))
 }
 
 func extractOpenAICodexTurnState(upstream http.Header) string {
@@ -99,17 +145,20 @@ func extractOpenAICodexTurnState(upstream http.Header) string {
 	return strings.TrimSpace(upstream.Get(openAICodexTurnStateHeader))
 }
 
-// noteOpenAICodexTurnStateProvenance 记录（下游会话 → 铸造账号）。
-func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context, account *Account) {
+// noteOpenAICodexTurnStateProvenance records the issuing account for the exact
+// state delivered to a downstream session.
+func (s *OpenAIGatewayService) noteOpenAICodexTurnStateProvenance(c *gin.Context, account *Account, state string) {
 	if s == nil || account == nil || account.ID <= 0 {
 		return
 	}
 	seed := openAICodexTurnStateSeed(c)
-	if seed == "" {
+	state = strings.TrimSpace(state)
+	if seed == "" || state == "" {
 		return
 	}
 	s.openaiCodexTurnStateOrigins.Store(seed, openAICodexTurnStateOrigin{
 		accountID: account.ID,
+		stateHash: sha256.Sum256([]byte(state)),
 		expiresAt: time.Now().Add(s.openAIWSSessionStickyTTL()),
 	})
 	s.sweepOpenAICodexTurnStateOrigins()
@@ -123,7 +172,8 @@ func (s *OpenAIGatewayService) guardOpenAICodexTurnStateEcho(c *gin.Context, acc
 	if s == nil || h == nil || account == nil {
 		return
 	}
-	if strings.TrimSpace(h.Get(openAICodexTurnStateHeader)) == "" {
+	state := strings.TrimSpace(h.Get(openAICodexTurnStateHeader))
+	if state == "" {
 		return
 	}
 	seed := openAICodexTurnStateSeed(c)
@@ -143,8 +193,40 @@ func (s *OpenAIGatewayService) guardOpenAICodexTurnStateEcho(c *gin.Context, acc
 		s.openaiCodexTurnStateOrigins.Delete(seed)
 		return
 	}
-	if origin.accountID != account.ID {
+	if origin.accountID != account.ID || origin.stateHash != sha256.Sum256([]byte(state)) {
 		h.Del(openAICodexTurnStateHeader)
+	}
+}
+
+// ClearOpenAIWSTurnStateForAccountSwitch removes state that was valid only for
+// the failed account before the handler selects another account. Callers must
+// invoke this only after deciding to switch accounts; same-account retries and
+// connection-local reconnects intentionally retain their state.
+func (s *OpenAIGatewayService) ClearOpenAIWSTurnStateForAccountSwitch(c *gin.Context, stickySessionHash string) {
+	if s == nil {
+		return
+	}
+	if c != nil && c.Request != nil {
+		c.Request.Header.Del(openAICodexTurnStateHeader)
+	}
+	if c != nil && c.Writer != nil && !c.Writer.Written() {
+		// A failed WS attempt may have staged its handshake state on the HTTP
+		// response. Do not let it survive when the replacement account emits none.
+		c.Writer.Header().Del(openAICodexTurnStateHeader)
+	}
+
+	stateStore := s.getOpenAIWSStateStore()
+	if stateStore == nil {
+		return
+	}
+	activeScope, _ := boundOpenAICodexTurnStateExecutionScope(c)
+	if activeScope == "" {
+		activeScope = strings.TrimSpace(stickySessionHash)
+	}
+	if activeScope != "" {
+		groupID := getOpenAIGroupIDFromContext(c)
+		stateStore.DeleteSessionTurnState(groupID, activeScope)
+		stateStore.DeleteSessionConn(groupID, activeScope)
 	}
 }
 

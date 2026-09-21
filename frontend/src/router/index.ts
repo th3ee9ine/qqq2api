@@ -122,6 +122,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/reliability',
+    name: 'AdminReliability',
+    component: () => import('@/views/admin/ReliabilityView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Reliability and Connections',
+      titleKey: 'admin.reliability.title',
+      descriptionKey: 'admin.reliability.description'
+    }
+  },
+  {
     path: '/admin/audit-logs',
     name: 'AdminAuditLogs',
     component: () => import('@/views/admin/AuditLogView.vue'),

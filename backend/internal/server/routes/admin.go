@@ -58,6 +58,9 @@ func RegisterAdminRoutes(
 		// 运维监控（Ops）
 		registerOpsRoutes(admin, h)
 
+		// 可靠性工作台：聚合状态包含全局运行信息，仅超级管理员可见。
+		registerReliabilityRoutes(admin, h)
+
 		// 系统管理
 		registerSystemRoutes(admin, h)
 
@@ -87,6 +90,17 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+// registerReliabilityRoutes keeps the reliability projection outside the
+// account-admin maintenance scope. It is intentionally read-only, but its
+// aggregate data is global and therefore remains administrator-only.
+func registerReliabilityRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	reliability := admin.Group("/reliability")
+	reliability.Use(middleware.AdminOnly())
+	{
+		reliability.GET("/status", h.Admin.Ops.GetReliabilityStatus)
 	}
 }
 

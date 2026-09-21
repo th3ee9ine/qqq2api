@@ -181,6 +181,7 @@ const flagOpsMonitoring = () => adminSettingsStore.opsMonitoringEnabled
 const baseAdminNavItems = computed<NavItem[]>(() => [
   { path: '/admin/dashboard', label: t('nav.dashboard'), icon: 'grid' },
   { path: '/admin/ops', label: t('nav.ops'), icon: 'chart', featureFlag: flagOpsMonitoring },
+  { path: '/admin/reliability', label: t('nav.reliability'), icon: 'link' },
   { path: '/admin/groups', label: t('nav.groups'), icon: 'folder' },
   { path: '/admin/accounts', label: t('nav.accounts'), icon: 'globe', requiredPermission: 'accounts.manage' },
   { path: '/admin/account-sessions', label: t('nav.accountSessions'), icon: 'server' },

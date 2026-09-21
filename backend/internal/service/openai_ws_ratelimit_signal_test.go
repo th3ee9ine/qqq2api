@@ -19,8 +19,9 @@ import (
 
 type openAIWSRateLimitSignalRepo struct {
 	stubOpenAIAccountRepo
-	rateLimitCalls []time.Time
-	updateExtra    []map[string]any
+	rateLimitCalls   []time.Time
+	updateExtra      []map[string]any
+	tempUnschedCalls int
 }
 
 type openAICodexSnapshotAsyncRepo struct {
@@ -45,6 +46,11 @@ func (r *openAIWSRateLimitSignalRepo) UpdateExtra(_ context.Context, _ int64, up
 		copied[k] = v
 	}
 	r.updateExtra = append(r.updateExtra, copied)
+	return nil
+}
+
+func (r *openAIWSRateLimitSignalRepo) SetTempUnschedulable(_ context.Context, _ int64, _ time.Time, _ string) error {
+	r.tempUnschedCalls++
 	return nil
 }
 
@@ -562,7 +568,7 @@ func TestOpenAIWSRateLimitFailoverError_LongRetryAfterSkipsInRequestRetry(t *tes
 		ID:       904,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
-	}, headers, body, "limited")
+	}, headers, body, "limited", false)
 	require.False(t, oauthErr.RetryableOnSameAccount)
 	require.True(t, oauthErr.SameAccountRetryDeadline.IsZero())
 	require.Zero(t, oauthErr.SameAccountRetryDelay)
@@ -573,8 +579,46 @@ func TestOpenAIWSRateLimitFailoverError_LongRetryAfterSkipsInRequestRetry(t *tes
 		ID:       905,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
-	}, headers, body, "limited")
+	}, headers, body, "limited", false)
 	require.False(t, apiKeyErr.RetryableOnSameAccount)
 	require.True(t, apiKeyErr.SameAccountRetryDeadline.IsZero())
 	require.Zero(t, apiKeyErr.SameAccountRetryDelay)
+}
+
+func TestOpenAIWSRateLimitFailoverError_TempUnschedulablePolicyDisablesSameAccountRetry(t *testing.T) {
+	repo := &openAIWSRateLimitSignalRepo{}
+	svc := &OpenAIGatewayService{rateLimitService: &RateLimitService{accountRepo: repo}}
+	account := &Account{
+		ID:       906,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"pool_mode":                    true,
+			"pool_mode_retry_status_codes": []any{float64(http.StatusTooManyRequests)},
+			"temp_unschedulable_enabled":   true,
+			"temp_unschedulable_rules": []any{
+				map[string]any{
+					"error_code":       float64(http.StatusTooManyRequests),
+					"keywords":         []any{"usage limit"},
+					"duration_minutes": float64(30),
+				},
+			},
+		},
+	}
+	body := []byte(`{"type":"error","error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`)
+
+	shouldDisable := svc.persistOpenAIWSRateLimitSignal(
+		context.Background(),
+		account,
+		nil,
+		body,
+		"rate_limit_exceeded",
+		"usage_limit_reached",
+		"The usage limit has been reached",
+	)
+	failoverErr := svc.newOpenAIWSRateLimitFailoverError(account, nil, body, "The usage limit has been reached", shouldDisable)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 1, repo.tempUnschedCalls)
+	require.False(t, failoverErr.RetryableOnSameAccount)
 }

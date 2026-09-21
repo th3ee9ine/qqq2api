@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -59,6 +60,7 @@ func TestRelayOpenAICodexTurnState_SetsHeaderAndRecordsProvenance(t *testing.T) 
 	origin, ok := raw.(openAICodexTurnStateOrigin)
 	require.True(t, ok)
 	require.Equal(t, int64(42), origin.accountID)
+	require.Equal(t, sha256.Sum256([]byte("blob-A")), origin.stateHash)
 	require.True(t, origin.expiresAt.After(time.Now()))
 }
 
@@ -191,6 +193,7 @@ func TestGuardOpenAICodexTurnStateEcho(t *testing.T) {
 		c, _ := newTurnStateTestContext(t, 7, "sess-g4")
 		svc.openaiCodexTurnStateOrigins.Store("7\x00sess-g4", openAICodexTurnStateOrigin{
 			accountID: 42,
+			stateHash: sha256.Sum256([]byte("blob-A")),
 			expiresAt: time.Now().Add(-time.Minute),
 		})
 		h := newOutbound("blob-A")
@@ -217,14 +220,122 @@ func TestGuardOpenAICodexTurnStateEcho(t *testing.T) {
 	})
 }
 
+func TestOpenAICodexTurnStateProvenanceIsolatesSiblingExecutionScopes(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	const apiKeyID = int64(71)
+	bodyA := []byte(`{"client_metadata":{"thread_id":"child-a"}}`)
+	bodyB := []byte(`{"client_metadata":{"thread_id":"child-b"}}`)
+	cA, _ := newTurnStateTestContext(t, apiKeyID, "shared-session")
+	cB, _ := newTurnStateTestContext(t, apiKeyID, "shared-session")
+	scopeA := BindOpenAICodexTurnStateExecutionScope(cA, bodyA)
+	scopeB := BindOpenAICodexTurnStateExecutionScope(cB, bodyB)
+	require.NotEmpty(t, scopeA)
+	require.NotEmpty(t, scopeB)
+	require.NotEqual(t, scopeA, scopeB)
+	require.Equal(t, scopeA, BindOpenAICodexTurnStateExecutionScope(cA, bodyB), "scope binding must be immutable for the request lifecycle")
+
+	svc.noteOpenAICodexTurnStateProvenance(cA, &Account{ID: 91}, "state-a")
+	svc.noteOpenAICodexTurnStateProvenance(cB, &Account{ID: 92}, "state-b")
+
+	assertGuard := func(c *gin.Context, accountID int64, state string, wantKept bool) {
+		h := http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{state}}
+		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: accountID}, h)
+		if wantKept {
+			require.Equal(t, state, h.Get(openAICodexTurnStateHeader))
+		} else {
+			require.Empty(t, h.Get(openAICodexTurnStateHeader))
+		}
+	}
+	assertGuard(cA, 91, "state-a", true)
+	assertGuard(cB, 92, "state-b", true)
+	assertGuard(cA, 92, "state-a", false)
+	assertGuard(cB, 91, "state-b", false)
+	assertGuard(cA, 91, "stale-state-a", false)
+}
+
+func TestClearOpenAIWSTurnStateForAccountSwitch_ClearsOnlyAttemptScopes(t *testing.T) {
+	const (
+		apiKeyID  = int64(71)
+		accountID = int64(91)
+	)
+	groupID := int64(81)
+	stateStore := NewOpenAIWSStateStore(nil)
+	svc := &OpenAIGatewayService{openaiWSStateStore: stateStore}
+	requestBody := []byte(`{"model":"gpt-5.1","client_metadata":{"thread_id":"child-a"},"input":"hello"}`)
+	siblingBody := []byte(`{"model":"gpt-5.1","client_metadata":{"thread_id":"child-b"},"input":"hello"}`)
+	c, _ := newTurnStateTestContext(t, apiKeyID, "shared-session")
+	c.Set("api_key", &APIKey{ID: apiKeyID, GroupID: &groupID})
+	c.Request.Header.Set(openAICodexTurnStateHeader, "state-from-account-a")
+	c.Writer.Header().Set(openAICodexTurnStateHeader, "staged-state-from-account-a")
+	executionScope := BindOpenAICodexTurnStateExecutionScope(c, requestBody)
+	require.NotEmpty(t, executionScope)
+	svc.noteOpenAICodexTurnStateProvenance(c, &Account{ID: accountID}, "state-from-account-a")
+	stateStore.BindSessionTurnState(groupID, accountID, executionScope, "account-a-state", time.Hour)
+	stateStore.BindSessionConn(groupID, executionScope, "account-a-conn", time.Hour)
+
+	siblingContext, _ := newTurnStateTestContext(t, apiKeyID, "shared-session")
+	siblingContext.Set("api_key", &APIKey{ID: apiKeyID, GroupID: &groupID})
+	siblingScope := BindOpenAICodexTurnStateExecutionScope(siblingContext, siblingBody)
+	require.NotEqual(t, executionScope, siblingScope)
+	stateStore.BindSessionTurnState(groupID, accountID, siblingScope, "sibling-state", time.Hour)
+	stateStore.BindSessionConn(groupID, siblingScope, "sibling-conn", time.Hour)
+	svc.noteOpenAICodexTurnStateProvenance(siblingContext, &Account{ID: accountID}, "sibling-state")
+
+	svc.ClearOpenAIWSTurnStateForAccountSwitch(c, "legacy-sticky-hash")
+
+	require.Empty(t, c.Request.Header.Get(openAICodexTurnStateHeader))
+	require.Empty(t, c.Writer.Header().Get(openAICodexTurnStateHeader))
+	_, stateExists := stateStore.GetSessionTurnState(groupID, accountID, executionScope)
+	_, connExists := stateStore.GetSessionConn(groupID, executionScope)
+	require.False(t, stateExists)
+	require.False(t, connExists)
+	siblingState, siblingStateExists := stateStore.GetSessionTurnState(groupID, accountID, siblingScope)
+	siblingConn, siblingConnExists := stateStore.GetSessionConn(groupID, siblingScope)
+	require.True(t, siblingStateExists)
+	require.Equal(t, "sibling-state", siblingState)
+	require.True(t, siblingConnExists)
+	require.Equal(t, "sibling-conn", siblingConn)
+	_, activeOriginExists := svc.openaiCodexTurnStateOrigins.Load(executionScope)
+	_, siblingOriginExists := svc.openaiCodexTurnStateOrigins.Load(siblingScope)
+	require.True(t, activeOriginExists, "immutable provenance must survive mutable state cleanup")
+	require.True(t, siblingOriginExists)
+
+	oldState := http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{"state-from-account-a"}}
+	svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: accountID + 1}, oldState)
+	require.Empty(t, oldState.Get(openAICodexTurnStateHeader))
+}
+
+func TestClearOpenAIWSTurnStateForAccountSwitchUsesSingleLegacyFallback(t *testing.T) {
+	const accountID = int64(91)
+	groupID := int64(81)
+	stateStore := NewOpenAIWSStateStore(nil)
+	svc := &OpenAIGatewayService{openaiWSStateStore: stateStore}
+	c, _ := newTurnStateTestContext(t, 71, "")
+	c.Set("api_key", &APIKey{ID: 71, GroupID: &groupID})
+	stateStore.BindSessionTurnState(groupID, accountID, "legacy-active", "state", time.Hour)
+	stateStore.BindSessionConn(groupID, "legacy-active", "conn", time.Hour)
+	stateStore.BindSessionTurnState(groupID, accountID, "legacy-sibling", "sibling-state", time.Hour)
+
+	svc.ClearOpenAIWSTurnStateForAccountSwitch(c, "legacy-active")
+
+	_, activeStateExists := stateStore.GetSessionTurnState(groupID, accountID, "legacy-active")
+	_, activeConnExists := stateStore.GetSessionConn(groupID, "legacy-active")
+	_, siblingStateExists := stateStore.GetSessionTurnState(groupID, accountID, "legacy-sibling")
+	require.False(t, activeStateExists)
+	require.False(t, activeConnExists)
+	require.True(t, siblingStateExists)
+}
+
 func TestSweepOpenAICodexTurnStateOrigins_PrunesExpiredEntries(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	svc.openaiCodexTurnStateOrigins.Store("expired", openAICodexTurnStateOrigin{
 		accountID: 1,
+		stateHash: sha256.Sum256([]byte("expired")),
 		expiresAt: time.Now().Add(-time.Minute),
 	})
 	svc.openaiCodexTurnStateOrigins.Store("alive", openAICodexTurnStateOrigin{
 		accountID: 2,
+		stateHash: sha256.Sum256([]byte("alive")),
 		expiresAt: time.Now().Add(time.Hour),
 	})
 

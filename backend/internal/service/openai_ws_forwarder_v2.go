@@ -38,6 +38,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	bindOpenAICodexTurnStateExecutionScopeValue(c, executionScope)
 	responseModelObserver := &upstreamResponseModelObserver{}
 
 	wsURL, err := s.buildOpenAIResponsesWSURL(account)
@@ -67,6 +68,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	turnState := ""
 	turnMetadata := ""
 	if c != nil && c.Request != nil {
+		// A client can echo a state minted by an earlier HTTP/WS attempt. Apply
+		// the same account-origin guard used by HTTP before building WS headers.
+		s.guardOpenAICodexTurnStateEcho(c, account, c.Request.Header)
 		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
@@ -132,7 +136,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		sessionHash = executionScope
 	}
 	if turnState == "" && stateStore != nil && sessionHash != "" {
-		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
+		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, account.ID, sessionHash); ok {
 			turnState = savedTurnState
 		}
 	}
@@ -339,10 +343,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 	if handshakeTurnState != "" {
 		if stateStore != nil && sessionHash != "" {
-			stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
-		}
-		if c != nil {
-			c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
+			stateStore.BindSessionTurnState(groupID, account.ID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
 		}
 	}
 
@@ -416,6 +417,22 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 	var finalResponse []byte
 	wroteDownstream := false
+	turnStateHeaderStaged := false
+	turnStateProvenanceCommitted := false
+	stageTurnStateHeader := func() {
+		if turnStateHeaderStaged || handshakeTurnState == "" || c == nil {
+			return
+		}
+		c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
+		turnStateHeaderStaged = true
+	}
+	commitTurnStateProvenance := func() {
+		if turnStateProvenanceCommitted || handshakeTurnState == "" {
+			return
+		}
+		s.noteOpenAICodexTurnStateProvenance(c, account, handshakeTurnState)
+		turnStateProvenanceCommitted = true
+	}
 	needModelReplace := originalModel != mappedModel
 	var mappedModelBytes []byte
 	if needModelReplace && mappedModel != "" {
@@ -522,6 +539,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if clientDisconnected {
 			return
 		}
+		stageTurnStateHeader()
 		frame := make([]byte, 0, len(message)+8)
 		frame = append(frame, "data: "...)
 		frame = append(frame, message...)
@@ -529,6 +547,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		_, wErr := c.Writer.Write(frame)
 		if wErr == nil {
 			wroteDownstream = true
+			commitTurnStateProvenance()
 			pendingFlushEvents++
 			flushStreamWriter(forceFlush)
 			return
@@ -877,7 +896,9 @@ readLoop:
 			return nil, wrapOpenAIWSFallback("response_affinity", bindErr)
 		}
 
+		stageTurnStateHeader()
 		c.Data(http.StatusOK, "application/json", finalResponse)
+		commitTurnStateProvenance()
 	} else {
 		flushStreamWriter(true)
 	}
