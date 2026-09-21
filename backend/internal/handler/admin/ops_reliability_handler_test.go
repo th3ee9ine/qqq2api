@@ -14,7 +14,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
-func TestGetReliabilityStatusReturnsFlatNoStoreProjection(t *testing.T) {
+func TestGetReliabilityStatusReturnsTurnStateOnlyNoStoreProjection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{Ops: config.OpsConfig{Enabled: false}}
 	cfg.Gateway.OpenAIWS.Enabled = true
@@ -36,12 +36,24 @@ func TestGetReliabilityStatusReturnsFlatNoStoreProjection(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
 	require.Zero(t, envelope.Code)
-	require.NotContains(t, envelope.Data, "summary")
-	require.Contains(t, envelope.Data, "cooldowns")
-	require.Contains(t, envelope.Data, "connection")
+	require.Len(t, envelope.Data, 1)
 	require.Contains(t, envelope.Data, "turn_state")
-	require.Contains(t, envelope.Data, "diagnostics")
-	require.NotContains(t, envelope.Data, "fallback")
+	for _, removed := range []string{
+		"summary",
+		"enabled",
+		"timestamp",
+		"cooldowns",
+		"account_availability",
+		"traffic",
+		"connection",
+		"limits",
+		"runtime",
+		"diagnostics",
+		"notes",
+		"fallback",
+	} {
+		require.NotContains(t, envelope.Data, removed)
+	}
 	require.NotContains(t, string(recorder.Body.Bytes()), "x-codex-turn-state")
 }
 

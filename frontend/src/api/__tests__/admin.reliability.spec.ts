@@ -10,6 +10,7 @@ vi.mock('@/api/client', () => ({
 }))
 
 import {
+  getReliabilityStatus,
   getReliabilityTurnStateSettings,
   normalizeReliabilityStatus,
   updateReliabilityTurnStateSettings,
@@ -20,40 +21,32 @@ beforeEach(() => {
   mocks.put.mockReset()
 })
 
-describe('normalizeReliabilityStatus', () => {
-  it('normalizes the nested aggregate response and keeps nested values authoritative', () => {
+describe('turn-state reliability status API', () => {
+  it('keeps a nested Turn State response authoritative', () => {
     const normalized = normalizeReliabilityStatus({
-      summary: {
-        account_availability: { total: 7, available: 5 },
-        traffic: { current_concurrency: 3 },
-        connection: { dial_timeout: 10, openai_ws: { dial_timeout_seconds: 8 } },
-        turn_state: { supported: true, collector: { injection_enabled: false, status: 'cooldown' } },
-      },
-      account_availability: { total: 99, available: 99 },
-      traffic: { current_concurrency: 99 },
+      summary: { turn_state: { supported: true, collector: { status: 'ready' } } },
+      turn_state: { supported: false },
     })
 
-    expect(normalized.account_availability).toEqual({ total: 7, available: 5 })
-    expect(normalized.traffic).toEqual({ current_concurrency: 3 })
-    expect(normalized.connection).toEqual({ dial_timeout: 10, openai_ws: { dial_timeout_seconds: 8 } })
-    expect(normalized.turn_state).toEqual({ supported: true, collector: { injection_enabled: false, status: 'cooldown' } })
+    expect(normalized).toEqual({
+      turn_state: { supported: true, collector: { status: 'ready' } },
+    })
   })
 
-  it('normalizes the flat aggregate response used by earlier backends', () => {
-    const normalized = normalizeReliabilityStatus({
-      enabled: true,
-      account_availability: { total_accounts: 4, available_count: 2 },
-      traffic: { concurrency: 6 },
-      connection: { status: 'unknown' },
+  it('accepts the current flat Turn State response', () => {
+    expect(normalizeReliabilityStatus({
       turn_state: { supported: true, collector: { status: 'degraded' } },
-      diagnostics: { warnings: ['no_schedulable_accounts'] },
+    })).toEqual({
+      turn_state: { supported: true, collector: { status: 'degraded' } },
     })
+  })
 
-    expect(normalized.account_availability).toEqual({ total_accounts: 4, available_count: 2 })
-    expect(normalized.traffic).toEqual({ concurrency: 6 })
-    expect(normalized.connection).toEqual({ status: 'unknown' })
-    expect(normalized.turn_state).toEqual({ supported: true, collector: { status: 'degraded' } })
-    expect(normalized.diagnostics).toEqual({ warnings: ['no_schedulable_accounts'] })
+  it('loads only the Turn State projection endpoint', async () => {
+    const status = { turn_state: { supported: true, collector: { status: 'ready' } } }
+    mocks.get.mockResolvedValue({ data: status })
+
+    await expect(getReliabilityStatus()).resolves.toEqual(status)
+    expect(mocks.get).toHaveBeenCalledWith('/admin/reliability/status')
   })
 })
 

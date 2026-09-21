@@ -64,11 +64,6 @@ type OpsService struct {
 
 	// getAccountAvailability is a unit-test hook for overriding account availability lookup.
 	getAccountAvailability func(ctx context.Context, platformFilter string, groupIDFilter *int64) (*OpsAccountAvailability, error)
-	// The remaining hooks keep the reliability projection testable without
-	// constructing Redis-backed concurrency and SQL-backed Ops repositories.
-	getReliabilityConcurrency func(ctx context.Context) (map[string]*PlatformConcurrencyInfo, error)
-	getReliabilityTraffic     func(ctx context.Context, filter *OpsDashboardFilter) (*OpsRealtimeTrafficSummary, error)
-	getReliabilityOverview    func(ctx context.Context, filter *OpsDashboardFilter) (*OpsDashboardOverview, error)
 
 	concurrencyService          *ConcurrencyService
 	gatewayService              *GatewayService

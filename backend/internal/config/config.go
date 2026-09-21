@@ -65,10 +65,8 @@ const DefaultUpstreamResponseReadMaxBytes int64 = 128 * 1024 * 1024
 // 可通过 gateway.models_list_read_max_bytes 配置项覆盖。
 const DefaultModelsListReadMaxBytes int64 = 8 * 1024 * 1024
 
-// Gateway upstream connection-establishment defaults are shared by the
-// transport implementation and the read-only reliability projection. These
-// deadlines cover DNS/TCP dialing and TLS handshakes only; they do not limit a
-// response stream's lifetime.
+// Gateway upstream connection-establishment defaults cover DNS/TCP dialing
+// and TLS handshakes only; they do not limit a response stream's lifetime.
 const (
 	DefaultGatewayUpstreamDialTimeout         = 10 * time.Second
 	DefaultGatewayUpstreamTLSHandshakeTimeout = 10 * time.Second
