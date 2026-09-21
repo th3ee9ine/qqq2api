@@ -422,6 +422,9 @@ func (c *gatewayCache) SaveLiveCall(ctx context.Context, record *service.LiveCal
 		"inbound_endpoint": record.InboundEndpoint,
 		"attestation":      record.AttestationCiphertext,
 	}
+	if record.UpstreamTurnState != nil {
+		values["upstream_turn_state"] = *record.UpstreamTurnState
+	}
 	if record.UpstreamOriginator != nil {
 		values["upstream_originator"] = *record.UpstreamOriginator
 	}
@@ -477,6 +480,7 @@ func (c *gatewayCache) GetLiveCall(ctx context.Context, callHash string) (*servi
 		UserAgent:             values["user_agent"],
 		IPAddress:             values["ip_address"],
 		InboundEndpoint:       values["inbound_endpoint"],
+		UpstreamTurnState:     optionalString("upstream_turn_state"),
 		UpstreamOriginator:    optionalString("upstream_originator"),
 		UpstreamUserAgent:     optionalString("upstream_user_agent"),
 		UpstreamVersion:       optionalString("upstream_version"),

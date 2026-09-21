@@ -1111,6 +1111,7 @@ const allColumns = computed(() => [
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },
   { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },
+  { key: 'upstream_turn_state', label: t('admin.usage.upstreamTurnState'), sortable: false },
   { key: 'upstream_originator', label: t('admin.usage.upstreamOriginator'), sortable: false },
   { key: 'upstream_user_agent', label: t('admin.usage.upstreamUserAgent'), sortable: false },
   { key: 'upstream_version', label: t('admin.usage.upstreamVersion'), sortable: false },

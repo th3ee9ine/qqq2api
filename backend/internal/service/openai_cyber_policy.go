@@ -21,6 +21,7 @@ var errOpenAICyberPolicyForwarded = errors.New("openai cyber_policy forwarded to
 
 // CyberPolicyMark 记录一次 cyber_policy 硬阻断的上游证据。
 type CyberPolicyMark struct {
+	UpstreamTurnState  *string `json:"-"`
 	UpstreamOriginator *string `json:"-"`
 	UpstreamUserAgent  *string `json:"-"`
 	UpstreamVersion    *string `json:"-"`

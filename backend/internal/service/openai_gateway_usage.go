@@ -50,6 +50,7 @@ type OpenAIRecordUsageInput struct {
 // 用量按上游真实 token 计费，与 WS cyber 及正常请求口径一致（InputTokens/OutputTokens
 // 取自上游 response.failed 报告的 usage，即 mark.UpstreamInTok/OutTok）。
 type CyberPolicyUsageInput struct {
+	UpstreamTurnState  *string
 	UpstreamOriginator *string
 	UpstreamUserAgent  *string
 	UpstreamVersion    *string
@@ -86,6 +87,7 @@ func (s *OpenAIGatewayService) RecordCyberPolicyUsageLog(ctx context.Context, in
 	}
 	result := &OpenAIForwardResult{
 		RequestID:          in.RequestID,
+		UpstreamTurnState:  in.UpstreamTurnState,
 		UpstreamOriginator: in.UpstreamOriginator,
 		UpstreamUserAgent:  in.UpstreamUserAgent,
 		UpstreamVersion:    in.UpstreamVersion,
@@ -382,6 +384,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		AccountID:                account.ID,
 		RequestID:                requestID,
 		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, result.OpenAIWSMode),
+		UpstreamTurnState:        result.UpstreamTurnState,
 		UpstreamOriginator:       result.UpstreamOriginator,
 		UpstreamUserAgent:        result.UpstreamUserAgent,
 		UpstreamVersion:          result.UpstreamVersion,

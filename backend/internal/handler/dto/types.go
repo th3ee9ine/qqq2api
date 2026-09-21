@@ -698,8 +698,9 @@ type AdminUsageLog struct {
 	ModelMappingChain *string `json:"model_mapping_chain,omitempty"`
 	// UpstreamRequestID 是直接上游声明的请求标识，仅管理端可见。
 	UpstreamRequestID *string `json:"upstream_request_id,omitempty"`
-	// Non-secret upstream identity fields are final outbound header snapshots and
-	// remain admin-only. Empty strings represent observed-but-omitted headers.
+	// Upstream identity fields are final outbound header snapshots and remain
+	// admin-only. Empty strings represent observed-but-omitted headers.
+	UpstreamTurnState  *string `json:"upstream_turn_state,omitempty"`
 	UpstreamOriginator *string `json:"upstream_originator,omitempty"`
 	UpstreamUserAgent  *string `json:"upstream_user_agent,omitempty"`
 	UpstreamVersion    *string `json:"upstream_version,omitempty"`

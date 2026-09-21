@@ -28,12 +28,14 @@ func TestSnapshotDispatchedUpstreamRequestCapturesFinalHeaders(t *testing.T) {
 	response := &http.Response{Request: request}
 	request = snapshotDispatchedUpstreamRequest(request, response)
 
+	require.Equal(t, secretTurnState, *beforeTransport.turnState)
 	require.Equal(t, "origin-before-transport", *beforeTransport.originator)
 	require.Equal(t, "ua-before-transport", *beforeTransport.userAgent)
 	require.Equal(t, "version-before-transport", *beforeTransport.version)
 
 	final := capture.load()
 	require.NotNil(t, final)
+	require.Equal(t, secretTurnState, *final.turnState)
 	require.Equal(t, "origin-final", *final.originator)
 	require.Equal(t, "ua-final", *final.userAgent)
 	require.Equal(t, "version-final", *final.version)
@@ -41,14 +43,17 @@ func TestSnapshotDispatchedUpstreamRequestCapturesFinalHeaders(t *testing.T) {
 	require.Same(t, final, upstreamIdentityFromResponse(response))
 	result := &OpenAIForwardResult{}
 	final.applyToOpenAIResult(result)
-	require.Nil(t, result.UpstreamTurnState)
+	require.NotNil(t, result.UpstreamTurnState)
+	require.Equal(t, secretTurnState, *result.UpstreamTurnState)
 }
 
 func TestSnapshotUpstreamIdentityDistinguishesObservedMissingHeaders(t *testing.T) {
 	snapshot := snapshotUpstreamIdentity(nil)
+	require.NotNil(t, snapshot.turnState)
 	require.NotNil(t, snapshot.originator)
 	require.NotNil(t, snapshot.userAgent)
 	require.NotNil(t, snapshot.version)
+	require.Empty(t, *snapshot.turnState)
 	require.Empty(t, *snapshot.originator)
 	require.Empty(t, *snapshot.userAgent)
 	require.Empty(t, *snapshot.version)
@@ -88,7 +93,8 @@ func TestApplyCapturedUpstreamIdentityDoesNotOverrideExplicitHandshake(t *testin
 	applyCapturedUpstreamIdentityToOpenAIResult(capture, result, nil)
 
 	require.Equal(t, "ws-handshake", *result.UpstreamUserAgent)
-	require.Nil(t, result.UpstreamTurnState)
+	require.NotNil(t, result.UpstreamTurnState)
+	require.Empty(t, *result.UpstreamTurnState)
 	require.Nil(t, result.UpstreamOriginator)
 	require.Nil(t, result.UpstreamVersion)
 }

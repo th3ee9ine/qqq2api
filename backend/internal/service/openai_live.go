@@ -243,6 +243,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			UserAgent:             identity.UserAgent,
 			IPAddress:             identity.IPAddress,
 			InboundEndpoint:       identity.InboundEndpoint,
+			UpstreamTurnState:     created.UpstreamTurnState,
 			UpstreamOriginator:    created.UpstreamOriginator,
 			UpstreamUserAgent:     created.UpstreamUserAgent,
 			UpstreamVersion:       created.UpstreamVersion,
@@ -354,6 +355,7 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 		Location: resp.Header.Get("Location"),
 	}
 	if identity := upstreamIdentityFromResponse(resp); identity != nil {
+		created.UpstreamTurnState = identity.turnState
 		created.UpstreamOriginator = identity.originator
 		created.UpstreamUserAgent = identity.userAgent
 		created.UpstreamVersion = identity.version
@@ -879,6 +881,7 @@ func (s *OpenAIGatewayService) finalizeLiveCall(record *LiveCallRecord) {
 		IPAddress:          &ipAddress,
 		InboundEndpoint:    &inboundEndpoint,
 		UpstreamEndpoint:   &upstreamEndpoint,
+		UpstreamTurnState:  record.UpstreamTurnState,
 		UpstreamOriginator: record.UpstreamOriginator,
 		UpstreamUserAgent:  record.UpstreamUserAgent,
 		UpstreamVersion:    record.UpstreamVersion,

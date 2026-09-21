@@ -66,8 +66,9 @@ type LiveCallRecord struct {
 	UserAgent       string
 	IPAddress       string
 	InboundEndpoint string
-	// Non-secret upstream identity is captured from the request that
-	// successfully created this Live call.
+	// Upstream identity is captured from the request that successfully created
+	// this Live call. Empty strings represent observed-but-omitted headers.
+	UpstreamTurnState  *string
 	UpstreamOriginator *string
 	UpstreamUserAgent  *string
 	UpstreamVersion    *string
@@ -80,6 +81,7 @@ type LiveCallCreated struct {
 	CallID             string
 	Location           string
 	Account            *Account
+	UpstreamTurnState  *string
 	UpstreamOriginator *string
 	UpstreamUserAgent  *string
 	UpstreamVersion    *string

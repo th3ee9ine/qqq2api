@@ -165,7 +165,8 @@ func TestPrepareUsageLogInsert_UpstreamIdentityArgWiring(t *testing.T) {
 	identityStart := len(prepared.args) - 8
 	turnStateArg, ok := prepared.args[identityStart].(sql.NullString)
 	require.True(t, ok, "turn-state arg should remain a nullable text slot, got %T", prepared.args[identityStart])
-	require.False(t, turnStateArg.Valid, "raw turn state must be forced to SQL NULL at the repository boundary")
+	require.True(t, turnStateArg.Valid, "observed turn state must be persisted for admin usage details")
+	require.Equal(t, turnState, turnStateArg.String)
 
 	want := []string{emptyOriginator, userAgent, version}
 	for offset, expected := range want {

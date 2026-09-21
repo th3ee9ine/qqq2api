@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -40,6 +39,7 @@ func TestGatewayCacheLiveCallIdentityAndController(t *testing.T) {
 	require.Equal(t, record.CallID, loaded.CallID)
 	require.Equal(t, record.AccountID, loaded.AccountID)
 	require.Equal(t, record.AttestationCiphertext, loaded.AttestationCiphertext)
+	require.Nil(t, loaded.UpstreamTurnState)
 	require.Nil(t, loaded.UpstreamOriginator)
 	require.Nil(t, loaded.UpstreamUserAgent)
 	require.Nil(t, loaded.UpstreamVersion)
@@ -82,6 +82,7 @@ func TestGatewayCacheLiveCallUpstreamIdentityPreservesFieldPresence(t *testing.T
 		CreatedAt:          time.Now(),
 		ExpiresAt:          time.Now().Add(time.Hour),
 		Controller:         service.LiveControllerPending,
+		UpstreamTurnState:  &turnState,
 		UpstreamOriginator: &emptyOriginator,
 		UpstreamUserAgent:  &userAgent,
 		UpstreamVersion:    &version,
@@ -90,19 +91,16 @@ func TestGatewayCacheLiveCallUpstreamIdentityPreservesFieldPresence(t *testing.T
 
 	stored, err := client.HGetAll(context.Background(), liveCallKey(record.CallHash)).Result()
 	require.NoError(t, err)
-	require.NotContains(t, stored, "upstream_turn_state")
+	require.Equal(t, turnState, stored["upstream_turn_state"])
 	require.Contains(t, stored, "upstream_originator")
 	require.Empty(t, stored["upstream_originator"])
 	require.Equal(t, userAgent, stored["upstream_user_agent"])
 	require.Equal(t, version, stored["upstream_version"])
 
-	// Historical cache hashes may still contain the retired field. Loading one
-	// must ignore it instead of reintroducing the opaque value into runtime state.
-	require.NoError(t, client.HSet(context.Background(), liveCallKey(record.CallHash), "upstream_turn_state", turnState).Err())
-
 	loaded, err := cache.GetLiveCall(context.Background(), record.CallHash)
 	require.NoError(t, err)
-	require.NotContains(t, fmt.Sprintf("%+v", loaded), turnState)
+	require.NotNil(t, loaded.UpstreamTurnState)
+	require.Equal(t, turnState, *loaded.UpstreamTurnState)
 	require.NotNil(t, loaded.UpstreamOriginator)
 	require.Empty(t, *loaded.UpstreamOriginator)
 	require.NotNil(t, loaded.UpstreamUserAgent)

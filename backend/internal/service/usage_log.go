@@ -190,8 +190,9 @@ type UsageLog struct {
 	// extra.upstream_request_id_header 指定的头；账户未指定头名、WS 轮次
 	// 与上游没有该头的路径为 nil。
 	UpstreamRequestID *string
-	// UpstreamTurnState is retained only for storage compatibility with existing
-	// rows. New writes leave it nil and API DTOs never expose the opaque value.
+	// UpstreamTurnState is the final outbound x-codex-turn-state header snapshot.
+	// It is admin-only in API DTOs; nil marks historical or unobserved requests,
+	// while an empty value marks an observed request that omitted the header.
 	UpstreamTurnState *string
 	// Non-secret upstream identity is captured after all request rewriting and
 	// immediately before dispatch. Nil marks historical or otherwise unobserved
