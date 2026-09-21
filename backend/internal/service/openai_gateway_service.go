@@ -33,14 +33,16 @@ const (
 	openaiPlatformAPIURL            = "https://api.openai.com/v1/responses"
 	openaiPlatformAPIInputTokensURL = "https://api.openai.com/v1/responses/input_tokens"
 	openaiStickySessionTTL          = time.Hour // 粘性会话TTL
-	// 与本机 Codex Desktop 内置 app-server 实测的 User-Agent 结构对齐：
+	// 与 Codex 0.154.0 官方客户端的 User-Agent 结构对齐：
 	// {originator}/{engine_version} ({OS} {OS_version}; {arch}) {terminal}
 	// ({desktop_client_name}; {desktop_app_version})
 	//
 	// engine_version 与 Responses/WS Version 同源跟随官方最新稳定 rust-v；
 	// desktop_app_version 是独立的 Desktop 宿主 build，保留在 trailer 中且不冒充 rust-v。
-	codexDesktopAppVersion      = "26.820.60940"
-	codexDesktopUserAgentSuffix = " (Mac OS 26.2.0; arm64) unknown (Codex Desktop; " + codexDesktopAppVersion + ")"
+	codexDesktopAppVersion      = "26.911.61220"
+	codexDesktopUserAgentSuffix = " (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; " + codexDesktopAppVersion + ")"
+	codexTUIUserAgentSuffix     = " (Mac OS 26.2.0; arm64) Apple_Terminal/466"
+	codexCLIUserAgentSuffix     = " (Ubuntu 22.4.0; x86_64) xterm-256color"
 	// codexCLIUserAgent 是历史内部名称，当前表示编译期兜底的 Codex Desktop UA。
 	// 运行时只重建首段 engine_version；UA 尾部的 Desktop app 版本保持独立。
 	codexCLIUserAgent = openai.CodexDefaultOriginator + "/" + codexCLIVersion + codexDesktopUserAgentSuffix
@@ -64,7 +66,7 @@ const (
 	// 陈旧版本会被优先丢弃（HTTP 200 + 流内 server_is_overloaded）；非官方客户端配不出
 	// 官方身份时整体回退到本常量，因此它必须跟随官方 Codex 稳定版，
 	// 落后多个版本会让这些请求稳定落在被优先丢弃的一侧。
-	codexCLIVersion = "0.150.1"
+	codexCLIVersion = "0.154.0"
 	// codexResponsesVersionFallback 与 UA engine 共用同一版本源，防止两个字段漂移。
 	// 运行时每 6 小时同步官方最新稳定 rust-v，可继续向前推进。
 	// Auth 面仍不发送 Version。

@@ -20,7 +20,7 @@ func TestCodexVersionConstants_Consistency(t *testing.T) {
 
 	require.True(t, strings.Contains(DefaultOpenAICodexUserAgent, codexCLIVersion),
 		"DefaultOpenAICodexUserAgent must embed codexCLIVersion")
-	require.Equal(t, "0.150.1", codexResponsesVersionFallback,
+	require.Equal(t, "0.154.0", codexResponsesVersionFallback,
 		"Responses Version fallback must match the current official stable release")
 	require.Equal(t, codexCLIVersion, codexResponsesVersionFallback,
 		"User-Agent engine and Responses Version must share one stable release")

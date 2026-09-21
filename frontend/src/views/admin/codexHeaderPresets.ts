@@ -1,11 +1,11 @@
-// Editable identity templates, not captured fingerprints of installed clients.
+export const defaultCodexClientVersion = "0.154.0";
+
+// Verified native identity templates. Other client identities remain available
+// through the manual Originator and User-Agent inputs.
 export const codexOriginators = [
   "Codex Desktop",
   "codex-tui",
   "codex_cli_rs",
-  "codex_vscode",
-  "codex_vscode_copilot",
-  "codex_exec",
 ] as const;
 
 export function compareCodexVersions(a: string, b: string): number {
@@ -40,15 +40,16 @@ export function setCodexTemplateVersion(userAgent: string, version: string): str
 export function buildCodexUserAgentTemplate(
   originator: string,
   version: string,
-  defaultUserAgent: string,
-  linux = false,
 ): string {
-  if (originator === "Codex Desktop" && defaultUserAgent) {
-    return setCodexTemplateVersion(defaultUserAgent, version);
+  if (!isStableCodexVersion(version)) return "";
+  switch (originator) {
+    case "Codex Desktop":
+      return `Codex Desktop/${version} (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)`;
+    case "codex-tui":
+      return `codex-tui/${version} (Mac OS 26.2.0; arm64) Apple_Terminal/466 (codex-tui; ${version})`;
+    case "codex_cli_rs":
+      return `codex_cli_rs/${version} (Ubuntu 22.4.0; x86_64) xterm-256color`;
+    default:
+      return "";
   }
-  const platform = linux
-    ? "(Linux 6.8.0; x86_64)"
-    : defaultUserAgent.match(/\([^)]*\)/)?.[0] || "(Mac OS 26.2.0; arm64)";
-  const editor = originator.startsWith("codex_vscode");
-  return `${originator}/${version} ${platform} ${editor ? "vscode" : "unknown"}`;
 }

@@ -426,7 +426,7 @@ func TestCodexOutboundVersionFreshness(t *testing.T) {
 	require.GreaterOrEqual(t, CompareVersions(codexCLIVersion, codexUpstreamMinVersion), 0,
 		"codexCLIVersion=%q 不得低于上游最低门槛 %q", codexCLIVersion, codexUpstreamMinVersion,
 	)
-	require.Equal(t, "0.150.1", codexResponsesVersionFallback)
+	require.Equal(t, "0.154.0", codexResponsesVersionFallback)
 	require.GreaterOrEqual(t, CompareVersions(codexResponsesVersionFallback, codexUpstreamMinVersion), 0,
 		"codexResponsesVersionFallback=%q 不得低于上游最低门槛 %q", codexResponsesVersionFallback, codexUpstreamMinVersion,
 	)

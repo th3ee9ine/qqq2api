@@ -685,8 +685,8 @@ func TestAPIContracts(t *testing.T) {
 					"openai_codex_client_version_synced": "",
 					"openai_codex_version_auto_sync_enabled": true,
 					"openai_codex_originator_default":    "Codex Desktop",
-					"openai_codex_user_agent_default":     "Codex Desktop/0.150.1 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
-					"openai_codex_client_version_default": "0.150.1",
+					"openai_codex_user_agent_default":     "Codex Desktop/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
+					"openai_codex_client_version_default": "0.154.0",
 					"openai_fast_policy_settings": {
 						"rules": []
 					},
@@ -1000,8 +1000,8 @@ func TestAPIContracts(t *testing.T) {
 					"openai_codex_client_version_synced": "",
 					"openai_codex_version_auto_sync_enabled": true,
 					"openai_codex_originator_default":    "Codex Desktop",
-					"openai_codex_user_agent_default":     "Codex Desktop/0.150.1 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
-					"openai_codex_client_version_default": "0.150.1",
+					"openai_codex_user_agent_default":     "Codex Desktop/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
+					"openai_codex_client_version_default": "0.154.0",
 					"openai_fast_policy_settings": {
 						"rules": []
 					},

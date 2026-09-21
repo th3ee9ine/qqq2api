@@ -164,7 +164,7 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.gatewayForwarding.openaiCodexIdentityTitle":
       "GPT/Codex 上游身份请求头",
     "admin.settings.gatewayForwarding.openaiCodexIdentityHint":
-      "下方展示的基线默认值仅表示全局三项全部留空时的结果；混合填写时 Originator 和 User-Agent 会联动配对。",
+      "内置 Codex Desktop、macOS TUI 和 Ubuntu CLI 三套规范模板，Originator、User-Agent 与 Version 联动保持一致。",
     "admin.settings.gatewayForwarding.openaiCodexOriginator": "Originator",
     "admin.settings.gatewayForwarding.openaiCodexOriginatorPlaceholder":
       "全局三项全部留空时使用基线默认值",
@@ -510,8 +510,8 @@ const baseSettingsResponse = {
   openai_codex_client_version_mode: "auto",
   openai_codex_originator_default: "Codex Desktop",
   openai_codex_user_agent_default:
-    "Codex Desktop/0.150.1 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
-  openai_codex_client_version_default: "0.150.1",
+    "Codex Desktop/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
+  openai_codex_client_version_default: "0.154.0",
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
   enable_openai_account_local_device_identity: true,
@@ -640,16 +640,16 @@ describe("admin SettingsView", () => {
     syncOpenAICodexVersion.mockReset();
     getOpenAICodexVersions.mockResolvedValue({
       versions: [
-        { version: "0.150.1", tag_name: "rust-v0.150.1", published_at: "2026-09-10T00:00:00Z", html_url: "https://github.com/openai/codex/releases/tag/rust-v0.150.1" },
-        { version: "0.149.0", tag_name: "rust-v0.149.0", published_at: "2026-09-09T00:00:00Z", html_url: "https://github.com/openai/codex/releases/tag/rust-v0.149.0" },
-      ], latest_version: "0.150.1", has_more: true, next_page: 2,
+        { version: "0.154.0", tag_name: "rust-v0.154.0", published_at: "2026-09-20T00:00:00Z", html_url: "https://github.com/openai/codex/releases/tag/rust-v0.154.0" },
+        { version: "0.153.0", tag_name: "rust-v0.153.0", published_at: "2026-09-19T00:00:00Z", html_url: "https://github.com/openai/codex/releases/tag/rust-v0.153.0" },
+      ], latest_version: "0.154.0", has_more: true, next_page: 2,
     });
     syncOpenAICodexVersion.mockResolvedValue({
-      latest_version: "0.151.0", synced_version: "0.151.0", updated: true,
+      latest_version: "0.155.0", synced_version: "0.155.0", updated: true,
       defaults: {
         originator: "Codex Desktop",
-        user_agent: "Codex Desktop/0.151.0 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
-        client_version: "0.151.0",
+        user_agent: "Codex Desktop/0.155.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
+        client_version: "0.155.0",
       },
     });
     getSettings.mockReset();
@@ -1304,12 +1304,13 @@ describe("admin SettingsView", () => {
   it("loads defaults and trims GPT/Codex upstream identity headers when saving", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
-      openai_codex_originator: "custom-client",
-      openai_codex_user_agent: "custom-client/0.200.0 (Linux; x86_64)",
+      openai_codex_originator: "codex_vscode",
+      openai_codex_user_agent:
+        "codex_vscode/0.200.0 (Linux; x86_64) vscode (codex_vscode; 0.9.8)",
       openai_codex_client_version: "0.200.0",
       openai_codex_originator_default: "Codex Desktop",
       openai_codex_user_agent_default:
-        "Codex Desktop/0.201.0 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
+        "Codex Desktop/0.201.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
       openai_codex_client_version_default: "0.201.0",
     });
     const wrapper = mountView();
@@ -1321,7 +1322,7 @@ describe("admin SettingsView", () => {
       '[data-testid="openai-codex-upstream-identity-settings"]',
     );
     expect(card.text()).toContain("GPT/Codex 上游身份请求头");
-    expect(card.text()).toContain("基线默认值仅表示全局三项全部留空时的结果");
+    expect(card.text()).toContain("内置 Codex Desktop、macOS TUI 和 Ubuntu CLI 三套规范模板");
     expect(
       card.findAll("input").map((input) => input.attributes("data-testid")),
     ).toEqual([
@@ -1334,7 +1335,7 @@ describe("admin SettingsView", () => {
         card.get('[data-testid="openai-codex-originator"]')
           .element as HTMLInputElement
       ).value,
-    ).toBe("custom-client");
+    ).toBe("codex_vscode");
     expect(
       card
         .get('[data-testid="openai-codex-originator"]')
@@ -1345,7 +1346,9 @@ describe("admin SettingsView", () => {
         card.get('[data-testid="openai-codex-user-agent"]')
           .element as HTMLInputElement
       ).value,
-    ).toBe("custom-client/0.200.0 (Linux; x86_64)");
+    ).toBe(
+      "codex_vscode/0.200.0 (Linux; x86_64) vscode (codex_vscode; 0.9.8)",
+    );
     expect(
       (
         card.get('[data-testid="openai-codex-version"]')
@@ -1363,11 +1366,24 @@ describe("admin SettingsView", () => {
     ).toBe("全局三项全部留空时的基线默认值：0.201.0");
 
     await card
+      .get('[data-testid="openai-codex-version"]')
+      .setValue("0.202.0");
+    expect(
+      (
+        card.get('[data-testid="openai-codex-user-agent"]')
+          .element as HTMLInputElement
+      ).value,
+    ).toBe(
+      "codex_vscode/0.202.0 (Linux; x86_64) vscode (codex_vscode; 0.9.8)",
+    );
+    await card
       .get('[data-testid="openai-codex-originator"]')
       .setValue("  codex_vscode  ");
     await card
       .get('[data-testid="openai-codex-user-agent"]')
-      .setValue("  codex_vscode/0.202.0 (Linux; x86_64) vscode  ");
+      .setValue(
+        "  codex_vscode/0.202.0 (Linux; x86_64) vscode (codex_vscode; 0.9.8)  ",
+      );
     await card
       .get('[data-testid="openai-codex-version"]')
       .setValue("  0.202.0  ");
@@ -1377,7 +1393,8 @@ describe("admin SettingsView", () => {
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         openai_codex_originator: "codex_vscode",
-        openai_codex_user_agent: "codex_vscode/0.202.0 (Linux; x86_64) vscode",
+        openai_codex_user_agent:
+          "codex_vscode/0.202.0 (Linux; x86_64) vscode (codex_vscode; 0.9.8)",
         openai_codex_client_version: "0.202.0",
       }),
     );
@@ -1407,7 +1424,7 @@ describe("admin SettingsView", () => {
     ).toContain("Codex Desktop");
     expect(
       wrapper.get('[data-testid="openai-codex-version-default"]').text(),
-    ).toContain("0.150.1");
+    ).toContain("0.154.0");
 
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
@@ -1421,7 +1438,7 @@ describe("admin SettingsView", () => {
     );
   });
 
-  it("lazily loads official history and applies paired editable Originator and UA presets", async () => {
+  it("lazily loads official history and applies the three paired native identity templates", async () => {
     const wrapper = mountView();
     await flushPromises();
     expect(getOpenAICodexVersions).not.toHaveBeenCalled();
@@ -1435,22 +1452,35 @@ describe("admin SettingsView", () => {
     expect(getOpenAICodexVersions).toHaveBeenCalledWith(1);
     const origins = wrapper.get('[data-testid="openai-codex-originator-presets"]');
     expect(origins.findAll("option").map((option) => option.text())).toEqual([
-      "Codex Desktop", "codex-tui", "codex_cli_rs", "codex_vscode", "codex_vscode_copilot", "codex_exec",
+      "Codex Desktop", "codex-tui", "codex_cli_rs",
     ]);
+    await origins.setValue("Codex Desktop");
+    expect((wrapper.get('[data-testid="openai-codex-originator"]').element as HTMLInputElement).value).toBe("Codex Desktop");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toBe(
+      "Codex Desktop/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
+    );
     await origins.setValue("codex-tui");
     expect((wrapper.get('[data-testid="openai-codex-originator"]').element as HTMLInputElement).value).toBe("codex-tui");
-    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toContain("codex-tui/0.150.1");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toBe(
+      "codex-tui/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (codex-tui; 0.154.0)",
+    );
+    await wrapper.get('[data-testid="openai-codex-version-history"]').setValue("0.153.0");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toBe(
+      "codex-tui/0.153.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (codex-tui; 0.153.0)",
+    );
     const uas = wrapper.get('[data-testid="openai-codex-user-agent-presets"]');
-    const linux = uas.findAll("option").find((option) => option.text().includes("codex_cli_rs") && option.text().includes("Linux"))!;
-    await uas.setValue(linux.attributes("value"));
+    const cli = uas.findAll("option").find((option) => option.text().includes("codex_cli_rs"))!;
+    await uas.setValue(cli.attributes("value"));
     expect((wrapper.get('[data-testid="openai-codex-originator"]').element as HTMLInputElement).value).toBe("codex_cli_rs");
-    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toContain("(Linux 6.8.0; x86_64)");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toBe(
+      "codex_cli_rs/0.153.0 (Ubuntu 22.4.0; x86_64) xterm-256color",
+    );
     await wrapper.get('[data-testid="openai-codex-originator"]').setValue("custom-client");
-    await wrapper.get('[data-testid="openai-codex-user-agent"]').setValue("custom-client/0.150.1 (custom OS)");
+    await wrapper.get('[data-testid="openai-codex-user-agent"]').setValue("custom-client/0.153.0 (custom OS)");
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
     expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
-      openai_codex_originator: "custom-client", openai_codex_user_agent: "custom-client/0.150.1 (custom OS)",
+      openai_codex_originator: "custom-client", openai_codex_user_agent: "custom-client/0.153.0 (custom OS)",
     }));
     await openClaudeTab(wrapper);
     await openGatewayTab(wrapper);
@@ -1464,19 +1494,19 @@ describe("admin SettingsView", () => {
     await openGPTTab(wrapper);
     await flushPromises();
     await wrapper.get('[data-testid="openai-codex-originator-presets"]').setValue("Codex Desktop");
-    await wrapper.get('[data-testid="openai-codex-version-history"]').setValue("0.149.0");
+    await wrapper.get('[data-testid="openai-codex-version-history"]').setValue("0.153.0");
     expect((wrapper.get('[data-testid="openai-codex-version-mode"]').element as HTMLSelectElement).value).toBe("pinned");
-    expect((wrapper.get('[data-testid="openai-codex-version"]').element as HTMLInputElement).value).toBe("0.149.0");
+    expect((wrapper.get('[data-testid="openai-codex-version"]').element as HTMLInputElement).value).toBe("0.153.0");
     expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toBe(
-      "Codex Desktop/0.149.0 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
+      "Codex Desktop/0.153.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
     );
     await wrapper.find("form").trigger("submit.prevent");
     await flushPromises();
     expect(updateSettings).toHaveBeenLastCalledWith(expect.objectContaining({
-      openai_codex_client_version: "0.149.0", openai_codex_client_version_mode: "pinned",
+      openai_codex_client_version: "0.153.0", openai_codex_client_version_mode: "pinned",
     }));
     await wrapper.get('[data-testid="openai-codex-version-mode"]').setValue("auto");
-    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toContain("Codex Desktop/0.150.1");
+    expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toContain("Codex Desktop/0.154.0");
     await wrapper.get('[data-testid="openai-codex-version"]').setValue("0.140.0");
     expect((wrapper.get('[data-testid="openai-codex-version-mode"]').element as HTMLSelectElement).value).toBe("pinned");
     await wrapper.get('[data-testid="openai-codex-version"]').setValue("");
@@ -1494,15 +1524,15 @@ describe("admin SettingsView", () => {
     await flushPromises();
     getOpenAICodexVersions.mockResolvedValueOnce({
       versions: [
-        { version: "0.149.0", published_at: "2026-09-09T00:00:00Z" },
+        { version: "0.153.0", published_at: "2026-09-19T00:00:00Z" },
         { version: "0.140.0", published_at: "2026-08-01T00:00:00Z" },
-      ], latest_version: "0.150.1", has_more: false, next_page: null,
+      ], latest_version: "0.154.0", has_more: false, next_page: null,
     });
     await wrapper.get('[data-testid="openai-codex-versions-more"]').trigger("click");
     await flushPromises();
     expect(getOpenAICodexVersions).toHaveBeenLastCalledWith(2);
     const history = wrapper.get('[data-testid="openai-codex-version-history"]');
-    expect(history.findAll("option").map((option) => option.attributes("value"))).toEqual(["0.150.1", "0.149.0", "0.140.0"]);
+    expect(history.findAll("option").map((option) => option.attributes("value"))).toEqual(["0.154.0", "0.153.0", "0.140.0"]);
     expect(wrapper.find('[data-testid="openai-codex-versions-more"]').exists()).toBe(false);
     await history.setValue("0.140.0");
     getOpenAICodexVersions.mockRejectedValueOnce(new Error("GitHub rate limited"));
@@ -1530,7 +1560,7 @@ describe("admin SettingsView", () => {
     expect(getOpenAICodexVersions).toHaveBeenCalledTimes(2);
     expect(showSuccess).toHaveBeenCalled();
     expect(updateSettings).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-testid="openai-codex-version-default"]').text()).toContain("0.151.0");
+    expect(wrapper.get('[data-testid="openai-codex-version-default"]').text()).toContain("0.155.0");
     expect((wrapper.get('[data-testid="openai-codex-version-mode"]').element as HTMLSelectElement).value).toBe("pinned");
     expect((wrapper.get('[data-testid="openai-codex-version"]').element as HTMLInputElement).value).toBe("0.140.0");
     expect((wrapper.get('[data-testid="openai-codex-user-agent"]').element as HTMLInputElement).value).toBe("custom-client/0.140.0 (custom OS)");
@@ -1558,7 +1588,7 @@ describe("admin SettingsView", () => {
     expect(showError).toHaveBeenCalledWith("error");
     expect(showSuccess).not.toHaveBeenCalled();
     expect(button.attributes("disabled")).toBeUndefined();
-    expect(wrapper.get('[data-testid="openai-codex-version-default"]').text()).toContain("0.150.1");
+    expect(wrapper.get('[data-testid="openai-codex-version-default"]').text()).toContain("0.154.0");
     expect(getOpenAICodexVersions).toHaveBeenCalledOnce();
   });
 

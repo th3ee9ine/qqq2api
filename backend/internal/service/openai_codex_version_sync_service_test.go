@@ -208,13 +208,13 @@ func TestLatestCodexStableReleaseVersion(t *testing.T) {
 func TestOpenAICodexVersionSyncWritesLatestStableVersion(t *testing.T) {
 	repo := newCodexVersionSyncSettingRepoStub(nil)
 	github := &codexVersionSyncGitHubStub{releases: []*GitHubRelease{
-		{TagName: "rust-v0.150.1"},
-		{TagName: "rust-v0.150.2"},
+		{TagName: "rust-v0.154.1"},
+		{TagName: "rust-v0.154.2"},
 	}}
 
 	newCodexVersionSyncService(repo, github).runOnce()
 
-	require.Equal(t, []string{"0.150.2"}, repo.syncedWrites())
+	require.Equal(t, []string{"0.154.2"}, repo.syncedWrites())
 }
 
 func TestOpenAICodexVersionSyncRejectsReleaseBelowBuiltinFallback(t *testing.T) {
@@ -919,13 +919,13 @@ func TestOpenAICodexVersionSyncInitialRefreshesRecentValueBelowBuiltinFallback(t
 		SettingKeyOpenAICodexClientVersionSynced: "0.150.0",
 	})
 	repo.updatedAt = time.Now().Add(-time.Hour)
-	github := &codexVersionSyncGitHubStub{latest: &GitHubRelease{TagName: "rust-v0.150.1"}}
+	github := &codexVersionSyncGitHubStub{latest: &GitHubRelease{TagName: "rust-v0.154.0"}}
 
 	settings := NewSettingService(repo, nil)
 	NewOpenAICodexVersionSyncService(repo, settings, github, openAICodexVersionSyncInterval).runInitial()
 
 	require.Equal(t, 1, github.latestCalls)
-	require.Equal(t, []string{"0.150.1"}, repo.syncedWrites())
+	require.Equal(t, []string{"0.154.0"}, repo.syncedWrites())
 }
 
 func TestOpenAICodexVersionSyncInitialRefreshesRecentPrerelease(t *testing.T) {
@@ -961,27 +961,27 @@ func TestOpenAICodexVersionSyncInitialRefreshesTimestampWhenVersionUnchanged(t *
 func TestOpenAICodexVersionSyncInitialRunsWhenStaleOrMissing(t *testing.T) {
 	t.Run("同步值已过期", func(t *testing.T) {
 		repo := newCodexVersionSyncSettingRepoStub(map[string]string{
-			SettingKeyOpenAICodexClientVersionSynced: "0.150.1",
+			SettingKeyOpenAICodexClientVersionSynced: "0.154.0",
 		})
 		repo.updatedAt = time.Now().Add(-7 * time.Hour)
-		github := &codexVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "rust-v0.150.2"}}}
+		github := &codexVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "rust-v0.154.1"}}}
 
 		newCodexVersionSyncService(repo, github).runInitial()
 
 		require.Equal(t, 1, github.calls)
-		require.Equal(t, []string{"0.150.2"}, repo.syncedWrites())
+		require.Equal(t, []string{"0.154.1"}, repo.syncedWrites())
 	})
 
 	// 首次部署尚无同步值：必须立刻同步，不能被防抖挡住。
 	t.Run("尚无同步值", func(t *testing.T) {
 		repo := newCodexVersionSyncSettingRepoStub(nil)
 		repo.updatedAt = time.Now()
-		github := &codexVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "rust-v0.150.1"}}}
+		github := &codexVersionSyncGitHubStub{releases: []*GitHubRelease{{TagName: "rust-v0.154.0"}}}
 
 		newCodexVersionSyncService(repo, github).runInitial()
 
 		require.Equal(t, 1, github.calls)
-		require.Equal(t, []string{"0.150.1"}, repo.syncedWrites())
+		require.Equal(t, []string{"0.154.0"}, repo.syncedWrites())
 	})
 }
 

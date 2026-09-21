@@ -467,7 +467,7 @@ func TestNormalizeCodexClientVersion(t *testing.T) {
 
 func TestBuildCodexCLIUserAgent(t *testing.T) {
 	require.Equal(t,
-		"Codex Desktop/0.150.1 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
+		"Codex Desktop/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
 		codexCLIUserAgent,
 	)
 	require.Equal(t, openai.CodexDefaultOriginator+"/0.200.1"+codexDesktopUserAgentSuffix, buildCodexCLIUserAgent("0.200.1"))
@@ -475,6 +475,41 @@ func TestBuildCodexCLIUserAgent(t *testing.T) {
 	// 非法版本号必须回退到内置 UA，不能拼出畸形身份。
 	require.Equal(t, codexCLIUserAgent, buildCodexCLIUserAgent("bogus version"))
 	require.Equal(t, codexCLIUserAgent, buildCodexCLIUserAgent(""))
+}
+
+func TestBuildCodexIdentityPresetUserAgent(t *testing.T) {
+	tests := []struct {
+		originator string
+		wantUA     string
+	}{
+		{
+			originator: "codex-tui",
+			wantUA:     "codex-tui/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (codex-tui; 0.154.0)",
+		},
+		{
+			originator: openai.CodexCLIOriginator,
+			wantUA:     "codex_cli_rs/0.154.0 (Ubuntu 22.4.0; x86_64) xterm-256color",
+		},
+		{
+			originator: openai.CodexDefaultOriginator,
+			wantUA:     "Codex Desktop/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.originator, func(t *testing.T) {
+			originator, userAgent, ok := buildCodexIdentityPresetUserAgent(tt.originator, "0.154.0")
+			require.True(t, ok)
+			require.Equal(t, tt.originator, originator)
+			require.Equal(t, tt.wantUA, userAgent)
+			require.Equal(t, "0.154.0", openai.CodexUserAgentVersion(userAgent))
+		})
+	}
+
+	_, _, ok := buildCodexIdentityPresetUserAgent("codex_vscode", "0.154.0")
+	require.False(t, ok)
+	_, _, ok = buildCodexIdentityPresetUserAgent("codex-tui", "invalid")
+	require.False(t, ok)
 }
 
 func TestCodexCanonicalUserAgentFollowsResolver(t *testing.T) {
@@ -595,7 +630,7 @@ func TestNormalizeCodexOriginatorHeader(t *testing.T) {
 	require.Empty(t, NormalizeCodexOriginatorHeader(strings.Repeat("x", codexOriginatorMaxLen+1)))
 }
 
-func TestCodexCanonicalIdentityUsesConfiguredOriginator(t *testing.T) {
+func TestCodexCanonicalIdentityUsesConfiguredNativeProfileAtomically(t *testing.T) {
 	SetCodexCanonicalUserAgentResolver(func() string {
 		return "codex-tui/0.144.1 (Linux 6.8; x86_64) xterm (codex-tui; 0.144.1)"
 	})
@@ -613,7 +648,7 @@ func TestCodexCanonicalIdentityUsesConfiguredOriginator(t *testing.T) {
 	require.Equal(t, "codex_cli_rs", headers.Get("Originator"))
 	require.Equal(t, "0.200.1", headers.Get("Version"))
 	require.Equal(t,
-		"codex_cli_rs/0.200.1 (Linux 6.8; x86_64) xterm (codex-tui; 0.200.1)",
+		"codex_cli_rs/0.200.1 (Ubuntu 22.4.0; x86_64) xterm-256color",
 		headers.Get("User-Agent"),
 	)
 
@@ -621,7 +656,7 @@ func TestCodexCanonicalIdentityUsesConfiguredOriginator(t *testing.T) {
 	ApplyCodexCanonicalAuthIdentity(authHeaders)
 	require.Equal(t, "codex_cli_rs", authHeaders.Get("Originator"))
 	require.Equal(t,
-		"codex_cli_rs/0.200.1 (Linux 6.8; x86_64) xterm (codex-tui; 0.200.1)",
+		"codex_cli_rs/0.200.1 (Ubuntu 22.4.0; x86_64) xterm-256color",
 		authHeaders.Get("User-Agent"),
 	)
 	require.Empty(t, authHeaders.Get("Version"), "credential/control requests keep the native no-Version contract")
@@ -694,6 +729,6 @@ func TestCodexOriginatorOverrideIsIgnoredWhenInvalid(t *testing.T) {
 }
 
 func TestCodexResponsesVersionFallbackUsesCurrentOfficialStable(t *testing.T) {
-	require.Equal(t, "0.150.1", codexResponsesVersionFallback)
+	require.Equal(t, "0.154.0", codexResponsesVersionFallback)
 	require.Equal(t, codexCLIVersion, codexResponsesVersionFallback)
 }

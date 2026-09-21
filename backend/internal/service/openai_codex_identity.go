@@ -93,14 +93,37 @@ func NormalizeCodexOriginatorHeader(originator string) string {
 	return originator
 }
 
+// buildCodexIdentityPresetUserAgent builds one of the verified native identity
+// templates. The Rust engine version is shared by User-Agent and Version; the
+// Desktop app build remains an independent trailer value.
+func buildCodexIdentityPresetUserAgent(originator, version string) (canonicalOriginator, userAgent string, ok bool) {
+	version = NormalizeCodexClientVersion(version)
+	if version == "" {
+		return "", "", false
+	}
+	switch {
+	case strings.EqualFold(strings.TrimSpace(originator), openai.CodexDefaultOriginator):
+		return openai.CodexDefaultOriginator,
+			openai.CodexDefaultOriginator + "/" + version + codexDesktopUserAgentSuffix, true
+	case strings.EqualFold(strings.TrimSpace(originator), "codex-tui"):
+		return "codex-tui",
+			"codex-tui/" + version + codexTUIUserAgentSuffix + " (codex-tui; " + version + ")", true
+	case strings.EqualFold(strings.TrimSpace(originator), openai.CodexCLIOriginator):
+		return openai.CodexCLIOriginator,
+			openai.CodexCLIOriginator + "/" + version + codexCLIUserAgentSuffix, true
+	default:
+		return "", "", false
+	}
+}
+
 // buildCodexCLIUserAgent 按官方稳定版拼出规范 Codex Desktop User-Agent。
 // 函数名为历史内部名称；首段 engine 与 Responses/WS Version 同源，
 // Desktop 宿主 build 则固定在独立 trailer 中。
 func buildCodexCLIUserAgent(version string) string {
-	if version = NormalizeCodexClientVersion(version); version == "" {
-		return codexCLIUserAgent
+	if _, userAgent, ok := buildCodexIdentityPresetUserAgent(openai.CodexDefaultOriginator, version); ok {
+		return userAgent
 	}
-	return openai.CodexDefaultOriginator + "/" + version + codexDesktopUserAgentSuffix
+	return codexCLIUserAgent
 }
 
 // codexIdentityEnforcement 控制 enforceCodexIdentityHeaders 是否强制统一出站身份，
@@ -314,16 +337,26 @@ func resolveCodexOutboundUserAgentIdentityWithVersion(candidateUA, version strin
 		ua = canonical
 	}
 	if originatorOverride := codexCanonicalOriginatorOverride(); originatorOverride != "" {
-		// The upstream validates Originator against the User-Agent's leading
-		// client segment. Make the configured Originator authoritative and
-		// rewrite that segment while preserving the configured UA fingerprint.
-		// If the configured UA is not a bounded `{client}/{version}` value,
-		// retain the safe canonical fingerprint instead.
+		// The upstream validates Originator against the User-Agent identity. A
+		// known native Originator selects its complete profile when the current UA
+		// belongs to another client; custom identities retain the configured UA
+		// fingerprint and rewrite only its leading client segment. Invalid UAs use
+		// the safe canonical fingerprint.
 		if !isSaneCodexUserAgentHeader(ua) {
 			ua = canonical
 		}
 		if !isSaneCodexUserAgentHeader(ua) {
 			ua = codexCLIUserAgent
+		}
+		if presetOriginator, presetUA, isPreset := buildCodexIdentityPresetUserAgent(originatorOverride, version); isPreset {
+			pairedOriginator, _, paired := openai.PairCodexClientIdentity(ua)
+			if !paired || !strings.EqualFold(pairedOriginator, presetOriginator) {
+				// A known native Originator is an identity-profile selection, not a
+				// string substitution. Falling back as a complete profile prevents
+				// combinations such as a CLI prefix with a TUI/Desktop trailer.
+				return presetUA, presetOriginator
+			}
+			originatorOverride = presetOriginator
 		}
 		if slash := strings.IndexByte(ua, '/'); slash > 0 {
 			ua = originatorOverride + ua[slash:]

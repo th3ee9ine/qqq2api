@@ -9181,6 +9181,7 @@ import Icon from "@/components/icons/Icon.vue";
 import Select from "@/components/common/Select.vue";
 import {
   buildCodexUserAgentTemplate, codexOriginators, compareCodexVersions,
+  defaultCodexClientVersion,
   isStableCodexVersion, setCodexTemplateVersion,
 } from "./codexHeaderPresets";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
@@ -11140,21 +11141,14 @@ const codexTemplateVersion = computed(() => {
     return manual;
   }
   return [manual, form.openai_codex_client_version_synced, form.openai_codex_client_version_default]
-    .filter(isStableCodexVersion).sort((a, b) => compareCodexVersions(b, a))[0] || "0.150.1";
+    .filter(isStableCodexVersion).sort((a, b) => compareCodexVersions(b, a))[0] || defaultCodexClientVersion;
 });
 const codexUserAgentOptions = computed(() => {
   const version = codexTemplateVersion.value;
-  const options = codexOriginators.map((originator) => ({
-    value: buildCodexUserAgentTemplate(originator, version, form.openai_codex_user_agent_default),
+  return codexOriginators.map((originator) => ({
+    value: buildCodexUserAgentTemplate(originator, version),
     label: `${originator} / ${version} · ${t("admin.settings.gatewayForwarding.openaiCodexTemplate")}`,
   }));
-  for (const originator of ["codex_cli_rs", "codex-tui"]) {
-    options.push({
-      value: buildCodexUserAgentTemplate(originator, version, form.openai_codex_user_agent_default, true),
-      label: `${originator} / ${version} · Linux x86_64 · ${t("admin.settings.gatewayForwarding.openaiCodexTemplate")}`,
-    });
-  }
-  return options;
 });
 const codexVersionOptions = computed(() => {
   const releases = new Map(codexVersions.value.map((release) => [release.version, release]));
@@ -11177,7 +11171,7 @@ function applyCodexOriginatorPreset(value: unknown): void {
   if (typeof value !== "string") return;
   form.openai_codex_originator = value;
   form.openai_codex_user_agent = buildCodexUserAgentTemplate(
-    value, codexTemplateVersion.value, form.openai_codex_user_agent_default,
+    value, codexTemplateVersion.value,
   );
 }
 

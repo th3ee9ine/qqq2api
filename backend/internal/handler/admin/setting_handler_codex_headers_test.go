@@ -61,7 +61,7 @@ func TestUpdateSettingsWritesNormalizedOpenAICodexOriginatorAndReturnsDefaults(t
 	require.Equal(t, "Codex Desktop", payload.Data["openai_codex_originator_default"])
 	require.Equal(t, "0.200.1", payload.Data["openai_codex_client_version_default"])
 	require.Equal(t,
-		"Codex Desktop/0.200.1 (Mac OS 26.2.0; arm64) unknown (Codex Desktop; 26.820.60940)",
+		"Codex Desktop/0.200.1 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
 		payload.Data["openai_codex_user_agent_default"],
 	)
 }
