@@ -291,49 +291,6 @@ func TestDebugWorkbenchAlwaysUsesIndependentIdentityAndNeverReplaysTurnState(t *
 	}
 }
 
-func TestDebugWorkbenchDisablesStoredAutomaticTurnState(t *testing.T) {
-	now := time.Now().UnixMilli()
-	account := &Account{
-		ID: 7, Name: "oauth-debug", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
-		Credentials: map[string]any{"access_token": "oauth-debug-token", "chatgpt_account_id": "debug-account"},
-		Extra: map[string]any{
-			codexTurnStateModelExtraKey("gpt-5.4"): map[string]any{
-				CodexTurnStateAutoExtraKey:              "stored-automatic-state",
-				CodexTurnStateAutoSetAtExtraKey:         now,
-				CodexTurnStateAutoVerifiedAtExtraKey:    now,
-				CodexTurnStateAutoVerifiedModelExtraKey: "gpt-5.4",
-			},
-		},
-	}
-	var actualState string
-	upstream := &debugWorkbenchHTTPStub{fn: func(req *http.Request, _ string, _ int64) (*http.Response, error) {
-		actualState = req.Header.Get(openAICodexTurnStateHeader)
-		response := debugWorkbenchJSONResponse(200, "data: "+`{"type":"response.completed","response":{"id":"resp_debug","object":"response","status":"completed","model":"gpt-5.4","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`+"\n\ndata: [DONE]\n\n")
-		response.Header.Set("Content-Type", "text/event-stream")
-		return response, nil
-	}}
-	svc, _ := debugWorkbenchTestService(account, upstream)
-	svc.gateway.settingService = NewSettingService(&codexHeaderSettingRepoStub{values: map[string]string{
-		SettingKeyOpenAICodexTurnStateDefaultModel: "gpt-5.4",
-		SettingKeyOpenAICodexTurnStateModels:       "gpt-5.4",
-		SettingKeyOpenAICodexTurnStateAutoEnabled:  "true",
-	}}, &config.Config{})
-
-	normal, _ := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
-	normal, err := svc.gateway.prepareCodexTurnStateRequest(context.Background(), normal, account, "gpt-5.4")
-	require.NoError(t, err)
-	require.Equal(t, "stored-automatic-state", normal.Header.Get(openAICodexTurnStateHeader), "fixture must prove automatic injection is otherwise active")
-
-	result, err := svc.Run(context.Background(), 1, 7, DebugWorkbenchRequest{
-		Endpoint: "responses",
-		Body:     json.RawMessage(`{"model":"gpt-5.4","input":"hello","stream":false}`),
-		Session:  DebugSessionInput{Action: "new_session"},
-	})
-	require.NoError(t, err)
-	require.True(t, result.Success, result.Error)
-	require.Empty(t, actualState)
-}
-
 func TestDebugWorkbenchAlignsExistingRequestMetadataWithoutInventingAncestry(t *testing.T) {
 	identity := debugWorkbenchRequestIdentity{sessionID: "managed-session", threadID: "managed-thread", turnID: "managed-turn", windowID: "managed-window"}
 	headers := http.Header{}

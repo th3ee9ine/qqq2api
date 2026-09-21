@@ -243,30 +243,23 @@ type UpdateSettingsRequest struct {
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
 	// Gateway forwarding behavior
-	OpenAITTFTMode                          *string   `json:"openai_ttft_mode"`
-	EnableFingerprintUnification            *bool     `json:"enable_fingerprint_unification"`
-	EnableMetadataPassthrough               *bool     `json:"enable_metadata_passthrough"`
-	EnableCCHSigning                        *bool     `json:"enable_cch_signing"`
-	EnableClaudeOAuthSystemPromptInjection  *bool     `json:"enable_claude_oauth_system_prompt_injection"`
-	ClaudeOAuthSystemPrompt                 *string   `json:"claude_oauth_system_prompt"`
-	ClaudeOAuthSystemPromptBlocks           *string   `json:"claude_oauth_system_prompt_blocks"`
-	EnableAnthropicCacheTTL1hInjection      *bool     `json:"enable_anthropic_cache_ttl_1h_injection"`
-	RewriteMessageCacheControl              *bool     `json:"rewrite_message_cache_control"`
-	EnableClientDatelineNormalization       *bool     `json:"enable_client_dateline_normalization"`
-	AntigravityUserAgentVersion             *string   `json:"-"`
-	OpenAICodexOriginator                   *string   `json:"openai_codex_originator"`
-	OpenAICodexUserAgent                    *string   `json:"openai_codex_user_agent"`
-	OpenAICodexClientVersion                *string   `json:"openai_codex_client_version"`
-	OpenAICodexClientVersionMode            *string   `json:"openai_codex_client_version_mode"`
-	OpenAICodexVersionAutoSyncEnabled       *bool     `json:"openai_codex_version_auto_sync_enabled"`
-	EnableOpenAIAccountLocalDeviceIdentity  *bool     `json:"enable_openai_account_local_device_identity"`
-	OpenAICodexTurnStateDefaultModel        *string   `json:"openai_codex_turn_state_default_model"`
-	OpenAICodexTurnStateModels              *string   `json:"openai_codex_turn_state_models"`
-	OpenAICodexTurnStateAutoEnabled         *bool     `json:"openai_codex_turn_state_auto_enabled"`
-	OpenAICodexTurnStateAutoIntervalMinutes *int      `json:"openai_codex_turn_state_auto_interval_minutes"`
-	OpenAICodexTurnStateProxyURLs           *[]string `json:"openai_codex_turn_state_proxy_urls"`
-	OpenAICodexTurnStateProxyIDs            *[]int64  `json:"openai_codex_turn_state_proxy_ids"`
-	OpenAICodexTurnStateProxyID             *int64    `json:"openai_codex_turn_state_proxy_id"`
+	OpenAITTFTMode                         *string `json:"openai_ttft_mode"`
+	EnableFingerprintUnification           *bool   `json:"enable_fingerprint_unification"`
+	EnableMetadataPassthrough              *bool   `json:"enable_metadata_passthrough"`
+	EnableCCHSigning                       *bool   `json:"enable_cch_signing"`
+	EnableClaudeOAuthSystemPromptInjection *bool   `json:"enable_claude_oauth_system_prompt_injection"`
+	ClaudeOAuthSystemPrompt                *string `json:"claude_oauth_system_prompt"`
+	ClaudeOAuthSystemPromptBlocks          *string `json:"claude_oauth_system_prompt_blocks"`
+	EnableAnthropicCacheTTL1hInjection     *bool   `json:"enable_anthropic_cache_ttl_1h_injection"`
+	RewriteMessageCacheControl             *bool   `json:"rewrite_message_cache_control"`
+	EnableClientDatelineNormalization      *bool   `json:"enable_client_dateline_normalization"`
+	AntigravityUserAgentVersion            *string `json:"-"`
+	OpenAICodexOriginator                  *string `json:"openai_codex_originator"`
+	OpenAICodexUserAgent                   *string `json:"openai_codex_user_agent"`
+	OpenAICodexClientVersion               *string `json:"openai_codex_client_version"`
+	OpenAICodexClientVersionMode           *string `json:"openai_codex_client_version_mode"`
+	OpenAICodexVersionAutoSyncEnabled      *bool   `json:"openai_codex_version_auto_sync_enabled"`
+	EnableOpenAIAccountLocalDeviceIdentity *bool   `json:"enable_openai_account_local_device_identity"`
 
 	// codex_cli_only 加固（global-only）
 	MinCodexVersion                      string `json:"min_codex_version"`
@@ -450,19 +443,12 @@ var settingKeyJSONAliases = map[string]string{
 // repository's current value win, and refreshCachedSettingsAfterWrite reloads
 // the resulting snapshot before publishing caches.
 var settingOmittablePointerKeys = map[string]string{
-	"openai_codex_originator":                       service.SettingKeyOpenAICodexOriginator,
-	"openai_codex_user_agent":                       service.SettingKeyOpenAICodexUserAgent,
-	"openai_codex_client_version":                   service.SettingKeyOpenAICodexClientVersion,
-	"openai_codex_client_version_mode":              service.SettingKeyOpenAICodexClientVersionMode,
-	"openai_codex_version_auto_sync_enabled":        service.SettingKeyOpenAICodexVersionAutoSyncEnabled,
-	"enable_openai_account_local_device_identity":   service.SettingKeyEnableOpenAIAccountLocalDeviceIdentity,
-	"openai_codex_turn_state_models":                service.SettingKeyOpenAICodexTurnStateModels,
-	"openai_codex_turn_state_default_model":         service.SettingKeyOpenAICodexTurnStateDefaultModel,
-	"openai_codex_turn_state_auto_enabled":          service.SettingKeyOpenAICodexTurnStateAutoEnabled,
-	"openai_codex_turn_state_auto_interval_minutes": service.SettingKeyOpenAICodexTurnStateAutoIntervalMinutes,
-	"openai_codex_turn_state_proxy_urls":            service.SettingKeyOpenAICodexTurnStateProxyURLs,
-	"openai_codex_turn_state_proxy_ids":             service.SettingKeyOpenAICodexTurnStateProxyIDs,
-	"openai_codex_turn_state_proxy_id":              service.SettingKeyOpenAICodexTurnStateProxyID,
+	"openai_codex_originator":                     service.SettingKeyOpenAICodexOriginator,
+	"openai_codex_user_agent":                     service.SettingKeyOpenAICodexUserAgent,
+	"openai_codex_client_version":                 service.SettingKeyOpenAICodexClientVersion,
+	"openai_codex_client_version_mode":            service.SettingKeyOpenAICodexClientVersionMode,
+	"openai_codex_version_auto_sync_enabled":      service.SettingKeyOpenAICodexVersionAutoSyncEnabled,
+	"enable_openai_account_local_device_identity": service.SettingKeyEnableOpenAIAccountLocalDeviceIdentity,
 }
 
 // settingKeyByJSONName maps the value-typed top-level JSON fields of
@@ -541,21 +527,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-	if req.OpenAICodexTurnStateAutoIntervalMinutes != nil {
-		if _, err := service.NormalizeOpenAICodexTurnStateAutoIntervalMinutes(*req.OpenAICodexTurnStateAutoIntervalMinutes); err != nil {
-			response.BadRequest(c, err.Error())
-			return
-		}
-	}
 	auditReq := settingsAuditRequest(req)
 	omitted := omittedSettingKeys(sentFields)
-	// The pool and legacy single-ID setting are one compatibility unit. Updating
-	// either field must persist both synchronized values; omitting/nulling both
-	// leaves both repository values untouched.
-	if req.OpenAICodexTurnStateProxyIDs != nil || req.OpenAICodexTurnStateProxyID != nil {
-		delete(omitted, service.SettingKeyOpenAICodexTurnStateProxyIDs)
-		delete(omitted, service.SettingKeyOpenAICodexTurnStateProxyID)
-	}
 
 	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
 	if err != nil {
@@ -1868,75 +1841,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.EnableOpenAIAccountLocalDeviceIdentity
 		}(),
-		OpenAICodexTurnStateDefaultModel: func() string {
-			if req.OpenAICodexTurnStateDefaultModel != nil {
-				return *req.OpenAICodexTurnStateDefaultModel
-			}
-			return previousSettings.OpenAICodexTurnStateDefaultModel
-		}(),
-		OpenAICodexTurnStateModels: func() string {
-			if req.OpenAICodexTurnStateModels != nil {
-				return strings.TrimSpace(*req.OpenAICodexTurnStateModels)
-			}
-			return previousSettings.OpenAICodexTurnStateModels
-		}(),
-		OpenAICodexTurnStateAutoEnabled: func() bool {
-			if req.OpenAICodexTurnStateAutoEnabled != nil {
-				return *req.OpenAICodexTurnStateAutoEnabled
-			}
-			return previousSettings.OpenAICodexTurnStateAutoEnabled
-		}(),
-		OpenAICodexTurnStateAutoIntervalMinutes: func() int {
-			if req.OpenAICodexTurnStateAutoIntervalMinutes != nil {
-				return *req.OpenAICodexTurnStateAutoIntervalMinutes
-			}
-			return previousSettings.OpenAICodexTurnStateAutoIntervalMinutes
-		}(),
-		OpenAICodexTurnStateProxyURLs: func() []string {
-			if req.OpenAICodexTurnStateProxyURLs != nil {
-				return append([]string{}, (*req.OpenAICodexTurnStateProxyURLs)...)
-			}
-			return append([]string{}, previousSettings.OpenAICodexTurnStateProxyURLs...)
-		}(),
-		OpenAICodexTurnStateProxyURLsValid: func() bool {
-			if req.OpenAICodexTurnStateProxyURLs != nil {
-				return true
-			}
-			return previousSettings.OpenAICodexTurnStateProxyURLsValid
-		}(),
-		OpenAICodexTurnStateProxyPoolConfigured: previousSettings.OpenAICodexTurnStateProxyPoolConfigured,
-		OpenAICodexTurnStateProxyPoolCount:      previousSettings.OpenAICodexTurnStateProxyPoolCount,
-		OpenAICodexTurnStateProxyIDs: func() []int64 {
-			if req.OpenAICodexTurnStateProxyIDs != nil {
-				return append([]int64{}, (*req.OpenAICodexTurnStateProxyIDs)...)
-			}
-			// A legacy-only request intentionally remains nil so the service can
-			// retain the legacy field's validation code while synchronizing JSON.
-			if req.OpenAICodexTurnStateProxyID != nil {
-				return nil
-			}
-			return append([]int64{}, previousSettings.OpenAICodexTurnStateProxyIDs...)
-		}(),
-		OpenAICodexTurnStateProxyID: func() int64 {
-			if req.OpenAICodexTurnStateProxyIDs != nil {
-				if len(*req.OpenAICodexTurnStateProxyIDs) > 0 {
-					return (*req.OpenAICodexTurnStateProxyIDs)[0]
-				}
-				return 0
-			}
-			if req.OpenAICodexTurnStateProxyID != nil {
-				return *req.OpenAICodexTurnStateProxyID
-			}
-			return previousSettings.OpenAICodexTurnStateProxyID
-		}(),
-		OpenAICodexTurnStateProxyIDsValid: func() bool {
-			if req.OpenAICodexTurnStateProxyIDs != nil || req.OpenAICodexTurnStateProxyID != nil {
-				// A successful write has already passed normalization and replaces any
-				// malformed stored representation with the canonical compatibility pair.
-				return true
-			}
-			return previousSettings.OpenAICodexTurnStateProxyIDsValid
-		}(),
 		MinCodexVersion:       strings.TrimSpace(req.MinCodexVersion),
 		MaxCodexVersion:       strings.TrimSpace(req.MaxCodexVersion),
 		CodexCLIOnlyBlacklist: strings.TrimSpace(req.CodexCLIOnlyBlacklist),
@@ -2486,17 +2390,6 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAICodexUserAgentDefault:                            codexHeaderDefaults.UserAgent,
 		OpenAICodexClientVersionDefault:                        codexHeaderDefaults.ClientVersion,
 		EnableOpenAIAccountLocalDeviceIdentity:                 updatedSettings.EnableOpenAIAccountLocalDeviceIdentity,
-		OpenAICodexTurnStateModels:                             updatedSettings.OpenAICodexTurnStateModels,
-		OpenAICodexTurnStateDefaultModel:                       updatedSettings.OpenAICodexTurnStateDefaultModel,
-		OpenAICodexTurnStateAutoEnabled:                        updatedSettings.OpenAICodexTurnStateAutoEnabled,
-		OpenAICodexTurnStateAutoIntervalMinutes:                updatedSettings.OpenAICodexTurnStateAutoIntervalMinutes,
-		OpenAICodexTurnStateProxyURLs:                          updatedSettings.OpenAICodexTurnStateProxyURLs,
-		OpenAICodexTurnStateProxyURLsValid:                     updatedSettings.OpenAICodexTurnStateProxyURLsValid,
-		OpenAICodexTurnStateProxyPoolConfigured:                updatedSettings.OpenAICodexTurnStateProxyPoolConfigured,
-		OpenAICodexTurnStateProxyPoolCount:                     updatedSettings.OpenAICodexTurnStateProxyPoolCount,
-		OpenAICodexTurnStateProxyIDs:                           updatedSettings.OpenAICodexTurnStateProxyIDs,
-		OpenAICodexTurnStateProxyID:                            updatedSettings.OpenAICodexTurnStateProxyID,
-		OpenAICodexTurnStateProxyIDsValid:                      updatedSettings.OpenAICodexTurnStateProxyIDsValid,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  updatedSettings.CodexCLIOnlyBlacklist,

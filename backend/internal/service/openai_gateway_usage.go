@@ -43,10 +43,6 @@ type OpenAIRecordUsageInput struct {
 	// Responses handler from stream=true + compaction_trigger. It never stores
 	// the request payload and does not replace the transport request type.
 	NativeCompactionV2 bool
-	// RequireDurableUsageLog is reserved for administrator acceptance runs.
-	// It bypasses the best-effort queue without retrying billing or insertion.
-	RequireDurableUsageLog bool
-	usageLogInserted       bool
 	ChannelUsageFields
 }
 
@@ -54,15 +50,14 @@ type OpenAIRecordUsageInput struct {
 // 用量按上游真实 token 计费，与 WS cyber 及正常请求口径一致（InputTokens/OutputTokens
 // 取自上游 response.failed 报告的 usage，即 mark.UpstreamInTok/OutTok）。
 type CyberPolicyUsageInput struct {
-	UpstreamTurnState *string `json:"-"`
-	APIKey            *APIKey
-	Account           *Account
-	Subscription      *UserSubscription
-	RequestID         string
-	Model             string
-	Stream            bool
-	InputTokens       int
-	OutputTokens      int
+	APIKey       *APIKey
+	Account      *Account
+	Subscription *UserSubscription
+	RequestID    string
+	Model        string
+	Stream       bool
+	InputTokens  int
+	OutputTokens int
 	// 渠道归因与请求级 meta，使 cyber 计费行与正常 RecordUsage 行口径一致
 	// （否则 cyber 行 channel_id 等为空，渠道维度统计会遗漏 cyber 命中）。
 	InboundEndpoint    string
@@ -87,10 +82,9 @@ func (s *OpenAIGatewayService) RecordCyberPolicyUsageLog(ctx context.Context, in
 		return
 	}
 	result := &OpenAIForwardResult{
-		RequestID:         in.RequestID,
-		UpstreamTurnState: in.UpstreamTurnState,
-		Model:             in.Model,
-		Stream:            in.Stream,
+		RequestID: in.RequestID,
+		Model:     in.Model,
+		Stream:    in.Stream,
 		Usage: OpenAIUsage{
 			InputTokens:  in.InputTokens,
 			OutputTokens: in.OutputTokens,
@@ -382,7 +376,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		AccountID:                account.ID,
 		RequestID:                requestID,
 		UpstreamRequestID:        usageUpstreamRequestIDPtr(account, result.UpstreamHeaders, result.OpenAIWSMode),
-		UpstreamTurnState:        result.UpstreamTurnState,
 		Model:                    result.Model,
 		RequestedModel:           requestedModel,
 		UpstreamModel:            optionalTrimmedStringPtr(result.UpstreamModel),
@@ -488,7 +481,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	}
 
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		s.writeOpenAIUsageLogWithTurnStateGate(ctx, input, usageLog)
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 		logger.LegacyPrintf("service.openai_gateway", "[SIMPLE MODE] Usage recorded (not billed): user=%d, tokens=%d", usageLog.UserID, usageLog.TotalTokens())
 		s.deferredService.ScheduleLastUsedUpdate(account.ID)
 		return nil
@@ -519,36 +512,12 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	if billingErr != nil {
 		usageLog.ActualCost = 0
-		s.writeOpenAIUsageLogWithTurnStateGate(ctx, input, usageLog)
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 		return billingErr
 	}
-	s.writeOpenAIUsageLogWithTurnStateGate(ctx, input, usageLog)
+	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 
 	return nil
-}
-
-// writeOpenAIUsageLogWithTurnStateGate preserves the existing best-effort path
-// for normal traffic. A request carrying a reserved Turn State candidate is the
-// narrow exception: publication needs an unambiguous, synchronous insert result.
-func (s *OpenAIGatewayService) writeOpenAIUsageLogWithTurnStateGate(ctx context.Context, input *OpenAIRecordUsageInput, usageLog *UsageLog) {
-	if !input.RequireDurableUsageLog && !s.codexTurnStateUsageRequiresDurableInsert(input, usageLog) {
-		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
-		return
-	}
-	if s.usageLogRepo == nil {
-		s.confirmCodexTurnStateUsageLog(input, usageLog, false)
-		return
-	}
-	usageCtx, cancel := detachedBillingContext(ctx)
-	defer cancel()
-	inserted, err := s.usageLogRepo.Create(usageCtx, usageLog)
-	if err != nil {
-		logger.LegacyPrintf("service.openai_gateway", "Create usage log failed: %v", err)
-		s.confirmCodexTurnStateUsageLog(input, usageLog, false)
-		return
-	}
-	input.usageLogInserted = inserted
-	s.confirmCodexTurnStateUsageLog(input, usageLog, inserted)
 }
 
 // hasIdentifiedOpenAIResponsePricing 判断上游自报的响应模型是否可以作为计费基准，

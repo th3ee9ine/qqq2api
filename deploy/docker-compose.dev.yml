@@ -74,7 +74,7 @@ services:
       - GATEWAY_MAX_IDLE_CONNS=${GATEWAY_MAX_IDLE_CONNS:-2560}
       - GATEWAY_MAX_IDLE_CONNS_PER_HOST=${GATEWAY_MAX_IDLE_CONNS_PER_HOST:-120}
       # Optional two-hop route for configured account proxies. Empty keeps the
-      # existing one-hop behavior; local Turn State validation enables it in .env.
+      # existing one-hop behavior.
       - GATEWAY_PROXY_CHAIN_PRE_PROXY_URL=${GATEWAY_PROXY_CHAIN_PRE_PROXY_URL:-}
       - GATEWAY_PROXY_CHAIN_FORCE_HTTP_PROXY=${GATEWAY_PROXY_CHAIN_FORCE_HTTP_PROXY:-false}
       - GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING=${GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING:-3}

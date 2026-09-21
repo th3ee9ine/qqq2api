@@ -32,8 +32,7 @@ import type {
   OpenAIAccountSessionList,
   OpenAIAccountSessionBatchRevokeResult,
   OpenAISessionCleanupSettings,
-  OpenAISessionCleanupUpdateRequest,
-  CodexTurnStateAutoInfo
+  OpenAISessionCleanupUpdateRequest
 } from '@/types'
 
 /**
@@ -1139,148 +1138,6 @@ export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<U
   return data.results
 }
 
-export type CodexTurnStateCollectStatus = 'queued' | 'already_valid' | 'rejected' | 'error' | string
-export type CodexTurnStateCollectSource = 'manual' | 'bulk'
-export type CodexTurnStateTaskSource = 'manual' | 'bulk' | 'automatic' | 'renewal' | 'retry'
-export type CodexTurnStateTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
-export type CodexTurnStateTaskStage =
-  | 'queued'
-  | 'preparing'
-  | 'loading_account'
-  | 'resolving_routes'
-  | 'collecting'
-  | 'verifying'
-  | 'persisting'
-  | 'retry_wait'
-  | 'completed'
-  | 'failed'
-  | 'canceled'
-
-export interface CodexTurnStateTaskEvent {
-  at_ms: number
-  stage: CodexTurnStateTaskStage | string
-  status: CodexTurnStateTaskStatus | string
-  progress: number
-  error?: string
-  /** Compatibility with task snapshots created before the registry contract was finalized. */
-  timestamp_ms?: number
-  message?: string
-}
-
-export interface CodexTurnStateTask {
-  id: string
-  account_id: number
-  account_name: string
-  request_model: string
-  owner_model: string
-  source: CodexTurnStateTaskSource | string
-  status: CodexTurnStateTaskStatus | string
-  stage: CodexTurnStateTaskStage | string
-  progress: number
-  progress_current: number
-  progress_total: number
-  created_at_ms: number
-  started_at_ms?: number
-  updated_at_ms?: number
-  finished_at_ms?: number
-  /** Compatibility with early task DTOs. */
-  completed_at_ms?: number
-  error?: string
-  retry_of?: string
-  can_cancel: boolean
-  can_retry: boolean
-  /** Present on task details; list responses intentionally omit event history. */
-  events?: CodexTurnStateTaskEvent[]
-}
-
-export interface CodexTurnStateCollectResult {
-  status: CodexTurnStateCollectStatus
-  account_id: number
-  /** Exact model targets resolved by the backend for this manual collection round. */
-  target_models?: string[]
-  /** Owner/slot keys queued by this round; these map directly to diagnostics.models. */
-  queued_models?: string[]
-  /** Owner/slot keys that were already valid when this round started. */
-  already_valid_models?: string[]
-  /** Concrete target to persisted owner mapping, including model-family de-duplication. */
-  model_targets?: Array<{ model: string; owner: string }>
-  /** Compatibility with older deployments that collected only one model. */
-  model?: string
-  codex_turn_state_auto?: CodexTurnStateAutoInfo | null
-  /** Compatibility with deployments that expose aggregate success at the response root. */
-  successful_models?: string[]
-  collection_succeeded?: boolean
-  reason?: string
-  retry_at_ms?: number
-  message?: string
-}
-
-/** Queue Turn State probes for every model in the configured collection scope. */
-export async function collectCodexTurnState(
-  id: number,
-  sourceOrSignal?: CodexTurnStateCollectSource | AbortSignal,
-  requestSignal?: AbortSignal,
-): Promise<CodexTurnStateCollectResult> {
-  const source = typeof sourceOrSignal === 'string' ? sourceOrSignal : undefined
-  const signal = typeof sourceOrSignal === 'string' ? requestSignal : sourceOrSignal
-  try {
-    const { data } = await apiClient.post<CodexTurnStateCollectResult>(
-      `/admin/accounts/${id}/codex-turn-state/collect`,
-      source ? { source } : undefined,
-      { timeout: 120_000, ...(signal ? { signal } : {}) },
-    )
-    return data
-  } catch (error: unknown) {
-    const rejected = error as {
-      status?: number
-      message?: string
-      reason?: string
-      data?: CodexTurnStateCollectResult
-    }
-    if (rejected?.status === 409) {
-      if (rejected.data?.status === 'rejected') return rejected.data
-      return {
-        status: 'rejected',
-        account_id: id,
-        reason: rejected.reason,
-        message: rejected.message,
-      }
-    }
-    throw error
-  }
-}
-
-export async function listCodexTurnStateTasks(options?: { signal?: AbortSignal }): Promise<CodexTurnStateTask[]> {
-  const config = options?.signal ? { signal: options.signal } : undefined
-  const { data } = config
-    ? await apiClient.get<CodexTurnStateTask[]>('/admin/accounts/codex-turn-state/tasks', config)
-    : await apiClient.get<CodexTurnStateTask[]>('/admin/accounts/codex-turn-state/tasks')
-  return Array.isArray(data) ? data : []
-}
-
-export async function getCodexTurnStateTask(taskId: string, options?: { signal?: AbortSignal }): Promise<CodexTurnStateTask> {
-  const path = `/admin/accounts/codex-turn-state/tasks/${encodeURIComponent(taskId)}`
-  const config = options?.signal ? { signal: options.signal } : undefined
-  const { data } = config
-    ? await apiClient.get<CodexTurnStateTask>(path, config)
-    : await apiClient.get<CodexTurnStateTask>(path)
-  return data
-}
-
-export async function cancelCodexTurnStateTask(taskId: string): Promise<CodexTurnStateTask> {
-  const { data } = await apiClient.post<CodexTurnStateTask>(
-    `/admin/accounts/codex-turn-state/tasks/${encodeURIComponent(taskId)}/cancel`,
-  )
-  return data
-}
-
-export async function retryCodexTurnStateTask(taskId: string): Promise<CodexTurnStateTask> {
-  const { data } = await apiClient.post<CodexTurnStateTask>(
-    `/admin/accounts/codex-turn-state/tasks/${encodeURIComponent(taskId)}/retry`,
-  )
-  return data
-}
-
 export async function getOllamaCloudUsageSettings(): Promise<OllamaCloudUsageSettings> {
   const { data } = await apiClient.get<OllamaCloudUsageSettings>('/admin/accounts/ollama-cloud-usage/settings')
   return data
@@ -1391,11 +1248,6 @@ export const accountsAPI = {
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
-  collectCodexTurnState,
-  listCodexTurnStateTasks,
-  getCodexTurnStateTask,
-  cancelCodexTurnStateTask,
-  retryCodexTurnStateTask,
   getOllamaCloudUsageSettings,
   updateOllamaCloudUsageSettings,
   getOllamaCloudUsage,

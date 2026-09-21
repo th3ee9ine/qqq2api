@@ -95,7 +95,6 @@ const DataTableStub = {
         <slot name="cell-cost" :row="row" />
         <slot name="cell-request_id" :row="row" />
         <slot name="cell-upstream_request_id" :row="row" />
-        <slot name="cell-upstream_turn_state" :row="row" />
       </div>
     </div>
   `,
@@ -765,38 +764,5 @@ describe('admin UsageTable IP geolocation batch toolbar', () => {
     })
     expect(wrapper.text()).toContain('121.35.47.43')
     expect(wrapper.text()).toContain('CN · Guangdong · Shenzhen')
-  })
-})
-
-
-describe('admin UsageTable Turn State', () => {
-  it.each([292, 312])('shows only length %i until clicked, then opens copyable details', async (length) => {
-    const token = 'x'.repeat(length)
-    const writeText = vi.fn().mockResolvedValue(undefined)
-    vi.stubGlobal('navigator', { clipboard: { writeText } })
-    const wrapper = mount(UsageTable, {
-      props: { data: [
-        { ...baseImageRow, request_id: 'sent', upstream_turn_state: token, openai_ws_mode: true },
-        { ...baseImageRow, request_id: 'absent', upstream_turn_state: '' },
-        { ...baseImageRow, request_id: 'historical', upstream_turn_state: null },
-      ], loading: false, columns: [] },
-      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
-    })
-    const button = wrapper.get('[data-testid="turn-state-length"]')
-    expect(button.text()).toBe(String(length))
-    expect(wrapper.html()).not.toContain(token)
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('admin.usage.turnStateNotSent')
-    expect(wrapper.text()).toContain('admin.usage.turnStateUnknown')
-    await button.trigger('click')
-    expect(wrapper.get('[role="dialog"]').text()).toContain('admin.usage.turnStateHandshakeHint')
-    expect(wrapper.get('[data-testid="turn-state-detail-value"]').text()).toBe(token)
-    await wrapper.get('[data-testid="turn-state-copy"]').trigger('click')
-    expect(writeText).toHaveBeenCalledWith(token)
-    await wrapper.get('[aria-label="Close modal"]').trigger('click')
-    expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
-    expect(wrapper.html()).not.toContain(token)
-    wrapper.unmount()
-    vi.unstubAllGlobals()
   })
 })

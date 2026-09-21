@@ -257,10 +257,8 @@ type OpenAIForwardResult struct {
 	ResponseID string
 	// UpstreamHeaders 是直接上游的响应头，用于按账户配置解析上游请求标识。
 	UpstreamHeaders http.Header
-	// UpstreamTurnState snapshots the sent header (nil: unobserved; empty: absent).
-	UpstreamTurnState *string `json:"-"`
-	Usage             OpenAIUsage
-	Model             string // 原始模型（用于响应和日志显示）
+	Usage           OpenAIUsage
+	Model           string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
@@ -273,12 +271,6 @@ type OpenAIForwardResult struct {
 	// response before any client-facing rewrite or protocol conversion.
 	UpstreamResponseModel         string
 	UpstreamResponseModelConflict bool
-	// CodexTurnStateResponse* keeps the raw Responses lifecycle evidence used
-	// only by the automatic Turn State acceptance gate. These values are never
-	// rewritten into client responses or usage_logs.
-	CodexTurnStateResponseCreatedModel   string `json:"-"`
-	CodexTurnStateResponseCompletedModel string `json:"-"`
-	CodexTurnStateResponseFailed         bool   `json:"-"`
 	// UpstreamResponseServiceTier is the tier the upstream reports having used
 	// (response service_tier: "priority" / "default" / "flex" / ...); "" when not declared.
 	UpstreamResponseServiceTier string
@@ -538,27 +530,8 @@ type OpenAIGatewayService struct {
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
 	// 记录最近一次向该会话下发 x-codex-turn-state 的铸造账号，供出站守卫
 	// 剥离跨账号回带（openai_codex_turn_state.go）。
-	openaiCodexTurnStateOrigins    sync.Map
-	openaiCodexTurnStateWrites     atomic.Uint64
-	openaiTurnStateMu              sync.Mutex
-	openaiTurnStates               map[codexTurnStateKey]*codexTurnStateAutoEntry
-	openaiTurnStateWorkers         int
-	openaiTurnStateStopping        bool
-	openaiTurnStateWorkersWG       sync.WaitGroup
-	openaiTurnStateLeaseWG         sync.WaitGroup
-	openaiTurnStateSweep           time.Time
-	openaiTurnStateLoads           codexTurnStateSourceLoads
-	openaiTurnStateCollectionLocks sync.Map // key: int64(accountID), value: *codexTurnStateAccountLock
-	openaiTurnStateRenewalMu       sync.Mutex
-	openaiTurnStateRenewalStop     context.CancelFunc
-	openaiTurnStateRenewalDone     chan struct{}
-	openaiTurnStateRenewalWG       sync.WaitGroup
-	// The remaining renewal fields are guarded by openaiTurnStateMu.
-	openaiTurnStateRenewalWorkers  int
-	openaiTurnStateRenewalAccounts map[int64]struct{}
-	openaiTurnStateRenewalCursor   codexTurnStateKey
-	openaiTurnStateTasksOnce       sync.Once
-	openaiTurnStateTasks           *codexTurnStateCollectionTaskRegistry
+	openaiCodexTurnStateOrigins sync.Map
+	openaiCodexTurnStateWrites  atomic.Uint64
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -628,7 +601,6 @@ func NewOpenAIGatewayService(
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		codexSnapshotThrottle: newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval),
 		openaiModelTransient:  newOpenAIAccountModelTransientState(openAIModelTransientDefaultMax),
-		openaiTurnStateTasks:  newCodexTurnStateCollectionTaskRegistry(codexTurnStateCollectionTaskLimit),
 	}
 	if rateLimitService != nil {
 		rateLimitService.SetAccountRuntimeBlocker(svc)
@@ -752,10 +724,6 @@ func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
 	if s == nil {
 		return
 	}
-	s.StopCodexTurnStateCollectionTasks()
-	s.StopOpenAICodexTurnStateRenewal()
-	s.openaiTurnStateWorkersWG.Wait()
-	s.openaiTurnStateLeaseWG.Wait()
 	if s.openaiWSPool != nil {
 		s.openaiWSPool.Close()
 	}

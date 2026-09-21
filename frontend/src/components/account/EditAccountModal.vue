@@ -1906,41 +1906,6 @@
         </div>
       </div>
 
-      <!-- The backend starts a probe only for the selected model's missing/expired state. -->
-      <div
-        v-if="account?.platform === 'openai' && (account?.type === 'oauth' || account?.type === 'setup-token')"
-        class="border-t border-gray-200 pt-4 dark:border-dark-600"
-        data-testid="edit-codex-turn-state"
-      >
-        <div class="flex flex-wrap items-start justify-between gap-3">
-          <div class="min-w-0">
-            <label class="input-label mb-0">{{ t('admin.accounts.codexTurnState.status') }}</label>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              <template v-if="codexTurnStateInfo?.configured && codexTurnStateInfo.expires_at_ms && codexTurnStateInfo.expires_at_ms > Date.now()">
-                {{ t('admin.accounts.codexTurnState.validUntil', { time: formatDateTime(new Date(codexTurnStateInfo.expires_at_ms)) }) }}
-              </template>
-              <template v-else-if="codexTurnStateInfo?.configured">
-                {{ t('admin.accounts.codexTurnState.expired') }}
-              </template>
-              <template v-else>
-                {{ t('admin.accounts.codexTurnState.missing') }}
-              </template>
-            </p>
-          </div>
-          <button
-            type="button"
-            data-testid="edit-codex-turn-state-collect"
-            class="btn btn-secondary shrink-0 text-xs"
-            :disabled="codexTurnStateCollecting"
-            @click="collectCodexTurnState"
-          >
-            <Icon v-if="codexTurnStateCollecting" name="refresh" size="sm" class="animate-spin" />
-            <Icon v-else name="refresh" size="sm" />
-            {{ t('admin.accounts.codexTurnState.collect') }}
-          </button>
-        </div>
-      </div>
-
       <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth'"
@@ -2680,7 +2645,6 @@ import {
   type OpenAIWSMode
 } from '@/utils/openaiWsMode'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
-import { extractApiErrorMessage } from '@/utils/apiError'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
@@ -2745,35 +2709,6 @@ const isGrokOAuthAccount = computed(
   () => props.account?.platform === 'grok' && props.account?.type === 'oauth'
 )
 const isSparkShadow = computed(() => Boolean(props.account?.parent_account_id))
-const codexTurnStateInfo = computed(() => props.account?.codex_turn_state_auto ?? null)
-
-const collectCodexTurnState = async () => {
-  const account = props.account
-  if (!account || codexTurnStateCollecting.value) return
-  codexTurnStateCollecting.value = true
-  try {
-    const result = await adminAPI.accounts.collectCodexTurnState(account.id)
-    if (result.codex_turn_state_auto) {
-      emit('updated', { ...account, codex_turn_state_auto: result.codex_turn_state_auto })
-    }
-    if (result.status === 'queued') {
-      appStore.showSuccess(t('admin.accounts.codexTurnState.queued'))
-    } else if (result.status === 'already_valid') {
-      appStore.showSuccess(t('admin.accounts.codexTurnState.alreadyValid'))
-    } else if (result.status === 'rejected') {
-      appStore.showError(result.message || t('admin.accounts.codexTurnState.rejected'))
-    } else if (result.status === 'error') {
-      appStore.showError(result.message || t('admin.accounts.codexTurnState.failed'))
-    } else {
-      appStore.showSuccess(result.message || t('admin.accounts.codexTurnState.queued'))
-    }
-  } catch (error: unknown) {
-    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.codexTurnState.failed')))
-  } finally {
-    codexTurnStateCollecting.value = false
-  }
-}
-
 const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
   if (props.account) emit('updated', { ...props.account, ollama_cloud_usage: state })
 }
@@ -2783,7 +2718,6 @@ const supportsAccountSchedulingThresholdOverride = computed(() =>
 )
 
 const submitting = ref(false)
-const codexTurnStateCollecting = ref(false)
 const name = ref('')
 const notes = ref('')
 const newApiKey = ref('')

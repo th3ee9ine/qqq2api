@@ -700,32 +700,7 @@ const (
 	SettingKeyOpenAICodexVersionAutoSyncEnabled = "openai_codex_version_auto_sync_enabled"
 	// SettingKeyEnableOpenAIAccountLocalDeviceIdentity 是否优先使用账号本地设备会话中的 UA/Originator（默认 true）。
 	SettingKeyEnableOpenAIAccountLocalDeviceIdentity = "enable_openai_account_local_device_identity"
-	// Retired manual Turn State keys identify legacy data in upgrade tests.
-	// Runtime settings neither read nor write them.
-	SettingKeyOpenAICodexTurnStateEnabled = "openai_codex_turn_state_enabled"
-	SettingKeyOpenAICodexTurnState        = "openai_codex_turn_state"
-	SettingKeyOpenAICodexTurnStateSetAtMS = "openai_codex_turn_state_set_at_ms"
-	// Active lifecycle probe model and model scope. An empty scope allows every
-	// model; entries support exact IDs and trailing-* prefix patterns.
-	SettingKeyOpenAICodexTurnStateDefaultModel = "openai_codex_turn_state_default_model"
-	SettingKeyOpenAICodexTurnStateModels       = "openai_codex_turn_state_models"
-	// SettingKeyOpenAICodexTurnStateAutoEnabled enables account-scoped automatic
-	// collection, renewal and bounded upstream probes. It is opt-in because each
-	// probe is an extra upstream request and may consume model quota.
-	SettingKeyOpenAICodexTurnStateAutoEnabled = "openai_codex_turn_state_auto_enabled"
-	// SettingKeyOpenAICodexTurnStateAutoIntervalMinutes controls when a valid
-	// account/model state becomes due for request-driven automatic renewal.
-	SettingKeyOpenAICodexTurnStateAutoIntervalMinutes = "openai_codex_turn_state_auto_interval_minutes"
-	// SettingKeyOpenAICodexTurnStateProxyURLs is the independent SOCKS5 URL pool
-	// used by automatic and manually triggered Turn State collection. A non-empty
-	// value takes precedence; an empty pool falls back to global proxy management.
-	SettingKeyOpenAICodexTurnStateProxyURLs = "openai_codex_turn_state_proxy_urls"
-	// SettingKeyOpenAICodexTurnStateProxyIDs is retained only for mixed-version
-	// settings API compatibility. Turn State routing no longer reads it.
-	SettingKeyOpenAICodexTurnStateProxyIDs = "openai_codex_turn_state_proxy_ids"
-	// SettingKeyOpenAICodexTurnStateProxyID is the legacy single-record companion.
-	// It remains synchronized for rollback but is runtime-inert in this version.
-	SettingKeyOpenAICodexTurnStateProxyID = "openai_codex_turn_state_proxy_id"
+
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。
 	// 迁移后等价规则写入 SettingKeyCodexCLIOnlyWhitelist，不再参与运行时判定。
 	SettingKeyOpenAIAllowClaudeCodeCodexPlugin = "openai_allow_claude_code_codex_plugin"

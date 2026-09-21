@@ -57,7 +57,6 @@ type accountRepository struct {
 var _ service.AccountAutomaticProxyRepository = (*accountRepository)(nil)
 
 var schedulerNeutralExtraKeyPrefixes = []string{
-	"codex_turn_state_auto",
 	"codex_primary_",
 	"codex_secondary_",
 	"codex_5h_",
@@ -4231,18 +4230,6 @@ func loadAndLockAutomaticProxyCapacities(ctx context.Context, exec sqlExecutor) 
 		WHERE deleted_at IS NULL
 		  AND status = $1
 		  AND (expires_at IS NULL OR expires_at > NOW())
-		  -- Explicit Turn State probe routes are reserved for the bounded
-		  -- maintenance worker. Do not let ordinary auto-assignment consume
-		  -- them; explicit manual bindings remain possible through the normal
-		  -- account-edit path.
-		  AND NOT (
-			LOWER(TRIM(COALESCE(name, ''))) LIKE 'codex-turn-state-probe:%'
-			OR (
-				LOWER(TRIM(COALESCE(host, ''))) = 'us.1024proxy.io'
-				AND port = 3000
-				AND LOWER(TRIM(COALESCE(name, ''))) ~ '(^|[-_:[:space:]])(state|turnstate)([-_:[:space:]]|$)'
-			)
-		  )
 		ORDER BY id
 		-- NO KEY UPDATE serializes automatic assigners and proxy config changes,
 		-- while remaining compatible with the KEY SHARE lock taken by manual

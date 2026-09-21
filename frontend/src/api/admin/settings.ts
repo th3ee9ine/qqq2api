@@ -627,25 +627,6 @@ export interface SystemSettings {
   openai_codex_client_version_synced: string;
   openai_codex_version_auto_sync_enabled: boolean;
   enable_openai_account_local_device_identity: boolean;
-  openai_codex_turn_state_auto_enabled: boolean;
-  /** Minutes before a successful Turn State becomes due for request-triggered renewal. */
-  openai_codex_turn_state_auto_interval_minutes: number;
-  openai_codex_turn_state_models: string;
-  openai_codex_turn_state_default_model: string;
-  /** Dedicated credential-bearing SOCKS5 pool. Empty falls back to the global IP management pool. */
-  openai_codex_turn_state_proxy_urls: string[];
-  /** Read-only: false when a stored dedicated URL pool is malformed. */
-  openai_codex_turn_state_proxy_urls_valid: boolean;
-  /** Read-only: true when a non-empty valid dedicated URL pool is configured. */
-  openai_codex_turn_state_proxy_pool_configured: boolean;
-  /** Read-only: normalized and de-duplicated dedicated URL count. */
-  openai_codex_turn_state_proxy_pool_count: number;
-  /** Explicit proxy pool for Turn State probes. Empty preserves the compatible all-proxy pool before account/direct fallback. */
-  openai_codex_turn_state_proxy_ids: number[];
-  /** Legacy single-proxy setting retained for reading older deployments. */
-  openai_codex_turn_state_proxy_id: number;
-  /** Read-only: false when the stored explicit pool is malformed and must be explicitly repaired. */
-  openai_codex_turn_state_proxy_ids_valid: boolean;
   // codex_cli_only 加固
   min_codex_version: string;
   max_codex_version: string;
@@ -961,14 +942,6 @@ export interface UpdateSettingsRequest {
   openai_codex_client_version_mode?: "auto" | "pinned";
   openai_codex_version_auto_sync_enabled?: boolean;
   enable_openai_account_local_device_identity?: boolean;
-  openai_codex_turn_state_auto_enabled?: boolean;
-  openai_codex_turn_state_auto_interval_minutes?: number;
-  openai_codex_turn_state_models?: string;
-  openai_codex_turn_state_default_model?: string;
-  /** Omit/null preserves the pool; [] clears it; a non-empty array fully replaces it. */
-  openai_codex_turn_state_proxy_urls?: string[] | null;
-  openai_codex_turn_state_proxy_ids?: number[];
-  openai_codex_turn_state_proxy_id?: number;
   // codex_cli_only 加固
   min_codex_version?: string;
   max_codex_version?: string;

@@ -59,7 +59,6 @@ type AccountHandler struct {
 	accountUsageService     *service.AccountUsageService
 	accountTestService      *service.AccountTestService
 	debugWorkbench          *service.DebugWorkbenchService
-	codexTurnStateService   *service.OpenAIGatewayService
 	concurrencyService      *service.ConcurrencyService
 	crsSyncService          *service.CRSSyncService
 	sessionLimitCache       service.SessionLimitCache
@@ -344,9 +343,6 @@ const accountListGroupUngroupedQueryValue = "ungrouped"
 
 func (h *AccountHandler) accountResponseFromService(ctx context.Context, account *service.Account) *dto.Account {
 	out := dto.AccountFromService(account)
-	if h != nil && h.codexTurnStateService != nil && out != nil {
-		out.CodexTurnStateAuto = h.codexTurnStateService.CodexTurnStateAutoInfoForAccount(ctx, account, time.Now())
-	}
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
@@ -357,9 +353,6 @@ func (h *AccountHandler) accountListResponseFromService(ctx context.Context, acc
 	out := dto.AccountFromServiceShallow(account)
 	if out != nil && account != nil {
 		out.Proxy = dto.ProxyFromService(account.Proxy)
-	}
-	if h != nil && h.codexTurnStateService != nil && out != nil {
-		out.CodexTurnStateAuto = h.codexTurnStateService.CodexTurnStateAutoInfoForAccount(ctx, account, time.Now())
 	}
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)

@@ -437,16 +437,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, mapping, maxLineSize)
 		}
 
-		// x-codex-turn-state 溯源：下游回传由 writeOpenAIPassthroughResponseHeaders
-		// 在各 handler 的写头点强制放行，铸造账号在此统一记录，供出站守卫剥离
-		// failover 换号后的跨账号回带（openai_codex_turn_state.go）。
-		if state := extractOpenAICodexTurnState(resp.Header); state != "" {
-			// Passthrough responses expose the native header immediately, but the
-			// provenance and automatic cache must wait until both raw lifecycle
-			// model events have been consumed by the response handler below.
-			s.stagePendingCodexTurnStateObservation(c, account, state, resp.Request)
-		} else {
-			s.clearPendingCodexTurnStateObservation(c)
+		// x-codex-turn-state is relayed by the response handlers at the point the
+		// selected upstream response is committed to the client.
+		// Record the issuing account for the native cross-account echo guard; this
+		// is passive provenance only and does not trigger a probe or state refresh.
+		if extractOpenAICodexTurnState(resp.Header) != "" {
+			s.noteOpenAICodexTurnStateProvenance(c, account)
 		}
 
 		if reqStream {
@@ -526,7 +522,6 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	forwardResult := &OpenAIForwardResult{
 		RequestID:                     resp.Header.Get("x-request-id"),
-		UpstreamTurnState:             upstreamTurnStateFromResponse(resp),
 		UpstreamHeaders:               resp.Header,
 		ResponseID:                    responseID,
 		Usage:                         *usage,
@@ -643,7 +638,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站（openai_codex_turn_state.go）。
-	s.guardOpenAICodexTurnStateEcho(c, account, req.Header, gjson.GetBytes(body, "model").String())
+	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
 
 	// 覆盖入站鉴权残留，并注入上游认证
 	req.Header.Del("authorization")
@@ -740,12 +735,6 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 保证不被覆盖丢失）。
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
-	if account.UsesOpenAICodexProtocol() {
-		req, err = s.prepareCodexTurnStateRequest(ctx, req, account, append(clientModels, gjson.GetBytes(body, "model").String())...)
-		if err != nil {
-			return nil, err
-		}
-	}
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")
 
 	return req, nil
@@ -957,11 +946,10 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	cyberHit, cyberCode, cyberMsg := detectOpenAICyberPolicy(body)
 	if cyberHit {
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
-			UpstreamTurnState: upstreamTurnStateFromResponse(resp),
-			Code:              cyberCode,
-			Message:           cyberMsg,
-			Body:              truncateString(string(body), 4096),
-			UpstreamStatus:    resp.StatusCode,
+			Code:           cyberCode,
+			Message:        cyberMsg,
+			Body:           truncateString(string(body), 4096),
+			UpstreamStatus: resp.StatusCode,
 		})
 	}
 
@@ -1854,7 +1842,6 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	originalModel string,
 	mappedModel string,
 ) (*openaiStreamingResultPassthrough, error) {
-	defer s.commitPendingCodexTurnStateObservation(c, true)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2078,13 +2065,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				if hit, code, msg := detectOpenAICyberPolicy(dataBytes); hit {
 					cyberHit = true
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
-						UpstreamTurnState: upstreamTurnStateFromResponse(resp),
-						Code:              code,
-						Message:           msg,
-						Body:              truncateString(string(dataBytes), 4096),
-						UpstreamStatus:    http.StatusOK,
-						UpstreamInTok:     usage.InputTokens,
-						UpstreamOutTok:    usage.OutputTokens,
+						Code:           code,
+						Message:        msg,
+						Body:           truncateString(string(dataBytes), 4096),
+						UpstreamStatus: http.StatusOK,
+						UpstreamInTok:  usage.InputTokens,
+						UpstreamOutTok: usage.OutputTokens,
 					})
 				}
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
@@ -2294,7 +2280,6 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	originalModel string,
 	mappedModel string,
 ) (*openaiNonStreamingResultPassthrough, error) {
-	defer s.commitPendingCodexTurnStateObservation(c, true)
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err

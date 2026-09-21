@@ -522,11 +522,10 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 	// （shouldFailoverUpstreamError(400)=false），故走到此处即可安全早返回。
 	if hit, code, cyberMsg := detectOpenAICyberPolicy(body); hit {
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
-			UpstreamTurnState: upstreamTurnStateFromResponse(resp),
-			Code:              code,
-			Message:           cyberMsg,
-			Body:              truncateString(string(body), 4096),
-			UpstreamStatus:    resp.StatusCode,
+			Code:           code,
+			Message:        cyberMsg,
+			Body:           truncateString(string(body), 4096),
+			UpstreamStatus: resp.StatusCode,
 		})
 		setOpsUpstreamError(c, resp.StatusCode, cyberMsg, truncateString(string(body), 2048))
 		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -775,11 +774,10 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	// handleOpenAIAccountUpstreamError（避免自定义 temp-unschedulable 规则误冷却）。
 	if hit, code, cyberMsg := detectOpenAICyberPolicy(body); hit {
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
-			UpstreamTurnState: upstreamTurnStateFromResponse(resp),
-			Code:              code,
-			Message:           cyberMsg,
-			Body:              truncateString(string(body), 4096),
-			UpstreamStatus:    resp.StatusCode,
+			Code:           code,
+			Message:        cyberMsg,
+			Body:           truncateString(string(body), 4096),
+			UpstreamStatus: resp.StatusCode,
 		})
 		setOpsUpstreamError(c, resp.StatusCode, cyberMsg, truncateString(string(body), 2048))
 		clientMsg := cyberMsg

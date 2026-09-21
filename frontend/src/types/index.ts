@@ -938,26 +938,6 @@ export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' 
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 
-/** Redacted diagnostics for account-scoped Codex Turn State slots. Tokens are never returned. */
-export interface CodexTurnStateAutoInfo {
-  models?: Record<string, CodexTurnStateAutoInfo>
-  /** Models whose persisted state passed the backend's verification checks. */
-  successful_models?: string[]
-  /** True only when this model or aggregate contains a verified persisted state. */
-  collection_succeeded?: boolean
-  configured: boolean
-  set_at_ms?: number
-  probe_at_ms?: number
-  verified_at_ms?: number
-  verified_model?: string
-  probe_not_before_ms?: number
-  state_length?: number
-  expires_at_ms?: number
-  due: boolean
-  last_error?: string
-  recovery_pending: boolean
-  invalidated_at_ms?: number
-}
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
 
 // Claude Model type (returned by /v1/models and account models API)
@@ -1217,8 +1197,6 @@ export interface Account {
   // 改为通过 credentials_status.has_<key> 暴露存在性。
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
-  /** Redacted, model-scoped Turn State diagnostics for OpenAI Codex accounts. */
-  codex_turn_state_auto?: CodexTurnStateAutoInfo | null
   /** Provider-reported ChatGPT subscription expiry (active_until). */
   subscription_expires_at?: string
   ollama_cloud_usage?: OllamaCloudUsageState
@@ -1895,7 +1873,6 @@ export interface AdminUsageLog extends UsageLog {
   upstream_model_mismatch?: boolean | null
   model_mapping_chain?: string | null
   upstream_request_id?: string | null
-  upstream_turn_state?: string | null
 
   // 账号计费倍率（仅管理员可见）
   account_rate_multiplier?: number | null

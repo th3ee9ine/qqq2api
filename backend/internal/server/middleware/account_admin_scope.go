@@ -82,11 +82,10 @@ func accountAdminResourceDelete(method, path string) bool {
 }
 
 func accountAdminRequestAllowed(method, path string) bool {
-	// These workflows are global task/synchronization surfaces whose records are
-	// not partitioned by account owner. Keep them super-administrator only until
+	// These workflows are global synchronization surfaces whose records are not
+	// partitioned by account owner. Keep them super-administrator only until
 	// their own persistence models carry an owner-aware authorization boundary.
 	for _, restrictedPrefix := range []string{
-		"/admin/accounts/codex-turn-state/tasks",
 		"/admin/accounts/sync/crs",
 		"/admin/accounts/upstream-billing-rates",
 		"/admin/scheduled-test-plans",

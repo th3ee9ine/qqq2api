@@ -110,27 +110,6 @@ func TestPlanAutomaticProxyAssignmentsRejectsWhenNoActiveCapacityProvided(t *tes
 	require.ErrorIs(t, err, service.ErrProxyCapacityInsufficient)
 }
 
-func TestAutomaticProxyCapacitiesExcludeDedicatedTurnStateRoutes(t *testing.T) {
-	db, mock, err := sqlmock.New()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	mock.ExpectQuery(`(?s)` +
-		regexp.QuoteMeta("SELECT id, max_accounts") + `.*` +
-		regexp.QuoteMeta("codex-turn-state-probe:%") + `.*` +
-		regexp.QuoteMeta("us.1024proxy.io") + `.*` +
-		regexp.QuoteMeta("(state|turnstate)") + `.*` +
-		regexp.QuoteMeta("FOR NO KEY UPDATE")).
-		WithArgs(service.StatusActive).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "max_accounts"}).AddRow(7, 2))
-
-	capacities, err := loadAndLockAutomaticProxyCapacities(context.Background(), db)
-
-	require.NoError(t, err)
-	require.Equal(t, []automaticProxyCapacity{{ID: 7, MaxAccounts: 2}}, capacities)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestBulkAutoProxyCapacityFailurePerformsNoUpdate(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

@@ -249,13 +249,6 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexClientVersionSynced:                     "",
 		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingKeyEnableOpenAIAccountLocalDeviceIdentity:             "true",
-		SettingKeyOpenAICodexTurnStateDefaultModel:                   openai.DefaultTestModel,
-		SettingKeyOpenAICodexTurnStateModels:                         "",
-		SettingKeyOpenAICodexTurnStateAutoEnabled:                    "false",
-		SettingKeyOpenAICodexTurnStateAutoIntervalMinutes:            strconv.Itoa(OpenAICodexTurnStateDefaultAutoIntervalMinutes),
-		SettingKeyOpenAICodexTurnStateProxyURLs:                      "[]",
-		SettingKeyOpenAICodexTurnStateProxyIDs:                       "[]",
-		SettingKeyOpenAICodexTurnStateProxyID:                        "0",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -911,64 +904,6 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.EnableOpenAIAccountLocalDeviceIdentity = v == "true"
 	} else {
 		result.EnableOpenAIAccountLocalDeviceIdentity = true
-	}
-	result.OpenAICodexTurnStateDefaultModel = openai.DefaultTestModel
-	if model, err := NormalizeOpenAICodexTurnStateDefaultModel(settings[SettingKeyOpenAICodexTurnStateDefaultModel]); err == nil {
-		result.OpenAICodexTurnStateDefaultModel = model
-	}
-	rawTurnStateModels := settings[SettingKeyOpenAICodexTurnStateModels]
-	if models, err := NormalizeOpenAICodexTurnStateModels(rawTurnStateModels); err == nil {
-		result.OpenAICodexTurnStateModels = models
-	} else {
-		// Runtime loading treats malformed historical scope values as fail-closed.
-		// Preserve that value in the admin snapshot as well: presenting it as an
-		// empty (allow-all) scope would let an unrelated full-form save silently
-		// widen collection and injection to every model.
-		result.OpenAICodexTurnStateModels = strings.TrimSpace(rawTurnStateModels)
-	}
-	result.OpenAICodexTurnStateAutoEnabled = settings[SettingKeyOpenAICodexTurnStateAutoEnabled] == "true"
-	result.OpenAICodexTurnStateAutoIntervalMinutes = OpenAICodexTurnStateDefaultAutoIntervalMinutes
-	if interval, err := strconv.Atoi(strings.TrimSpace(settings[SettingKeyOpenAICodexTurnStateAutoIntervalMinutes])); err == nil {
-		if normalized, normalizeErr := NormalizeOpenAICodexTurnStateAutoIntervalMinutes(interval); normalizeErr == nil {
-			result.OpenAICodexTurnStateAutoIntervalMinutes = normalized
-		}
-	}
-	result.OpenAICodexTurnStateProxyURLs = []string{}
-	result.OpenAICodexTurnStateProxyURLsValid = true
-	rawTurnStateProxyURLs := settings[SettingKeyOpenAICodexTurnStateProxyURLs]
-	if proxyURLs, err := ParseOpenAICodexTurnStateProxyURLs(rawTurnStateProxyURLs); err == nil {
-		result.OpenAICodexTurnStateProxyURLs = proxyURLs
-		result.OpenAICodexTurnStateProxyPoolCount = len(proxyURLs)
-		result.OpenAICodexTurnStateProxyPoolConfigured = len(proxyURLs) > 0
-	} else if rawTurnStateProxyURLs != "" {
-		// Do not reflect malformed credential-bearing storage through the API.
-		result.OpenAICodexTurnStateProxyURLsValid = false
-	}
-	result.OpenAICodexTurnStateProxyIDs = []int64{}
-	result.OpenAICodexTurnStateProxyID = 0
-	result.OpenAICodexTurnStateProxyIDsValid = true
-	rawTurnStateProxyIDs := settings[SettingKeyOpenAICodexTurnStateProxyIDs]
-	if proxyIDs, err := ParseOpenAICodexTurnStateProxyIDs(rawTurnStateProxyIDs); err == nil {
-		if len(proxyIDs) > 0 {
-			result.OpenAICodexTurnStateProxyIDs = proxyIDs
-			result.OpenAICodexTurnStateProxyID = proxyIDs[0]
-		} else {
-			rawLegacyProxyID := settings[SettingKeyOpenAICodexTurnStateProxyID]
-			if proxyID, legacyErr := NormalizeOpenAICodexTurnStateProxyID(rawLegacyProxyID); legacyErr == nil && proxyID > 0 {
-				result.OpenAICodexTurnStateProxyIDs = []int64{proxyID}
-				result.OpenAICodexTurnStateProxyID = proxyID
-			} else if legacyErr != nil && strings.TrimSpace(rawLegacyProxyID) != "" {
-				// The compatibility field controls routing whenever the new pool is
-				// empty. Mark malformed non-empty values invalid instead of widening
-				// automatic collection to every proxy record.
-				result.OpenAICodexTurnStateProxyIDsValid = false
-			}
-		}
-	} else if rawTurnStateProxyIDs != "" {
-		// Do not expose the malformed value or reinterpret it as the compatible
-		// all-proxy pool. The admin API returns an empty redacted value plus this
-		// validity bit so clients must explicitly repair the pool before saving.
-		result.OpenAICodexTurnStateProxyIDsValid = false
 	}
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]

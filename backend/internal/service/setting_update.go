@@ -102,9 +102,6 @@ func (s *SettingService) persistSystemSettingsAndRefresh(
 	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
 		return 0, err
 	}
-	// Publish the automatic Codex turn-state change immediately after persistence;
-	// the runtime cache itself is owned by openai_codex_turn_state_config.go.
-	s.InvalidateOpenAICodexTurnStateCache()
 	s.refreshCachedSettingsAfterWrite(ctx, settings, omitted)
 	s.settingsUpdateRevision++
 	return s.settingsUpdateRevision, nil
@@ -520,68 +517,6 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAICodexClientVersionMode] = versionMode
 	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
 	updates[SettingKeyEnableOpenAIAccountLocalDeviceIdentity] = strconv.FormatBool(settings.EnableOpenAIAccountLocalDeviceIdentity)
-	turnStateDefaultModel, err := NormalizeOpenAICodexTurnStateDefaultModel(settings.OpenAICodexTurnStateDefaultModel)
-	if err != nil {
-		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_DEFAULT_MODEL", err.Error())
-	}
-	updates[SettingKeyOpenAICodexTurnStateDefaultModel] = turnStateDefaultModel
-	turnStateModels, err := NormalizeOpenAICodexTurnStateModels(settings.OpenAICodexTurnStateModels)
-	if err != nil {
-		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_MODELS", err.Error())
-	}
-	updates[SettingKeyOpenAICodexTurnStateModels] = turnStateModels
-	updates[SettingKeyOpenAICodexTurnStateAutoEnabled] = strconv.FormatBool(settings.OpenAICodexTurnStateAutoEnabled)
-	turnStateAutoInterval := settings.OpenAICodexTurnStateAutoIntervalMinutes
-	if turnStateAutoInterval == 0 {
-		turnStateAutoInterval = OpenAICodexTurnStateDefaultAutoIntervalMinutes
-	}
-	turnStateAutoInterval, err = NormalizeOpenAICodexTurnStateAutoIntervalMinutes(turnStateAutoInterval)
-	if err != nil {
-		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_AUTO_INTERVAL", err.Error())
-	}
-	settings.OpenAICodexTurnStateAutoIntervalMinutes = turnStateAutoInterval
-	updates[SettingKeyOpenAICodexTurnStateAutoIntervalMinutes] = strconv.Itoa(turnStateAutoInterval)
-	turnStateProxyURLs, err := NormalizeOpenAICodexTurnStateProxyURLs(settings.OpenAICodexTurnStateProxyURLs)
-	if err != nil {
-		return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_PROXY_URLS", err.Error())
-	}
-	encodedTurnStateProxyURLs, err := json.Marshal(turnStateProxyURLs)
-	if err != nil {
-		return nil, fmt.Errorf("marshal %s: %w", SettingKeyOpenAICodexTurnStateProxyURLs, err)
-	}
-	settings.OpenAICodexTurnStateProxyURLs = append([]string{}, turnStateProxyURLs...)
-	settings.OpenAICodexTurnStateProxyURLsValid = true
-	settings.OpenAICodexTurnStateProxyPoolConfigured = len(turnStateProxyURLs) > 0
-	settings.OpenAICodexTurnStateProxyPoolCount = len(turnStateProxyURLs)
-	updates[SettingKeyOpenAICodexTurnStateProxyURLs] = string(encodedTurnStateProxyURLs)
-	turnStateProxyIDs := settings.OpenAICodexTurnStateProxyIDs
-	if turnStateProxyIDs == nil {
-		if settings.OpenAICodexTurnStateProxyID < 0 {
-			return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_PROXY_ID", "openai_codex_turn_state_proxy_id must be zero or a positive proxy ID")
-		}
-		turnStateProxyIDs = []int64{}
-		if settings.OpenAICodexTurnStateProxyID > 0 {
-			turnStateProxyIDs = append(turnStateProxyIDs, settings.OpenAICodexTurnStateProxyID)
-		}
-	} else {
-		var err error
-		turnStateProxyIDs, err = NormalizeOpenAICodexTurnStateProxyIDs(turnStateProxyIDs)
-		if err != nil {
-			return nil, infraerrors.BadRequest("INVALID_OPENAI_CODEX_TURN_STATE_PROXY_IDS", err.Error())
-		}
-	}
-	encodedTurnStateProxyIDs, err := json.Marshal(turnStateProxyIDs)
-	if err != nil {
-		return nil, fmt.Errorf("marshal %s: %w", SettingKeyOpenAICodexTurnStateProxyIDs, err)
-	}
-	turnStateProxyID := int64(0)
-	if len(turnStateProxyIDs) > 0 {
-		turnStateProxyID = turnStateProxyIDs[0]
-	}
-	settings.OpenAICodexTurnStateProxyIDs = append([]int64{}, turnStateProxyIDs...)
-	settings.OpenAICodexTurnStateProxyID = turnStateProxyID
-	updates[SettingKeyOpenAICodexTurnStateProxyIDs] = string(encodedTurnStateProxyIDs)
-	updates[SettingKeyOpenAICodexTurnStateProxyID] = strconv.FormatInt(turnStateProxyID, 10)
 	// SettingKeyOpenAICodexClientVersionSynced 由自动同步任务独占写入，此处不得覆盖，
 	// 否则面板保存会把同步结果清空。
 	// codex_cli_only 加固

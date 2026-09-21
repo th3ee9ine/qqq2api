@@ -253,7 +253,6 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		CredentialsStatus:       credsStatus,
 		SubscriptionExpiresAt:   a.GetCredential("subscription_expires_at"),
 		Extra:                   extra,
-		CodexTurnStateAuto:      service.CodexTurnStateAutoInfoForAccount(a, time.Now()),
 		OllamaCloudUsage:        ollamaCloudUsage,
 		ProxyID:                 a.ProxyID,
 		ProxyFallbackOriginID:   a.ProxyFallbackOriginID,
@@ -418,21 +417,8 @@ func redactAccountManagedExtra(extra map[string]any) map[string]any {
 	}
 	redacted := make(map[string]any, len(extra))
 	for key, value := range extra {
-		if strings.HasPrefix(key, service.CodexTurnStateModelExtraPrefix) || strings.HasPrefix(key, service.CodexTurnStateProbeBurstBudgetExtraPrefix) {
-			continue
-		}
 		switch key {
-		case service.CodexTurnStateAutoExtraKey,
-			service.CodexTurnStateAutoSetAtExtraKey,
-			service.CodexTurnStateAutoProbeAtExtraKey,
-			service.CodexTurnStateAutoProbeCompletedAtExtraKey,
-			service.CodexTurnStateAutoLastErrorExtraKey,
-			service.CodexTurnStateAutoVerifiedAtExtraKey,
-			service.CodexTurnStateAutoVerifiedModelExtraKey,
-			service.CodexTurnStateAutoProbeModelExtraKey,
-			service.CodexTurnStateAutoProbeNotBeforeExtraKey,
-			service.CodexTurnStateAutoRecoveryExtraKey,
-			service.OllamaCloudUsageSessionExtraKey,
+		case service.OllamaCloudUsageSessionExtraKey,
 			service.OllamaCloudUsageAutoRefreshExtraKey,
 			service.OllamaCloudUsageSnapshotExtraKey:
 			continue
@@ -527,9 +513,8 @@ func AccountListItemFromAccount(a *Account) *AccountListItem {
 	return &AccountListItem{
 		ID: a.ID, Name: a.Name, Notes: a.Notes, Platform: a.Platform, Type: a.Type,
 		Credentials: a.Credentials, CredentialsStatus: a.CredentialsStatus, Extra: a.Extra,
-		OllamaCloudUsage:   a.OllamaCloudUsage,
-		CodexTurnStateAuto: a.CodexTurnStateAuto,
-		ProxyID:            a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
+		OllamaCloudUsage: a.OllamaCloudUsage,
+		ProxyID:          a.ProxyID, ProxyFallbackOriginID: a.ProxyFallbackOriginID, ProxyFallbackOriginName: a.ProxyFallbackOriginName,
 		Concurrency: a.Concurrency, LoadFactor: a.LoadFactor, Priority: a.Priority, RateMultiplier: a.RateMultiplier,
 		Status: a.Status, ErrorMessage: a.ErrorMessage, LastUsedAt: a.LastUsedAt, ExpiresAt: a.ExpiresAt,
 		AutoPauseOnExpired: a.AutoPauseOnExpired, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
@@ -838,7 +823,6 @@ func UsageLogFromServiceAdmin(l *service.UsageLog) *AdminUsageLog {
 		ChannelID:               l.ChannelID,
 		ModelMappingChain:       l.ModelMappingChain,
 		UpstreamRequestID:       l.UpstreamRequestID,
-		UpstreamTurnState:       l.UpstreamTurnState,
 		BillingTier:             l.BillingTier,
 		AccountRateMultiplier:   l.AccountRateMultiplier,
 		AccountStatsCost:        l.AccountStatsCost,

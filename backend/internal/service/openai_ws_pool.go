@@ -71,12 +71,6 @@ type openAIWSAcquireRequest struct {
 	Account *Account
 	WSURL   string
 	Headers http.Header
-	// TurnState contains only request-local injection policy; never an outbound header.
-	TurnState              openAIWSTurnStatePolicy
-	turnStateError         error
-	turnStateModel         string
-	turnStateFingerprint   string
-	turnStateRecoveryEpoch string
 	// HeadersFactory is evaluated inside dialConn. It exists so credentials
 	// whose authorization is per-dial (Agent Identity) are never cached in
 	// lastAcquire or delayed prewarm state.
@@ -94,28 +88,23 @@ type openAIWSAcquireRequest struct {
 }
 
 type openAIWSHandshakeCompatibilityKey struct {
-	// Explicit turn-state overrides are immutable handshake credentials. Rotate
-	// the pooled connection on enable/disable/token changes, without fragmenting
-	// the default native turn-state continuation path.
-	turnStateOverride      string
-	turnStateRecoveryEpoch string
-	userAgent              string
-	originator             string
-	version                string
-	openAIBeta             string
-	betaFeatures           string
-	codexResidency         string
-	responsesTiming        string
-	subagent               string
-	memgenRequest          string
-	codexInstallationID    string
-	sessionIDHyphen        string
-	sessionIDUnderscore    string
-	conversationID         string
-	threadID               string
-	clientRequestID        string
-	codexWindowID          string
-	parentThreadID         string
+	userAgent           string
+	originator          string
+	version             string
+	openAIBeta          string
+	betaFeatures        string
+	codexResidency      string
+	responsesTiming     string
+	subagent            string
+	memgenRequest       string
+	codexInstallationID string
+	sessionIDHyphen     string
+	sessionIDUnderscore string
+	conversationID      string
+	threadID            string
+	clientRequestID     string
+	codexWindowID       string
+	parentThreadID      string
 }
 
 type openAIWSConnLease struct {
@@ -196,15 +185,6 @@ func (l *openAIWSConnLease) HandshakeHeader(name string) string {
 		return ""
 	}
 	return l.conn.handshakeHeader(name)
-}
-
-// SentTurnState reports the handshake request, including for a reused lease.
-func (l *openAIWSConnLease) SentTurnState() *string {
-	if l == nil || l.conn == nil || l.conn.sentTurnState == nil {
-		return nil
-	}
-	state := *l.conn.sentTurnState
-	return &state
 }
 
 func (l *openAIWSConnLease) HandshakeHeaders() http.Header {
@@ -316,7 +296,6 @@ type openAIWSConn struct {
 	id string
 	ws openAIWSClientConn
 
-	sentTurnState          *string // Immutable header from this connection's actual handshake.
 	handshakeHeaders       http.Header
 	handshakeCompatibility openAIWSHandshakeCompatibilityKey
 	routingAffinity        string
@@ -825,9 +804,6 @@ func (c *openAIWSConn) matchesContinuationHandshakeCompatibility(compatibility o
 		return false
 	}
 	existing := c.handshakeCompatibility
-	// Pinned continuations cannot bypass account/model ownership, expiry,
-	// mandatory injection or revocation. A changed Turn State requires a new
-	// handshake even when other identity settings may be relaxed below.
 	existing.responsesTiming = ""
 	existing.subagent = ""
 	existing.memgenRequest = ""
@@ -1223,12 +1199,8 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 	}
 
 retryAcquire:
-	req = req.withCurrentTurnState(ctx)
-	if req.turnStateError != nil {
-		return nil, req.turnStateError
-	}
 	accountID := req.Account.ID
-	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers, req.turnStateFingerprint, req.turnStateRecoveryEpoch)
+	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
 	routingAffinity := normalizeOpenAIWSRoutingAffinity(req.Headers)
 	effectiveMaxConns := p.effectiveMaxConnsByAccount(req.Account)
 	if effectiveMaxConns <= 0 {
@@ -2348,10 +2320,6 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	if p == nil || p.clientDialer == nil {
 		return nil, errors.New("openai ws client dialer is nil")
 	}
-	req = req.withCurrentTurnState(ctx)
-	if req.turnStateError != nil {
-		return nil, req.turnStateError
-	}
 	headers := cloneHeader(req.Headers)
 	var err error
 	if req.HeadersFactory != nil {
@@ -2360,7 +2328,6 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 			return nil, err
 		}
 	}
-	sentTurnState := headers.Get(openAICodexTurnStateHeader)
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
 	if err != nil {
 		var handshakeErr *openAIWSHandshakeError
@@ -2384,11 +2351,10 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	id := p.nextConnID(req.Account.ID)
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
-	pooledConn.sentTurnState = &sentTurnState
 	accountID := req.Account.ID
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)
-	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers, req.turnStateFingerprint, req.turnStateRecoveryEpoch)
+	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
 	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
 	return pooledConn, nil
 }
@@ -2569,7 +2535,7 @@ func cloneOpenAIWSAcquireRequestPtr(req *openAIWSAcquireRequest) *openAIWSAcquir
 func sameOpenAIWSPrewarmTarget(a, b openAIWSAcquireRequest) bool {
 	return stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
 		stringsTrim(a.ProxyURL) == stringsTrim(b.ProxyURL) &&
-		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers, a.turnStateFingerprint, a.turnStateRecoveryEpoch) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers, b.turnStateFingerprint, b.turnStateRecoveryEpoch)
+		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers)
 }
 
 func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
@@ -2597,31 +2563,23 @@ func normalizeOpenAIWSBetaFeatures(headers http.Header) string {
 	return strings.Join(normalized, ",")
 }
 
-func normalizeOpenAIWSHandshakeCompatibility(_ *Account, headers http.Header, turnStateFingerprint ...string) openAIWSHandshakeCompatibilityKey {
-	fingerprint := ""
-	if len(turnStateFingerprint) > 0 {
-		fingerprint = turnStateFingerprint[0]
-	}
+func normalizeOpenAIWSHandshakeCompatibility(_ *Account, headers http.Header) openAIWSHandshakeCompatibilityKey {
 	key := openAIWSHandshakeCompatibilityKey{
-		turnStateOverride: fingerprint,
-		userAgent:         normalizeOpenAIWSStableIdentityHeader(headers, "user-agent"),
-		originator:        normalizeOpenAIWSStableIdentityHeader(headers, "originator"),
-		version:           normalizeOpenAIWSStableIdentityHeader(headers, "version"),
-		openAIBeta:        normalizeOpenAIWSStableIdentityHeader(headers, "openai-beta"),
-		betaFeatures:      normalizeOpenAIWSBetaFeatures(headers),
-		codexResidency:    normalizeOpenAIWSStableIdentityHeader(headers, openAICodexResidencyHeader),
-		responsesTiming:   normalizeOpenAIWSStableIdentityHeader(headers, openAIResponsesTimingMetricsHeader),
-		subagent:          normalizeOpenAIWSStableIdentityHeader(headers, openAISubagentHeader),
-		memgenRequest:     normalizeOpenAIWSStableIdentityHeader(headers, openAIMemgenRequestHeader),
+		userAgent:       normalizeOpenAIWSStableIdentityHeader(headers, "user-agent"),
+		originator:      normalizeOpenAIWSStableIdentityHeader(headers, "originator"),
+		version:         normalizeOpenAIWSStableIdentityHeader(headers, "version"),
+		openAIBeta:      normalizeOpenAIWSStableIdentityHeader(headers, "openai-beta"),
+		betaFeatures:    normalizeOpenAIWSBetaFeatures(headers),
+		codexResidency:  normalizeOpenAIWSStableIdentityHeader(headers, openAICodexResidencyHeader),
+		responsesTiming: normalizeOpenAIWSStableIdentityHeader(headers, openAIResponsesTimingMetricsHeader),
+		subagent:        normalizeOpenAIWSStableIdentityHeader(headers, openAISubagentHeader),
+		memgenRequest:   normalizeOpenAIWSStableIdentityHeader(headers, openAIMemgenRequestHeader),
 	}
 	// Native Codex reuses a WebSocket across turns of one client session; it
 	// does not multiplex unrelated installation/session/thread handshakes on a
 	// single connection. Keep every non-empty identity component in the pool
 	// key even when convergence is off or device-only. Otherwise immutable
 	// handshake headers from the first lease leak into a later client's frames.
-	if len(turnStateFingerprint) > 1 && turnStateFingerprint[1] != "0" {
-		key.turnStateRecoveryEpoch = turnStateFingerprint[1]
-	}
 	key.codexInstallationID = normalizeOpenAIWSStableIdentityHeader(headers, "x-codex-installation-id")
 	key.sessionIDHyphen = normalizeOpenAIWSStableIdentityHeader(headers, "session-id")
 	key.sessionIDUnderscore = normalizeOpenAIWSStableIdentityHeader(headers, "session_id")

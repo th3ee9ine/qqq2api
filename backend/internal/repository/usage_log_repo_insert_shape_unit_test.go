@@ -143,16 +143,3 @@ func TestPrepareUsageLogInsert_UpstreamRequestIDArgWiring(t *testing.T) {
 
 	require.Contains(t, usageLogSelectColumns, "upstream_request_id")
 }
-
-func TestPrepareUsageLogInsert_TurnStatePreservesEmptyAndNull(t *testing.T) {
-	empty, token := "", "sent-state"
-	for _, value := range []*string{nil, &empty, &token} {
-		prepared := prepareUsageLogInsert(&service.UsageLog{UpstreamTurnState: value})
-		idx := len(prepared.args) - 5
-		arg := prepared.args[idx].(sql.NullString)
-		require.Equal(t, value != nil, arg.Valid)
-		if value != nil {
-			require.Equal(t, *value, arg.String)
-		}
-	}
-}

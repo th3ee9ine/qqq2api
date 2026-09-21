@@ -41,13 +41,6 @@ type upstreamResponseModelObserver struct {
 	terminal string
 	conflict bool
 
-	// Responses state validation needs the two lifecycle declarations
-	// separately. Model() remains the compatibility view used by billing, while
-	// these fields let the turn-state cache require evidence from both events.
-	created   string
-	completed string
-	failed    bool
-
 	// firstTier holds the first non-terminal tier declaration; it is discarded
 	// when later non-terminal declarations disagree. terminalTier comes from a
 	// terminal event and always wins.
@@ -118,23 +111,6 @@ func (o *upstreamResponseModelObserver) ObserveOpenAI(payload []byte, eventType 
 	model := firstValidTrimmedGJSONString(payload, "response.model", "model")
 	terminal := isUpstreamResponseModelTerminalEvent(eventType)
 	o.Observe(model, terminal)
-	switch eventType {
-	case "response.created":
-		if model != "" {
-			o.created = model
-		}
-	case "response.completed":
-		if model != "" {
-			o.completed = model
-		}
-	case "response.failed", "response.incomplete", "response.cancelled", "response.canceled", "error":
-		o.failed = true
-	}
-	// A non-SSE JSON response has no event name, but a completed status is still
-	// terminal evidence. It intentionally does not synthesize response.created.
-	if eventType == "" && strings.EqualFold(strings.TrimSpace(gjson.GetBytes(payload, "status").String()), "completed") && model != "" {
-		o.completed = model
-	}
 	// Every payload that declares a service tier also declares a model, so
 	// model-free delta frames skip the extra lookups entirely.
 	if model == "" {
@@ -246,16 +222,6 @@ func (o *upstreamResponseModelObserver) Model() string {
 
 func (o *upstreamResponseModelObserver) Conflict() bool {
 	return o != nil && o.conflict
-}
-
-// CodexTurnStateEvidence returns raw lifecycle model declarations. Empty
-// values are meaningful: the caller must treat missing evidence as unknown,
-// never infer success from HTTP 200 or an envelope length.
-func (o *upstreamResponseModelObserver) CodexTurnStateEvidence() (created, completed string, failed bool) {
-	if o == nil {
-		return "", "", false
-	}
-	return o.created, o.completed, o.failed
 }
 
 func beginUpstreamResponseModelObservation(c *gin.Context) *upstreamResponseModelObserver {

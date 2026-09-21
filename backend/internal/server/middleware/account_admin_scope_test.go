@@ -35,7 +35,6 @@ func TestAccountAdminScope_AccountAdminRequestMatrix(t *testing.T) {
 		{name: "clear ollama session", method: http.MethodDelete, path: "/api/v1/admin/accounts/42/ollama-cloud-usage/session", wantStatus: http.StatusNoContent},
 		{name: "clear temporary account state", method: http.MethodDelete, path: "/api/v1/admin/accounts/42/temp-unschedulable", wantStatus: http.StatusNoContent},
 		{name: "scheduled account test", method: http.MethodPost, path: "/api/v1/admin/scheduled-test-plans/9/run", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
-		{name: "global codex task center", method: http.MethodGet, path: "/api/v1/admin/accounts/codex-turn-state/tasks", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
 		{name: "global crs sync", method: http.MethodPost, path: "/api/v1/admin/accounts/sync/crs", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
 		{name: "upstream billing rates", method: http.MethodGet, path: "/api/v1/admin/accounts/upstream-billing-rates", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
 

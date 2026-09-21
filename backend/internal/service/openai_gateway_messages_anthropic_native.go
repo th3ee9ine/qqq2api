@@ -260,17 +260,16 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 	c.Data(resp.StatusCode, contentType, body)
 
 	return &OpenAIForwardResult{
-		RequestID:         resp.Header.Get("x-request-id"),
-		UpstreamTurnState: upstreamTurnStateFromResponse(resp),
-		UpstreamHeaders:   resp.Header,
-		Usage:             claudeUsageToOpenAIUsage(usage),
-		Model:             originalModel,
-		BillingModel:      billingModel,
-		UpstreamModel:     upstreamModel,
-		UpstreamEndpoint:  "/v1/messages",
-		Stream:            false,
-		ReasoningEffort:   reasoningEffort,
-		Duration:          time.Since(startTime),
+		RequestID:        resp.Header.Get("x-request-id"),
+		UpstreamHeaders:  resp.Header,
+		Usage:            claudeUsageToOpenAIUsage(usage),
+		Model:            originalModel,
+		BillingModel:     billingModel,
+		UpstreamModel:    upstreamModel,
+		UpstreamEndpoint: "/v1/messages",
+		Stream:           false,
+		ReasoningEffort:  reasoningEffort,
+		Duration:         time.Since(startTime),
 	}, nil
 }
 
@@ -542,19 +541,18 @@ func (s *OpenAIGatewayService) nativeAnthropicStreamResult(
 		usage = &ClaudeUsage{}
 	}
 	return &OpenAIForwardResult{
-		RequestID:         resp.Header.Get("x-request-id"),
-		UpstreamTurnState: upstreamTurnStateFromResponse(resp),
-		UpstreamHeaders:   resp.Header,
-		Usage:             claudeUsageToOpenAIUsage(usage),
-		Model:             originalModel,
-		BillingModel:      billingModel,
-		UpstreamModel:     upstreamModel,
-		UpstreamEndpoint:  "/v1/messages",
-		Stream:            true,
-		ReasoningEffort:   reasoningEffort,
-		Duration:          time.Since(startTime),
-		FirstTokenMs:      firstTokenMs,
-		ClientDisconnect:  clientDisconnect,
+		RequestID:        resp.Header.Get("x-request-id"),
+		UpstreamHeaders:  resp.Header,
+		Usage:            claudeUsageToOpenAIUsage(usage),
+		Model:            originalModel,
+		BillingModel:     billingModel,
+		UpstreamModel:    upstreamModel,
+		UpstreamEndpoint: "/v1/messages",
+		Stream:           true,
+		ReasoningEffort:  reasoningEffort,
+		Duration:         time.Since(startTime),
+		FirstTokenMs:     firstTokenMs,
+		ClientDisconnect: clientDisconnect,
 	}
 }
 

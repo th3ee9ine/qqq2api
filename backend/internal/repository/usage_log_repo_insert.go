@@ -82,7 +82,6 @@ var usageLogInsertArgTypes = [...]string{
 	"text",        // billing_tier
 	"text",        // billing_mode
 	"numeric",     // account_stats_cost
-	"text",        // upstream_turn_state
 	"text",        // upstream_request_id
 	"text",        // session_id
 	"boolean",     // native_compaction_v2
@@ -284,7 +283,6 @@ func (r *usageLogRepository) createSingle(ctx context.Context, sqlq sqlExecutor,
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			upstream_turn_state,
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
@@ -745,7 +743,6 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			upstream_turn_state,
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
@@ -841,7 +838,6 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				billing_tier,
 				billing_mode,
 				account_stats_cost,
-				upstream_turn_state,
 				upstream_request_id,
 				session_id,
 				native_compaction_v2,
@@ -906,7 +902,6 @@ func buildUsageLogBatchInsertQuery(keys []string, preparedByKey map[string]usage
 				billing_tier,
 				billing_mode,
 				account_stats_cost,
-				upstream_turn_state,
 				upstream_request_id,
 				session_id,
 				native_compaction_v2,
@@ -1011,7 +1006,6 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			upstream_turn_state,
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
@@ -1102,7 +1096,6 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			upstream_turn_state,
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
@@ -1167,7 +1160,6 @@ func buildUsageLogBestEffortInsertQuery(preparedList []usageLogInsertPrepared) (
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			upstream_turn_state,
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
@@ -1240,7 +1232,6 @@ func execUsageLogInsertNoResult(ctx context.Context, sqlq sqlExecutor, prepared 
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
-			upstream_turn_state,
 			upstream_request_id,
 			session_id,
 			native_compaction_v2,
@@ -1293,10 +1284,6 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 	modelMappingChain := nullString(log.ModelMappingChain)
 	billingTier := nullString(log.BillingTier)
 	billingMode := nullString(log.BillingMode)
-	var upstreamTurnState sql.NullString
-	if log.UpstreamTurnState != nil {
-		upstreamTurnState = sql.NullString{String: *log.UpstreamTurnState, Valid: true}
-	}
 	upstreamRequestID := nullString(log.UpstreamRequestID)
 	sessionID := nullString(log.SessionID)
 	requestedModel := strings.TrimSpace(log.RequestedModel)
@@ -1376,7 +1363,6 @@ func prepareUsageLogInsert(log *service.UsageLog) usageLogInsertPrepared {
 			billingTier,
 			billingMode,
 			log.AccountStatsCost, // account_stats_cost
-			upstreamTurnState,    // upstream_turn_state
 			upstreamRequestID,    // upstream_request_id
 			sessionID,            // session_id
 			log.NativeCompactionV2,

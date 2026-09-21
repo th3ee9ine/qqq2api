@@ -9871,17 +9871,6 @@ type SettingsForm = Omit<
   | "wechat_connect_open_enabled"
   | "wechat_connect_mp_enabled"
   | "wechat_connect_mobile_enabled"
-  | "openai_codex_turn_state_auto_enabled"
-  | "openai_codex_turn_state_auto_interval_minutes"
-  | "openai_codex_turn_state_models"
-  | "openai_codex_turn_state_default_model"
-  | "openai_codex_turn_state_proxy_urls"
-  | "openai_codex_turn_state_proxy_urls_valid"
-  | "openai_codex_turn_state_proxy_pool_configured"
-  | "openai_codex_turn_state_proxy_pool_count"
-  | "openai_codex_turn_state_proxy_ids"
-  | "openai_codex_turn_state_proxy_id"
-  | "openai_codex_turn_state_proxy_ids_valid"
 > & {
   /** Form always binds a concrete boolean (SystemSettings marks this optional). */
   channel_monitor_hide_throughput: boolean;
@@ -11285,10 +11274,6 @@ const codexSyncedVersionLabel = computed(() => {
   });
 });
 
-function isStandaloneCodexTurnStateSetting(key: string): boolean {
-  return key === "openai_codex_turn_state" || key.startsWith("openai_codex_turn_state_");
-}
-
 async function loadSettings() {
   loading.value = true;
   loadFailed.value = false;
@@ -11298,7 +11283,6 @@ async function loadSettings() {
       settings.payment_load_balance_strategy || "round-robin";
     // Only assign non-null values from backend (null means unconfigured, keep defaults)
     for (const [key, value] of Object.entries(settings)) {
-      if (isStandaloneCodexTurnStateSetting(key)) continue;
       if (value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }
@@ -11706,7 +11690,7 @@ async function saveSettings() {
       adminAPI.settings.updateSettings(payload),
     );
     for (const [key, value] of Object.entries(updated)) {
-      if (key === "openai_fast_policy_settings" || isStandaloneCodexTurnStateSetting(key)) continue;
+      if (key === "openai_fast_policy_settings") continue;
       if (value !== null && value !== undefined) {
         (form as Record<string, unknown>)[key] = value;
       }

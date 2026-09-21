@@ -209,12 +209,11 @@ type AdminGroup struct {
 }
 
 type Account struct {
-	CodexTurnStateAuto *service.CodexTurnStateAutoInfo `json:"codex_turn_state_auto"`
-	ID                 int64                           `json:"id"`
-	Name               string                          `json:"name"`
-	Notes              *string                         `json:"notes"`
-	Platform           string                          `json:"platform"`
-	Type               string                          `json:"type"`
+	ID       int64   `json:"id"`
+	Name     string  `json:"name"`
+	Notes    *string `json:"notes"`
+	Platform string  `json:"platform"`
+	Type     string  `json:"type"`
 	// Credentials 经 RedactCredentials 处理后只含非敏感子键；敏感 token / api_key / 私钥
 	// 的存在性通过 CredentialsStatus（has_<key>）暴露，原始值不返回前端。
 	Credentials       map[string]any  `json:"credentials"`
@@ -339,12 +338,11 @@ type Account struct {
 // repeated account_groups and groups object graphs. Fetch /admin/accounts/:id
 // for the complete Account DTO when editing or inspecting an account.
 type AccountListItem struct {
-	CodexTurnStateAuto *service.CodexTurnStateAutoInfo `json:"codex_turn_state_auto"`
-	ID                 int64                           `json:"id"`
-	Name               string                          `json:"name"`
-	Notes              *string                         `json:"notes"`
-	Platform           string                          `json:"platform"`
-	Type               string                          `json:"type"`
+	ID       int64   `json:"id"`
+	Name     string  `json:"name"`
+	Notes    *string `json:"notes"`
+	Platform string  `json:"platform"`
+	Type     string  `json:"type"`
 
 	Credentials       map[string]any                 `json:"credentials,omitempty"`
 	CredentialsStatus map[string]bool                `json:"credentials_status,omitempty"`
@@ -700,7 +698,6 @@ type AdminUsageLog struct {
 	ModelMappingChain *string `json:"model_mapping_chain,omitempty"`
 	// UpstreamRequestID 是直接上游声明的请求标识，仅管理端可见。
 	UpstreamRequestID *string `json:"upstream_request_id,omitempty"`
-	UpstreamTurnState *string `json:"upstream_turn_state,omitempty"`
 	// BillingTier 计费层级标签（per_request/image 模式）
 	BillingTier *string `json:"billing_tier,omitempty"`
 

@@ -216,7 +216,6 @@ func (s *DebugWorkbenchService) Run(ctx context.Context, ownerID, accountID int6
 	}
 	trace := NewDebugWorkbenchTrace(submitted, secrets)
 	ctx = trace.Context(ctx)
-	ctx = withOpenAICodexTurnStateInjectionPolicy(ctx, codexTurnStateInjectionDisabled)
 	requestID := uuid.NewString()
 	ctx = context.WithValue(ctx, ctxkey.ClientRequestID, requestID)
 

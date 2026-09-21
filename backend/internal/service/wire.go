@@ -226,7 +226,6 @@ func ProvideOpenAIGatewayService(
 	)
 	svc.proxyRepo = proxyRepo
 	svc.SetTLSFingerprintProfileService(tlsFPProfileService)
-	svc.StartOpenAICodexTurnStateRenewal()
 	return svc
 }
 

@@ -109,18 +109,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	_, _, turnStateUsageVerification := codexTurnStateUsageVerificationIdentity(ctx)
-	if turnStateUsageVerification {
-		wsDecision = openAIWSHTTPDecision("codex_turn_state_usage_verification")
-	}
 	clientTransport := GetOpenAIClientTransport(c)
 	httpResponsesWSBridge := clientTransport == OpenAIClientTransportHTTP && shouldBridgeOpenAIResponsesHTTPToWSV2(wsDecision, account)
 	// Native Responses API-key accounts remain on HTTP. Standard OAuth accounts
 	// with WSv2 enabled use the existing WS forwarder as a REST JSON/SSE facade so
 	// their store=false response IDs remain attached to a reusable connection.
-	if !turnStateUsageVerification {
-		wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, clientTransport, account)
-	}
+	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, clientTransport, account)
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	compactPath := isOpenAIResponsesCompactPath(c)
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
@@ -1319,7 +1313,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		forwardResult := &OpenAIForwardResult{
 			RequestID:                     resp.Header.Get("x-request-id"),
-			UpstreamTurnState:             upstreamTurnStateFromResponse(resp),
 			UpstreamHeaders:               resp.Header,
 			ResponseID:                    responseID,
 			Usage:                         *usage,
@@ -1461,7 +1454,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站——异账号 blob 与本账号的（指纹收敛后）出站身份自相矛盾。
-	s.guardOpenAICodexTurnStateEcho(c, account, req.Header, gjson.GetBytes(body, "model").String())
+	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
 	if account.UsesOpenAICodexProtocol() {
 		compatMessagesBridge := isOpenAICompatMessagesBridgeContext(c) || isOpenAICompatMessagesBridgeBody(body)
 		// 清除客户端透传的 session 头，后续用隔离后的值重新设置，防止跨用户会话碰撞。
@@ -1537,12 +1530,6 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 保证不被覆盖丢失）。
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
-	if account.UsesOpenAICodexProtocol() {
-		req, err = s.prepareCodexTurnStateRequest(ctx, req, account, append(clientModels, gjson.GetBytes(body, "model").String())...)
-		if err != nil {
-			return nil, err
-		}
-	}
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")
 
 	return req, nil

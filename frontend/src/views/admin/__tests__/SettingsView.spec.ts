@@ -769,49 +769,6 @@ describe("admin SettingsView", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
-  it("leaves Codex Turn State configuration to its standalone page", async () => {
-    getSettings.mockResolvedValueOnce({
-      ...baseSettingsResponse,
-      openai_codex_turn_state_auto_enabled: true,
-      openai_codex_turn_state_auto_interval_minutes: 30,
-      openai_codex_turn_state_models: "gpt-5*",
-      openai_codex_turn_state_default_model: "gpt-5.5",
-      openai_codex_turn_state_proxy_ids: [7, 9],
-      openai_codex_turn_state_proxy_id: 7,
-    });
-    updateSettings.mockImplementationOnce(async (payload) => ({
-      ...baseSettingsResponse,
-      ...payload,
-      openai_codex_turn_state_auto_enabled: true,
-      openai_codex_turn_state_auto_interval_minutes: 30,
-      openai_codex_turn_state_models: "gpt-5*",
-      openai_codex_turn_state_default_model: "gpt-5.5",
-      openai_codex_turn_state_proxy_ids: [7, 9],
-      openai_codex_turn_state_proxy_id: 7,
-    }));
-    const wrapper = mountView();
-    await flushPromises();
-
-    expect(wrapper.find('[data-testid="codex-turn-state-settings"]').exists()).toBe(false);
-    expect(wrapper.find('[data-testid="openai-codex-turn-state-auto-toggle"]').exists()).toBe(false);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
-
-    const payload = updateSettings.mock.calls.at(-1)?.[0];
-    const settingsForm = (wrapper.vm as unknown as { form: Record<string, unknown> }).form;
-    for (const key of [
-      "openai_codex_turn_state_auto_enabled",
-      "openai_codex_turn_state_auto_interval_minutes",
-      "openai_codex_turn_state_models",
-      "openai_codex_turn_state_default_model",
-      "openai_codex_turn_state_proxy_ids",
-      "openai_codex_turn_state_proxy_id",
-    ]) {
-      expect(payload).not.toHaveProperty(key);
-      expect(settingsForm).not.toHaveProperty(key);
-    }
-  });
-
   it("submits the compact home page toggle", async () => {
     const wrapper = mountView();
     await flushPromises();

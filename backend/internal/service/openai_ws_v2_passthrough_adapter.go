@@ -943,31 +943,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return errors.New("openai ws passthrough dialer is nil")
 	}
 
-	// Keep both the client's original/session model and the final upstream model
-	// in the turn-state scope candidates.  The former may be an alias that was
-	// rewritten by MapRequestModel or account mapping; global scope is defined to
-	// match either name so an administrator can scope by the model users see or
-	// by the model sent upstream.
-	turnStateRequest := openAIWSAcquireRequest{Account: account, Headers: headers, TurnState: openAIWSTurnStatePolicy{Settings: s.settingService, Gateway: s, Models: []string{initialRequestModel, capturedSessionModel, gjson.GetBytes(firstClientMessage, "model").String()}, NativeState: headers.Get(openAICodexTurnStateHeader)}}
 	agentTaskRecoveryTried := false
 	var upstreamConn openAIWSClientConn
 	statusCode := 0
 	var handshakeHeaders http.Header
-	var sentTurnState string
 	for {
-		turnStateRequest.Headers = headers
-		turnStateRequest = turnStateRequest.withCurrentTurnState(ctx)
-		if turnStateRequest.turnStateError != nil {
-			return turnStateRequest.turnStateError
-		}
-		headers = turnStateRequest.Headers
 		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
 		SanitizeOutboundGatewayIdentity(headers)
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
-		sentTurnState = headers.Get(openAICodexTurnStateHeader)
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
 		if err == nil {
@@ -1199,9 +1185,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			//     覆盖（Store(nil)），因为 OpenAI 上游对该帧实际不传
 			//     service_tier 时按 default 处理，billing 应如实反映。
 			if policyErr == nil && blocked == nil && isResponseCreate {
-				if err := s.checkCodexTurnStatePassthrough(ctx, account, sentTurnState, turnStateRequest.turnStateModel, requestModelForThisFrame, model); err != nil {
-					return payload, nil, err
-				}
 				// This is the last local gate before the frame is returned to the
 				// relay for upstream transmission. Acquire the per-turn user/account
 				// slots here so policy-rejected frames never consume capacity.
@@ -1327,7 +1310,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					OpenAIWSMode:                  true,
 					UpstreamTerminalEvent:         normalizeOpenAIWSTerminalEvent(turn.TerminalEventType),
 					ResponseHeaders:               cloneHeader(handshakeHeaders),
-					UpstreamTurnState:             &sentTurnState,
 					Duration:                      turn.Duration,
 					FirstTokenMs:                  turn.FirstTokenMs,
 				}
@@ -1467,7 +1449,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		OpenAIWSMode:                  true,
 		UpstreamTerminalEvent:         normalizeOpenAIWSTerminalEvent(relayResult.TerminalEventType),
 		ResponseHeaders:               cloneHeader(handshakeHeaders),
-		UpstreamTurnState:             &sentTurnState,
 		Duration:                      relayResult.Duration,
 		FirstTokenMs:                  relayResult.FirstTokenMs,
 	}

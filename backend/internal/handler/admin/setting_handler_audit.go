@@ -500,27 +500,6 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.EnableOpenAIAccountLocalDeviceIdentity != after.EnableOpenAIAccountLocalDeviceIdentity {
 		changed = append(changed, "enable_openai_account_local_device_identity")
 	}
-	if before.OpenAICodexTurnStateAutoEnabled != after.OpenAICodexTurnStateAutoEnabled {
-		changed = append(changed, "openai_codex_turn_state_auto_enabled")
-	}
-	if before.OpenAICodexTurnStateAutoIntervalMinutes != after.OpenAICodexTurnStateAutoIntervalMinutes {
-		changed = append(changed, "openai_codex_turn_state_auto_interval_minutes")
-	}
-	if before.OpenAICodexTurnStateDefaultModel != after.OpenAICodexTurnStateDefaultModel {
-		changed = append(changed, "openai_codex_turn_state_default_model")
-	}
-	if before.OpenAICodexTurnStateModels != after.OpenAICodexTurnStateModels {
-		changed = append(changed, "openai_codex_turn_state_models")
-	}
-	if !equalStringSlice(before.OpenAICodexTurnStateProxyURLs, after.OpenAICodexTurnStateProxyURLs) {
-		changed = append(changed, "openai_codex_turn_state_proxy_urls")
-	}
-	if !equalInt64Slice(before.OpenAICodexTurnStateProxyIDs, after.OpenAICodexTurnStateProxyIDs) {
-		changed = append(changed, "openai_codex_turn_state_proxy_ids")
-	}
-	if before.OpenAICodexTurnStateProxyID != after.OpenAICodexTurnStateProxyID {
-		changed = append(changed, "openai_codex_turn_state_proxy_id")
-	}
 	if before.PaymentVisibleMethodAlipaySource != after.PaymentVisibleMethodAlipaySource {
 		changed = append(changed, "payment_visible_method_alipay_source")
 	}
