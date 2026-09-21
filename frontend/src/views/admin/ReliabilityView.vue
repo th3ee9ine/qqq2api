@@ -10,12 +10,12 @@
           <button
             type="button"
             class="btn btn-secondary"
-            :disabled="loading"
+            :disabled="pageBusy"
             :title="t('admin.reliability.refresh')"
-            @click="loadData"
+            @click="loadPageData"
           >
-            <Icon name="refresh" size="sm" :class="{ 'animate-spin': loading }" />
-            {{ loading ? t('admin.reliability.refreshing') : t('admin.reliability.refresh') }}
+            <Icon name="refresh" size="sm" :class="{ 'animate-spin': pageLoading }" />
+            {{ pageLoading ? t('admin.reliability.refreshing') : t('admin.reliability.refresh') }}
           </button>
         </template>
       </AdminPageHeader>
@@ -99,6 +99,67 @@
           <div class="min-w-0">
             <h2 class="admin-section-heading">{{ t('admin.reliability.turnState.title') }}</h2>
             <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.description') }}</p>
+          </div>
+        </div>
+        <div
+          class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+          data-testid="turn-state-settings"
+        >
+          <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-400">
+            {{ t('admin.reliability.turnState.settingsTitle') }}
+          </h3>
+          <div class="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2">
+            <div class="flex min-h-14 items-center justify-between gap-4">
+              <div class="min-w-0">
+                <p id="turn-state-probe-label" class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {{ t('admin.reliability.turnState.probeToggle') }}
+                </p>
+                <p class="mt-1 min-h-5 text-xs text-gray-500 dark:text-dark-400">
+                  {{ settingStatusLabel('probe', turnStateProbeEnabled) }}
+                </p>
+              </div>
+              <Toggle
+                data-testid="turn-state-probe-toggle"
+                :model-value="turnStateProbeEnabled"
+                :disabled="turnStateSettingsBusy || !turnStateSettingsLoaded"
+                aria-labelledby="turn-state-probe-label"
+                @update:model-value="saveTurnStateSetting('probe', $event)"
+              />
+            </div>
+            <div class="flex min-h-14 items-center justify-between gap-4">
+              <div class="min-w-0">
+                <p id="turn-state-injection-label" class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {{ t('admin.reliability.turnState.injectionToggle') }}
+                </p>
+                <p class="mt-1 min-h-5 text-xs text-gray-500 dark:text-dark-400">
+                  {{ settingStatusLabel('injection', turnStateCacheInjectionEnabled) }}
+                </p>
+              </div>
+              <Toggle
+                data-testid="turn-state-injection-toggle"
+                :model-value="turnStateCacheInjectionEnabled"
+                :disabled="turnStateSettingsBusy || !turnStateSettingsLoaded"
+                aria-labelledby="turn-state-injection-label"
+                @update:model-value="saveTurnStateSetting('injection', $event)"
+              />
+            </div>
+          </div>
+          <div
+            v-if="turnStateSettingsError"
+            class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-red-700 dark:text-red-300"
+            data-testid="turn-state-settings-error"
+            role="alert"
+          >
+            <span>{{ turnStateSettingsError }}</span>
+            <button
+              v-if="!turnStateSettingsLoaded"
+              type="button"
+              class="font-medium text-red-700 underline decoration-red-300 underline-offset-2 hover:text-red-800 disabled:cursor-not-allowed disabled:opacity-60 dark:text-red-300 dark:hover:text-red-200"
+              :disabled="turnStateSettingsBusy"
+              @click="loadTurnStateSettings"
+            >
+              {{ t('admin.reliability.turnState.settingsRetry') }}
+            </button>
           </div>
         </div>
         <dl class="mt-4 grid gap-3 border-t border-gray-100 pt-4 sm:grid-cols-2 dark:border-dark-700 lg:grid-cols-3 xl:grid-cols-5">
@@ -203,21 +264,36 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import AdminPageHeader from '@/components/admin/AdminPageHeader.vue'
 import AdminOverviewStrip from '@/components/admin/AdminOverviewStrip.vue'
 import Icon from '@/components/icons/Icon.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import {
   normalizeReliabilityStatus,
   reliabilityAPI,
   type ReliabilityStatusResponse,
   type ReliabilityStatusSummary,
+  type ReliabilityTurnStateSettings,
 } from '@/api/admin/reliability'
 import { opsAPI } from '@/api/admin/ops'
+import { useAppStore } from '@/stores/app'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatNumber } from '@/utils/format'
 
 const { t, locale } = useI18n()
+const appStore = useAppStore()
 
 const loading = ref(false)
 const loadError = ref('')
 const status = ref<ReliabilityStatusResponse | null>(null)
 const lastUpdated = ref<string | null>(null)
+const turnStateSettingsLoading = ref(false)
+const turnStateSettingsLoaded = ref(false)
+const turnStateSettingsError = ref('')
+const turnStateSettingSaving = ref<'probe' | 'injection' | null>(null)
+const turnStateProbeEnabled = ref(true)
+const turnStateCacheInjectionEnabled = ref(true)
+
+const turnStateSettingsBusy = computed(() => turnStateSettingsLoading.value || turnStateSettingSaving.value !== null)
+const pageLoading = computed(() => loading.value || turnStateSettingsLoading.value)
+const pageBusy = computed(() => pageLoading.value || turnStateSettingSaving.value !== null)
 
 const summary = computed<ReliabilityStatusSummary>(() => normalizeReliabilityStatus(status.value ?? {}))
 const accountSummary = computed(() => summary.value.account_availability ?? summary.value.accounts ?? {})
@@ -384,6 +460,16 @@ function collectorCollectingLabel(value: boolean | null): string {
   return value ? t('admin.reliability.turnState.collectorCollectingValue') : t('admin.reliability.turnState.collectorIdleValue')
 }
 
+function settingStatusLabel(kind: 'probe' | 'injection', enabled: boolean): string {
+  if (turnStateSettingsLoading.value || (!turnStateSettingsLoaded.value && !turnStateSettingsError.value)) {
+    return t('admin.reliability.turnState.settingsLoading')
+  }
+  if (turnStateSettingSaving.value === kind) return t('admin.reliability.turnState.settingsSaving')
+  return enabled
+    ? t('admin.reliability.turnState.settingEnabled')
+    : t('admin.reliability.turnState.settingDisabled')
+}
+
 function protectionLabel(value: boolean | null): string {
   if (value === null) return t('admin.reliability.turnState.unknownValue')
   return value ? t('admin.reliability.turnState.protectedValue') : t('admin.reliability.turnState.unprotectedValue')
@@ -468,5 +554,69 @@ async function loadData() {
   loading.value = false
 }
 
-onMounted(loadData)
+function enabledSetting(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+async function loadTurnStateSettings() {
+  if (turnStateSettingsLoading.value || turnStateSettingSaving.value !== null) return
+  turnStateSettingsLoading.value = true
+  turnStateSettingsError.value = ''
+  try {
+    const settings = await reliabilityAPI.getTurnStateSettings()
+    turnStateProbeEnabled.value = enabledSetting(settings?.probe_enabled, true)
+    turnStateCacheInjectionEnabled.value = enabledSetting(settings?.injection_enabled, true)
+    turnStateSettingsLoaded.value = true
+  } catch (error) {
+    turnStateSettingsLoaded.value = false
+    turnStateSettingsError.value = extractApiErrorMessage(
+      error,
+      t('admin.reliability.turnState.settingsLoadFailed'),
+    )
+  } finally {
+    turnStateSettingsLoading.value = false
+  }
+}
+
+async function saveTurnStateSetting(kind: 'probe' | 'injection', enabled: boolean) {
+  if (!turnStateSettingsLoaded.value || turnStateSettingsBusy.value) return
+
+  const previous: ReliabilityTurnStateSettings = {
+    probe_enabled: turnStateProbeEnabled.value,
+    injection_enabled: turnStateCacheInjectionEnabled.value,
+  }
+  if (kind === 'probe') turnStateProbeEnabled.value = enabled
+  else turnStateCacheInjectionEnabled.value = enabled
+
+  turnStateSettingSaving.value = kind
+  turnStateSettingsError.value = ''
+  try {
+    const updated = await reliabilityAPI.updateTurnStateSettings({
+      probe_enabled: turnStateProbeEnabled.value,
+      injection_enabled: turnStateCacheInjectionEnabled.value,
+    })
+    turnStateProbeEnabled.value = enabledSetting(updated?.probe_enabled, turnStateProbeEnabled.value)
+    turnStateCacheInjectionEnabled.value = enabledSetting(
+      updated?.injection_enabled,
+      turnStateCacheInjectionEnabled.value,
+    )
+    appStore.showSuccess(t('admin.reliability.turnState.settingsSaved'))
+  } catch (error) {
+    turnStateProbeEnabled.value = previous.probe_enabled
+    turnStateCacheInjectionEnabled.value = previous.injection_enabled
+    turnStateSettingsError.value = extractApiErrorMessage(
+      error,
+      t('admin.reliability.turnState.settingsSaveFailed'),
+    )
+    appStore.showError(turnStateSettingsError.value)
+  } finally {
+    turnStateSettingSaving.value = null
+  }
+}
+
+async function loadPageData() {
+  await Promise.all([loadData(), loadTurnStateSettings()])
+}
+
+onMounted(loadPageData)
 </script>

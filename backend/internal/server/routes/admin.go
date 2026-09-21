@@ -93,14 +93,16 @@ func RegisterAdminRoutes(
 	}
 }
 
-// registerReliabilityRoutes keeps the reliability projection outside the
-// account-admin maintenance scope. It is intentionally read-only, but its
-// aggregate data is global and therefore remains administrator-only.
+// registerReliabilityRoutes keeps the reliability workbench outside the
+// account-admin maintenance scope. Its aggregate data and runtime controls are
+// global and therefore remain super-administrator-only.
 func registerReliabilityRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	reliability := admin.Group("/reliability")
 	reliability.Use(middleware.AdminOnly())
 	{
 		reliability.GET("/status", h.Admin.Ops.GetReliabilityStatus)
+		reliability.GET("/turn-state-settings", h.Admin.Ops.GetCodexTurnStateRuntimeSettings)
+		reliability.PUT("/turn-state-settings", h.Admin.Ops.UpdateCodexTurnStateRuntimeSettings)
 	}
 }
 

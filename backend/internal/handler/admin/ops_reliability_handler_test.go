@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -67,4 +68,58 @@ func TestWriteReliabilityStatusErrorReturnsGatewayTimeoutForInternalDeadline(t *
 
 	require.Equal(t, http.StatusGatewayTimeout, recorder.Code)
 	require.Contains(t, recorder.Body.String(), "Reliability status collection timed out")
+}
+
+func TestCodexTurnStateRuntimeSettingsHandlersDefaultAndPersistCompleteSnapshot(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := newTestSettingRepo()
+	svc := service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewOpsHandler(svc)
+	router := gin.New()
+	router.GET("/turn-state-settings", handler.GetCodexTurnStateRuntimeSettings)
+	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
+
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/turn-state-settings", nil))
+	require.Equal(t, http.StatusOK, getRecorder.Code)
+	require.Equal(t, "no-store", getRecorder.Header().Get("Cache-Control"))
+	var getEnvelope struct {
+		Data service.CodexTurnStateRuntimeSettings `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(getRecorder.Body.Bytes(), &getEnvelope))
+	require.True(t, getEnvelope.Data.ProbeEnabled)
+	require.True(t, getEnvelope.Data.InjectionEnabled)
+
+	putRecorder := httptest.NewRecorder()
+	putRequest := httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(`{"probe_enabled":false,"injection_enabled":true}`))
+	putRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(putRecorder, putRequest)
+	require.Equal(t, http.StatusOK, putRecorder.Code)
+	var putEnvelope struct {
+		Data service.CodexTurnStateRuntimeSettings `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(putRecorder.Body.Bytes(), &putEnvelope))
+	require.False(t, putEnvelope.Data.ProbeEnabled)
+	require.True(t, putEnvelope.Data.InjectionEnabled)
+	require.Equal(t, "false", repo.values[service.SettingKeyCodexTurnStateProbeEnabled])
+	require.Equal(t, "true", repo.values[service.SettingKeyCodexTurnStateCacheInjectionEnabled])
+}
+
+func TestUpdateCodexTurnStateRuntimeSettingsRequiresBothBooleanFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewOpsHandler(service.NewOpsService(nil, newTestSettingRepo(), nil, nil, nil, nil, nil, nil, nil, nil, nil))
+	router := gin.New()
+	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
+
+	for _, body := range []string{
+		`{"probe_enabled":false}`,
+		`{"probe_enabled":"false","injection_enabled":true}`,
+		`{}`,
+	} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(body))
+		request.Header.Set("Content-Type", "application/json")
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, http.StatusBadRequest, recorder.Code, body)
+	}
 }

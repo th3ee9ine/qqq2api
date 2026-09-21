@@ -35,7 +35,7 @@ func TestResolveOpenAIWSCodexTurnStatePriority(t *testing.T) {
 		cached := collectorTestToken(t, now.Add(-2*time.Minute), 2, 3)
 		native := collectorTestToken(t, now.Add(-time.Minute), 2, 4)
 		require.True(t, svc.codexTurnStateCollector.OfferValueMust(svc.codexTurnStateKey(c, account, model), cached, "cached", now))
-		svc.codexTurnStateInjection = false
+		svc.SetCodexTurnStateRuntimeSettings(true, false)
 
 		selected := svc.resolveOpenAIWSCodexTurnState(context.Background(), c, account, model, native, true)
 
@@ -65,10 +65,10 @@ func TestResolveOpenAIWSCodexTurnStatePriority(t *testing.T) {
 		cached := collectorTestToken(t, now.Add(-time.Minute), 2, 6)
 		require.True(t, svc.codexTurnStateCollector.OfferValueMust(svc.codexTurnStateKey(c, account, model), cached, "cached", now))
 
-		svc.codexTurnStateInjection = false
+		svc.SetCodexTurnStateRuntimeSettings(true, false)
 		require.Empty(t, svc.resolveOpenAIWSCodexTurnState(context.Background(), c, account, model, "", true))
 
-		svc.codexTurnStateInjection = true
+		svc.SetCodexTurnStateRuntimeSettings(true, true)
 		require.Equal(t, cached, svc.resolveOpenAIWSCodexTurnState(context.Background(), c, account, model, "", true))
 	})
 }

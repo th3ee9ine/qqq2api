@@ -216,6 +216,8 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 		SettingKeyOpsMonitoringEnabled,
 		SettingKeyOpsAdvancedSettings,
 		SettingKeyOpsRuntimeLogConfig,
+		SettingKeyCodexTurnStateProbeEnabled,
+		SettingKeyCodexTurnStateCacheInjectionEnabled,
 	})
 	if err != nil {
 		return err
@@ -234,6 +236,7 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 	normalizeOpsAdvancedSettings(advanced)
 
 	s.runtimeSettings.Store(&opsRuntimeSettingsSnapshot{monitoringEnabled: monitoringEnabled, advanced: *advanced})
+	s.applyCodexTurnStateRuntimeSettings(codexTurnStateRuntimeSettingsFromValues(values))
 	if s.systemLogSink != nil {
 		persistAccessLogs := false
 		if raw, ok := values[SettingKeyOpsRuntimeLogConfig]; ok {

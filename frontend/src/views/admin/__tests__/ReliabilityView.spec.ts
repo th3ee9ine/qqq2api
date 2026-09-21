@@ -4,12 +4,30 @@ import ReliabilityView from '../ReliabilityView.vue'
 
 const mocks = vi.hoisted(() => ({
   getStatus: vi.fn(),
+  getTurnStateSettings: vi.fn(),
+  updateTurnStateSettings: vi.fn(),
+  showSuccess: vi.fn(),
+  showError: vi.fn(),
 }))
 
 vi.mock('@/api/admin/reliability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/admin/reliability')>()
-  return { ...actual, reliabilityAPI: { getStatus: mocks.getStatus } }
+  return {
+    ...actual,
+    reliabilityAPI: {
+      getStatus: mocks.getStatus,
+      getTurnStateSettings: mocks.getTurnStateSettings,
+      updateTurnStateSettings: mocks.updateTurnStateSettings,
+    },
+  }
 })
+
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => ({
+    showSuccess: mocks.showSuccess,
+    showError: mocks.showError,
+  }),
+}))
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -63,7 +81,16 @@ function setAggregateStatus(overrides: Record<string, unknown> = {}) {
 describe('ReliabilityView', () => {
   beforeEach(() => {
     mocks.getStatus.mockReset()
+    mocks.getTurnStateSettings.mockReset()
+    mocks.updateTurnStateSettings.mockReset()
+    mocks.showSuccess.mockReset()
+    mocks.showError.mockReset()
     setAggregateStatus()
+    mocks.getTurnStateSettings.mockResolvedValue({
+      probe_enabled: true,
+      injection_enabled: true,
+    })
+    mocks.updateTurnStateSettings.mockImplementation(async (settings) => settings)
   })
 
   it('shows unavailable overview metrics when Ops collection is disabled', async () => {
@@ -91,6 +118,7 @@ describe('ReliabilityView', () => {
     await flushPromises()
 
     expect(mocks.getStatus).toHaveBeenCalledOnce()
+    expect(mocks.getTurnStateSettings).toHaveBeenCalledOnce()
 
     const removedTestIds = [
       'fallback-policy',
@@ -236,5 +264,92 @@ describe('ReliabilityView', () => {
     await flushPromises()
 
     expect(mocks.getStatus).toHaveBeenCalledTimes(2)
+    expect(mocks.getTurnStateSettings).toHaveBeenCalledTimes(2)
+  })
+
+  it('defaults missing turn-state settings to enabled', async () => {
+    mocks.getTurnStateSettings.mockResolvedValue({})
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-probe-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="turn-state-injection-toggle"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="turn-state-probe-toggle"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="turn-state-injection-toggle"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('loads and persists the probe and injection switches independently', async () => {
+    mocks.getTurnStateSettings.mockResolvedValue({
+      probe_enabled: false,
+      injection_enabled: true,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const probeToggle = wrapper.get('[data-testid="turn-state-probe-toggle"]')
+    const injectionToggle = wrapper.get('[data-testid="turn-state-injection-toggle"]')
+    expect(probeToggle.attributes('aria-checked')).toBe('false')
+    expect(injectionToggle.attributes('aria-checked')).toBe('true')
+
+    await probeToggle.trigger('click')
+    await flushPromises()
+    expect(mocks.updateTurnStateSettings).toHaveBeenNthCalledWith(1, {
+      probe_enabled: true,
+      injection_enabled: true,
+    })
+
+    await injectionToggle.trigger('click')
+    await flushPromises()
+    expect(mocks.updateTurnStateSettings).toHaveBeenNthCalledWith(2, {
+      probe_enabled: true,
+      injection_enabled: false,
+    })
+    expect(mocks.showSuccess).toHaveBeenCalledTimes(2)
+  })
+
+  it('rolls a switch back when persistence fails', async () => {
+    mocks.updateTurnStateSettings.mockRejectedValue(new Error('save rejected'))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const probeToggle = wrapper.get('[data-testid="turn-state-probe-toggle"]')
+    expect(probeToggle.attributes('aria-checked')).toBe('true')
+
+    await probeToggle.trigger('click')
+    await flushPromises()
+
+    expect(probeToggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.get('[data-testid="turn-state-settings-error"]').text()).toContain('save rejected')
+    expect(mocks.showError).toHaveBeenCalledWith('save rejected')
+  })
+
+  it('keeps default-on controls disabled until a failed settings load is retried', async () => {
+    mocks.getTurnStateSettings.mockRejectedValueOnce(new Error('load rejected'))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const probeToggle = wrapper.get('[data-testid="turn-state-probe-toggle"]')
+    const injectionToggle = wrapper.get('[data-testid="turn-state-injection-toggle"]')
+    expect(probeToggle.attributes('aria-checked')).toBe('true')
+    expect(injectionToggle.attributes('aria-checked')).toBe('true')
+    expect(probeToggle.attributes('disabled')).toBeDefined()
+    expect(injectionToggle.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="turn-state-settings-error"]').text()).toContain('load rejected')
+
+    mocks.getTurnStateSettings.mockResolvedValue({
+      probe_enabled: false,
+      injection_enabled: false,
+    })
+    await wrapper.get('[data-testid="turn-state-settings-error"] button').trigger('click')
+    await flushPromises()
+
+    expect(probeToggle.attributes('aria-checked')).toBe('false')
+    expect(injectionToggle.attributes('aria-checked')).toBe('false')
+    expect(probeToggle.attributes('disabled')).toBeUndefined()
+    expect(injectionToggle.attributes('disabled')).toBeUndefined()
   })
 })

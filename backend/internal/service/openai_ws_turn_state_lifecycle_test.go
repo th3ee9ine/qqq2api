@@ -42,10 +42,8 @@ func newOpenAIWSTurnStateLifecycleConfig() *config.Config {
 	return cfg
 }
 
-func enableOpenAIWSTurnStateLifecycleCollector(cfg *config.Config, injection bool) {
+func enableOpenAIWSTurnStateLifecycleCollector(cfg *config.Config) {
 	cfg.Gateway.CodexTurnState = config.GatewayCodexTurnStateConfig{
-		Enabled:               true,
-		InjectionEnabled:      injection,
 		ProbeTimeoutSeconds:   2,
 		RefreshBeforeSeconds:  120,
 		CooldownSeconds:       3,
@@ -95,14 +93,13 @@ func newOpenAIWSTurnStateLifecycleService(
 		)),
 	}}
 	return &OpenAIGatewayService{
-		cfg:                     cfg,
-		httpUpstream:            fallback,
-		cache:                   &stubGatewayCache{},
-		openaiWSResolver:        NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:           NewCodexToolCorrector(),
-		openaiWSPool:            pool,
-		openaiWSStateStore:      store,
-		codexTurnStateInjection: cfg.Gateway.CodexTurnState.InjectionEnabled,
+		cfg:                cfg,
+		httpUpstream:       fallback,
+		cache:              &stubGatewayCache{},
+		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:      NewCodexToolCorrector(),
+		openaiWSPool:       pool,
+		openaiWSStateStore: store,
 	}, store
 }
 
@@ -212,7 +209,7 @@ func TestOpenAIGatewayService_Forward_WSv2_HandshakeTurnStateCommitGate(t *testi
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := newOpenAIWSTurnStateLifecycleConfig()
-			enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
 			handshakeState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, byte(80+index))
 			model := "gpt-5.5"
 			event := []byte(fmt.Sprintf(
@@ -263,7 +260,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateIsolatedByFinalModel(t *test
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := newOpenAIWSTurnStateLifecycleConfig()
-			enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
 			storedState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, byte(90+index))
 			conn := &openAIWSCaptureConn{events: [][]byte{[]byte(fmt.Sprintf(
 				`{"type":"response.completed","response":{"id":%q,"model":%q,"usage":{"input_tokens":1,"output_tokens":1}}}`,
@@ -326,13 +323,14 @@ func TestOpenAIGatewayService_Forward_WSv2_InjectionDisabledIgnoresStoreAndPrese
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := newOpenAIWSTurnStateLifecycleConfig()
-			enableOpenAIWSTurnStateLifecycleCollector(cfg, false)
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
 			conn := &openAIWSCaptureConn{events: [][]byte{[]byte(fmt.Sprintf(
 				`{"type":"response.completed","response":{"id":%q,"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`,
 				fmt.Sprintf("resp_disabled_v2_%d", index),
 			))}}
 			dialer := &openAIWSTurnStateSequenceDialer{conns: []openAIWSClientConn{conn}}
 			svc, store := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)
+			svc.SetCodexTurnStateRuntimeSettings(false, false)
 			svc.initCodexTurnStateCollector()
 			account := codexTurnStateGatewayTestAccount(8870 + int64(index))
 			account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
@@ -365,7 +363,7 @@ func TestOpenAIGatewayService_Forward_WSv2_InjectionDisabledIgnoresStoreAndPrese
 func TestOpenAIGatewayService_Forward_WSv2_NoReliableScopeDoesNotUseFallbackTurnStateStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSTurnStateLifecycleConfig()
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 	now := time.Now().UTC()
 	storedState := collectorTestToken(t, now.Add(-2*time.Minute), 2, 40)
 	handshakeState := collectorTestToken(t, now.Add(-time.Minute), 2, 41)
@@ -429,7 +427,7 @@ func TestOpenAIGatewayService_Forward_WSv2_NoReliableScopeDoesNotUseFallbackTurn
 func TestOpenAIGatewayService_Forward_WSv2_InvalidStoredStateFallsBackToCollector(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSTurnStateLifecycleConfig()
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 	conn := &openAIWSCaptureConn{events: [][]byte{[]byte(
 		`{"type":"response.completed","response":{"id":"resp_invalid_store_fallback","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`,
 	)}}
@@ -464,7 +462,7 @@ func TestOpenAIGatewayService_Forward_WSv2_InvalidStoredStateFallsBackToCollecto
 func TestOpenAIGatewayService_Forward_WSv2_InvalidationDuringFlightDoesNotRepublishState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSTurnStateLifecycleConfig()
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 	state := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 9)
 	gated := newOpenAIWSGatedConn(`{"type":"response.completed","response":{"id":"resp_stale_generation","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`)
 	dialer := &openAIWSTurnStateSequenceDialer{
@@ -539,7 +537,7 @@ func TestOpenAIGatewayService_Forward_WSv2_DoesNotCommitHandshakeStateOnFailure(
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := newOpenAIWSTurnStateLifecycleConfig()
-			enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
 			cfg.Gateway.OpenAIWS.RetryBackoffInitialMS = 1
 			cfg.Gateway.OpenAIWS.RetryBackoffMaxMS = 1
 			cfg.Gateway.OpenAIWS.RetryJitterRatio = 0
@@ -599,7 +597,7 @@ func TestOpenAIGatewayService_Forward_WSv2_FinalWriteFailureDoesNotCommitHandsha
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			cfg := newOpenAIWSTurnStateLifecycleConfig()
-			enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
 			handshakeState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, byte(120+index))
 			conn := &openAIWSCaptureConn{events: [][]byte{[]byte(fmt.Sprintf(
 				`{"type":"response.completed","response":{"id":%q,"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`,
@@ -708,13 +706,14 @@ func TestOpenAIGatewayService_Ingress_InjectionDisabledIgnoresStoreAndPreservesN
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cfg := newOpenAIWSTurnStateLifecycleConfig()
-			enableOpenAIWSTurnStateLifecycleCollector(cfg, false)
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
 			conn := &openAIWSCaptureConn{events: [][]byte{[]byte(fmt.Sprintf(
 				`{"type":"response.completed","response":{"id":%q,"model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`,
 				fmt.Sprintf("resp_disabled_ingress_%d", index),
 			))}}
 			dialer := &openAIWSTurnStateSequenceDialer{conns: []openAIWSClientConn{conn}}
 			svc, store := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)
+			svc.SetCodexTurnStateRuntimeSettings(false, false)
 			svc.initCodexTurnStateCollector()
 			account := codexTurnStateGatewayTestAccount(8890 + int64(index))
 			account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
@@ -752,7 +751,7 @@ func TestOpenAIGatewayService_Ingress_InjectionDisabledIgnoresStoreAndPreservesN
 func TestOpenAIGatewayService_Ingress_NoReliableScopeDoesNotUseFallbackTurnStateStore(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSTurnStateLifecycleConfig()
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 	now := time.Now().UTC()
 	storedState := collectorTestToken(t, now.Add(-2*time.Minute), 2, 70)
 	handshakeState := collectorTestToken(t, now.Add(-time.Minute), 2, 71)
@@ -826,7 +825,7 @@ func readOpenAIWSTurnStateIngressMessage(t *testing.T, conn *coderws.Conn) []byt
 func TestOpenAIGatewayService_IngressTurnStateWriteRetryDoesNotCommitStaleHandshake(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSTurnStateLifecycleConfig()
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 	secondConn := &openAIWSCaptureConn{events: [][]byte{[]byte(
 		`{"type":"response.completed","response":{"id":"resp_ingress_retry","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`,
 	)}}
@@ -866,7 +865,7 @@ func TestOpenAIGatewayService_IngressTurnStateWriteRetryDoesNotCommitStaleHandsh
 func TestOpenAIGatewayService_IngressResponseFailedDoesNotCommitHandshakeState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSTurnStateLifecycleConfig()
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 	conn := &openAIWSCaptureConn{events: [][]byte{[]byte(
 		`{"type":"response.failed","response":{"id":"resp_ingress_failed","model":"gpt-5.5","status":"failed","error":{"code":"server_error","message":"failed"}}}`,
 	)}}

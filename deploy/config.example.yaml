@@ -289,14 +289,11 @@ gateway:
   # 状态仅保存在有界进程内存中，按账号、不可变执行作用域和最终上游模型隔离；
   # 可靠性 API 不暴露原始值。封装/块数检查仅是形状筛选，不代表签名、权限、配额或模型质量。
   codex_turn_state:
-    enabled: true
-    # Opt in to active probes and collector injection. A cold cache miss sends
-    # one bounded model request, which consumes upstream quota and can add up to
-    # probe_timeout_seconds of latency. False keeps passive collection and valid
-    # native client-state forwarding without issuing extra model requests.
-    # 主动探测与缓存注入需显式开启。缓存冷启动会发送一次受限模型请求，消耗上游额度，
-    # 并可能增加最长 probe_timeout_seconds 的延迟。false 仍保留被动采集及合法原生状态透传。
-    injection_enabled: false
+    # Active probing and cache injection are controlled from the administrator
+    # Reliability & Connection page and default to enabled. A cold-cache probe
+    # consumes upstream quota and may add up to probe_timeout_seconds of latency.
+    # 主动探测与缓存注入由管理端「可靠性与连接」页面控制，默认开启。
+    # 缓存冷启动探测会消耗上游额度，并可能增加最长 probe_timeout_seconds 的延迟。
     probe_timeout_seconds: 15
     refresh_before_seconds: 1200
     cooldown_seconds: 180

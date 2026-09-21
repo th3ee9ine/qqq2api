@@ -58,16 +58,16 @@ func TestOpenAIGatewayService_Forward_WSv2_APIKeyDoesNotPersistTurnState(t *test
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 0
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 
 	svc := &OpenAIGatewayService{
-		cfg:                     cfg,
-		httpUpstream:            &httpUpstreamRecorder{},
-		cache:                   &stubGatewayCache{},
-		openaiWSResolver:        NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:           NewCodexToolCorrector(),
-		codexTurnStateInjection: true,
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
 	}
+	svc.SetCodexTurnStateRuntimeSettings(true, true)
 	svc.initCodexTurnStateCollector()
 	groupID := int64(9)
 	account := &Account{
@@ -124,7 +124,7 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 
 	completed := func(id string) []byte {
 		return []byte(`{"type":"response.completed","response":{"id":"` + id + `","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
@@ -139,15 +139,15 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 
 	stateStore := NewOpenAIWSStateStore(nil)
 	svc := &OpenAIGatewayService{
-		cfg:                     cfg,
-		httpUpstream:            &httpUpstreamRecorder{},
-		cache:                   &stubGatewayCache{},
-		openaiWSResolver:        NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:           NewCodexToolCorrector(),
-		openaiWSPool:            pool,
-		openaiWSStateStore:      stateStore,
-		codexTurnStateInjection: true,
+		cfg:                cfg,
+		httpUpstream:       &httpUpstreamRecorder{},
+		cache:              &stubGatewayCache{},
+		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:      NewCodexToolCorrector(),
+		openaiWSPool:       pool,
+		openaiWSStateStore: stateStore,
 	}
+	svc.SetCodexTurnStateRuntimeSettings(true, true)
 	svc.initCodexTurnStateCollector()
 	groupID := int64(9)
 	const apiKeyID = int64(21)

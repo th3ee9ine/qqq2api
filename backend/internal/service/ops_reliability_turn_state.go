@@ -17,6 +17,7 @@ import (
 // projection before being exposed to the administrator UI.
 type OpenAICodexTurnStateReliabilitySnapshot struct {
 	Enabled          bool
+	ProbeEnabled     bool
 	InjectionEnabled bool
 	Status           string
 	Ready            bool
@@ -43,6 +44,7 @@ type OpenAICodexTurnStateReliabilityProvider interface {
 // collector snapshot. It contains no opaque token or identity-bearing key.
 type OpsReliabilityTurnStateCollector struct {
 	Enabled          bool       `json:"enabled"`
+	ProbeEnabled     bool       `json:"probe_enabled"`
 	InjectionEnabled bool       `json:"injection_enabled"`
 	Status           string     `json:"status,omitempty"`
 	Ready            bool       `json:"ready"`
@@ -64,6 +66,7 @@ type OpsReliabilityTurnStateCollector struct {
 func reliabilityTurnStateCollectorFromSnapshot(snapshot OpenAICodexTurnStateReliabilitySnapshot) *OpsReliabilityTurnStateCollector {
 	return &OpsReliabilityTurnStateCollector{
 		Enabled:          snapshot.Enabled,
+		ProbeEnabled:     snapshot.ProbeEnabled,
 		InjectionEnabled: snapshot.InjectionEnabled,
 		Status:           normalizeTurnStateCollectorStatus(snapshot.Status),
 		Ready:            snapshot.Ready,

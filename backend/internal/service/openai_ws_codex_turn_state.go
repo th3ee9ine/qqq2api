@@ -29,7 +29,8 @@ func (s *OpenAIGatewayService) openAIWSSessionTurnStateUsable(account *Account, 
 // session hashes remain valid for connection affinity, but must never become a
 // turn-state cache scope.
 func (s *OpenAIGatewayService) canUseOpenAIWSSessionTurnStateStore(account *Account, scope, model string) bool {
-	return s != nil && s.codexTurnStateInjection && s.codexTurnStateEligible(account) &&
+	_, cacheInjectionEnabled := s.CodexTurnStateRuntimeSettings()
+	return s != nil && cacheInjectionEnabled && s.codexTurnStateEligible(account) &&
 		strings.TrimSpace(scope) != "" && codexTurnStateModel(model) != ""
 }
 
@@ -84,12 +85,6 @@ func (s *OpenAIGatewayService) resolveOpenAIWSCodexTurnState(
 			return snapshot.Token.Value
 		}
 		return current
-	}
-
-	if !s.codexTurnStateInjection {
-		key := s.codexTurnStateKey(c, account, model)
-		s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{}, false)
-		return ""
 	}
 
 	incoming := make(http.Header)

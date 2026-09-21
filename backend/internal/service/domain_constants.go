@@ -460,6 +460,12 @@ const (
 	// SettingKeyOpsMetricsIntervalSeconds controls the ops metrics collector interval (>=60).
 	SettingKeyOpsMetricsIntervalSeconds = "ops_metrics_interval_seconds"
 
+	// Codex turn-state controls are persisted runtime settings. They are kept
+	// separate so the reliability workbench can update either behavior without
+	// depending on deployment configuration or restarting the process.
+	SettingKeyCodexTurnStateProbeEnabled          = "codex_turn_state_probe_enabled"
+	SettingKeyCodexTurnStateCacheInjectionEnabled = "codex_turn_state_cache_injection_enabled"
+
 	// SettingKeyOpsAdvancedSettings stores JSON config for ops advanced settings (data retention, aggregation).
 	SettingKeyOpsAdvancedSettings = "ops_advanced_settings"
 

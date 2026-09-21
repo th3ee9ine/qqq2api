@@ -1010,9 +1010,10 @@ type GatewayConfig struct {
 	// ForcedCodexInstructionsTemplate: 启动时从模板文件读取并缓存的模板内容。
 	// 该字段不直接参与配置反序列化，仅用于请求热路径避免重复读盘。
 	ForcedCodexInstructionsTemplate string `mapstructure:"-"`
-	// CodexTurnState controls collection and injection of the opaque
-	// X-Codex-Turn-State envelope for official OAuth/Setup Token Codex routes.
-	// API-key and relay routes never use this collector, even when enabled.
+	// CodexTurnState bounds collection of the opaque X-Codex-Turn-State
+	// envelope for official OAuth/Setup Token Codex routes. Runtime probe and
+	// injection switches are managed from the administrator reliability page.
+	// API-key and relay routes never use this collector.
 	CodexTurnState GatewayCodexTurnStateConfig `mapstructure:"codex_turn_state"`
 	// OpenAIPassthroughAllowTimeoutHeaders: OpenAI 透传模式是否放行客户端超时头
 	// 关闭（默认）可避免 x-stainless-timeout 等头导致上游提前断流。
@@ -1120,8 +1121,6 @@ type GatewayConfig struct {
 // GatewayCodexTurnStateConfig bounds the in-memory turn-state collector. The
 // state itself is never persisted or returned by reliability endpoints.
 type GatewayCodexTurnStateConfig struct {
-	Enabled               bool  `mapstructure:"enabled"`
-	InjectionEnabled      bool  `mapstructure:"injection_enabled"`
 	ProbeTimeoutSeconds   int   `mapstructure:"probe_timeout_seconds"`
 	RefreshBeforeSeconds  int   `mapstructure:"refresh_before_seconds"`
 	CooldownSeconds       int   `mapstructure:"cooldown_seconds"`
@@ -2416,11 +2415,6 @@ func setDefaults() {
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
-	viper.SetDefault("gateway.codex_turn_state.enabled", true)
-	// Passive collection is safe to enable by default. Active probing and cache
-	// injection are opt-in because a cold miss consumes upstream quota and adds
-	// synchronous latency to the first generation request for a scope/model key.
-	viper.SetDefault("gateway.codex_turn_state.injection_enabled", false)
 	viper.SetDefault("gateway.codex_turn_state.probe_timeout_seconds", 15)
 	viper.SetDefault("gateway.codex_turn_state.refresh_before_seconds", 1200)
 	viper.SetDefault("gateway.codex_turn_state.cooldown_seconds", 180)
@@ -3323,32 +3317,30 @@ func (c *Config) Validate() error {
 		(c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds > 0 && c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds < 30) {
 		return fmt.Errorf("gateway.openai_high_effort_first_output_timeout_seconds must be 0 or between 30-1800 seconds")
 	}
-	if c.Gateway.CodexTurnState.Enabled {
-		turnState := c.Gateway.CodexTurnState
-		if turnState.ProbeTimeoutSeconds <= 0 || turnState.ProbeTimeoutSeconds > 120 {
-			return fmt.Errorf("gateway.codex_turn_state.probe_timeout_seconds must be between 1-120 seconds")
-		}
-		if turnState.TTLSeconds < 120 || turnState.TTLSeconds > 86400 {
-			return fmt.Errorf("gateway.codex_turn_state.ttl_seconds must be between 120-86400 seconds")
-		}
-		if turnState.RefreshBeforeSeconds < 0 || turnState.RefreshBeforeSeconds >= turnState.TTLSeconds {
-			return fmt.Errorf("gateway.codex_turn_state.refresh_before_seconds must be non-negative and less than ttl_seconds")
-		}
-		if turnState.CooldownSeconds < 0 || turnState.CooldownSeconds > 3600 {
-			return fmt.Errorf("gateway.codex_turn_state.cooldown_seconds must be between 0-3600 seconds")
-		}
-		if turnState.ExpectedBlocks < 0 || turnState.ExpectedBlocks > 64 {
-			return fmt.Errorf("gateway.codex_turn_state.expected_blocks must be between 0-64")
-		}
-		if turnState.MaxEntries <= 0 || turnState.MaxEntries > 65536 {
-			return fmt.Errorf("gateway.codex_turn_state.max_entries must be between 1-65536")
-		}
-		if turnState.MaxTokenBytes <= 0 || turnState.MaxTokenBytes > 8192 {
-			return fmt.Errorf("gateway.codex_turn_state.max_token_bytes must be between 1-8192")
-		}
-		if turnState.MaxProbeResponseBytes <= 0 || turnState.MaxProbeResponseBytes > 16*1024*1024 {
-			return fmt.Errorf("gateway.codex_turn_state.max_probe_response_bytes must be between 1-16777216")
-		}
+	turnState := c.Gateway.CodexTurnState
+	if turnState.ProbeTimeoutSeconds <= 0 || turnState.ProbeTimeoutSeconds > 120 {
+		return fmt.Errorf("gateway.codex_turn_state.probe_timeout_seconds must be between 1-120 seconds")
+	}
+	if turnState.TTLSeconds < 120 || turnState.TTLSeconds > 86400 {
+		return fmt.Errorf("gateway.codex_turn_state.ttl_seconds must be between 120-86400 seconds")
+	}
+	if turnState.RefreshBeforeSeconds < 0 || turnState.RefreshBeforeSeconds >= turnState.TTLSeconds {
+		return fmt.Errorf("gateway.codex_turn_state.refresh_before_seconds must be non-negative and less than ttl_seconds")
+	}
+	if turnState.CooldownSeconds < 0 || turnState.CooldownSeconds > 3600 {
+		return fmt.Errorf("gateway.codex_turn_state.cooldown_seconds must be between 0-3600 seconds")
+	}
+	if turnState.ExpectedBlocks < 0 || turnState.ExpectedBlocks > 64 {
+		return fmt.Errorf("gateway.codex_turn_state.expected_blocks must be between 0-64")
+	}
+	if turnState.MaxEntries <= 0 || turnState.MaxEntries > 65536 {
+		return fmt.Errorf("gateway.codex_turn_state.max_entries must be between 1-65536")
+	}
+	if turnState.MaxTokenBytes <= 0 || turnState.MaxTokenBytes > 8192 {
+		return fmt.Errorf("gateway.codex_turn_state.max_token_bytes must be between 1-8192")
+	}
+	if turnState.MaxProbeResponseBytes <= 0 || turnState.MaxProbeResponseBytes > 16*1024*1024 {
+		return fmt.Errorf("gateway.codex_turn_state.max_probe_response_bytes must be between 1-16777216")
 	}
 	if c.Gateway.Live.MaxSessionDurationSeconds <= 0 {
 		c.Gateway.Live.MaxSessionDurationSeconds = 3600

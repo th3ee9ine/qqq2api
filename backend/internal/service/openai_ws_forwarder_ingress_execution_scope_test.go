@@ -63,7 +63,7 @@ func writeOpenAIWSExecutionScopeRequest(t *testing.T, conn *coderws.Conn, body s
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StateBoundToExecutionScope(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := newOpenAIWSExecutionScopeTestConfig()
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 	expectedTurnState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 101)
 
 	captureConn := &openAIWSCaptureConn{
@@ -79,15 +79,15 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_StateBoundToExec
 
 	stateStore := NewOpenAIWSStateStore(nil)
 	svc := &OpenAIGatewayService{
-		cfg:                     cfg,
-		httpUpstream:            &httpUpstreamRecorder{},
-		cache:                   &stubGatewayCache{},
-		openaiWSResolver:        NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:           NewCodexToolCorrector(),
-		openaiWSPool:            pool,
-		openaiWSStateStore:      stateStore,
-		codexTurnStateInjection: true,
+		cfg:                cfg,
+		httpUpstream:       &httpUpstreamRecorder{},
+		cache:              &stubGatewayCache{},
+		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:      NewCodexToolCorrector(),
+		openaiWSPool:       pool,
+		openaiWSStateStore: stateStore,
 	}
+	svc.SetCodexTurnStateRuntimeSettings(true, true)
 	svc.initCodexTurnStateCollector()
 	groupID := int64(9)
 	account := codexTurnStateGatewayTestAccount(454)

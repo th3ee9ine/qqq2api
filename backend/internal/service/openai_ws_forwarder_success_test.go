@@ -1381,7 +1381,7 @@ func TestOpenAIGatewayService_Forward_WSv2_APIKeyDoesNotReplayTurnStateOnReconne
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 0
-	enableOpenAIWSTurnStateLifecycleCollector(cfg, true)
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 
 	svc := &OpenAIGatewayService{
 		cfg:              cfg,

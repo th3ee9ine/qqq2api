@@ -2654,8 +2654,6 @@ func TestLoadDefaultGatewayCodexTurnStateConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	turnState := cfg.Gateway.CodexTurnState
-	require.True(t, turnState.Enabled)
-	require.False(t, turnState.InjectionEnabled)
 	require.Equal(t, 15, turnState.ProbeTimeoutSeconds)
 	require.Equal(t, 1200, turnState.RefreshBeforeSeconds)
 	require.Equal(t, 180, turnState.CooldownSeconds)
@@ -2710,8 +2708,6 @@ func TestValidateGatewayCodexTurnStateConfig(t *testing.T) {
 	t.Run("inclusive boundaries", func(t *testing.T) {
 		cfg := loadValid(t)
 		cfg.Gateway.CodexTurnState = GatewayCodexTurnStateConfig{
-			Enabled:               true,
-			InjectionEnabled:      true,
 			ProbeTimeoutSeconds:   120,
 			RefreshBeforeSeconds:  86399,
 			CooldownSeconds:       3600,
@@ -2725,19 +2721,11 @@ func TestValidateGatewayCodexTurnStateConfig(t *testing.T) {
 		require.NoError(t, cfg.Validate())
 	})
 
-	t.Run("disabled ignores collector-only bounds", func(t *testing.T) {
+	t.Run("collector bounds are always validated", func(t *testing.T) {
 		cfg := loadValid(t)
-		cfg.Gateway.CodexTurnState = GatewayCodexTurnStateConfig{
-			Enabled:               false,
-			ProbeTimeoutSeconds:   -1,
-			RefreshBeforeSeconds:  -1,
-			CooldownSeconds:       -1,
-			TTLSeconds:            -1,
-			ExpectedBlocks:        -1,
-			MaxEntries:            -1,
-			MaxTokenBytes:         -1,
-			MaxProbeResponseBytes: -1,
-		}
-		require.NoError(t, cfg.Validate())
+		cfg.Gateway.CodexTurnState = GatewayCodexTurnStateConfig{}
+		err := cfg.Validate()
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "gateway.codex_turn_state.probe_timeout_seconds")
 	})
 }

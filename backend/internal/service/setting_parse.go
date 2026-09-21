@@ -180,10 +180,12 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyIdentityPatchPrompt: "",
 
 		// Ops monitoring defaults (vNext)
-		SettingKeyOpsMonitoringEnabled:         "true",
-		SettingKeyOpsRealtimeMonitoringEnabled: "true",
-		SettingKeyOpsQueryModeDefault:          "auto",
-		SettingKeyOpsMetricsIntervalSeconds:    "60",
+		SettingKeyOpsMonitoringEnabled:                "true",
+		SettingKeyOpsRealtimeMonitoringEnabled:        "true",
+		SettingKeyOpsQueryModeDefault:                 "auto",
+		SettingKeyOpsMetricsIntervalSeconds:           "60",
+		SettingKeyCodexTurnStateProbeEnabled:          "true",
+		SettingKeyCodexTurnStateCacheInjectionEnabled: "true",
 
 		// Channel monitor defaults (enabled, 60s)
 		SettingKeyChannelMonitorEnabled:                "true",

@@ -55,8 +55,6 @@ func (b *codexTurnStateBoundedBody) Close() error {
 func newCodexTurnStateGatewayTestService(upstream HTTPUpstream) *OpenAIGatewayService {
 	cfg := &config.Config{}
 	cfg.Gateway.CodexTurnState = config.GatewayCodexTurnStateConfig{
-		Enabled:               true,
-		InjectionEnabled:      true,
 		ProbeTimeoutSeconds:   2,
 		RefreshBeforeSeconds:  120,
 		CooldownSeconds:       3,
@@ -174,25 +172,9 @@ func TestPrepareCodexTurnStateDoesNotReuseStateAcrossAccountSwitch(t *testing.T)
 	require.False(t, staleBinding, "the prior account binding must not match after failover")
 }
 
-func TestPrepareCodexTurnStateDisabledAndAPIKeyNeverProbeOrInject(t *testing.T) {
+func TestPrepareCodexTurnStateAPIKeyNeverProbesOrInjects(t *testing.T) {
 	now := time.Now().UTC()
 	state := collectorTestToken(t, now.Add(-time.Minute), 2, 44)
-
-	t.Run("disabled", func(t *testing.T) {
-		upstream := &httpUpstreamRecorder{}
-		cfg := &config.Config{}
-		cfg.Gateway.CodexTurnState.Enabled = false
-		svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
-		svc.initCodexTurnStateCollector()
-		account := codexTurnStateGatewayTestAccount(401)
-		c := newCodexTurnStateGatewayTestContext(t, "execution-disabled")
-
-		snapshot, ok := svc.prepareCodexTurnState(context.Background(), c, account, "gpt-5.5", make(http.Header), true)
-		require.False(t, ok)
-		require.Empty(t, snapshot.Token.Value)
-		require.Nil(t, svc.codexTurnStateCollector)
-		require.Empty(t, upstream.requests)
-	})
 
 	t.Run("api-key", func(t *testing.T) {
 		upstream := &httpUpstreamRecorder{}
@@ -212,7 +194,7 @@ func TestPrepareCodexTurnStateDisabledAndAPIKeyNeverProbeOrInject(t *testing.T) 
 func TestPrepareCodexTurnStateInjectionDisabledDoesNotConsumeCachedState(t *testing.T) {
 	upstream := &httpUpstreamRecorder{}
 	svc := newCodexTurnStateGatewayTestService(upstream)
-	svc.codexTurnStateInjection = false
+	svc.SetCodexTurnStateRuntimeSettings(true, false)
 	account := codexTurnStateGatewayTestAccount(403)
 	c := newCodexTurnStateGatewayTestContext(t, "execution-injection-disabled")
 	now := time.Now().UTC()
@@ -220,7 +202,7 @@ func TestPrepareCodexTurnStateInjectionDisabledDoesNotConsumeCachedState(t *test
 	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
 	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, state, "seed", now))
 
-	snapshot, ok := svc.prepareCodexTurnState(context.Background(), c, account, "gpt-5.5", make(http.Header), true)
+	snapshot, ok := svc.prepareCodexTurnState(context.Background(), c, account, "gpt-5.5", make(http.Header), false)
 
 	require.False(t, ok)
 	require.Empty(t, snapshot.Token.Value)

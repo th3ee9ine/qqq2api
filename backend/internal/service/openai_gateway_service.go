@@ -544,11 +544,10 @@ type OpenAIGatewayService struct {
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
 	// codexTurnStateCollector is an in-memory, account/scope/model isolated
-	// cache. It is intentionally optional so hand-built test services and
-	// API-key-only deployments keep the pre-existing behavior.
+	// cache. It remains optional only for hand-built test services without a
+	// configuration; production services always initialize it.
 	codexTurnStateCollector       *OpenAICodexTurnStateCollector
-	codexTurnStateEnabled         bool
-	codexTurnStateInjection       bool
+	codexTurnStateRuntime         atomic.Pointer[openAICodexTurnStateRuntimeSettings]
 	codexTurnStateProbeSuccesses  atomic.Uint64
 	codexTurnStateProbeFailures   atomic.Uint64
 	codexTurnStateLastSuccessUnix atomic.Int64

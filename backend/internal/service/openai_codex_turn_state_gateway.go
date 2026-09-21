@@ -66,6 +66,39 @@ type openAICodexTurnStateRequestBinding struct {
 	used     bool
 }
 
+type openAICodexTurnStateRuntimeSettings struct {
+	probeEnabled          bool
+	cacheInjectionEnabled bool
+}
+
+// SetCodexTurnStateRuntimeSettings publishes the administrator-controlled
+// switches as one immutable snapshot. A nil snapshot means the persisted
+// settings have not been loaded yet, so both capabilities use their default-on
+// behavior.
+func (s *OpenAIGatewayService) SetCodexTurnStateRuntimeSettings(probeEnabled, cacheInjectionEnabled bool) {
+	if s == nil {
+		return
+	}
+	s.codexTurnStateRuntime.Store(&openAICodexTurnStateRuntimeSettings{
+		probeEnabled:          probeEnabled,
+		cacheInjectionEnabled: cacheInjectionEnabled,
+	})
+}
+
+// CodexTurnStateRuntimeSettings returns a lock-free runtime snapshot. Missing
+// settings intentionally default to enabled so new and upgraded installations
+// get the UI defaults without requiring a database migration.
+func (s *OpenAIGatewayService) CodexTurnStateRuntimeSettings() (probeEnabled, cacheInjectionEnabled bool) {
+	if s == nil {
+		return true, true
+	}
+	settings := s.codexTurnStateRuntime.Load()
+	if settings == nil {
+		return true, true
+	}
+	return settings.probeEnabled, settings.cacheInjectionEnabled
+}
+
 type openAICodexTurnStateProbeFailure struct {
 	code       string
 	statusCode int
@@ -88,13 +121,7 @@ func (s *OpenAIGatewayService) initCodexTurnStateCollector() {
 	if s == nil || s.cfg == nil {
 		return
 	}
-	cfg := s.cfg.Gateway.CodexTurnState
-	if !cfg.Enabled {
-		return
-	}
 	s.codexTurnStateCollector = NewOpenAICodexTurnStateCollector(s.codexTurnStatePolicy())
-	s.codexTurnStateEnabled = true
-	s.codexTurnStateInjection = cfg.InjectionEnabled
 	// Store an initial value so atomic.Value.Load is always well-defined even
 	// before the first probe failure.
 	s.codexTurnStateLastError.Store("")
@@ -126,7 +153,7 @@ func codexTurnStateEligibleAccount(account *Account) bool {
 }
 
 func (s *OpenAIGatewayService) codexTurnStateEligible(account *Account) bool {
-	return s != nil && s.codexTurnStateEnabled && s.codexTurnStateCollector != nil && codexTurnStateEligibleAccount(account)
+	return s != nil && s.codexTurnStateCollector != nil && codexTurnStateEligibleAccount(account)
 }
 
 func codexTurnStateModel(model string) string {
@@ -198,15 +225,18 @@ func (s *OpenAIGatewayService) prepareCodexTurnState(ctx context.Context, c *gin
 	// Cache reuse and probing require the complete isolation key. A native
 	// client value above can still pass through unchanged, but an unknown final
 	// upstream model must never be folded into another model's cache entry.
-	if !reliableKey || !s.codexTurnStateInjection {
+	if !reliableKey {
 		s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{}, false)
 		return OpenAICodexTurnStateSnapshot{}, false
 	}
-	if snapshot, usable := s.codexTurnStateCollector.Acquire(key, now); usable {
-		s.bindCodexTurnStateRequest(c, key, model, snapshot, true)
-		return snapshot, true
+	probeEnabled, cacheInjectionEnabled := s.CodexTurnStateRuntimeSettings()
+	if cacheInjectionEnabled {
+		if snapshot, usable := s.codexTurnStateCollector.Acquire(key, now); usable {
+			s.bindCodexTurnStateRequest(c, key, model, snapshot, true)
+			return snapshot, true
+		}
 	}
-	if !allowProbe {
+	if !allowProbe || !probeEnabled {
 		s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{}, false)
 		return OpenAICodexTurnStateSnapshot{}, false
 	}
@@ -226,6 +256,10 @@ func (s *OpenAIGatewayService) prepareCodexTurnState(ctx context.Context, c *gin
 	}
 	probe, started := s.codexTurnStateCollector.StartProbe(key, now)
 	if !started {
+		if !cacheInjectionEnabled {
+			s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{}, false)
+			return OpenAICodexTurnStateSnapshot{}, false
+		}
 		// A concurrent request may be collecting the value. Wait only for that
 		// bounded flight; if it completes, the next acquire can inject it.
 		_, _ = s.codexTurnStateCollector.WaitProbe(probeCtx, key)
@@ -261,10 +295,14 @@ func (s *OpenAIGatewayService) prepareCodexTurnState(ctx context.Context, c *gin
 		}
 		if s.codexTurnStateCollector.Offer(key, token, "probe", time.Now()) {
 			s.recordCodexTurnStateProbeSuccess()
-			if snapshot, usable := s.codexTurnStateCollector.Acquire(key, time.Now()); usable {
-				s.bindCodexTurnStateRequest(c, key, model, snapshot, true)
-				return snapshot, true
+			if cacheInjectionEnabled {
+				if snapshot, usable := s.codexTurnStateCollector.Acquire(key, time.Now()); usable {
+					s.bindCodexTurnStateRequest(c, key, model, snapshot, true)
+					return snapshot, true
+				}
 			}
+			s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{}, false)
+			return OpenAICodexTurnStateSnapshot{}, false
 		}
 		s.recordCodexTurnStateProbeFailure("invalid_state")
 	} else {
@@ -692,7 +730,7 @@ func (s *OpenAIGatewayService) recordCodexTurnStateProbeFailure(code string) {
 // CodexTurnStateReliabilitySnapshot implements the optional Ops projection.
 // Only aggregate counts and allow-listed error codes leave this service.
 func (s *OpenAIGatewayService) CodexTurnStateReliabilitySnapshot(ctx context.Context) OpenAICodexTurnStateReliabilitySnapshot {
-	if s == nil || !s.codexTurnStateEnabled || s.codexTurnStateCollector == nil {
+	if s == nil || s.codexTurnStateCollector == nil {
 		return OpenAICodexTurnStateReliabilitySnapshot{Enabled: false, Status: "disabled"}
 	}
 	if ctx != nil {
@@ -743,9 +781,11 @@ func (s *OpenAIGatewayService) CodexTurnStateReliabilitySnapshot(ctx context.Con
 	if raw := s.codexTurnStateLastError.Load(); raw != nil {
 		lastError, _ = raw.(string)
 	}
+	probeEnabled, cacheInjectionEnabled := s.CodexTurnStateRuntimeSettings()
 	return OpenAICodexTurnStateReliabilitySnapshot{
 		Enabled:          true,
-		InjectionEnabled: s.codexTurnStateInjection,
+		ProbeEnabled:     probeEnabled,
+		InjectionEnabled: cacheInjectionEnabled,
 		Status:           status,
 		Ready:            active > 0,
 		Collecting:       collecting,

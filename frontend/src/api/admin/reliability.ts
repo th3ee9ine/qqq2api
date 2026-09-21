@@ -239,6 +239,12 @@ export interface ReliabilityStatusResponse {
   message?: string
 }
 
+/** Runtime controls for bounded turn-state collection and reuse. */
+export interface ReliabilityTurnStateSettings {
+  probe_enabled: boolean
+  injection_enabled: boolean
+}
+
 /** Normalize both the current nested response and the earlier flat projection. */
 export function normalizeReliabilityStatus(response: ReliabilityStatusResponse): ReliabilityStatusSummary {
   const nested = response.summary ?? {}
@@ -261,8 +267,25 @@ export async function getReliabilityStatus(): Promise<ReliabilityStatusResponse>
   return data
 }
 
+export async function getReliabilityTurnStateSettings(): Promise<ReliabilityTurnStateSettings> {
+  const { data } = await apiClient.get<ReliabilityTurnStateSettings>('/admin/reliability/turn-state-settings')
+  return data
+}
+
+export async function updateReliabilityTurnStateSettings(
+  settings: ReliabilityTurnStateSettings,
+): Promise<ReliabilityTurnStateSettings> {
+  const { data } = await apiClient.put<ReliabilityTurnStateSettings>(
+    '/admin/reliability/turn-state-settings',
+    settings,
+  )
+  return data
+}
+
 export const reliabilityAPI = {
   getStatus: getReliabilityStatus,
+  getTurnStateSettings: getReliabilityTurnStateSettings,
+  updateTurnStateSettings: updateReliabilityTurnStateSettings,
 }
 
 export default reliabilityAPI

@@ -729,7 +729,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	if account.UsesOpenAICodexProtocol() {
 		stateModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, true); ok && req.Header.Get(openAICodexTurnStateHeader) == "" && s.codexTurnStateInjection {
+		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, true); ok && req.Header.Get(openAICodexTurnStateHeader) == "" {
 			req.Header.Set(openAICodexTurnStateHeader, snapshot.Token.Value)
 		}
 	}
