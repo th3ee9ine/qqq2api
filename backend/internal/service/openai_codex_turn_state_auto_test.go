@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/tlsfingerprint"
 	"github.com/tidwall/gjson"
 )
 
@@ -104,6 +105,13 @@ func (u *turnStateRawUpstream) Do(req *http.Request, proxy string, id int64, _ i
 	return u.call(req, proxy, id)
 }
 
+// Turn State maintenance follows the same TLS-aware fallback as the account
+// test path. Keep this test double's two transport entry points equivalent so
+// the embedded interface cannot dispatch through a nil method.
+func (u *turnStateRawUpstream) DoWithTLS(req *http.Request, proxy string, id int64, _ int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.call(req, proxy, id)
+}
+
 func (u *turnStateAutoUpstream) Do(req *http.Request, proxy string, id int64, _ int) (*http.Response, error) {
 	var payload []byte
 	if req.Body != nil {
@@ -124,6 +132,11 @@ func (u *turnStateAutoUpstream) Do(req *http.Request, proxy string, id int64, _ 
 	}
 	return resp, nil
 }
+
+func (u *turnStateAutoUpstream) DoWithTLS(req *http.Request, proxy string, id int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxy, id, concurrency)
+}
+
 func newTurnStateAutoService(t *testing.T) (*OpenAIGatewayService, *turnStateAutoRepo, *Account) {
 	t.Helper()
 	account := &Account{ID: 10, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Credentials: map[string]any{"access_token": "access-secret", "chatgpt_account_id": "account-test"}}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/tlsfingerprint"
 )
 
 type turnStateProxyRepo struct {
@@ -163,6 +164,10 @@ func (r *turnStateConcurrentProxyRepo) ListAllForFallback(context.Context) ([]Pr
 
 func (u *turnStateProbeSequenceUpstream) Do(req *http.Request, proxy string, id int64, _ int) (*http.Response, error) {
 	return u.call(req, proxy, id)
+}
+
+func (u *turnStateProbeSequenceUpstream) DoWithTLS(req *http.Request, proxy string, id int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxy, id, concurrency)
 }
 
 func turnStateDedicatedTemplateProxy() Proxy {

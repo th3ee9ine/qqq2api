@@ -22,6 +22,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/proxyurl"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/proxyutil"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/tlsfingerprint"
 	"github.com/tidwall/gjson"
 	golangproxy "golang.org/x/net/proxy"
 )
@@ -806,6 +807,10 @@ func (u *codexTurnStateLiveHTTP) Do(req *http.Request, proxyURL string, accountI
 		len(extractOpenAICodexTurnState(resp.Header)),
 	)
 	return resp, nil
+}
+
+func (u *codexTurnStateLiveHTTP) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
 }
 
 func codexTurnStateLiveErrorShape(body []byte) string {

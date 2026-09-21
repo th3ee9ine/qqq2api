@@ -2885,12 +2885,19 @@ func (s *OpenAIGatewayService) loadCodexTurnStateCollectionAccount(ctx context.C
 }
 
 func (s *OpenAIGatewayService) requestOpenAICodexTurnStateViaProxyWithMode(ctx context.Context, account *Account, model, proxyURL, sentState string, requireState, activeRound bool) (string, *upstreamResponseModelObserver, error) {
-	if s == nil || s.httpUpstream == nil || account == nil {
+	if s == nil || account == nil {
 		return "", nil, codexTurnStateAutoError("account_unavailable")
 	}
 	account, err := s.loadCodexTurnStateCollectionAccount(ctx, account.ID)
 	if err != nil {
 		return "", nil, err
+	}
+	// A shadow account owns the maintenance state and sticky route, but its
+	// parent owns the OAuth credential and Codex identity. Keep those two
+	// concerns separate just like the live account-test flow does.
+	credentialAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
+	if err != nil || credentialAccount == nil {
+		return "", nil, codexTurnStateAutoError("auth_failed")
 	}
 	if !activeRound {
 		blocked, boundaryErr := s.refreshCodexTurnStateAccountProbeBoundary(ctx, account.ID)
@@ -2910,16 +2917,20 @@ func (s *OpenAIGatewayService) requestOpenAICodexTurnStateViaProxyWithMode(ctx c
 	if err != nil {
 		return "", nil, codexTurnStateAutoError("request_failed")
 	}
-	token, _, err := s.GetAccessToken(ctx, account)
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	// The resolved credential snapshot is also the token-provider key. Using it
+	// avoids resolving a shadow account a second time and keeps the token,
+	// ChatGPT account id, and Agent Identity headers on one parent snapshot.
+	token, _, err := s.GetAccessToken(ctx, credentialAccount)
 	if err != nil {
 		return "", nil, codexTurnStateAutoError("auth_failed")
 	}
-	applyOpenAIAccountTestHeaders(req, account, "responses", payloadBytes)
+	applyOpenAIAccountTestHeaders(req, credentialAccount, "responses", payloadBytes)
 	// Setup tokens use exactly the same Codex endpoint and identity as OAuth.
 	req.Host = "chatgpt.com"
-	setOpenAIChatGPTAccountHeaders(req.Header, account)
-	enforceCodexIdentityHeadersWithAccount(req.Header, account)
-	auth, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
+	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
+	enforceCodexIdentityHeadersWithAccount(req.Header, credentialAccount)
+	auth, err := s.buildOpenAIAuthenticationHeaders(ctx, credentialAccount, token)
 	if err != nil {
 		return "", nil, codexTurnStateAutoError("auth_failed")
 	}
@@ -2932,10 +2943,18 @@ func (s *OpenAIGatewayService) requestOpenAICodexTurnStateViaProxyWithMode(ctx c
 		req.Header.Set(openAICodexTurnStateHeader, strings.TrimSpace(sentState))
 	}
 	SanitizeOutboundGatewayIdentity(req.Header)
-	// Match the OpenAI gateway's ordinary transport (including its proxy).
-	// Turn State maintenance is independent of the account's serving
-	// concurrency. A zero value keeps the transport on its ordinary pool limits.
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, 0)
+	// Match the account-test egress path: the OAuth plugin gets first refusal;
+	// otherwise use the account's configured concurrency and TLS-aware transport.
+	resp, _, err := doOpenAIOAuthTransportWithCredentialAccount(
+		req,
+		proxyURL,
+		account,
+		credentialAccount,
+		s.pluginManager,
+		s.httpUpstream,
+		s.tlsFPProfileService,
+		true,
+	)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return "", nil, codexTurnStateAutoError("timeout")

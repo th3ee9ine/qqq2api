@@ -191,6 +191,7 @@ func ProvideOpenAIGatewayService(
 	rateLimitService *RateLimitService,
 	billingCacheService *BillingCacheService,
 	httpUpstream HTTPUpstream,
+	tlsFPProfileService *TLSFingerprintProfileService,
 	deferredService *DeferredService,
 	openAITokenProvider *OpenAITokenProvider,
 	resolver *ModelPricingResolver,
@@ -224,6 +225,7 @@ func ProvideOpenAIGatewayService(
 		userPlatformQuotaRepo,
 	)
 	svc.proxyRepo = proxyRepo
+	svc.SetTLSFingerprintProfileService(tlsFPProfileService)
 	svc.StartOpenAICodexTurnStateRenewal()
 	return svc
 }
