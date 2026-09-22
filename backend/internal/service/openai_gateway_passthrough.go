@@ -742,6 +742,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		}
 		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, true); ok && req.Header.Get(openAICodexTurnStateHeader) == "" {
 			req.Header.Set(openAICodexTurnStateHeader, snapshot.Token.Value)
+			req = bindOpenAICodexTurnStateTicketRequest(req, snapshot)
 		}
 	}
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http_passthrough", req.Header, body, "not_applicable")

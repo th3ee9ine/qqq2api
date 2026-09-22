@@ -5,6 +5,7 @@ import ReliabilityView from '../ReliabilityView.vue'
 const mocks = vi.hoisted(() => ({
   getStatus: vi.fn(),
   getTurnStateSettings: vi.fn(),
+  startTurnStateHarvest: vi.fn(),
   updateTurnStateSettings: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock('@/api/admin/reliability', async (importOriginal) => {
     reliabilityAPI: {
       getStatus: mocks.getStatus,
       getTurnStateSettings: mocks.getTurnStateSettings,
+      startTurnStateHarvest: mocks.startTurnStateHarvest,
       updateTurnStateSettings: mocks.updateTurnStateSettings,
     },
   }
@@ -76,6 +78,7 @@ describe('ReliabilityView', () => {
   beforeEach(() => {
     mocks.getStatus.mockReset()
     mocks.getTurnStateSettings.mockReset()
+    mocks.startTurnStateHarvest.mockReset()
     mocks.updateTurnStateSettings.mockReset()
     mocks.showSuccess.mockReset()
     mocks.showError.mockReset()
@@ -83,7 +86,16 @@ describe('ReliabilityView', () => {
     mocks.getTurnStateSettings.mockResolvedValue({
       probe_enabled: true,
       injection_enabled: true,
+      speed_preset: 'standard',
+      max_requests_per_round: 4,
+      failure_cooldown_seconds: 120,
+      presets: ['slow', 'standard', 'fast', 'burst'],
+      bounds: {
+        max_requests_per_round: { min: 1, max: 20, step: 1 },
+        failure_cooldown_seconds: { min: 10, max: 3600, step: 10 },
+      },
     })
+    mocks.startTurnStateHarvest.mockResolvedValue({ accepted: true, message: 'collected' })
     mocks.updateTurnStateSettings.mockImplementation(async (settings) => settings)
   })
 
@@ -305,6 +317,9 @@ describe('ReliabilityView', () => {
     mocks.getTurnStateSettings.mockResolvedValue({
       probe_enabled: false,
       injection_enabled: true,
+      speed_preset: 'standard',
+      max_requests_per_round: 4,
+      failure_cooldown_seconds: 120,
     })
 
     const wrapper = mountView()
@@ -331,10 +346,209 @@ describe('ReliabilityView', () => {
     expect(mocks.showSuccess).toHaveBeenCalledTimes(2)
   })
 
+  it('does not save or discard an unsaved collection policy when toggling a switch', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const maxRequests = wrapper.get('[data-testid="turn-state-max-requests"]')
+    await maxRequests.setValue('999')
+    expect(wrapper.get('[data-testid="turn-state-harvest-policy-save"]').attributes('disabled')).toBeDefined()
+
+    await wrapper.get('[data-testid="turn-state-probe-toggle"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateTurnStateSettings).toHaveBeenCalledWith({
+      probe_enabled: false,
+      injection_enabled: true,
+    })
+    expect((maxRequests.element as HTMLInputElement).value).toBe('999')
+    expect(wrapper.get('[data-testid="turn-state-probe-toggle"]').attributes('aria-checked')).toBe('false')
+  })
+
+  it('uses advertised presets and bounds when saving collection pace', async () => {
+    mocks.getTurnStateSettings.mockResolvedValue({
+      probe_enabled: true,
+      injection_enabled: true,
+      speed_preset: 'slow',
+      max_requests_per_round: 2,
+      failure_cooldown_seconds: 300,
+      presets: {
+        slow: { max_requests_per_round: 2, failure_cooldown_seconds: 300 },
+        fast: { max_requests_per_round: 10, failure_cooldown_seconds: 60 },
+      },
+      bounds: {
+        max_requests_per_round: { min: 2, max: 12, step: 2 },
+        failure_cooldown_seconds: { min: 30, max: 900, step: 30 },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const presetButtons = wrapper.get('[data-testid="turn-state-speed-preset"]').findAll('button')
+    expect(presetButtons).toHaveLength(2)
+    expect(presetButtons[0].attributes('aria-pressed')).toBe('true')
+    const maxRequests = wrapper.get('[data-testid="turn-state-max-requests"]')
+    const cooldown = wrapper.get('[data-testid="turn-state-failure-cooldown"]')
+    expect(maxRequests.attributes()).toMatchObject({ min: '2', max: '12', step: '2' })
+    expect(cooldown.attributes()).toMatchObject({ min: '30', max: '900', step: '30' })
+
+    await presetButtons[1].trigger('click')
+    expect((maxRequests.element as HTMLInputElement).value).toBe('10')
+    expect((cooldown.element as HTMLInputElement).value).toBe('60')
+    await maxRequests.setValue('8')
+    await cooldown.setValue('180')
+    await wrapper.get('[data-testid="turn-state-harvest-policy-save"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateTurnStateSettings).toHaveBeenCalledWith({
+      probe_enabled: true,
+      injection_enabled: true,
+      speed_preset: 'fast',
+      max_requests_per_round: 8,
+      failure_cooldown_seconds: 180,
+    })
+
+    await maxRequests.setValue('13')
+    expect(wrapper.get('[data-testid="turn-state-harvest-policy-save"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('uses the matching backend defaults when presets are returned as names', async () => {
+    mocks.getTurnStateSettings.mockResolvedValue({
+      probe_enabled: true,
+      injection_enabled: true,
+      speed_preset: 'standard',
+      max_requests_per_round: 6,
+      failure_cooldown_seconds: 180,
+      presets: ['slow', 'standard', 'fast', 'burst'],
+      bounds: {
+        max_requests_per_round: { min: 1, max: 100, step: 1 },
+        failure_cooldown_seconds: { min: 1, max: 3600, step: 1 },
+      },
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    const buttons = wrapper.get('[data-testid="turn-state-speed-preset"]').findAll('button')
+    await buttons[3].trigger('click')
+    expect((wrapper.get('[data-testid="turn-state-max-requests"]').element as HTMLInputElement).value).toBe('20')
+    expect((wrapper.get('[data-testid="turn-state-failure-cooldown"]').element as HTMLInputElement).value).toBe('1')
+  })
+
+  it('starts a targeted collection without rendering the backend message', async () => {
+    mocks.startTurnStateHarvest.mockResolvedValue({
+      accepted: true,
+      message: 'queued via https://proxy-user:proxy-password@proxy.example.com',
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const submit = wrapper.get('[data-testid="turn-state-harvest-submit"]')
+    expect(submit.attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="turn-state-harvest-account"]').setValue('42')
+    await wrapper.get('[data-testid="turn-state-harvest-model"]').setValue('  gpt-5.6-sol  ')
+    await submit.trigger('submit')
+    await flushPromises()
+
+    expect(mocks.startTurnStateHarvest).toHaveBeenCalledWith({ account_id: 42, model: 'gpt-5.6-sol' })
+    expect(wrapper.get('[data-testid="turn-state-harvest-feedback"]').text()).toContain('harvestAccepted')
+    expect(wrapper.text()).not.toContain('proxy-user')
+    expect(wrapper.text()).not.toContain('proxy-password')
+    expect(mocks.getStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses fixed safe feedback when a collection request is rejected', async () => {
+    mocks.startTurnStateHarvest.mockResolvedValue({
+      accepted: false,
+      message: 'cookie_name=session; cookie_value=secret; turn-state=opaque',
+    })
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="turn-state-harvest-account"]').setValue('7')
+    await wrapper.get('[data-testid="turn-state-harvest-model"]').setValue('gpt-5')
+    await wrapper.get('[data-testid="turn-state-harvest-submit"]').trigger('submit')
+    await flushPromises()
+
+    const feedback = wrapper.get('[data-testid="turn-state-harvest-feedback"]')
+    expect(feedback.attributes('role')).toBe('alert')
+    expect(feedback.text()).toContain('harvestRejected')
+    expect(wrapper.text()).not.toContain('cookie_name')
+    expect(wrapper.text()).not.toContain('cookie_value')
+    expect(wrapper.text()).not.toContain('turn-state=opaque')
+  })
+
+  it('renders aggregate cookie and node health without sensitive node fields', async () => {
+    setTurnStateStatus({
+      collector: {
+        enabled: true,
+        status: 'ready',
+        cookie_count: 8,
+        cookie_active_count: 6,
+        cookie_expired_count: 2,
+        cookie_remaining_seconds: 3665,
+        budget_used: 3,
+        budget_limit: 12,
+        budget_reset_at: '2026-09-22T02:00:00Z',
+        cookie_name: 'session-secret-name',
+        cookie_value: 'session-secret-value',
+        turn_state: 'opaque-turn-state',
+        nodes: [{
+          node_id: 'node-1',
+          label: 'https://proxy-user:proxy-password@proxy.example.com:443',
+          successes: 12,
+          failures: 3,
+          consecutive_failures: 1,
+          cooldown_remaining_seconds: 75,
+          last_result: 'success',
+          proxy_url: 'https://raw-user:raw-password@proxy.example.com:443',
+          cookie: 'raw-cookie',
+        }],
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-cookie-count"]').text()).toBe('8')
+    expect(wrapper.get('[data-testid="turn-state-budget"]').text()).toBe('3 / 12')
+    expect(wrapper.get('[data-testid="turn-state-budget-reset"]').text()).not.toBe('UNAVAILABLE')
+    expect(wrapper.get('[data-testid="turn-state-cookie-active-count"]').text()).toBe('6')
+    expect(wrapper.get('[data-testid="turn-state-cookie-expired-count"]').text()).toBe('2')
+    expect(wrapper.get('[data-testid="turn-state-cookie-remaining"]').text()).toContain('durationHoursMinutes')
+    const nodes = wrapper.get('[data-testid="turn-state-collector-nodes"]')
+    expect(nodes.text()).toContain('https://***@proxy.example.com:443')
+    expect(nodes.text()).toContain('collectorNodeResults.success')
+    for (const secret of [
+      'proxy-user', 'proxy-password', 'raw-user', 'raw-password', 'raw-cookie',
+      'session-secret-name', 'session-secret-value', 'opaque-turn-state',
+    ]) expect(wrapper.text()).not.toContain(secret)
+  })
+
+  it('renders only local labels for known and unrecognized node results', async () => {
+    setTurnStateStatus({
+      collector: {
+        enabled: true,
+        status: 'ready',
+        nodes: [
+          { node_id: 'node-1', label: 'proxy.example', last_result: 'transport_error' },
+          { node_id: 'node-2', label: 'proxy2.example', last_result: 'private-failure-detail' },
+        ],
+      },
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    const nodes = wrapper.get('[data-testid="turn-state-collector-nodes"]').text()
+    expect(nodes).toContain('collectorErrors.transport_error')
+    expect(nodes).toContain('collectorUnknown')
+    expect(nodes).not.toContain('private-failure-detail')
+  })
+
   it('edits a batch proxy pool and renders collection IP diagnostics', async () => {
     mocks.getTurnStateSettings.mockResolvedValue({
       probe_enabled: true,
       injection_enabled: true,
+      speed_preset: 'standard',
+      max_requests_per_round: 4,
+      failure_cooldown_seconds: 120,
       proxy_pool_configured: true,
       proxy_pool_count: 2,
     })
@@ -357,6 +571,8 @@ describe('ReliabilityView', () => {
           { reason: 'account_identity_changed', count: 1 },
           { reason: 'account_unschedulable', count: 5 },
           { reason: 'response_model_mismatch', count: 2 },
+          { reason: 'request_budget_exhausted', count: 3 },
+          { reason: 'routes_cooling_down', count: 4 },
         ],
       },
     })
@@ -374,6 +590,8 @@ describe('ReliabilityView', () => {
     )
     expect(wrapper.get('[data-testid="turn-state-candidate-breakdown"]').text()).toContain('admin.reliability.turnState.candidateReasons.account_identity_changed')
     expect(wrapper.get('[data-testid="turn-state-candidate-breakdown"]').text()).toContain('admin.reliability.turnState.candidateReasons.account_unschedulable')
+    expect(wrapper.get('[data-testid="turn-state-candidate-breakdown"]').text()).toContain('admin.reliability.turnState.candidateReasons.request_budget_exhausted')
+    expect(wrapper.get('[data-testid="turn-state-candidate-breakdown"]').text()).toContain('admin.reliability.turnState.candidateReasons.routes_cooling_down')
 
     const input = wrapper.get('[data-testid="turn-state-proxy-pool-input"]')
     await input.setValue('https://proxy.example.com:443\nhttps://proxy.example.com:443\nsocks5://proxy.example.net:1080')

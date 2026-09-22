@@ -198,6 +198,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			wsHeaders.Set(openAIWSTurnStateHeader, turnState)
 		}
 	}
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	proxyURL = s.pinOpenAICodexTurnStateWSIdentity(c, account, turnStateModel, wsHeaders, proxyURL)
+	if s.openAICodexWSTicketHasHarvestSession(c, account, turnStateModel) {
+		for _, key := range openAICodexTurnStateForeignBodyKeys {
+			delete(payload, key)
+		}
+		payloadBytes = -1
+	}
 	logOpenAIWSModeDebug(
 		"acquire_start account_id=%d account_type=%s transport=%s preferred_conn_id=%s has_previous_response_id=%v session_hash=%s has_turn_state=%v turn_state_len=%d has_turn_metadata=%v turn_metadata_len=%d store_disabled=%v store_disabled_conn_mode=%s retry_last_reason=%s force_new_conn=%v header_user_agent=%s header_openai_beta=%s header_originator=%s header_accept_language=%s header_session_id=%s header_conversation_id=%s session_id_source=%s conversation_id_source=%s has_prompt_cache_key=%v has_chatgpt_account_id=%v has_authorization=%v has_session_id=%v has_conversation_id=%v proxy_enabled=%v",
 		account.ID,
@@ -234,9 +245,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	defer acquireCancel()
 
 	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   wsURL,
-		Headers: wsHeaders,
+		Account:        account,
+		WSURL:          wsURL,
+		Headers:        wsHeaders,
+		TurnStateModel: turnStateModel,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
@@ -244,12 +256,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		ForceNewConn:        forceNewConn,
 		ForcePreferredConn:  strictHTTPContinuation,
 		AllowPinnedOverflow: httpOAuthFacade && forceNewConn,
-		ProxyURL: func() string {
-			if account.ProxyID != nil && account.Proxy != nil {
-				return account.Proxy.URL()
-			}
-			return ""
-		}(),
+		ProxyURL:            proxyURL,
 	})
 	if err != nil {
 		if strictHTTPContinuation && errors.Is(err, errOpenAIWSPreferredConnUnavailable) {
@@ -943,8 +950,9 @@ readLoop:
 		}
 		if !clientDisconnected && (lastEventType == "response.completed" || lastEventType == "response.done") {
 			if !openAIWSTurnStateModelMismatchMarked(c) {
-				commitHandshakeTurnState()
-				s.observeCodexTurnStateResponseDetails(c, account, mappedModel, lease.HandshakeHeaders(), responseModelObserver.Model(), responseModelObserver.Conflict())
+				if s.observeCompletedOpenAIWSTurnState(c, account, mappedModel, lease, responseModelObserver.Model(), responseModelObserver.Conflict()) {
+					commitHandshakeTurnState()
+				}
 			}
 			if consumeOpenAIWSTurnStateModelMismatch(c) {
 				lease.MarkBroken()
@@ -955,8 +963,9 @@ readLoop:
 		markClientRequestCanceled()
 		if !clientDisconnected && (lastEventType == "response.completed" || lastEventType == "response.done") {
 			if !openAIWSTurnStateModelMismatchMarked(c) {
-				commitHandshakeTurnState()
-				s.observeCodexTurnStateResponseDetails(c, account, mappedModel, lease.HandshakeHeaders(), responseModelObserver.Model(), responseModelObserver.Conflict())
+				if s.observeCompletedOpenAIWSTurnState(c, account, mappedModel, lease, responseModelObserver.Model(), responseModelObserver.Conflict()) {
+					commitHandshakeTurnState()
+				}
 			}
 			if consumeOpenAIWSTurnStateModelMismatch(c) {
 				lease.MarkBroken()
@@ -990,6 +999,32 @@ readLoop:
 	result.ImageCount = imageCounter.Count()
 	result.ImageOutputSizes = imageCounter.Sizes()
 	return result, nil
+}
+
+func (s *OpenAIGatewayService) openAICodexWSTicketHasHarvestSession(c *gin.Context, account *Account, model string) bool {
+	if s == nil || c == nil || account == nil || !s.codexTurnStateEligible(account) {
+		return false
+	}
+	binding, bound := s.codexTurnStateBinding(c, account, model)
+	return bound && binding.used && binding.snapshot.Route != "client" && strings.TrimSpace(binding.snapshot.HarvestSessionID) != ""
+}
+
+func stripOpenAICodexWSTicketForeignBody(payload []byte) ([]byte, error) {
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return nil, err
+	}
+	changed := false
+	for _, key := range openAICodexTurnStateForeignBodyKeys {
+		if _, exists := body[key]; exists {
+			delete(body, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return payload, nil
+	}
+	return json.Marshal(body)
 }
 
 // ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。

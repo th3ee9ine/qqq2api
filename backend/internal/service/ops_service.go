@@ -225,6 +225,9 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 		SettingKeyCodexTurnStateProbeEnabled,
 		SettingKeyCodexTurnStateCacheInjectionEnabled,
 		SettingKeyCodexTurnStateProxyPool,
+		SettingKeyCodexTurnStateHarvestSpeedPreset,
+		SettingKeyCodexTurnStateHarvestRequestBudget,
+		SettingKeyCodexTurnStateHarvestFailureCooldown,
 	})
 	if err != nil {
 		return err

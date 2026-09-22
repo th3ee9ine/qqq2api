@@ -66,6 +66,19 @@ export interface ReliabilityTurnStateCandidateBreakdown {
   [key: string]: unknown
 }
 
+/** Credential-free health for one configured collector node. */
+export interface ReliabilityTurnStateCollectorNodeSummary {
+  node_id?: string
+  label?: string
+  successes?: number
+  failures?: number
+  consecutive_failures?: number
+  cooldown_remaining_seconds?: number
+  /** A bounded result code. Free-form values are not rendered by the UI. */
+  last_result?: string
+  [key: string]: unknown
+}
+
 /** Aggregate collector health only; the opaque state value is never returned. */
 export interface ReliabilityTurnStateCollectorSummary {
   enabled?: boolean
@@ -81,6 +94,14 @@ export interface ReliabilityTurnStateCollectorSummary {
   last_success_at?: string
   last_failure_at?: string
   last_error_code?: string
+  cookie_count?: number
+  cookie_active_count?: number
+  cookie_expired_count?: number
+  cookie_remaining_seconds?: number
+  budget_used?: number
+  budget_limit?: number
+  budget_reset_at?: string
+  nodes?: ReliabilityTurnStateCollectorNodeSummary[]
   /** Configured egress pool, with credentials removed by the backend. */
   proxy_pool?: ReliabilityTurnStateProxyPoolEntry[]
   successful_ip_regions?: ReliabilityTurnStateIPRegionSummary[]
@@ -93,6 +114,29 @@ export interface ReliabilityTurnStateCollectorSummary {
   /** Optional aggregate aliases used by older/newer gateways. */
   proxy_pool_count?: number
   successful_ip_count?: number
+  [key: string]: unknown
+}
+
+export const reliabilityTurnStateSpeedPresets = ['slow', 'standard', 'fast', 'burst'] as const
+
+export type ReliabilityTurnStateSpeedPreset = (typeof reliabilityTurnStateSpeedPresets)[number]
+
+export interface ReliabilityTurnStateNumberBounds {
+  min: number
+  max: number
+  step?: number
+}
+
+export interface ReliabilityTurnStateSettingsBounds {
+  max_requests_per_round?: ReliabilityTurnStateNumberBounds
+  failure_cooldown_seconds?: ReliabilityTurnStateNumberBounds
+}
+
+export interface ReliabilityTurnStateSpeedPresetValues {
+  max_requests_per_round?: number
+  failure_cooldown_seconds?: number
+  /** Compatibility with the source project's generic cooldown field. */
+  cooldown_seconds?: number
   [key: string]: unknown
 }
 
@@ -110,11 +154,43 @@ export interface ReliabilityStatusSummary {
 export interface ReliabilityTurnStateSettings {
   probe_enabled: boolean
   injection_enabled: boolean
+  speed_preset?: ReliabilityTurnStateSpeedPreset
+  max_requests_per_round?: number
+  failure_cooldown_seconds?: number
+  /** Server-advertised controls keep the UI aligned with deployed policy. */
+  presets?: ReliabilityTurnStateSpeedPreset[] | Partial<Record<ReliabilityTurnStateSpeedPreset, ReliabilityTurnStateSpeedPresetValues>>
+  bounds?: ReliabilityTurnStateSettingsBounds
+  /** Compatibility with an internal nested projection during rolling deploys. */
+  harvest?: {
+    speed_preset?: ReliabilityTurnStateSpeedPreset
+    max_requests_per_round?: number
+    failure_cooldown_seconds?: number
+  }
   /** The pool is write-only; credentials are never returned by the backend. */
   proxy_pool_urls?: string[]
   /** Credential-free metadata returned by the settings endpoint. */
   proxy_pool_configured?: boolean
   proxy_pool_count?: number
+}
+
+export interface ReliabilityTurnStateSettingsUpdate {
+  probe_enabled: boolean
+  injection_enabled: boolean
+  speed_preset?: ReliabilityTurnStateSpeedPreset
+  max_requests_per_round?: number
+  failure_cooldown_seconds?: number
+  proxy_pool_urls?: string[]
+}
+
+export interface ReliabilityTurnStateHarvestRequest {
+  account_id: number
+  model: string
+}
+
+export interface ReliabilityTurnStateHarvestResponse {
+  accepted: boolean
+  /** Informational backend text; callers should not render it directly. */
+  message?: string
 }
 
 /** Keep compatibility with both nested and flat Turn State responses. */
@@ -135,7 +211,7 @@ export async function getReliabilityTurnStateSettings(): Promise<ReliabilityTurn
 }
 
 export async function updateReliabilityTurnStateSettings(
-  settings: ReliabilityTurnStateSettings,
+  settings: ReliabilityTurnStateSettingsUpdate,
 ): Promise<ReliabilityTurnStateSettings> {
   const { data } = await apiClient.put<ReliabilityTurnStateSettings>(
     '/admin/reliability/turn-state-settings',
@@ -144,10 +220,21 @@ export async function updateReliabilityTurnStateSettings(
   return data
 }
 
+export async function startReliabilityTurnStateHarvest(
+  request: ReliabilityTurnStateHarvestRequest,
+): Promise<ReliabilityTurnStateHarvestResponse> {
+  const { data } = await apiClient.post<ReliabilityTurnStateHarvestResponse>(
+    '/admin/reliability/turn-state-harvest',
+    request,
+  )
+  return data
+}
+
 export const reliabilityAPI = {
   getStatus: getReliabilityStatus,
   getTurnStateSettings: getReliabilityTurnStateSettings,
   updateTurnStateSettings: updateReliabilityTurnStateSettings,
+  startTurnStateHarvest: startReliabilityTurnStateHarvest,
 }
 
 export default reliabilityAPI

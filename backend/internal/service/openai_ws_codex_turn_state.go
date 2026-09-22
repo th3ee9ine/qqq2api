@@ -137,6 +137,9 @@ func (s *OpenAIGatewayService) bindOpenAIWSSessionTurnStateIfRefreshNeeded(
 		return false
 	}
 	now := time.Now()
+	if !s.openAICodexReturnedStateMatchesCurrentTicket(c, account, model, state) {
+		return false
+	}
 	if strict, ok := store.(openAIWSSessionTurnStateGenerationStore); ok {
 		written := strict.BindSessionTurnStateIfRefreshNeeded(
 			groupID, account.ID, scope, state, generation, s.openAIWSSessionStickyTTL(), s.codexTurnStatePolicy(), now, model,
@@ -150,6 +153,22 @@ func (s *OpenAIGatewayService) bindOpenAIWSSessionTurnStateIfRefreshNeeded(
 		return written
 	}
 	return false
+}
+
+func (s *OpenAIGatewayService) openAICodexReturnedStateMatchesCurrentTicket(
+	c *gin.Context,
+	account *Account,
+	model, state string,
+) bool {
+	if s == nil || c == nil || account == nil || s.codexTurnStateCollector == nil {
+		return true
+	}
+	binding, bound := s.codexTurnStateBinding(c, account, model)
+	if !bound || !binding.used {
+		return true
+	}
+	current, usable := s.codexTurnStateCollector.Acquire(binding.key, time.Now())
+	return usable && current.Token.Value == strings.TrimSpace(state)
 }
 
 // canUseOpenAIWSSessionTurnStateStore keeps reusable WS turn state behind the
@@ -169,6 +188,33 @@ func (s *OpenAIGatewayService) canUseOpenAIWSSessionTurnStateStore(account *Acco
 // is persisted or exposed as a response header.
 func (s *OpenAIGatewayService) canCommitOpenAIWSSessionTurnState(ctx context.Context, c *gin.Context, account *Account, model, state string) bool {
 	return s.canCommitOpenAICodexTurnState(ctx, c, account, model, state)
+}
+
+// observeCompletedOpenAIWSTurnState qualifies the immutable upgrade response
+// at most once per upstream connection. A pooled connection can serve multiple
+// turns, but its Turn-State and Set-Cookie handshake headers are not per-turn
+// responses and must not repeatedly advance the collector.
+func (s *OpenAIGatewayService) observeCompletedOpenAIWSTurnState(
+	c *gin.Context,
+	account *Account,
+	model string,
+	lease *openAIWSConnLease,
+	observedModel string,
+	responseModelConflict bool,
+) bool {
+	if lease == nil {
+		return false
+	}
+	headers := lease.HandshakeHeaders()
+	if s.codexTurnStateEligible(account) {
+		var fresh bool
+		headers, fresh = lease.ConsumeTurnStateHandshakeHeaders()
+		if !fresh {
+			return false
+		}
+	}
+	s.observeCodexTurnStateResponseDetails(c, account, model, headers, observedModel, responseModelConflict)
+	return true
 }
 
 // resolveOpenAIWSCodexTurnState keeps a provenance-validated native WS state or
@@ -217,7 +263,7 @@ func (s *OpenAIGatewayService) resolveOpenAIWSCodexTurnState(
 				}
 			}
 			incoming.Set(openAICodexTurnStateHeader, current)
-			if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, model, incoming, false); ok && snapshot.Route == "client" {
+			if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, model, incoming, false); ok {
 				return snapshot.Token.Value
 			}
 			// prepareCodexTurnState clears the request header when provenance

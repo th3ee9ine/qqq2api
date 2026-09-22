@@ -467,7 +467,10 @@ const (
 	SettingKeyCodexTurnStateCacheInjectionEnabled = "codex_turn_state_cache_injection_enabled"
 	// SettingKeyCodexTurnStateProxyPool stores the JSON array of dedicated
 	// collector egress URLs. It is intentionally separate from account proxies.
-	SettingKeyCodexTurnStateProxyPool = "codex_turn_state_proxy_pool"
+	SettingKeyCodexTurnStateProxyPool              = "codex_turn_state_proxy_pool"
+	SettingKeyCodexTurnStateHarvestSpeedPreset     = "codex_turn_state_harvest_speed_preset"
+	SettingKeyCodexTurnStateHarvestRequestBudget   = "codex_turn_state_harvest_request_budget"
+	SettingKeyCodexTurnStateHarvestFailureCooldown = "codex_turn_state_harvest_failure_cooldown_seconds"
 
 	// SettingKeyOpsAdvancedSettings stores JSON config for ops advanced settings (data retention, aggregation).
 	SettingKeyOpsAdvancedSettings = "ops_advanced_settings"

@@ -132,7 +132,7 @@ func TestCodexImagesResponsesTurnStateUsesDriverModel(t *testing.T) {
 	key := svc.codexTurnStateKey(c, account, driverModel)
 	active, usable := svc.codexTurnStateCollector.Acquire(key, time.Now())
 	require.True(t, usable)
-	require.Equal(t, probeState, active.Token.Value, "a healthy probe state is not replaced before the refresh window")
+	require.Equal(t, responseState, active.Token.Value, "a successful model-matched response advances the consumed ticket")
 	require.False(t, svc.codexTurnStateCollector.Status(key, time.Now()).Ready)
 }
 

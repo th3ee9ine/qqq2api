@@ -2,22 +2,25 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
+  post: vi.fn(),
   put: vi.fn(),
 }))
 
 vi.mock('@/api/client', () => ({
-  apiClient: { get: mocks.get, put: mocks.put },
+  apiClient: { get: mocks.get, post: mocks.post, put: mocks.put },
 }))
 
 import {
   getReliabilityStatus,
   getReliabilityTurnStateSettings,
   normalizeReliabilityStatus,
+  startReliabilityTurnStateHarvest,
   updateReliabilityTurnStateSettings,
 } from '@/api/admin/reliability'
 
 beforeEach(() => {
   mocks.get.mockReset()
+  mocks.post.mockReset()
   mocks.put.mockReset()
 })
 
@@ -55,6 +58,14 @@ describe('turn-state reliability settings API', () => {
     const settings = {
       probe_enabled: true,
       injection_enabled: false,
+      speed_preset: 'standard' as const,
+      max_requests_per_round: 4,
+      failure_cooldown_seconds: 120,
+      presets: ['slow', 'standard', 'fast', 'burst'],
+      bounds: {
+        max_requests_per_round: { min: 1, max: 20 },
+        failure_cooldown_seconds: { min: 10, max: 3600 },
+      },
       proxy_pool_urls: ['https://proxy.example.com:443'],
     }
     mocks.get.mockResolvedValue({ data: settings })
@@ -67,11 +78,25 @@ describe('turn-state reliability settings API', () => {
     const settings = {
       probe_enabled: false,
       injection_enabled: true,
+      speed_preset: 'fast' as const,
+      max_requests_per_round: 8,
+      failure_cooldown_seconds: 60,
       proxy_pool_urls: ['socks5://proxy.example.com:1080'],
     }
     mocks.put.mockResolvedValue({ data: settings })
 
     await expect(updateReliabilityTurnStateSettings(settings)).resolves.toEqual(settings)
     expect(mocks.put).toHaveBeenCalledWith('/admin/reliability/turn-state-settings', settings)
+  })
+})
+
+describe('turn-state harvest API', () => {
+  it('requests bounded collection for one account and model', async () => {
+    const request = { account_id: 42, model: 'gpt-5.6-sol' }
+    const response = { accepted: true, message: 'queued' }
+    mocks.post.mockResolvedValue({ data: response })
+
+    await expect(startReliabilityTurnStateHarvest(request)).resolves.toEqual(response)
+    expect(mocks.post).toHaveBeenCalledWith('/admin/reliability/turn-state-harvest', request)
   })
 })

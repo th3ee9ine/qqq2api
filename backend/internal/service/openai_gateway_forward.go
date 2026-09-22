@@ -1553,6 +1553,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		allowTurnStateProbe := !isOpenAIImagesCodexTurnStateProbeDisabled(ctx)
 		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, allowTurnStateProbe); ok && req.Header.Get(openAICodexTurnStateHeader) == "" {
 			req.Header.Set(openAICodexTurnStateHeader, snapshot.Token.Value)
+			req = bindOpenAICodexTurnStateTicketRequest(req, snapshot)
 		}
 	}
 	logOpenAIRoutingDiagnosticsFromBody(ctx, account, "http", req.Header, body, "not_applicable")

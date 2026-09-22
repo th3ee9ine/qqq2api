@@ -180,13 +180,16 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyIdentityPatchPrompt: "",
 
 		// Ops monitoring defaults (vNext)
-		SettingKeyOpsMonitoringEnabled:                "true",
-		SettingKeyOpsRealtimeMonitoringEnabled:        "true",
-		SettingKeyOpsQueryModeDefault:                 "auto",
-		SettingKeyOpsMetricsIntervalSeconds:           "60",
-		SettingKeyCodexTurnStateProbeEnabled:          "true",
-		SettingKeyCodexTurnStateCacheInjectionEnabled: "true",
-		SettingKeyCodexTurnStateProxyPool:             "[]",
+		SettingKeyOpsMonitoringEnabled:                 "true",
+		SettingKeyOpsRealtimeMonitoringEnabled:         "true",
+		SettingKeyOpsQueryModeDefault:                  "auto",
+		SettingKeyOpsMetricsIntervalSeconds:            "60",
+		SettingKeyCodexTurnStateProbeEnabled:           "true",
+		SettingKeyCodexTurnStateCacheInjectionEnabled:  "true",
+		SettingKeyCodexTurnStateProxyPool:              "[]",
+		SettingKeyCodexTurnStateHarvestSpeedPreset:     "standard",
+		SettingKeyCodexTurnStateHarvestRequestBudget:   "6",
+		SettingKeyCodexTurnStateHarvestFailureCooldown: "180",
 
 		// Channel monitor defaults (enabled, 60s)
 		SettingKeyChannelMonitorEnabled:                "true",

@@ -125,10 +125,12 @@ func TestProbeCodexTurnStateLargePoolBoundsAttemptsWithoutDilutingRouteBudget(t 
 	for index := range pool {
 		pool[index] = fmt.Sprintf("http://proxy-%03d.example:8080", index)
 	}
-	svc.SetCodexTurnStateRuntimeSettingsWithProxyPool(true, true, pool)
+	svc.SetCodexTurnStateRuntimeSettingsWithControls(true, true, pool, CodexTurnStateHarvestControls{
+		SpeedPreset: "burst", MaxRequestsPerRound: 20, FailureCooldownSeconds: 1,
+	})
 
 	for round := 0; round < 2; round++ {
-		token, failure := svc.probeCodexTurnState(context.Background(), codexTurnStateGatewayTestAccount(993), "gpt-5.5")
+		token, failure := svc.probeCodexTurnState(context.Background(), codexTurnStateGatewayTestAccount(993+int64(round)), "gpt-5.5")
 		require.Empty(t, token.Value)
 		require.NotNil(t, failure)
 	}
@@ -141,4 +143,92 @@ func TestProbeCodexTurnStateLargePoolBoundsAttemptsWithoutDilutingRouteBudget(t 
 	for _, budget := range budgets {
 		require.Greater(t, budget, 2*time.Second, "a 256-route pool must not dilute a 15-second round to millisecond deadlines")
 	}
+}
+
+func TestCodexTurnStateHarvestBudgetResetsAfterRound(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	svc.SetCodexTurnStateRuntimeSettingsWithControls(true, true, nil, CodexTurnStateHarvestControls{
+		SpeedPreset: "fast", MaxRequestsPerRound: 2, FailureCooldownSeconds: 60,
+	})
+	base := time.Now().UTC().Truncate(time.Second)
+	require.True(t, svc.reserveCodexTurnStateHarvestRequest(base))
+	require.True(t, svc.reserveCodexTurnStateHarvestRequest(base))
+	require.False(t, svc.reserveCodexTurnStateHarvestRequest(base))
+
+	_, used, limit, resetAt := svc.codexTurnStateHarvestSummary(base.Add(59 * time.Second))
+	require.Equal(t, 2, used)
+	require.Equal(t, 2, limit)
+	require.NotNil(t, resetAt)
+	require.Equal(t, base.Add(60*time.Second), *resetAt)
+
+	require.True(t, svc.reserveCodexTurnStateHarvestRequest(base.Add(60*time.Second)))
+	_, used, limit, resetAt = svc.codexTurnStateHarvestSummary(base.Add(60 * time.Second))
+	require.Equal(t, 1, used)
+	require.Equal(t, 2, limit)
+	require.Equal(t, base.Add(120*time.Second), *resetAt)
+}
+
+func TestCodexTurnStateHarvestNodeCooldownAndSafeProjection(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	proxyURL := "http://private-user:private-password@proxy.example:8080"
+	svc.SetCodexTurnStateRuntimeSettingsWithControls(true, true, []string{proxyURL}, CodexTurnStateHarvestControls{
+		SpeedPreset: "fast", MaxRequestsPerRound: 12, FailureCooldownSeconds: 60,
+	})
+	base := time.Now().UTC().Truncate(time.Second)
+	generation := svc.codexTurnStateDiagnosticsGeneration()
+	svc.recordCodexTurnStateHarvestNode(proxyURL, &openAICodexTurnStateProbeFailure{code: "transport_error"}, 25*time.Millisecond, base, generation)
+	require.False(t, svc.codexTurnStateHarvestRouteAvailable(proxyURL, base.Add(59*time.Second)))
+	nodes, _, _, _ := svc.codexTurnStateHarvestSummary(base.Add(59 * time.Second))
+	require.Len(t, nodes, 1)
+	require.Equal(t, codexTurnStateHarvestNodeID(proxyURL), nodes[0].NodeID)
+	require.Equal(t, "http://proxy.example:8080", nodes[0].Label)
+	require.Equal(t, uint64(1), nodes[0].Failures)
+	require.Equal(t, uint64(1), nodes[0].ConsecutiveFailures)
+	require.Equal(t, 1, nodes[0].CooldownRemainingSeconds)
+	require.Equal(t, "transport_error", nodes[0].LastResult)
+	require.NotContains(t, fmt.Sprintf("%+v", nodes[0]), "private-password")
+	require.True(t, svc.codexTurnStateHarvestRouteAvailable(proxyURL, base.Add(60*time.Second)))
+
+	svc.recordCodexTurnStateHarvestNode(proxyURL, nil, 10*time.Millisecond, base.Add(61*time.Second), generation)
+	nodes, _, _, _ = svc.codexTurnStateHarvestSummary(base.Add(61 * time.Second))
+	require.Equal(t, uint64(1), nodes[0].Successes)
+	require.Zero(t, nodes[0].ConsecutiveFailures)
+	require.Zero(t, nodes[0].CooldownRemainingSeconds)
+	require.Equal(t, "success", nodes[0].LastResult)
+
+	svc.recordCodexTurnStateHarvestNode(proxyURL, &openAICodexTurnStateProbeFailure{code: "upstream_401"}, 10*time.Millisecond, base.Add(62*time.Second), generation)
+	require.True(t, svc.codexTurnStateHarvestRouteAvailable(proxyURL, base.Add(62*time.Second)),
+		"an account-specific upstream rejection must not isolate the shared proxy")
+	nodes, _, _, _ = svc.codexTurnStateHarvestSummary(base.Add(62 * time.Second))
+	require.Equal(t, uint64(2), nodes[0].Failures)
+	require.Equal(t, uint64(1), nodes[0].ConsecutiveFailures)
+	require.Zero(t, nodes[0].CooldownRemainingSeconds)
+	require.Equal(t, "upstream_401", nodes[0].LastResult)
+}
+
+func TestCodexTurnStatePoolChangeInvalidatesPinnedTicketButNoopResavePreservesIt(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	poolA := []string{"http://route-a.example:8080"}
+	svc.SetCodexTurnStateRuntimeSettingsWithProxyPool(true, true, poolA)
+	base := time.Now().UTC().Truncate(time.Second)
+	logicalKey := OpenAICodexTurnStateKey{AccountID: 994, Scope: "execution", Model: "gpt-5.5"}
+	key := svc.codexTurnStateCollector.BindKey(logicalKey)
+	value := collectorTestToken(t, base, 2, 200)
+	token, err := ParseOpenAICodexTurnState(value)
+	require.NoError(t, err)
+	require.True(t, svc.codexTurnStateCollector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+		Token: token, Route: "probe", EgressProxyURL: poolA[0], EgressPinned: true,
+	}, base))
+
+	svc.SetCodexTurnStateRuntimeSettingsWithProxyPool(true, true, []string{poolA[0]})
+	active, usable := svc.codexTurnStateCollector.Acquire(key, base)
+	require.True(t, usable, "resaving the identical pool should preserve active collection")
+	require.Equal(t, value, active.Token.Value)
+
+	svc.SetCodexTurnStateRuntimeSettingsWithProxyPool(true, true, []string{"http://route-b.example:8080"})
+	_, usable = svc.codexTurnStateCollector.Acquire(key, base)
+	require.False(t, usable, "a request already bound to a removed route must not replay the old ticket")
+	current := svc.codexTurnStateCollector.BindKey(logicalKey)
+	_, usable = svc.codexTurnStateCollector.Acquire(current, base)
+	require.False(t, usable, "new execution scopes must not find a ticket pinned to the old pool")
 }

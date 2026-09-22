@@ -42,6 +42,15 @@ func openAIWSHeaderValueForLog(headers http.Header, key string) string {
 	if headers == nil {
 		return "-"
 	}
+	// Session and conversation IDs can now be minted by the ticket collector.
+	// Diagnostics need presence only; never put reusable identity material in logs.
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "session_id", "session-id", "conversation_id":
+		if strings.TrimSpace(headers.Get(key)) == "" {
+			return "-"
+		}
+		return "[redacted]"
+	}
 	return truncateOpenAIWSLogValue(headers.Get(key), openAIWSHeaderValueMaxLen)
 }
 

@@ -827,19 +827,21 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			wsHeaders.Set(openAIWSTurnStateHeader, turnState)
 		}
 	}
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	defaultProxyURL := proxyURL
+	proxyURL = s.pinOpenAICodexTurnStateWSIdentity(c, account, turnStateModel, wsHeaders, proxyURL)
 	baseAcquireReq := openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   wsURL,
-		Headers: wsHeaders,
+		Account:        account,
+		WSURL:          wsURL,
+		Headers:        wsHeaders,
+		TurnStateModel: turnStateModel,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
-		ProxyURL: func() string {
-			if account.ProxyID != nil && account.Proxy != nil {
-				return account.Proxy.URL()
-			}
-			return ""
-		}(),
+		ProxyURL:     proxyURL,
 		ForceNewConn: false,
 	}
 	pool := s.getOpenAIWSConnPool()
@@ -903,6 +905,36 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	turnStateBoundToConnection := confirmedTurnStateBound
 	var acquireTurnLease func(int, string, bool, bool) (*openAIWSConnLease, error)
 	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool, forceNewConn bool) (*openAIWSConnLease, error) {
+		// A previous turn may have lost its collector CAS while this client WS
+		// remained open. Revalidate the ticket before any new upstream lease so
+		// reconnects never reuse its superseded state, cookie, session, or egress.
+		if s.codexTurnStateEligible(account) {
+			if binding, bound := s.codexTurnStateBinding(c, account, turnStateModel); bound && binding.used {
+				current, usable := s.codexTurnStateCollector.Acquire(binding.key, time.Now())
+				_, injectionEnabled := s.CodexTurnStateRuntimeSettings()
+				usable = usable && injectionEnabled
+				updatedHeaders := cloneHeader(baseAcquireReq.Headers)
+				if updatedHeaders == nil {
+					updatedHeaders = make(http.Header)
+				}
+				updatedHeaders.Del("session_id")
+				baseAcquireReq.ProxyURL = defaultProxyURL
+				if usable {
+					turnState = current.Token.Value
+					updatedHeaders.Set(openAIWSTurnStateHeader, turnState)
+					s.bindCodexTurnStateRequest(c, binding.key, turnStateModel, current, true)
+					baseAcquireReq.ProxyURL = s.pinOpenAICodexTurnStateWSIdentity(c, account, turnStateModel, updatedHeaders, defaultProxyURL)
+					confirmedTurnStateBound = true
+				} else {
+					turnState = ""
+					updatedHeaders.Del(openAIWSTurnStateHeader)
+					applyOpenAICodexTurnStateTicketHeaders(updatedHeaders, OpenAICodexTurnStateSnapshot{}, time.Now())
+					s.bindCodexTurnStateRequest(c, binding.key, turnStateModel, OpenAICodexTurnStateSnapshot{}, false)
+					confirmedTurnStateBound = false
+				}
+				baseAcquireReq.Headers = updatedHeaders
+			}
+		}
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
 		req.PreferredConnID = strings.TrimSpace(preferred)
 		req.ForcePreferredConn = forcePreferredConn
@@ -1018,7 +1050,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
-		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
+		wirePayload := payload
+		if s.openAICodexWSTicketHasHarvestSession(c, account, turnStateModel) {
+			var stripErr error
+			wirePayload, stripErr = stripOpenAICodexWSTicketForeignBody(payload)
+			if stripErr != nil {
+				return nil, wrapOpenAIWSIngressTurnError("sanitize_ticket_body", stripErr, false)
+			}
+		}
+		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(wirePayload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
 				fmt.Errorf("write upstream websocket request: %w", err),
@@ -1293,29 +1333,35 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				if !clientDisconnected && (eventType == "response.completed" || eventType == "response.done") {
-					if !openAIWSTurnStateModelMismatchMarked(c) && pendingHandshakeTurnState != "" && stateStore != nil &&
+					freshHandshakeEvidence := true
+					if !openAIWSTurnStateModelMismatchMarked(c) {
+						freshHandshakeEvidence = s.observeCompletedOpenAIWSTurnState(c, account, mappedModel, lease, responseModelObserver.Model(), responseModelObserver.Conflict())
+					}
+					if freshHandshakeEvidence && !openAIWSTurnStateModelMismatchMarked(c) && pendingHandshakeTurnState != "" && stateStore != nil &&
 						s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, mappedModel) &&
 						strings.EqualFold(mappedModel, turnStateModel) && s.canCommitOpenAIWSSessionTurnState(ctx, c, account, mappedModel, pendingHandshakeTurnState) {
 						confirmedState := pendingHandshakeTurnState
-						s.bindOpenAIWSSessionTurnStateIfRefreshNeeded(c, stateStore, groupID, account, turnStateScope, mappedModel, confirmedState)
-						turnState = confirmedState
-						updatedHeaders := cloneHeader(baseAcquireReq.Headers)
-						if updatedHeaders == nil {
-							updatedHeaders = make(http.Header)
+						if s.bindOpenAIWSSessionTurnStateIfRefreshNeeded(c, stateStore, groupID, account, turnStateScope, mappedModel, confirmedState) {
+							turnState = confirmedState
+							updatedHeaders := cloneHeader(baseAcquireReq.Headers)
+							if updatedHeaders == nil {
+								updatedHeaders = make(http.Header)
+							}
+							updatedHeaders.Set(openAIWSTurnStateHeader, confirmedState)
+							baseAcquireReq.Headers = updatedHeaders
+							confirmedTurnStateBound = true
 						}
-						updatedHeaders.Set(openAIWSTurnStateHeader, confirmedState)
-						baseAcquireReq.Headers = updatedHeaders
-						confirmedTurnStateBound = true
 					}
 					pendingHandshakeTurnState = ""
-					if !openAIWSTurnStateModelMismatchMarked(c) {
-						s.observeCodexTurnStateResponseDetails(c, account, mappedModel, lease.HandshakeHeaders(), responseModelObserver.Model(), responseModelObserver.Conflict())
-					}
 					if consumeOpenAIWSTurnStateModelMismatch(c) {
 						lease.MarkBroken()
 					}
-				} else {
+				} else if consumeOpenAIWSTurnStateModelMismatch(c) {
+					// A failed turn does not consume otherwise valid handshake
+					// evidence. A model conflict is different: retire the lease and
+					// prevent its state from being qualified by a later turn.
 					pendingHandshakeTurnState = ""
+					lease.MarkBroken()
 				}
 				// 客户端已断连时，上游连接的 session 状态不可信，标记 broken 避免回池复用。
 				if clientDisconnected {

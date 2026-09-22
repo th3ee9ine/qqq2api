@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,6 +109,148 @@ func TestOpenAICodexTurnStateCollectorKeepsActiveUntilRefresh(t *testing.T) {
 	require.Greater(t, promoted.Version, active.Version)
 	oldSnapshot := active
 	require.Equal(t, first, oldSnapshot.Token.Value)
+}
+
+func TestOpenAICodexTurnStateCollectorCookieLifetimeBoundary(t *testing.T) {
+	base := time.Now().UTC().Truncate(time.Second)
+	collector := NewOpenAICodexTurnStateCollector(collectorTestPolicy())
+	key := OpenAICodexTurnStateKey{AccountID: 510, Scope: "cookie-boundary", Model: "gpt-5"}
+	value := collectorTestToken(t, base, 2, 51)
+	token, err := ParseOpenAICodexTurnState(value)
+	require.NoError(t, err)
+	require.True(t, collector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+		Token: token, Route: "probe", HarvestSessionID: "collector-session",
+		HarvestCookies:   []OpenAICodexTurnStateCookie{{Name: "session", Value: "opaque"}},
+		HarvestCookiesAt: base,
+	}, base))
+
+	snapshot, usable := collector.Acquire(key, base)
+	require.True(t, usable)
+	at239 := base.Add(239 * time.Second)
+	require.True(t, snapshot.cookiesFresh(at239))
+	status := collector.Status(key, at239)
+	require.Equal(t, 1, status.CookieCount)
+	require.Equal(t, 1, status.CookieRemainingSeconds)
+	require.False(t, status.CookieExpired)
+	headers := make(http.Header)
+	applyOpenAICodexTurnStateTicketHeaders(headers, snapshot, at239)
+	require.Equal(t, "session=opaque", headers.Get("Cookie"))
+	justBeforeExpiry := base.Add(240*time.Second - time.Nanosecond)
+	status = collector.Status(key, justBeforeExpiry)
+	require.False(t, status.CookieExpired)
+	require.Equal(t, 1, status.CookieRemainingSeconds)
+	applyOpenAICodexTurnStateTicketHeaders(headers, snapshot, justBeforeExpiry)
+	require.Equal(t, "session=opaque", headers.Get("Cookie"))
+
+	at240 := base.Add(240 * time.Second)
+	require.False(t, snapshot.cookiesFresh(at240))
+	status = collector.Status(key, at240)
+	require.Equal(t, 1, status.CookieCount, "expired cookies may remain in the snapshot for diagnostics")
+	require.Zero(t, status.CookieRemainingSeconds)
+	require.True(t, status.CookieExpired)
+	applyOpenAICodexTurnStateTicketHeaders(headers, snapshot, at240)
+	require.Empty(t, headers.Get("Cookie"), "expired cookies must never be replayed")
+}
+
+func TestOpenAICodexTurnStateCollectorQualifiedRotationKeepsCookieClockWithoutUpdates(t *testing.T) {
+	base := time.Now().UTC().Truncate(time.Second)
+	collector := NewOpenAICodexTurnStateCollector(collectorTestPolicy())
+	key := OpenAICodexTurnStateKey{AccountID: 511, Scope: "qualified-response", Model: "gpt-5"}
+	first := collectorTestToken(t, base, 2, 52)
+	second := collectorTestToken(t, base.Add(time.Second), 2, 53)
+	token, err := ParseOpenAICodexTurnState(first)
+	require.NoError(t, err)
+	require.True(t, collector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+		Token: token, Route: "probe", EgressProxyURL: "http://proxy.example:8080", EgressPinned: true,
+		HarvestSessionID: "collector-session",
+		HarvestCookies:   []OpenAICodexTurnStateCookie{{Name: "session", Value: "first"}},
+		HarvestCookiesAt: base,
+	}, base))
+	used, usable := collector.Acquire(key, base)
+	require.True(t, usable)
+	require.False(t, collector.ObserveQualified(key, "malformed", used,
+		[]OpenAICodexTurnStateCookie{{Name: "session", Value: "untrusted"}}, base.Add(time.Second)))
+	require.False(t, collector.ObserveQualified(key, second,
+		OpenAICodexTurnStateSnapshot{Token: used.Token, Route: "client", Version: used.Version},
+		[]OpenAICodexTurnStateCookie{{Name: "session", Value: "client"}}, base.Add(time.Second)))
+	unchanged, usable := collector.Acquire(key, base.Add(time.Second))
+	require.True(t, usable)
+	require.Equal(t, first, unchanged.Token.Value)
+	require.Equal(t, base, unchanged.HarvestCookiesAt)
+
+	require.True(t, collector.ObserveQualified(key, second, used, nil, base.Add(2*time.Second)))
+	rotated, usable := collector.Acquire(key, base.Add(2*time.Second))
+	require.True(t, usable)
+	require.Equal(t, second, rotated.Token.Value)
+	require.Greater(t, rotated.Version, used.Version)
+	require.Equal(t, base, rotated.HarvestCookiesAt, "a state-only response cannot extend cookie freshness")
+	require.Equal(t, used.HarvestCookies, rotated.HarvestCookies)
+	require.Equal(t, used.HarvestSessionID, rotated.HarvestSessionID)
+	require.Equal(t, used.EgressProxyURL, rotated.EgressProxyURL)
+	require.True(t, rotated.EgressPinned)
+
+	third := collectorTestToken(t, base.Add(3*time.Second), 2, 54)
+	require.True(t, collector.ObserveQualified(key, third, rotated,
+		[]OpenAICodexTurnStateCookie{{Name: "session", Value: "refreshed"}}, base.Add(3*time.Second)))
+	refreshed, usable := collector.Acquire(key, base.Add(3*time.Second))
+	require.True(t, usable)
+	require.Equal(t, base.Add(3*time.Second), refreshed.HarvestCookiesAt)
+	require.Equal(t, []OpenAICodexTurnStateCookie{{Name: "session", Value: "refreshed"}}, refreshed.HarvestCookies)
+}
+
+func TestOpenAICodexTurnStateCollectorQualifiedRotationRejectsStaleConcurrentResponse(t *testing.T) {
+	base := time.Now().UTC().Truncate(time.Second)
+	collector := NewOpenAICodexTurnStateCollector(collectorTestPolicy())
+	key := OpenAICodexTurnStateKey{AccountID: 512, Scope: "concurrent-response", Model: "gpt-5"}
+	first := collectorTestToken(t, base, 2, 55)
+	require.True(t, collector.OfferValueMust(key, first, "probe", base))
+	oldA, usable := collector.Acquire(key, base)
+	require.True(t, usable)
+	oldB, usable := collector.Acquire(key, base)
+	require.True(t, usable)
+	newA := collectorTestToken(t, base.Add(time.Second), 2, 56)
+	newB := collectorTestToken(t, base.Add(2*time.Second), 2, 57)
+	require.True(t, collector.ObserveQualified(key, newA, oldA, nil, base.Add(time.Second)))
+	require.False(t, collector.ObserveQualified(key, newB, oldB,
+		[]OpenAICodexTurnStateCookie{{Name: "session", Value: "stale"}}, base.Add(2*time.Second)),
+		"a second in-flight response cannot replace the first winner or refresh its cookies")
+	active, usable := collector.Acquire(key, base.Add(2*time.Second))
+	require.True(t, usable)
+	require.Equal(t, newA, active.Token.Value)
+	require.Equal(t, oldA.Version+1, active.Version)
+	require.Empty(t, active.HarvestCookies)
+	require.Zero(t, collector.Status(key, base.Add(2*time.Second)).CookieCount)
+}
+
+func TestOpenAICodexTurnStateCollectorQualifiedRotationDoesNotResurrectExpiredCookies(t *testing.T) {
+	base := time.Now().UTC().Truncate(time.Second)
+	collector := NewOpenAICodexTurnStateCollector(collectorTestPolicy())
+	key := OpenAICodexTurnStateKey{AccountID: 513, Scope: "expired-cookie-response", Model: "gpt-5"}
+	first := collectorTestToken(t, base, 2, 58)
+	token, err := ParseOpenAICodexTurnState(first)
+	require.NoError(t, err)
+	require.True(t, collector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+		Token: token, Route: "probe", HarvestSessionID: "collector-session",
+		HarvestCookies: []OpenAICodexTurnStateCookie{
+			{Name: "session", Value: "expired-session"},
+			{Name: "region", Value: "expired-region"},
+		},
+		HarvestCookiesAt: base,
+	}, base))
+	responseAt := base.Add(241 * time.Second)
+	used, usable := collector.Acquire(key, responseAt)
+	require.True(t, usable)
+	require.False(t, used.cookiesFresh(responseAt))
+	second := collectorTestToken(t, responseAt, 2, 59)
+	require.True(t, collector.ObserveQualified(key, second, used,
+		[]OpenAICodexTurnStateCookie{{Name: "region", Value: "new-region"}}, responseAt))
+	rotated, usable := collector.Acquire(key, responseAt)
+	require.True(t, usable)
+	require.Equal(t, []OpenAICodexTurnStateCookie{{Name: "region", Value: "new-region"}}, rotated.HarvestCookies)
+	require.Equal(t, responseAt, rotated.HarvestCookiesAt)
+	headers := make(http.Header)
+	applyOpenAICodexTurnStateTicketHeaders(headers, rotated, responseAt)
+	require.Equal(t, "region=new-region", headers.Get("Cookie"))
 }
 
 func TestOpenAICodexTurnStateCollectorOfferIfRefreshNeededConcurrentInitial(t *testing.T) {
@@ -426,7 +569,10 @@ func TestOpenAICodexTurnStateCollectorResponseOfferHealthyAccountModelSuppresses
 }
 
 func TestOpenAICodexTurnStateCollectorResponseOfferExactInvalidationBypassesHealthySibling(t *testing.T) {
-	base := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	// DeleteAndForceRefresh intentionally uses the wall clock for its TTL sweep.
+	// Keep this test on the same clock domain so it remains deterministic when
+	// run more than one collector TTL after the original fixture timestamp.
+	base := time.Now().UTC().Truncate(time.Second)
 	collector := NewOpenAICodexTurnStateCollector(collectorTestPolicy())
 	sibling := OpenAICodexTurnStateKey{AccountID: 94, Scope: "S1", Model: "gpt-5"}
 	target := OpenAICodexTurnStateKey{AccountID: 94, Scope: "S2", Model: "gpt-5"}
@@ -510,7 +656,10 @@ func TestOpenAICodexTurnStateCollectorProbeOfferRechecksHealthySibling(t *testin
 }
 
 func TestOpenAICodexTurnStateCollectorExactInvalidationBypassesHealthySibling(t *testing.T) {
-	base := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	// DeleteAndForceRefresh performs its TTL sweep against the wall clock. Keep
+	// the sibling genuinely healthy so this test exercises the force-refresh
+	// bypass instead of passing after the fixed fixture has silently expired.
+	base := time.Now().UTC().Truncate(time.Second)
 	collector := NewOpenAICodexTurnStateCollector(collectorTestPolicy())
 	target := OpenAICodexTurnStateKey{AccountID: 92, Scope: "invalidated", Model: "gpt-5"}
 	sibling := OpenAICodexTurnStateKey{AccountID: 92, Scope: "healthy", Model: "gpt-5"}

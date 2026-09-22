@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
@@ -34,8 +35,11 @@ func (h *OpsHandler) GetReliabilityStatus(c *gin.Context) {
 // UpdateCodexTurnStateRuntimeSettingsRequest requires a complete switch
 // snapshot. Pointer fields distinguish an explicit false from an omitted key.
 type UpdateCodexTurnStateRuntimeSettingsRequest struct {
-	ProbeEnabled     *bool `json:"probe_enabled"`
-	InjectionEnabled *bool `json:"injection_enabled"`
+	ProbeEnabled           *bool   `json:"probe_enabled"`
+	InjectionEnabled       *bool   `json:"injection_enabled"`
+	SpeedPreset            *string `json:"speed_preset"`
+	MaxRequestsPerRound    *int    `json:"max_requests_per_round"`
+	FailureCooldownSeconds *int    `json:"failure_cooldown_seconds"`
 	// A pointer distinguishes an omitted pool (preserve the current pool) from
 	// an explicit empty array (clear the pool).
 	ProxyPoolURLs *[]string `json:"proxy_pool_urls"`
@@ -47,10 +51,26 @@ type UpdateCodexTurnStateRuntimeSettingsRequest struct {
 // client treats the proxy pool as write-only and uses these metadata fields
 // to show whether a pool is configured without learning its secrets.
 type codexTurnStateRuntimeSettingsResponse struct {
-	ProbeEnabled        bool `json:"probe_enabled"`
-	InjectionEnabled    bool `json:"injection_enabled"`
-	ProxyPoolConfigured bool `json:"proxy_pool_configured"`
-	ProxyPoolCount      int  `json:"proxy_pool_count"`
+	ProbeEnabled           bool                                `json:"probe_enabled"`
+	InjectionEnabled       bool                                `json:"injection_enabled"`
+	ProxyPoolConfigured    bool                                `json:"proxy_pool_configured"`
+	ProxyPoolCount         int                                 `json:"proxy_pool_count"`
+	SpeedPreset            string                              `json:"speed_preset"`
+	MaxRequestsPerRound    int                                 `json:"max_requests_per_round"`
+	FailureCooldownSeconds int                                 `json:"failure_cooldown_seconds"`
+	Presets                []string                            `json:"presets"`
+	Bounds                 codexTurnStateHarvestSettingsBounds `json:"bounds"`
+}
+
+type codexTurnStateHarvestNumberBounds struct {
+	Min  int `json:"min"`
+	Max  int `json:"max"`
+	Step int `json:"step"`
+}
+
+type codexTurnStateHarvestSettingsBounds struct {
+	MaxRequestsPerRound    codexTurnStateHarvestNumberBounds `json:"max_requests_per_round"`
+	FailureCooldownSeconds codexTurnStateHarvestNumberBounds `json:"failure_cooldown_seconds"`
 }
 
 func projectCodexTurnStateRuntimeSettings(settings *service.CodexTurnStateRuntimeSettings) codexTurnStateRuntimeSettingsResponse {
@@ -58,10 +78,18 @@ func projectCodexTurnStateRuntimeSettings(settings *service.CodexTurnStateRuntim
 		return codexTurnStateRuntimeSettingsResponse{}
 	}
 	return codexTurnStateRuntimeSettingsResponse{
-		ProbeEnabled:        settings.ProbeEnabled,
-		InjectionEnabled:    settings.InjectionEnabled,
-		ProxyPoolConfigured: len(settings.ProxyPoolURLs) > 0,
-		ProxyPoolCount:      len(settings.ProxyPoolURLs),
+		ProbeEnabled:           settings.ProbeEnabled,
+		InjectionEnabled:       settings.InjectionEnabled,
+		ProxyPoolConfigured:    len(settings.ProxyPoolURLs) > 0,
+		ProxyPoolCount:         len(settings.ProxyPoolURLs),
+		SpeedPreset:            settings.Harvest.SpeedPreset,
+		MaxRequestsPerRound:    settings.Harvest.MaxRequestsPerRound,
+		FailureCooldownSeconds: settings.Harvest.FailureCooldownSeconds,
+		Presets:                service.CodexTurnStateHarvestPresetNames(),
+		Bounds: codexTurnStateHarvestSettingsBounds{
+			MaxRequestsPerRound:    codexTurnStateHarvestNumberBounds{Min: 1, Max: 100, Step: 1},
+			FailureCooldownSeconds: codexTurnStateHarvestNumberBounds{Min: 1, Max: 3600, Step: 1},
+		},
 	}
 }
 
@@ -106,16 +134,59 @@ func (h *OpsHandler) UpdateCodexTurnStateRuntimeSettings(c *gin.Context) {
 		}
 		proxyPoolURLs = normalized
 	}
+	var harvest service.CodexTurnStateHarvestControls
+	if req.SpeedPreset != nil || req.MaxRequestsPerRound != nil || req.FailureCooldownSeconds != nil {
+		if req.SpeedPreset == nil || req.MaxRequestsPerRound == nil || req.FailureCooldownSeconds == nil {
+			response.BadRequest(c, "speed_preset, max_requests_per_round and failure_cooldown_seconds must be supplied together")
+			return
+		}
+		harvest = service.CodexTurnStateHarvestControls{
+			SpeedPreset:            *req.SpeedPreset,
+			MaxRequestsPerRound:    *req.MaxRequestsPerRound,
+			FailureCooldownSeconds: *req.FailureCooldownSeconds,
+		}
+		if err := service.ValidateCodexTurnStateHarvestControls(harvest); err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+	}
 	updated, err := h.opsService.UpdateCodexTurnStateRuntimeSettings(c.Request.Context(), service.CodexTurnStateRuntimeSettings{
 		ProbeEnabled:     *req.ProbeEnabled,
 		InjectionEnabled: *req.InjectionEnabled,
 		ProxyPoolURLs:    proxyPoolURLs,
+		Harvest:          harvest,
 	})
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "Failed to update Codex turn-state settings")
 		return
 	}
 	response.Success(c, projectCodexTurnStateRuntimeSettings(updated))
+}
+
+type startCodexTurnStateHarvestRequest struct {
+	AccountID int64  `json:"account_id"`
+	Model     string `json:"model"`
+}
+
+// StartCodexTurnStateHarvest runs a bounded probe for one account and model.
+// POST /api/v1/admin/reliability/turn-state-harvest
+func (h *OpsHandler) StartCodexTurnStateHarvest(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	if h == nil || h.opsService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
+		return
+	}
+	var req startCodexTurnStateHarvestRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.AccountID <= 0 || strings.TrimSpace(req.Model) == "" || len(req.Model) > 200 {
+		response.BadRequest(c, "account_id and model are required")
+		return
+	}
+	accepted, err := h.opsService.StartCodexTurnStateHarvest(c.Request.Context(), req.AccountID, strings.TrimSpace(req.Model))
+	if err != nil {
+		writeReliabilityStatusError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"accepted": accepted})
 }
 
 func writeReliabilityStatusError(c *gin.Context, err error) {

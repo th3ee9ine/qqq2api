@@ -1417,12 +1417,13 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 	if err != nil {
 		return OpenAIUsage{}, 0, nil, err
 	}
-	if !modelMismatch {
-		s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
-	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	s.relayOpenAICodexTurnState(c, account, resp.Header, turnStateModel)
+	priorWriteErrors := len(c.Errors)
 	c.Data(resp.StatusCode, "application/json; charset=utf-8", responseBody)
+	if !modelMismatch && len(c.Errors) == priorWriteErrors && c.Request.Context().Err() == nil {
+		s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
+	}
 	return usage, len(results), openAIResponsesImageResultSizes(results), nil
 }
 

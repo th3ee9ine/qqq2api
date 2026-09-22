@@ -103,6 +103,7 @@ func registerReliabilityRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		reliability.GET("/status", h.Admin.Ops.GetReliabilityStatus)
 		reliability.GET("/turn-state-settings", h.Admin.Ops.GetCodexTurnStateRuntimeSettings)
 		reliability.PUT("/turn-state-settings", h.Admin.Ops.UpdateCodexTurnStateRuntimeSettings)
+		reliability.POST("/turn-state-harvest", h.Admin.Ops.StartCodexTurnStateHarvest)
 	}
 }
 

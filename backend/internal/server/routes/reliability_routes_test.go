@@ -81,3 +81,29 @@ func TestReliabilityTurnStateSettingsRoutesAreSuperAdministratorOnly(t *testing.
 		})
 	}
 }
+
+func TestReliabilityTurnStateHarvestRouteIsSuperAdministratorOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		role       string
+		wantStatus int
+	}{
+		{role: service.RoleAdmin, wantStatus: http.StatusServiceUnavailable},
+		{role: service.RoleAccountAdmin, wantStatus: http.StatusForbidden},
+	} {
+		router := gin.New()
+		handlers := &handler.Handlers{Admin: &handler.AdminHandlers{Ops: adminhandler.NewOpsHandler(nil)}}
+		admin := router.Group("/api/v1/admin", func(c *gin.Context) {
+			c.Set(string(middleware.ContextKeyUserRole), tc.role)
+			c.Next()
+		})
+		registerReliabilityRoutes(admin, handlers)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/reliability/turn-state-harvest", nil)
+		router.ServeHTTP(recorder, request)
+		require.Equal(t, tc.wantStatus, recorder.Code, tc.role)
+		if tc.role == service.RoleAdmin {
+			require.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+		}
+	}
+}

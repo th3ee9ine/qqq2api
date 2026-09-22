@@ -124,6 +124,28 @@ func TestReliabilityTurnStateCollectorProjectionIncludesBoundedDiagnostics(t *te
 	require.True(t, strings.Contains(string(encoded), "198.51.100.8"))
 }
 
+func TestReliabilityTurnStateCollectorProjectionRedactsHarvestNodesAndCookieValues(t *testing.T) {
+	projected := reliabilityTurnStateCollectorFromSnapshot(OpenAICodexTurnStateReliabilitySnapshot{
+		CookieCount: 3, CookieActiveCount: 1, CookieExpiredCount: 1, CookieRemainingSeconds: 239,
+		BudgetUsed: 2, BudgetLimit: 6,
+		HarvestNodes: []OpenAICodexTurnStateHarvestNodeSummary{
+			{NodeID: "0123456789abcdef", Label: "http://proxy.example:8080", LastResult: "transport_error", Failures: 1},
+			{NodeID: "fedcba9876543210", Label: "http://secret:password@proxy.example:8080", LastResult: "raw-session-cookie"},
+			{NodeID: "not-a-node-id", Label: "http://proxy.example:8080", LastResult: "success"},
+		},
+	})
+	require.Equal(t, 3, projected.CookieCount)
+	require.Equal(t, 1, projected.CookieExpiredCount)
+	require.Equal(t, 239, projected.CookieRemainingSeconds)
+	require.Equal(t, 2, projected.BudgetUsed)
+	require.Len(t, projected.Nodes, 1)
+	require.Equal(t, "transport_error", projected.Nodes[0].LastResult)
+	encoded, err := json.Marshal(projected)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "password")
+	require.NotContains(t, string(encoded), "raw-session-cookie")
+}
+
 func TestReliabilityTurnStateCollectorStatusUnavailableWithoutProvider(t *testing.T) {
 	svc := &OpsService{}
 	require.Nil(t, svc.reliabilityTurnStateCollectorStatus(nil))

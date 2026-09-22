@@ -166,7 +166,7 @@ func TestOpenAICompatSessionTurnStateRejectsStaleGenerationWriteAfterInvalidatio
 	require.Zero(t, binding.TurnStateGeneration)
 }
 
-func TestOpenAICompatSessionTurnStateKeepsHealthyBindingAcrossNewResponseTokens(t *testing.T) {
+func TestOpenAICompatSessionTurnStateRotatesBindingAcrossNewResponseTokens(t *testing.T) {
 	svc := newCodexTurnStateGatewayTestService(nil)
 	account := codexTurnStateGatewayTestAccount(390)
 	c := newCodexTurnStateGatewayTestContext(t, "compat-stable-state")
@@ -177,8 +177,8 @@ func TestOpenAICompatSessionTurnStateKeepsHealthyBindingAcrossNewResponseTokens(
 	svc.bindOpenAICompatSessionTurnState(context.Background(), c, account, "cache-key", first, model)
 	svc.bindOpenAICompatSessionTurnState(context.Background(), c, account, "cache-key", second, model)
 
-	require.Equal(t, first, svc.getOpenAICompatSessionTurnState(context.Background(), c, account, "cache-key", model),
-		"a newly issued token must not slide a healthy binding's 55-minute window")
+	require.Equal(t, second, svc.getOpenAICompatSessionTurnState(context.Background(), c, account, "cache-key", model),
+		"a newly issued qualifying response token replaces the old compatibility binding")
 }
 
 func TestOpenAICompatSessionTurnStateStaleWriterCannotClearReplacementGeneration(t *testing.T) {

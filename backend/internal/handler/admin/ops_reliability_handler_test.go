@@ -101,6 +101,11 @@ func TestCodexTurnStateRuntimeSettingsHandlersDefaultAndPersistCompleteSnapshot(
 	require.NoError(t, json.Unmarshal(getRecorder.Body.Bytes(), &getEnvelope))
 	require.True(t, getEnvelope.Data.ProbeEnabled)
 	require.True(t, getEnvelope.Data.InjectionEnabled)
+	require.Contains(t, getRecorder.Body.String(), `"speed_preset":"standard"`)
+	require.Contains(t, getRecorder.Body.String(), `"max_requests_per_round":6`)
+	require.Contains(t, getRecorder.Body.String(), `"failure_cooldown_seconds":180`)
+	require.Contains(t, getRecorder.Body.String(), `"presets":["slow","standard","fast","burst"]`)
+	require.Contains(t, getRecorder.Body.String(), `"bounds":`)
 
 	putRecorder := httptest.NewRecorder()
 	putRequest := httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(`{"probe_enabled":false,"injection_enabled":true}`))
@@ -115,6 +120,68 @@ func TestCodexTurnStateRuntimeSettingsHandlersDefaultAndPersistCompleteSnapshot(
 	require.True(t, putEnvelope.Data.InjectionEnabled)
 	require.Equal(t, "false", repo.values[service.SettingKeyCodexTurnStateProbeEnabled])
 	require.Equal(t, "true", repo.values[service.SettingKeyCodexTurnStateCacheInjectionEnabled])
+	require.Equal(t, "standard", repo.values[service.SettingKeyCodexTurnStateHarvestSpeedPreset])
+}
+
+func TestCodexTurnStateRuntimeSettingsHandlersUpdateHarvestPolicy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := newTestSettingRepo()
+	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+	router := gin.New()
+	router.GET("/turn-state-settings", handler.GetCodexTurnStateRuntimeSettings)
+	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
+
+	request := httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(`{"probe_enabled":true,"injection_enabled":true,"speed_preset":"fast","max_requests_per_round":17,"failure_cooldown_seconds":90}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "fast", repo.values[service.SettingKeyCodexTurnStateHarvestSpeedPreset])
+	require.Equal(t, "17", repo.values[service.SettingKeyCodexTurnStateHarvestRequestBudget])
+	require.Equal(t, "90", repo.values[service.SettingKeyCodexTurnStateHarvestFailureCooldown])
+	require.Contains(t, recorder.Body.String(), `"speed_preset":"fast"`)
+	require.Contains(t, recorder.Body.String(), `"max_requests_per_round":17`)
+
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/turn-state-settings", nil))
+	require.Equal(t, http.StatusOK, getRecorder.Code)
+	require.Contains(t, getRecorder.Body.String(), `"failure_cooldown_seconds":90`)
+
+	for _, body := range []string{
+		`{"probe_enabled":true,"injection_enabled":true,"speed_preset":"fast"}`,
+		`{"probe_enabled":true,"injection_enabled":true,"speed_preset":"invalid","max_requests_per_round":17,"failure_cooldown_seconds":90}`,
+		`{"probe_enabled":true,"injection_enabled":true,"speed_preset":"fast","max_requests_per_round":0,"failure_cooldown_seconds":90}`,
+		`{"probe_enabled":true,"injection_enabled":true,"speed_preset":"fast","max_requests_per_round":17,"failure_cooldown_seconds":3601}`,
+	} {
+		invalidRequest := httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(body))
+		invalidRequest.Header.Set("Content-Type", "application/json")
+		invalidRecorder := httptest.NewRecorder()
+		router.ServeHTTP(invalidRecorder, invalidRequest)
+		require.Equal(t, http.StatusBadRequest, invalidRecorder.Code, body)
+		require.Equal(t, "fast", repo.values[service.SettingKeyCodexTurnStateHarvestSpeedPreset])
+	}
+}
+
+func TestStartCodexTurnStateHarvestRejectsMalformedInputAndUnavailableService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/turn-state-harvest", NewOpsHandler(nil).StartCodexTurnStateHarvest)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/turn-state-harvest", bytes.NewBufferString(`{"account_id":42,"model":"gpt-5.5"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+
+	serviceRouter := gin.New()
+	serviceRouter.POST("/turn-state-harvest", NewOpsHandler(service.NewOpsService(nil, newTestSettingRepo(), nil, nil, nil, nil, nil, nil, nil, nil, nil)).StartCodexTurnStateHarvest)
+	for _, body := range []string{`{}`, `{"account_id":0,"model":"gpt-5.5"}`, `{"account_id":42,"model":" "}`, `{"account_id":"42","model":"gpt-5.5"}`} {
+		invalidRequest := httptest.NewRequest(http.MethodPost, "/turn-state-harvest", bytes.NewBufferString(body))
+		invalidRequest.Header.Set("Content-Type", "application/json")
+		invalidRecorder := httptest.NewRecorder()
+		serviceRouter.ServeHTTP(invalidRecorder, invalidRequest)
+		require.Equal(t, http.StatusBadRequest, invalidRecorder.Code, body)
+	}
 }
 
 func TestCodexTurnStateRuntimeSettingsHandlersNeverEchoProxyCredentials(t *testing.T) {

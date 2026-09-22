@@ -394,12 +394,8 @@ func (s *defaultOpenAIWSStateStore) BindSessionTurnStateIfRefreshNeeded(
 
 	s.sessionToTurnStateMu.Lock()
 	defer s.sessionToTurnStateMu.Unlock()
-	if existing, ok := s.sessionToTurnState[key]; ok && existing.accountID == accountID &&
-		existing.generation == generation && now.Before(existing.expiresAt) {
-		if token, err := ValidateOpenAICodexTurnState(existing.turnState, policy, now); err == nil &&
-			!openAICodexTurnStateTokenNeedsRefresh(token, policy, now) {
-			return false
-		}
+	if _, err := ValidateOpenAICodexTurnState(state, policy, now); err != nil {
+		return false
 	}
 	ensureBindingCapacity(s.sessionToTurnState, key, openAIWSStateStoreMaxEntriesPerMap)
 	s.sessionToTurnState[key] = openAIWSTurnStateBinding{

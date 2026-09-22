@@ -87,6 +87,72 @@
               />
             </div>
           </div>
+          <div class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700" data-testid="turn-state-harvest-policy">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <h4 class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                {{ t('admin.reliability.turnState.harvestPolicyTitle') }}
+              </h4>
+              <button
+                type="button"
+                class="btn btn-secondary shrink-0 text-xs"
+                data-testid="turn-state-harvest-policy-save"
+                :disabled="turnStateSettingsBusy || !turnStateSettingsLoaded || !turnStatePolicyValid"
+                @click="saveTurnStatePolicy"
+              >
+                <Icon name="check" size="sm" />
+                {{ turnStatePolicySaving ? t('admin.reliability.turnState.settingsSaving') : t('admin.reliability.turnState.harvestPolicySave') }}
+              </button>
+            </div>
+            <div
+              class="mt-3 grid grid-cols-2 overflow-hidden rounded-lg border border-gray-200 dark:border-dark-600 sm:grid-cols-4"
+              data-testid="turn-state-speed-preset"
+              role="group"
+              :aria-label="t('admin.reliability.turnState.speedPreset')"
+            >
+              <button
+                v-for="preset in turnStateSpeedPresets"
+                :key="preset"
+                type="button"
+                class="min-h-10 border-gray-200 px-3 py-2 text-xs font-medium transition-colors dark:border-dark-600"
+                :class="turnStateSpeedPreset === preset
+                  ? 'bg-teal-50 text-teal-800 dark:bg-teal-950/40 dark:text-teal-200'
+                  : 'bg-white text-gray-600 hover:bg-gray-50 dark:bg-dark-800 dark:text-dark-300 dark:hover:bg-dark-700'"
+                :aria-pressed="turnStateSpeedPreset === preset"
+                :disabled="turnStateSettingsBusy || !turnStateSettingsLoaded"
+                @click="selectSpeedPreset(preset)"
+              >
+                {{ speedPresetLabel(preset) }}
+              </button>
+            </div>
+            <div class="mt-3 grid gap-3 sm:grid-cols-2">
+              <label class="block text-xs font-medium text-gray-600 dark:text-dark-300">
+                {{ t('admin.reliability.turnState.maxRequestsPerRound') }}
+                <input
+                  v-model.number="turnStateMaxRequestsPerRound"
+                  type="number"
+                  class="input mt-1 w-full"
+                  data-testid="turn-state-max-requests"
+                  :min="maxRequestsBounds.min"
+                  :max="maxRequestsBounds.max"
+                  :step="maxRequestsBounds.step"
+                  :disabled="turnStateSettingsBusy || !turnStateSettingsLoaded"
+                />
+              </label>
+              <label class="block text-xs font-medium text-gray-600 dark:text-dark-300">
+                {{ t('admin.reliability.turnState.failureCooldownSeconds') }}
+                <input
+                  v-model.number="turnStateFailureCooldownSeconds"
+                  type="number"
+                  class="input mt-1 w-full"
+                  data-testid="turn-state-failure-cooldown"
+                  :min="failureCooldownBounds.min"
+                  :max="failureCooldownBounds.max"
+                  :step="failureCooldownBounds.step"
+                  :disabled="turnStateSettingsBusy || !turnStateSettingsLoaded"
+                />
+              </label>
+            </div>
+          </div>
           <div class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700" data-testid="turn-state-proxy-pool-settings">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="min-w-0">
@@ -150,6 +216,57 @@
             </button>
           </div>
         </div>
+        <form
+          class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+          data-testid="turn-state-harvest-control"
+          @submit.prevent="startTurnStateHarvest"
+        >
+          <div class="flex flex-wrap items-end gap-3">
+            <label class="min-w-0 flex-1 text-xs font-medium text-gray-600 dark:text-dark-300 sm:min-w-40">
+              {{ t('admin.reliability.turnState.harvestAccountID') }}
+              <input
+                v-model="turnStateHarvestAccountID"
+                type="number"
+                min="1"
+                step="1"
+                inputmode="numeric"
+                class="input mt-1 w-full"
+                data-testid="turn-state-harvest-account"
+                :disabled="turnStateHarvestBusy"
+              />
+            </label>
+            <label class="min-w-0 flex-[2] text-xs font-medium text-gray-600 dark:text-dark-300 sm:min-w-64">
+              {{ t('admin.reliability.turnState.harvestModel') }}
+              <input
+                v-model="turnStateHarvestModel"
+                type="text"
+                maxlength="160"
+                autocomplete="off"
+                class="input mt-1 w-full"
+                data-testid="turn-state-harvest-model"
+                :disabled="turnStateHarvestBusy"
+              />
+            </label>
+            <button
+              type="submit"
+              class="btn btn-primary shrink-0"
+              data-testid="turn-state-harvest-submit"
+              :disabled="turnStateHarvestBusy || !turnStateHarvestValid"
+            >
+              <Icon name="refresh" size="sm" :class="{ 'animate-spin': turnStateHarvestBusy }" />
+              {{ turnStateHarvestBusy ? t('admin.reliability.turnState.harvestSubmitting') : t('admin.reliability.turnState.harvestSubmit') }}
+            </button>
+          </div>
+          <p
+            v-if="turnStateHarvestFeedback"
+            class="mt-2 text-xs"
+            :class="turnStateHarvestAccepted ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'"
+            :role="turnStateHarvestAccepted ? 'status' : 'alert'"
+            data-testid="turn-state-harvest-feedback"
+          >
+            {{ turnStateHarvestFeedback }}
+          </p>
+        </form>
         <dl class="mt-4 grid gap-3 border-t border-gray-100 pt-4 sm:grid-cols-2 dark:border-dark-700 lg:grid-cols-3 xl:grid-cols-5">
           <div>
             <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.supported') }}</dt>
@@ -223,6 +340,30 @@
               <dd class="mt-1 text-sm font-semibold tabular-nums" :class="numeric(turnStateCollector.failures) > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-900 dark:text-gray-100'">{{ formatCount(turnStateCollector.failures) }}</dd>
             </div>
             <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorBudget') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums text-gray-900 dark:text-gray-100" data-testid="turn-state-budget">{{ formatCount(turnStateCollector.budget_used) }} / {{ formatCount(turnStateCollector.budget_limit) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorBudgetReset') }}</dt>
+              <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100" data-testid="turn-state-budget-reset">{{ formatTimestamp(turnStateCollector.budget_reset_at) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorCookies') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums text-gray-900 dark:text-gray-100" data-testid="turn-state-cookie-count">{{ formatCount(turnStateCollector.cookie_count) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorCookiesActive') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums text-green-700 dark:text-green-300" data-testid="turn-state-cookie-active-count">{{ formatCount(turnStateCollector.cookie_active_count) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorCookiesExpired') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums" :class="numeric(turnStateCollector.cookie_expired_count) > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-900 dark:text-gray-100'" data-testid="turn-state-cookie-expired-count">{{ formatCount(turnStateCollector.cookie_expired_count) }}</dd>
+            </div>
+            <div>
+              <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorCookieRemaining') }}</dt>
+              <dd class="mt-1 text-sm font-semibold tabular-nums text-gray-900 dark:text-gray-100" data-testid="turn-state-cookie-remaining">{{ formatDuration(turnStateCollector.cookie_remaining_seconds) }}</dd>
+            </div>
+            <div>
               <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.collectorLastSuccess') }}</dt>
               <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-gray-100" data-testid="turn-state-collector-last-success">{{ formatTimestamp(turnStateCollector.last_success_at) }}</dd>
             </div>
@@ -235,6 +376,46 @@
               <dd class="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-300" data-testid="turn-state-collector-last-error">{{ collectorLastErrorLabel }}</dd>
             </div>
           </dl>
+          <section class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700" data-testid="turn-state-collector-nodes">
+            <div class="flex items-center justify-between gap-2">
+              <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-400">
+                {{ t('admin.reliability.turnState.collectorNodes') }}
+              </h4>
+              <span class="text-xs tabular-nums text-gray-500 dark:text-dark-400">
+                {{ t('admin.reliability.turnState.collectorNodeCount', { count: collectorNodes.length }) }}
+              </span>
+            </div>
+            <div v-if="collectorNodes.length" class="mt-2 overflow-x-auto rounded-lg border border-gray-100 dark:border-dark-700">
+              <table class="w-full min-w-[44rem] divide-y divide-gray-100 text-left text-xs dark:divide-dark-700">
+                <thead class="bg-gray-50 text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+                  <tr>
+                    <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.collectorNode') }}</th>
+                    <th class="px-3 py-2 text-right font-medium">{{ t('admin.reliability.turnState.collectorSuccesses') }}</th>
+                    <th class="px-3 py-2 text-right font-medium">{{ t('admin.reliability.turnState.collectorFailures') }}</th>
+                    <th class="px-3 py-2 text-right font-medium">{{ t('admin.reliability.turnState.collectorConsecutiveFailures') }}</th>
+                    <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.collectorCooldown') }}</th>
+                    <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.collectorLastResult') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr v-for="(node, index) in collectorNodes" :key="`${node.node_id}-${index}`">
+                    <td class="px-3 py-2 text-gray-800 dark:text-gray-200">
+                      <span class="block font-medium">{{ safeNodeText(node.label || node.node_id) }}</span>
+                      <span v-if="node.label && node.node_id" class="mt-0.5 block font-mono text-[11px] text-gray-500 dark:text-dark-400">{{ safeNodeText(node.node_id) }}</span>
+                    </td>
+                    <td class="px-3 py-2 text-right font-semibold tabular-nums text-gray-800 dark:text-gray-200">{{ formatCount(node.successes) }}</td>
+                    <td class="px-3 py-2 text-right font-semibold tabular-nums text-gray-800 dark:text-gray-200">{{ formatCount(node.failures) }}</td>
+                    <td class="px-3 py-2 text-right font-semibold tabular-nums" :class="numeric(node.consecutive_failures) > 0 ? 'text-amber-700 dark:text-amber-300' : 'text-gray-800 dark:text-gray-200'">{{ formatCount(node.consecutive_failures) }}</td>
+                    <td class="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700 dark:text-gray-300">{{ formatDuration(node.cooldown_remaining_seconds) }}</td>
+                    <td class="whitespace-nowrap px-3 py-2 text-gray-700 dark:text-gray-300">{{ collectorNodeResultLabel(node.last_result) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="mt-2 rounded-lg bg-gray-50 px-3 py-3 text-xs text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+              {{ t('admin.reliability.turnState.collectorNodesEmpty') }}
+            </p>
+          </section>
           <div class="mt-4 grid gap-4 border-t border-gray-100 pt-4 dark:border-dark-700 lg:grid-cols-2">
             <section data-testid="turn-state-proxy-pool" class="min-w-0">
               <div class="flex items-center justify-between gap-2">
@@ -377,13 +558,19 @@ import Icon from '@/components/icons/Icon.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import {
   normalizeReliabilityStatus,
+  reliabilityTurnStateSpeedPresets as defaultTurnStateSpeedPresets,
   reliabilityAPI,
   type ReliabilityStatusResponse,
   type ReliabilityTurnStateCandidateBreakdown,
+  type ReliabilityTurnStateCollectorNodeSummary,
   type ReliabilityTurnStateIPRegionSummary,
+  type ReliabilityTurnStateNumberBounds,
   type ReliabilityTurnStateProxyPoolEntry,
-  type ReliabilityTurnStateSuccessfulIP,
   type ReliabilityTurnStateSettings,
+  type ReliabilityTurnStateSettingsUpdate,
+  type ReliabilityTurnStateSpeedPreset,
+  type ReliabilityTurnStateSpeedPresetValues,
+  type ReliabilityTurnStateSuccessfulIP,
 } from '@/api/admin/reliability'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -391,6 +578,12 @@ import { formatNumber } from '@/utils/format'
 
 const { t, locale } = useI18n()
 const appStore = useAppStore()
+const builtInSpeedPresetValues: Record<ReliabilityTurnStateSpeedPreset, ReliabilityTurnStateSpeedPresetValues> = {
+  slow: { max_requests_per_round: 3, failure_cooldown_seconds: 300 },
+  standard: { max_requests_per_round: 6, failure_cooldown_seconds: 180 },
+  fast: { max_requests_per_round: 12, failure_cooldown_seconds: 60 },
+  burst: { max_requests_per_round: 20, failure_cooldown_seconds: 1 },
+}
 
 const loading = ref(false)
 const loadError = ref('')
@@ -398,17 +591,30 @@ const status = ref<ReliabilityStatusResponse | null>(null)
 const turnStateSettingsLoading = ref(false)
 const turnStateSettingsLoaded = ref(false)
 const turnStateSettingsError = ref('')
-const turnStateSettingSaving = ref<'probe' | 'injection' | 'proxy_pool' | null>(null)
+const turnStateSettingSaving = ref<'probe' | 'injection' | 'policy' | 'proxy_pool' | null>(null)
 const turnStateProbeEnabled = ref(true)
 const turnStateCacheInjectionEnabled = ref(true)
+const turnStateSpeedPreset = ref<ReliabilityTurnStateSpeedPreset>('standard')
+const turnStateSpeedPresets = ref<ReliabilityTurnStateSpeedPreset[]>([...defaultTurnStateSpeedPresets])
+const turnStateSpeedPresetValues = ref<Partial<Record<ReliabilityTurnStateSpeedPreset, ReliabilityTurnStateSpeedPresetValues>>>({ ...builtInSpeedPresetValues })
+const turnStateMaxRequestsPerRound = ref<number | ''>(6)
+const turnStateFailureCooldownSeconds = ref<number | ''>(180)
+const maxRequestsBounds = ref<ReliabilityTurnStateNumberBounds>({ min: 1, max: 100, step: 1 })
+const failureCooldownBounds = ref<ReliabilityTurnStateNumberBounds>({ min: 1, max: 3600, step: 1 })
 const turnStateProxyPoolText = ref('')
 const turnStateProxyPoolError = ref('')
 const turnStateProxyPoolSaving = computed(() => turnStateSettingSaving.value === 'proxy_pool')
+const turnStatePolicySaving = computed(() => turnStateSettingSaving.value === 'policy')
 const turnStateSettingsHasProxyPool = ref(false)
+const turnStateHarvestAccountID = ref('')
+const turnStateHarvestModel = ref('')
+const turnStateHarvestBusy = ref(false)
+const turnStateHarvestFeedback = ref('')
+const turnStateHarvestAccepted = ref(false)
 
 const turnStateSettingsBusy = computed(() => turnStateSettingsLoading.value || turnStateSettingSaving.value !== null)
 const pageLoading = computed(() => loading.value || turnStateSettingsLoading.value)
-const pageBusy = computed(() => pageLoading.value || turnStateSettingSaving.value !== null)
+const pageBusy = computed(() => pageLoading.value || turnStateSettingSaving.value !== null || turnStateHarvestBusy.value)
 
 const turnState = computed(() => normalizeReliabilityStatus(status.value ?? {}).turn_state ?? {})
 const turnStateCollector = computed(() => {
@@ -417,6 +623,24 @@ const turnStateCollector = computed(() => {
 })
 
 const proxyPoolParse = computed(() => parseProxyPoolText(turnStateProxyPoolText.value))
+const turnStatePolicyValid = computed(() => (
+  isIntegerInBounds(turnStateMaxRequestsPerRound.value, maxRequestsBounds.value)
+  && isIntegerInBounds(turnStateFailureCooldownSeconds.value, failureCooldownBounds.value)
+  && turnStateSpeedPresets.value.includes(turnStateSpeedPreset.value)
+))
+const turnStateHarvestValid = computed(() => {
+  const accountID = Number(turnStateHarvestAccountID.value)
+  const model = turnStateHarvestModel.value.trim()
+  return Number.isSafeInteger(accountID) && accountID > 0 && model.length > 0 && model.length <= 160
+})
+
+const collectorNodes = computed<ReliabilityTurnStateCollectorNodeSummary[]>(() => {
+  const value: unknown = turnStateCollector.value?.nodes
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => (
+    entry && typeof entry === 'object' ? [entry as ReliabilityTurnStateCollectorNodeSummary] : []
+  ))
+})
 
 const proxyPoolEntries = computed<ReliabilityTurnStateProxyPoolEntry[]>(() => {
   const value: unknown = turnStateCollector.value?.proxy_pool
@@ -492,6 +716,62 @@ function numeric(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function isSpeedPreset(value: unknown): value is ReliabilityTurnStateSpeedPreset {
+  return defaultTurnStateSpeedPresets.includes(value as ReliabilityTurnStateSpeedPreset)
+}
+
+function normalizeSpeedPresets(value: unknown): {
+  names: ReliabilityTurnStateSpeedPreset[]
+  values: Partial<Record<ReliabilityTurnStateSpeedPreset, ReliabilityTurnStateSpeedPresetValues>>
+} {
+  if (Array.isArray(value)) {
+    const names = value.filter(isSpeedPreset)
+    return {
+      names: names.length > 0 ? [...new Set(names)] : [...defaultTurnStateSpeedPresets],
+      values: builtInSpeedPresetValues,
+    }
+  }
+  if (value && typeof value === 'object') {
+    const values: Partial<Record<ReliabilityTurnStateSpeedPreset, ReliabilityTurnStateSpeedPresetValues>> = {}
+    for (const [name, preset] of Object.entries(value)) {
+      if (isSpeedPreset(name) && preset && typeof preset === 'object') {
+        values[name] = preset as ReliabilityTurnStateSpeedPresetValues
+      }
+    }
+    const names = defaultTurnStateSpeedPresets.filter((name) => values[name] !== undefined)
+    if (names.length > 0) return { names, values }
+  }
+  return { names: [...defaultTurnStateSpeedPresets], values: builtInSpeedPresetValues }
+}
+
+function normalizeNumberBounds(
+  value: unknown,
+  fallback: ReliabilityTurnStateNumberBounds,
+): ReliabilityTurnStateNumberBounds {
+  if (!value || typeof value !== 'object') return { ...fallback }
+  const candidate = value as Partial<ReliabilityTurnStateNumberBounds>
+  const min = Number(candidate.min)
+  const max = Number(candidate.max)
+  const step = Number(candidate.step)
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return { ...fallback }
+  return {
+    min,
+    max,
+    step: Number.isFinite(step) && step > 0 ? step : fallback.step,
+  }
+}
+
+function boundedInteger(value: unknown, bounds: ReliabilityTurnStateNumberBounds, fallback: number): number {
+  const parsed = Number(value)
+  const candidate = Number.isSafeInteger(parsed) ? parsed : fallback
+  return Math.min(bounds.max, Math.max(bounds.min, candidate))
+}
+
+function isIntegerInBounds(value: unknown, bounds: ReliabilityTurnStateNumberBounds): boolean {
+  const parsed = Number(value)
+  return value !== '' && Number.isSafeInteger(parsed) && parsed >= bounds.min && parsed <= bounds.max
+}
+
 type ProxyPoolParseResult = {
   validLines: string[]
   valid: number
@@ -556,6 +836,7 @@ function candidateReasonLabel(value: unknown): string {
     'model_mismatch', 'model_not_supported', 'not_eligible', 'probe_disabled',
     'probe_failed', 'probe_in_progress', 'probe_timeout', 'proxy_failed', 'proxy_stream_quarantined',
     'proxy_timeout', 'proxy_unavailable', 'quota_auto_pause', 'refresh_due', 'response_model_mismatch',
+    'request_budget_exhausted', 'routes_cooling_down',
     'runtime_blocked', 'scheduling_threshold', 'shadow_parent_unhealthy',
     'capability_mismatch', 'channel_upstream_restricted', 'group_mismatch',
     'privacy_not_set', 'same_account_retry_mismatch',
@@ -565,6 +846,60 @@ function candidateReasonLabel(value: unknown): string {
   ])
   if (!supported.has(code)) return t('admin.reliability.turnState.collectorUnknown')
   return t(`admin.reliability.turnState.candidateReasons.${code}`)
+}
+
+function speedPresetLabel(preset: ReliabilityTurnStateSpeedPreset): string {
+  return t(`admin.reliability.turnState.speedPresets.${preset}`)
+}
+
+function selectSpeedPreset(preset: ReliabilityTurnStateSpeedPreset) {
+  turnStateSpeedPreset.value = preset
+  const values = turnStateSpeedPresetValues.value[preset]
+  if (!values) return
+  turnStateMaxRequestsPerRound.value = boundedInteger(
+    values.max_requests_per_round,
+    maxRequestsBounds.value,
+    Number(turnStateMaxRequestsPerRound.value) || 6,
+  )
+  turnStateFailureCooldownSeconds.value = boundedInteger(
+    values.failure_cooldown_seconds ?? values.cooldown_seconds,
+    failureCooldownBounds.value,
+    Number(turnStateFailureCooldownSeconds.value) || 180,
+  )
+}
+
+function safeNodeText(value: unknown): string {
+  const sanitized = String(value ?? '')
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, '$1***@')
+    .replace(/\b[^:\s/@]+:[^@\s/]+@(?=[^\s]+)/g, '***@')
+    .split('')
+    .map((character) => {
+      const code = character.charCodeAt(0)
+      return code < 32 || code === 127 ? ' ' : character
+    })
+    .join('')
+    .trim()
+    .slice(0, 160)
+  return sanitized || t('admin.reliability.turnState.unknownValue')
+}
+
+function collectorNodeResultLabel(value: unknown): string {
+  const aliases: Record<string, string> = {
+    failed: 'failure',
+    timeout: 'failure',
+  }
+  const raw = String(value ?? '').trim().toLowerCase()
+  const code = aliases[raw] ?? raw
+  const supported = new Set(['idle', 'collecting', 'success', 'failure', 'cooldown', 'skipped', 'unavailable'])
+  if (supported.has(code)) return t(`admin.reliability.turnState.collectorNodeResults.${code}`)
+  const errors = new Set([
+    'probe_timeout', 'transport_error', 'upstream_401', 'upstream_403', 'upstream_429',
+    'upstream_5xx', 'model_capacity', 'upstream_rate_limited', 'response_failed',
+    'response_model_mismatch', 'invalid_state', 'invalid_model', 'incomplete_stream',
+    'state_time_rejected', 'cancelled', 'disabled', 'other',
+  ])
+  if (errors.has(code)) return t(`admin.reliability.turnState.collectorErrors.${code}`)
+  return t('admin.reliability.turnState.collectorUnknown')
 }
 
 const turnStateSupported = computed(() => optionalBoolean(turnState.value.supported))
@@ -612,6 +947,31 @@ function formatTimestamp(value: unknown): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return t('admin.reliability.unavailable')
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'short', timeStyle: 'short' }).format(date)
+}
+
+function formatDuration(value: unknown): string {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed < 0) return t('admin.reliability.unavailable')
+  const seconds = Math.floor(parsed)
+  if (seconds >= 86400) {
+    return t('admin.reliability.turnState.durationDaysHours', {
+      days: Math.floor(seconds / 86400),
+      hours: Math.floor((seconds % 86400) / 3600),
+    })
+  }
+  if (seconds >= 3600) {
+    return t('admin.reliability.turnState.durationHoursMinutes', {
+      hours: Math.floor(seconds / 3600),
+      minutes: Math.floor((seconds % 3600) / 60),
+    })
+  }
+  if (seconds >= 60) {
+    return t('admin.reliability.turnState.durationMinutesSeconds', {
+      minutes: Math.floor(seconds / 60),
+      seconds: seconds % 60,
+    })
+  }
+  return t('admin.reliability.turnState.durationSeconds', { seconds })
 }
 
 function supportLabel(value: boolean | null): string {
@@ -666,14 +1026,71 @@ function enabledSetting(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback
 }
 
+function applyTurnStateSettings(settings: ReliabilityTurnStateSettings, includeMetadata = false) {
+  if (includeMetadata) {
+    const presets = normalizeSpeedPresets(settings?.presets)
+    turnStateSpeedPresets.value = presets.names
+    turnStateSpeedPresetValues.value = presets.values
+    maxRequestsBounds.value = normalizeNumberBounds(
+      settings?.bounds?.max_requests_per_round,
+      { min: 1, max: 100, step: 1 },
+    )
+    failureCooldownBounds.value = normalizeNumberBounds(
+      settings?.bounds?.failure_cooldown_seconds,
+      { min: 1, max: 3600, step: 1 },
+    )
+  }
+
+  turnStateProbeEnabled.value = enabledSetting(settings?.probe_enabled, turnStateProbeEnabled.value)
+  turnStateCacheInjectionEnabled.value = enabledSetting(
+    settings?.injection_enabled,
+    turnStateCacheInjectionEnabled.value,
+  )
+  const requestedPreset = isSpeedPreset(settings?.speed_preset ?? settings?.harvest?.speed_preset)
+    ? (settings.speed_preset ?? settings.harvest?.speed_preset) as ReliabilityTurnStateSpeedPreset
+    : turnStateSpeedPreset.value
+  turnStateSpeedPreset.value = turnStateSpeedPresets.value.includes(requestedPreset)
+    ? requestedPreset
+    : (turnStateSpeedPresets.value[0] ?? 'standard')
+  turnStateMaxRequestsPerRound.value = boundedInteger(
+    settings?.max_requests_per_round ?? settings?.harvest?.max_requests_per_round,
+    maxRequestsBounds.value,
+    Number(turnStateMaxRequestsPerRound.value) || 6,
+  )
+  turnStateFailureCooldownSeconds.value = boundedInteger(
+    settings?.failure_cooldown_seconds ?? settings?.harvest?.failure_cooldown_seconds,
+    failureCooldownBounds.value,
+    Number(turnStateFailureCooldownSeconds.value) || 180,
+  )
+}
+
+function currentTurnStateSettingsPayload(): ReliabilityTurnStateSettingsUpdate {
+  return {
+    ...currentTurnStateSwitchesPayload(),
+    speed_preset: turnStateSpeedPreset.value,
+    max_requests_per_round: Number(turnStateMaxRequestsPerRound.value),
+    failure_cooldown_seconds: Number(turnStateFailureCooldownSeconds.value),
+  }
+}
+
+function currentTurnStateSwitchesPayload(): ReliabilityTurnStateSettingsUpdate {
+  return {
+    probe_enabled: turnStateProbeEnabled.value,
+    injection_enabled: turnStateCacheInjectionEnabled.value,
+  }
+}
+
 async function loadTurnStateSettings() {
   if (turnStateSettingsLoading.value || turnStateSettingSaving.value !== null) return
   turnStateSettingsLoading.value = true
   turnStateSettingsError.value = ''
   try {
     const settings = await reliabilityAPI.getTurnStateSettings()
-    turnStateProbeEnabled.value = enabledSetting(settings?.probe_enabled, true)
-    turnStateCacheInjectionEnabled.value = enabledSetting(settings?.injection_enabled, true)
+    applyTurnStateSettings({
+      ...settings,
+      probe_enabled: enabledSetting(settings?.probe_enabled, true),
+      injection_enabled: enabledSetting(settings?.injection_enabled, true),
+    }, true)
     turnStateSettingsHasProxyPool.value = settings?.proxy_pool_configured === true
       || (typeof settings?.proxy_pool_count === 'number' && settings.proxy_pool_count > 0)
     // Proxy URLs are write-only. Never hydrate the textarea from a response,
@@ -695,33 +1112,43 @@ async function loadTurnStateSettings() {
 async function saveTurnStateSetting(kind: 'probe' | 'injection', enabled: boolean) {
   if (!turnStateSettingsLoaded.value || turnStateSettingsBusy.value) return
 
-  const previous: ReliabilityTurnStateSettings = {
-    probe_enabled: turnStateProbeEnabled.value,
-    injection_enabled: turnStateCacheInjectionEnabled.value,
-  }
+  const previousProbe = turnStateProbeEnabled.value
+  const previousInjection = turnStateCacheInjectionEnabled.value
   if (kind === 'probe') turnStateProbeEnabled.value = enabled
   else turnStateCacheInjectionEnabled.value = enabled
 
   turnStateSettingSaving.value = kind
   turnStateSettingsError.value = ''
   try {
-    const payload: ReliabilityTurnStateSettings = {
-      probe_enabled: turnStateProbeEnabled.value,
-      injection_enabled: turnStateCacheInjectionEnabled.value,
-    }
-    const updated = await reliabilityAPI.updateTurnStateSettings(payload)
+    const updated = await reliabilityAPI.updateTurnStateSettings(currentTurnStateSwitchesPayload())
     turnStateProbeEnabled.value = enabledSetting(updated?.probe_enabled, turnStateProbeEnabled.value)
-    turnStateCacheInjectionEnabled.value = enabledSetting(
-      updated?.injection_enabled,
-      turnStateCacheInjectionEnabled.value,
-    )
+    turnStateCacheInjectionEnabled.value = enabledSetting(updated?.injection_enabled, turnStateCacheInjectionEnabled.value)
     if (typeof updated?.proxy_pool_configured === 'boolean') {
       turnStateSettingsHasProxyPool.value = updated.proxy_pool_configured
     }
     appStore.showSuccess(t('admin.reliability.turnState.settingsSaved'))
   } catch (error) {
-    turnStateProbeEnabled.value = previous.probe_enabled
-    turnStateCacheInjectionEnabled.value = previous.injection_enabled
+    turnStateProbeEnabled.value = previousProbe
+    turnStateCacheInjectionEnabled.value = previousInjection
+    turnStateSettingsError.value = extractApiErrorMessage(
+      error,
+      t('admin.reliability.turnState.settingsSaveFailed'),
+    )
+    appStore.showError(turnStateSettingsError.value)
+  } finally {
+    turnStateSettingSaving.value = null
+  }
+}
+
+async function saveTurnStatePolicy() {
+  if (!turnStateSettingsLoaded.value || turnStateSettingsBusy.value || !turnStatePolicyValid.value) return
+  turnStateSettingSaving.value = 'policy'
+  turnStateSettingsError.value = ''
+  try {
+    const updated = await reliabilityAPI.updateTurnStateSettings(currentTurnStateSettingsPayload())
+    applyTurnStateSettings(updated)
+    appStore.showSuccess(t('admin.reliability.turnState.settingsSaved'))
+  } catch (error) {
     turnStateSettingsError.value = extractApiErrorMessage(
       error,
       t('admin.reliability.turnState.settingsSaveFailed'),
@@ -746,8 +1173,7 @@ async function saveTurnStateProxyPool() {
   turnStateSettingsError.value = ''
   try {
     const updated = await reliabilityAPI.updateTurnStateSettings({
-      probe_enabled: turnStateProbeEnabled.value,
-      injection_enabled: turnStateCacheInjectionEnabled.value,
+      ...currentTurnStateSwitchesPayload(),
       proxy_pool_urls: proxyPoolURLs,
     })
     // Remove saved credentials from both the form and its reactive state.
@@ -767,6 +1193,34 @@ async function saveTurnStateProxyPool() {
     appStore.showError(turnStateProxyPoolError.value)
   } finally {
     turnStateSettingSaving.value = null
+  }
+}
+
+async function startTurnStateHarvest() {
+  if (turnStateHarvestBusy.value || !turnStateHarvestValid.value) return
+  turnStateHarvestBusy.value = true
+  turnStateHarvestFeedback.value = ''
+  turnStateHarvestAccepted.value = false
+  try {
+    const response = await reliabilityAPI.startTurnStateHarvest({
+      account_id: Number(turnStateHarvestAccountID.value),
+      model: turnStateHarvestModel.value.trim(),
+    })
+    turnStateHarvestAccepted.value = response?.accepted === true
+    turnStateHarvestFeedback.value = turnStateHarvestAccepted.value
+      ? t('admin.reliability.turnState.harvestAccepted')
+      : t('admin.reliability.turnState.harvestRejected')
+    if (turnStateHarvestAccepted.value) {
+      appStore.showSuccess(turnStateHarvestFeedback.value)
+      await loadData()
+    } else {
+      appStore.showError(turnStateHarvestFeedback.value)
+    }
+  } catch {
+    turnStateHarvestFeedback.value = t('admin.reliability.turnState.harvestFailed')
+    appStore.showError(turnStateHarvestFeedback.value)
+  } finally {
+    turnStateHarvestBusy.value = false
   }
 }
 

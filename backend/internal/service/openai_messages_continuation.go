@@ -818,6 +818,9 @@ func (s *OpenAIGatewayService) bindOpenAICompatSessionTurnState(ctx context.Cont
 		// enter the trusted compatibility map for a later request.
 		return
 	}
+	if !s.openAICodexReturnedStateMatchesCurrentTicket(c, account, model, state) {
+		return
+	}
 	binding := openAICompatSessionResponseBinding{
 		TurnState:           state,
 		Model:               model,
@@ -835,25 +838,6 @@ func (s *OpenAIGatewayService) bindOpenAICompatSessionTurnState(ctx context.Cont
 			if !ok {
 				s.openaiCompatSessionResponses.Delete(key)
 				continue
-			}
-			// Turn-State metadata is preserved only for the same known model. A
-			// legacy unscoped state is deliberately dropped for model-aware writes.
-			sameTurnStateModel := !modelAware ||
-				(existing.Model != "" && openAICompatTurnStateModelMatches(existing.Model, model))
-			if sameTurnStateModel {
-				// A successful response may carry a newly issued opaque state on
-				// every turn. Preserve the current account/model/generation binding
-				// until its 55-minute refresh window opens; otherwise repeated turns
-				// slide IssuedAt forever and prevent the intended refresh lifecycle.
-				existingState := strings.TrimSpace(existing.TurnState)
-				if existing.TurnStateGeneration == generation && existingState != "" {
-					if token, err := ValidateOpenAICodexTurnState(existingState, policy, now); err == nil &&
-						!openAICodexTurnStateTokenNeedsRefresh(token, policy, now) {
-						next.TurnState = existing.TurnState
-						next.Model = existing.Model
-						next.TurnStateGeneration = existing.TurnStateGeneration
-					}
-				}
 			}
 			// Response-ID metadata has its own model scope. Legacy response IDs
 			// remain usable for compatibility, while a known mismatched model is

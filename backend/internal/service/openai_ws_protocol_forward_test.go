@@ -523,6 +523,107 @@ func TestOpenAIGatewayService_ForwardOpenAIWSV2_HTTPFacadeAffinityWithStoreEnabl
 	require.True(t, pinned, "HTTP facade affinity must not depend on store=false")
 }
 
+func TestOpenAIGatewayService_ForwardOpenAIWSV2_TurnStateConnectionUsesFinalModelForStrictContinuation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	captureConn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.completed","response":{"id":"resp_turn_state_model_1","model":"gpt-5.6-sol","usage":{"input_tokens":1,"output_tokens":2}}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_turn_state_model_2","model":"gpt-5.6-sol","usage":{"input_tokens":1,"output_tokens":2}}}`),
+	}}
+	handshake := make(http.Header)
+	handshake.Set(openAIWSTurnStateHeader, "opaque-model-bound-state")
+	dialer := &openAIWSCaptureDialer{conn: captureConn, handshake: handshake}
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = 3600
+
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+	pool.setClientDialerForTest(dialer)
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		openaiWSPool:     pool,
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          1051,
+		Name:        "openai-oauth-turn-state-model",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+	newContext := func() *gin.Context {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+		SetOpenAIHTTPResponseOwner(c, 1001, 2001)
+		return c
+	}
+	forward := func(c *gin.Context, previousResponseID string) (*OpenAIForwardResult, error) {
+		body := map[string]any{
+			"model":  "gpt-5.6-sol",
+			"stream": false,
+			"store":  true,
+			"input":  "hello",
+		}
+		if previousResponseID != "" {
+			body["previous_response_id"] = previousResponseID
+		}
+		return svc.forwardOpenAIWSV2(
+			context.Background(),
+			c,
+			account,
+			body,
+			"prompt-cache-key",
+			"execution-scope",
+			"oauth-token",
+			svc.getOpenAIWSProtocolResolver().Resolve(account),
+			false,
+			false,
+			"public-model-alias",
+			"gpt-5.6-sol",
+			time.Now(),
+			1,
+			"",
+			new(bool),
+		)
+	}
+
+	first, err := forward(newContext(), "")
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.Equal(t, "resp_turn_state_model_1", first.RequestID)
+
+	store := svc.getOpenAIWSStateStore()
+	connID, ok := store.GetResponseConn(first.RequestID)
+	require.True(t, ok)
+	accountPool, ok := pool.getAccountPool(account.ID)
+	require.True(t, ok)
+	accountPool.mu.Lock()
+	pooledConn := accountPool.conns[connID]
+	accountPool.mu.Unlock()
+	require.NotNil(t, pooledConn)
+	require.True(t, pooledConn.matchesHandshakeTurnStateModel("gpt-5.6-sol"))
+	require.False(t, pooledConn.matchesHandshakeTurnStateModel("public-model-alias"), "the pool binding must use the final mapped model")
+
+	second, err := forward(newContext(), first.RequestID)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	require.Equal(t, "resp_turn_state_model_2", second.RequestID)
+	require.Equal(t, 1, dialer.DialCount(), "strict continuation must reuse the model-compatible state-bearing connection")
+}
+
 func TestOpenAIGatewayService_ForwardOpenAIWSV2_HTTPFacadeDoesNotExposeOrphanedResponseID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	captureConn := &openAIWSCaptureConn{events: [][]byte{

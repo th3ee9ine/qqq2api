@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -109,6 +110,9 @@ type openAIWSHandshakeCompatibilityKey struct {
 	clientRequestID     string
 	codexWindowID       string
 	parentThreadID      string
+	egressHash          [sha256.Size]byte
+	cookieHash          [sha256.Size]byte
+	hasCookie           bool
 }
 
 type openAIWSConnLease struct {
@@ -196,6 +200,18 @@ func (l *openAIWSConnLease) HandshakeHeaders() http.Header {
 		return nil
 	}
 	return cloneHeader(l.conn.handshakeHeaders)
+}
+
+// ConsumeTurnStateHandshakeHeaders returns the immutable Turn-State handshake
+// evidence once for the lifetime of the upstream connection. Callers consume
+// it only after a completed turn has reached the downstream; failed turns leave
+// it available for the first later successful turn.
+func (l *openAIWSConnLease) ConsumeTurnStateHandshakeHeaders() (http.Header, bool) {
+	if l == nil || l.conn == nil ||
+		!l.conn.turnStateHandshakeConsumed.CompareAndSwap(false, true) {
+		return nil, false
+	}
+	return cloneHeader(l.conn.handshakeHeaders), true
 }
 
 // SentIdentity returns the immutable outbound headers used to establish this
@@ -332,6 +348,9 @@ type openAIWSConn struct {
 	readerLoopErrMu      sync.Mutex
 	readerLoopErr        error
 	readerLoopPeerClosed atomic.Bool
+	// The upgrade response is immutable and must not be treated as fresh
+	// per-turn state/cookie evidence each time this pooled connection is reused.
+	turnStateHandshakeConsumed atomic.Bool
 	// onPeerClosed 由池在建连后设置：上游主动关闭时立刻把连接移出账号池，不等清理周期。
 	onPeerClosed atomic.Pointer[func()]
 	// unusable 表示空闲期收到数据被判为脏连接：持有令牌不再借出，由池在锁外关闭。
@@ -1249,7 +1268,7 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 
 retryAcquire:
 	accountID := req.Account.ID
-	compatibility := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	compatibility := normalizeOpenAIWSAcquireCompatibility(req)
 	routingAffinity := normalizeOpenAIWSRoutingAffinity(req.Headers)
 	effectiveMaxConns := p.effectiveMaxConnsByAccount(req.Account)
 	if effectiveMaxConns <= 0 {
@@ -2439,7 +2458,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	accountID := req.Account.ID
 	evict := func() { p.evictConn(accountID, id) }
 	pooledConn.onPeerClosed.Store(&evict)
-	pooledConn.handshakeCompatibility = normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	pooledConn.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(req)
 	pooledConn.routingAffinity = normalizeOpenAIWSRoutingAffinity(req.Headers)
 	return pooledConn, nil
 }
@@ -2622,7 +2641,18 @@ func sameOpenAIWSPrewarmTarget(a, b openAIWSAcquireRequest) bool {
 	return stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
 		stringsTrim(a.ProxyURL) == stringsTrim(b.ProxyURL) &&
 		codexTurnStateModelIdentity(a.TurnStateModel) == codexTurnStateModelIdentity(b.TurnStateModel) &&
-		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers)
+		normalizeOpenAIWSAcquireCompatibility(a) == normalizeOpenAIWSAcquireCompatibility(b)
+}
+
+func normalizeOpenAIWSAcquireCompatibility(req openAIWSAcquireRequest) openAIWSHandshakeCompatibilityKey {
+	key := normalizeOpenAIWSHandshakeCompatibility(req.Account, req.Headers)
+	key.egressHash = sha256.Sum256([]byte(stringsTrim(req.ProxyURL)))
+	cookie := stringsTrim(req.Headers.Get("Cookie"))
+	if cookie != "" {
+		key.cookieHash = sha256.Sum256([]byte(cookie))
+		key.hasCookie = true
+	}
+	return key
 }
 
 func normalizeOpenAIWSBetaFeatures(headers http.Header) string {

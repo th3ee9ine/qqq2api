@@ -20,13 +20,72 @@ type CodexTurnStateRuntimeSettings struct {
 	// internal settings/update path, but never serialize it through an
 	// administrator response. The HTTP handler exposes only credential-free
 	// metadata (configured/count) instead.
-	ProxyPoolURLs []string `json:"-"`
+	ProxyPoolURLs []string                      `json:"-"`
+	Harvest       CodexTurnStateHarvestControls `json:"harvest"`
+}
+
+type CodexTurnStateHarvestControls struct {
+	SpeedPreset            string `json:"speed_preset"`
+	MaxRequestsPerRound    int    `json:"max_requests_per_round"`
+	FailureCooldownSeconds int    `json:"failure_cooldown_seconds"`
+}
+
+type CodexTurnStateHarvestPreset struct {
+	RoundIntervalSeconds   int `json:"round_interval_seconds"`
+	MaxRequestsPerRound    int `json:"max_requests_per_round"`
+	FailureCooldownSeconds int `json:"failure_cooldown_seconds"`
+}
+
+var codexTurnStateHarvestPresets = map[string]CodexTurnStateHarvestPreset{
+	"slow":     {RoundIntervalSeconds: 300, MaxRequestsPerRound: 3, FailureCooldownSeconds: 300},
+	"standard": {RoundIntervalSeconds: 180, MaxRequestsPerRound: 6, FailureCooldownSeconds: 180},
+	"fast":     {RoundIntervalSeconds: 60, MaxRequestsPerRound: 12, FailureCooldownSeconds: 60},
+	"burst":    {RoundIntervalSeconds: 1, MaxRequestsPerRound: 20, FailureCooldownSeconds: 1},
+}
+
+func CodexTurnStateHarvestPresetNames() []string {
+	return []string{"slow", "standard", "fast", "burst"}
+}
+
+func defaultCodexTurnStateHarvestControls() CodexTurnStateHarvestControls {
+	preset := codexTurnStateHarvestPresets["standard"]
+	return CodexTurnStateHarvestControls{SpeedPreset: "standard", MaxRequestsPerRound: preset.MaxRequestsPerRound, FailureCooldownSeconds: preset.FailureCooldownSeconds}
+}
+
+func normalizeCodexTurnStateHarvestControls(controls CodexTurnStateHarvestControls) CodexTurnStateHarvestControls {
+	controls.SpeedPreset = strings.ToLower(strings.TrimSpace(controls.SpeedPreset))
+	preset, ok := codexTurnStateHarvestPresets[controls.SpeedPreset]
+	if !ok {
+		controls.SpeedPreset = "standard"
+		preset = codexTurnStateHarvestPresets[controls.SpeedPreset]
+	}
+	if controls.MaxRequestsPerRound <= 0 {
+		controls.MaxRequestsPerRound = preset.MaxRequestsPerRound
+	}
+	if controls.FailureCooldownSeconds <= 0 {
+		controls.FailureCooldownSeconds = preset.FailureCooldownSeconds
+	}
+	return controls
+}
+
+func ValidateCodexTurnStateHarvestControls(controls CodexTurnStateHarvestControls) error {
+	if _, ok := codexTurnStateHarvestPresets[strings.ToLower(strings.TrimSpace(controls.SpeedPreset))]; !ok {
+		return fmt.Errorf("invalid harvest speed preset")
+	}
+	if controls.MaxRequestsPerRound < 1 || controls.MaxRequestsPerRound > 100 {
+		return fmt.Errorf("max_requests_per_round must be between 1 and 100")
+	}
+	if controls.FailureCooldownSeconds < 1 || controls.FailureCooldownSeconds > 3600 {
+		return fmt.Errorf("failure_cooldown_seconds must be between 1 and 3600")
+	}
+	return nil
 }
 
 func defaultCodexTurnStateRuntimeSettings() CodexTurnStateRuntimeSettings {
 	return CodexTurnStateRuntimeSettings{
 		ProbeEnabled:     true,
 		InjectionEnabled: true,
+		Harvest:          defaultCodexTurnStateHarvestControls(),
 	}
 }
 
@@ -53,6 +112,23 @@ func codexTurnStateRuntimeSettingsFromValues(values map[string]string) (CodexTur
 		}
 		settings.ProxyPoolURLs = pool
 	}
+	if raw, ok := values[SettingKeyCodexTurnStateHarvestSpeedPreset]; ok {
+		settings.Harvest.SpeedPreset = strings.TrimSpace(raw)
+	}
+	if raw, ok := values[SettingKeyCodexTurnStateHarvestRequestBudget]; ok {
+		if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+			settings.Harvest.MaxRequestsPerRound = value
+		}
+	}
+	if raw, ok := values[SettingKeyCodexTurnStateHarvestFailureCooldown]; ok {
+		if value, err := strconv.Atoi(strings.TrimSpace(raw)); err == nil {
+			settings.Harvest.FailureCooldownSeconds = value
+		}
+	}
+	settings.Harvest = normalizeCodexTurnStateHarvestControls(settings.Harvest)
+	if err := ValidateCodexTurnStateHarvestControls(settings.Harvest); err != nil {
+		return settings, err
+	}
 	return settings, nil
 }
 
@@ -75,6 +151,9 @@ func (s *OpsService) GetCodexTurnStateRuntimeSettings(ctx context.Context) (*Cod
 		SettingKeyCodexTurnStateProbeEnabled,
 		SettingKeyCodexTurnStateCacheInjectionEnabled,
 		SettingKeyCodexTurnStateProxyPool,
+		SettingKeyCodexTurnStateHarvestSpeedPreset,
+		SettingKeyCodexTurnStateHarvestRequestBudget,
+		SettingKeyCodexTurnStateHarvestFailureCooldown,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get Codex turn-state runtime settings: %w", err)
@@ -99,6 +178,25 @@ func (s *OpsService) UpdateCodexTurnStateRuntimeSettings(ctx context.Context, se
 	s.runtimeSettingsMu.Lock()
 	defer s.runtimeSettingsMu.Unlock()
 	pool := settings.ProxyPoolURLs
+	if strings.TrimSpace(settings.Harvest.SpeedPreset) == "" {
+		current, readErr := s.settingRepo.GetMultiple(ctx, []string{
+			SettingKeyCodexTurnStateHarvestSpeedPreset,
+			SettingKeyCodexTurnStateHarvestRequestBudget,
+			SettingKeyCodexTurnStateHarvestFailureCooldown,
+		})
+		if readErr != nil {
+			return nil, fmt.Errorf("read existing Codex turn-state harvest controls: %w", readErr)
+		}
+		existing, parseErr := codexTurnStateRuntimeSettingsFromValues(current)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		settings.Harvest = existing.Harvest
+	}
+	settings.Harvest = normalizeCodexTurnStateHarvestControls(settings.Harvest)
+	if err := ValidateCodexTurnStateHarvestControls(settings.Harvest); err != nil {
+		return nil, err
+	}
 	if pool == nil {
 		// Older callers only know about the two switches. Preserve the existing
 		// pool when they omit the new field.
@@ -125,9 +223,12 @@ func (s *OpsService) UpdateCodexTurnStateRuntimeSettings(ctx context.Context, se
 		return nil, fmt.Errorf("encode Codex turn-state proxy pool: %w", err)
 	}
 	if err := s.settingRepo.SetMultiple(ctx, map[string]string{
-		SettingKeyCodexTurnStateProbeEnabled:          strconv.FormatBool(settings.ProbeEnabled),
-		SettingKeyCodexTurnStateCacheInjectionEnabled: strconv.FormatBool(settings.InjectionEnabled),
-		SettingKeyCodexTurnStateProxyPool:             poolJSON,
+		SettingKeyCodexTurnStateProbeEnabled:           strconv.FormatBool(settings.ProbeEnabled),
+		SettingKeyCodexTurnStateCacheInjectionEnabled:  strconv.FormatBool(settings.InjectionEnabled),
+		SettingKeyCodexTurnStateProxyPool:              poolJSON,
+		SettingKeyCodexTurnStateHarvestSpeedPreset:     settings.Harvest.SpeedPreset,
+		SettingKeyCodexTurnStateHarvestRequestBudget:   strconv.Itoa(settings.Harvest.MaxRequestsPerRound),
+		SettingKeyCodexTurnStateHarvestFailureCooldown: strconv.Itoa(settings.Harvest.FailureCooldownSeconds),
 	}); err != nil {
 		return nil, fmt.Errorf("update Codex turn-state runtime settings: %w", err)
 	}
@@ -141,5 +242,5 @@ func (s *OpsService) applyCodexTurnStateRuntimeSettings(settings CodexTurnStateR
 	if s == nil || s.openAIGatewayService == nil {
 		return
 	}
-	s.openAIGatewayService.SetCodexTurnStateRuntimeSettingsWithProxyPool(settings.ProbeEnabled, settings.InjectionEnabled, settings.ProxyPoolURLs)
+	s.openAIGatewayService.SetCodexTurnStateRuntimeSettingsWithControls(settings.ProbeEnabled, settings.InjectionEnabled, settings.ProxyPoolURLs, settings.Harvest)
 }

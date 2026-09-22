@@ -102,6 +102,12 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 	}()
 	if request != nil {
 		normalizeLegacyOpenAIOutboundRequestBody(request)
+		if ticket, ok := openAICodexTurnStateTicketFromContext(request.Context()); ok {
+			pinOpenAICodexTurnStateTicketRequest(request, ticket)
+			if ticket.EgressPinned {
+				proxyURL = ticket.EgressProxyURL
+			}
+		}
 		SanitizeOutboundGatewayIdentity(request.Header)
 		request = snapshotUpstreamRequestIdentity(request)
 	}

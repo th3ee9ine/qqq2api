@@ -28,6 +28,8 @@ const (
 	openAICodexTurnStateCollectorDefaultMaxEntries     = 2048
 	openAICodexTurnStateCollectorDefaultMaxTokenLength = 2048
 	openAICodexTurnStateCollectorDefaultMaxProbeSlots  = 1
+	openAICodexTurnStateCookieTTL                      = 240 * time.Second
+	openAICodexTurnStateMaxCookies                     = 64
 	openAICodexTurnStateCollectorMaxScopeLength        = 512
 	openAICodexTurnStateCollectorMaxModelLength        = 128
 	openAICodexTurnStateCollectorMaxRouteLength        = 256
@@ -227,9 +229,33 @@ func (k OpenAICodexTurnStateKey) canonical() OpenAICodexTurnStateKey {
 // OpenAICodexTurnStateSnapshot is immutable request state. A caller can keep
 // it across a failover attempt; later observations cannot mutate its version.
 type OpenAICodexTurnStateSnapshot struct {
-	Token   OpenAICodexTurnStateToken
-	Route   string
-	Version uint64
+	Token            OpenAICodexTurnStateToken
+	Route            string
+	Version          uint64
+	EgressProxyURL   string
+	EgressPinned     bool
+	HarvestSessionID string
+	HarvestCookies   []OpenAICodexTurnStateCookie
+	HarvestCookiesAt time.Time
+}
+
+// OpenAICodexTurnStateCookie is the minimum cookie material needed for a
+// pinned ticket request. Attributes from Set-Cookie are intentionally not
+// retained, and status/admin projections expose counts only.
+type OpenAICodexTurnStateCookie struct {
+	Name  string
+	Value string
+}
+
+func cloneOpenAICodexTurnStateSnapshot(snapshot OpenAICodexTurnStateSnapshot) OpenAICodexTurnStateSnapshot {
+	snapshot.HarvestCookies = append([]OpenAICodexTurnStateCookie(nil), snapshot.HarvestCookies...)
+	return snapshot
+}
+
+func (s OpenAICodexTurnStateSnapshot) cookiesFresh(now time.Time) bool {
+	now = collectorNow(now)
+	return len(s.HarvestCookies) > 0 && !s.HarvestCookiesAt.IsZero() &&
+		now.Before(s.HarvestCookiesAt.Add(openAICodexTurnStateCookieTTL))
 }
 
 func (s OpenAICodexTurnStateSnapshot) usable(policy OpenAICodexTurnStatePolicy, now time.Time) bool {
@@ -239,21 +265,24 @@ func (s OpenAICodexTurnStateSnapshot) usable(policy OpenAICodexTurnStatePolicy, 
 // OpenAICodexTurnStateStatus intentionally contains metadata only. In
 // particular, it never exposes Token.Value.
 type OpenAICodexTurnStateStatus struct {
-	Key               OpenAICodexTurnStateKey `json:"key"`
-	Usable            bool                    `json:"usable"`
-	Ready             bool                    `json:"ready"`
-	Version           uint64                  `json:"version"`
-	Strikes           int                     `json:"strikes"`
-	Candidates        uint64                  `json:"candidates"`
-	Observations      uint64                  `json:"observations"`
-	ActiveFingerprint string                  `json:"active_fingerprint,omitempty"`
-	ReadyFingerprint  string                  `json:"ready_fingerprint,omitempty"`
-	ActiveIssuedAt    time.Time               `json:"active_issued_at,omitempty"`
-	ReadyIssuedAt     time.Time               `json:"ready_issued_at,omitempty"`
-	RemainingSeconds  int                     `json:"remaining_seconds"`
-	LastProbeAt       time.Time               `json:"last_probe_at,omitempty"`
-	NextProbeAt       time.Time               `json:"next_probe_at,omitempty"`
-	ProbeInFlight     bool                    `json:"probe_in_flight"`
+	Key                    OpenAICodexTurnStateKey `json:"key"`
+	Usable                 bool                    `json:"usable"`
+	Ready                  bool                    `json:"ready"`
+	Version                uint64                  `json:"version"`
+	Strikes                int                     `json:"strikes"`
+	Candidates             uint64                  `json:"candidates"`
+	Observations           uint64                  `json:"observations"`
+	ActiveFingerprint      string                  `json:"active_fingerprint,omitempty"`
+	ReadyFingerprint       string                  `json:"ready_fingerprint,omitempty"`
+	ActiveIssuedAt         time.Time               `json:"active_issued_at,omitempty"`
+	ReadyIssuedAt          time.Time               `json:"ready_issued_at,omitempty"`
+	RemainingSeconds       int                     `json:"remaining_seconds"`
+	CookieCount            int                     `json:"cookie_count"`
+	CookieRemainingSeconds int                     `json:"cookie_remaining_seconds"`
+	CookieExpired          bool                    `json:"cookie_expired"`
+	LastProbeAt            time.Time               `json:"last_probe_at,omitempty"`
+	NextProbeAt            time.Time               `json:"next_probe_at,omitempty"`
+	ProbeInFlight          bool                    `json:"probe_in_flight"`
 }
 
 // OpenAICodexTurnStateMetrics is a bounded aggregate; it contains no key or
@@ -584,8 +613,58 @@ func (c *OpenAICodexTurnStateCollector) Acquire(key OpenAICodexTurnStateKey, now
 		return OpenAICodexTurnStateSnapshot{}, false
 	}
 	c.promoteLocked(entry, now)
-	snapshot := entry.active
+	snapshot := cloneOpenAICodexTurnStateSnapshot(entry.active)
 	return snapshot, snapshot.usable(c.policy, now)
+}
+
+// OfferSnapshot publishes a complete server-owned ticket. Callers use it for
+// manually collected seeds; the ordinary Offer API remains token-only for
+// compatibility with existing collector users.
+func (c *OpenAICodexTurnStateCollector) OfferSnapshot(key OpenAICodexTurnStateKey, snapshot OpenAICodexTurnStateSnapshot, now time.Time) bool {
+	if c == nil {
+		return false
+	}
+	now = collectorNow(now)
+	c.counts.offers.Add(1)
+	token, ok := c.normalizeOfferToken(snapshot.Token, now)
+	if !ok {
+		return false
+	}
+	snapshot.Token = token
+	snapshot = normalizeOpenAICodexTurnStateSnapshot(snapshot)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.offerSnapshotLocked(key, snapshot, now, nil)
+}
+
+// AdoptManualSnapshot transfers a qualified, account-fenced manual ticket to
+// one real execution scope. Incrementing the version fences outstanding
+// responses bound to the previous ticket, including when it is still healthy.
+func (c *OpenAICodexTurnStateCollector) AdoptManualSnapshot(key OpenAICodexTurnStateKey, snapshot OpenAICodexTurnStateSnapshot, now time.Time) bool {
+	if c == nil {
+		return false
+	}
+	now = collectorNow(now)
+	token, valid := c.normalizeOfferToken(snapshot.Token, now)
+	if !valid {
+		return false
+	}
+	snapshot.Token = token
+	snapshot = normalizeOpenAICodexTurnStateSnapshot(snapshot)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, current := c.entryLocked(key, now, true)
+	if !current {
+		return false
+	}
+	entry.version++
+	snapshot.Version = entry.version
+	entry.active = cloneOpenAICodexTurnStateSnapshot(snapshot)
+	entry.ready = OpenAICodexTurnStateSnapshot{}
+	entry.strikes = 0
+	entry.forceRefresh = false
+	c.counts.acceptedOffers.Add(1)
+	return true
 }
 
 // Offer publishes a validated candidate. A healthy active value is never
@@ -664,6 +743,25 @@ func (c *OpenAICodexTurnStateCollector) OfferProbeIfRefreshNeeded(probe OpenAICo
 	return c.offerIfRefreshNeededLocked(probe.Key, token, route, now, &probe)
 }
 
+// OfferProbeSnapshotIfRefreshNeeded atomically publishes the token together
+// with the exact egress/session/cookie identity that minted it.
+func (c *OpenAICodexTurnStateCollector) OfferProbeSnapshotIfRefreshNeeded(probe OpenAICodexTurnStateProbe, snapshot OpenAICodexTurnStateSnapshot, now time.Time) OpenAICodexTurnStateOfferResult {
+	if c == nil || probe.done == nil {
+		return OpenAICodexTurnStateOfferRejected
+	}
+	now = collectorNow(now)
+	token, ok := c.normalizeOfferToken(snapshot.Token, now)
+	if !ok {
+		c.counts.offers.Add(1)
+		return OpenAICodexTurnStateOfferRejected
+	}
+	snapshot.Token = token
+	snapshot = normalizeOpenAICodexTurnStateSnapshot(snapshot)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.offerSnapshotIfRefreshNeededLocked(probe.Key, snapshot, now, &probe)
+}
+
 // ProbeCurrent reports whether a probe lease is still allowed to publish.
 // Callers use this to distinguish a fenced lease from an ordinary probe
 // validation failure, where a still-healthy active snapshot may be retained.
@@ -696,6 +794,10 @@ func (c *OpenAICodexTurnStateCollector) normalizeOfferToken(token OpenAICodexTur
 }
 
 func (c *OpenAICodexTurnStateCollector) offerLocked(key OpenAICodexTurnStateKey, token OpenAICodexTurnStateToken, route string, now time.Time, expectedProbe *OpenAICodexTurnStateProbe) bool {
+	return c.offerSnapshotLocked(key, OpenAICodexTurnStateSnapshot{Token: token, Route: route}, now, expectedProbe)
+}
+
+func (c *OpenAICodexTurnStateCollector) offerSnapshotLocked(key OpenAICodexTurnStateKey, snapshot OpenAICodexTurnStateSnapshot, now time.Time, expectedProbe *OpenAICodexTurnStateProbe) bool {
 	create := expectedProbe == nil
 	entry, ok := c.entryLocked(key, now, create)
 	if !ok || (expectedProbe != nil &&
@@ -703,11 +805,15 @@ func (c *OpenAICodexTurnStateCollector) offerLocked(key OpenAICodexTurnStateKey,
 		c.counts.rejectedOffers.Add(1)
 		return false
 	}
-	c.offerEntryLocked(entry, token, route, now)
+	c.offerSnapshotEntryLocked(entry, snapshot, now)
 	return true
 }
 
 func (c *OpenAICodexTurnStateCollector) offerIfRefreshNeededLocked(key OpenAICodexTurnStateKey, token OpenAICodexTurnStateToken, route string, now time.Time, expectedProbe *OpenAICodexTurnStateProbe) OpenAICodexTurnStateOfferResult {
+	return c.offerSnapshotIfRefreshNeededLocked(key, OpenAICodexTurnStateSnapshot{Token: token, Route: route}, now, expectedProbe)
+}
+
+func (c *OpenAICodexTurnStateCollector) offerSnapshotIfRefreshNeededLocked(key OpenAICodexTurnStateKey, snapshot OpenAICodexTurnStateSnapshot, now time.Time, expectedProbe *OpenAICodexTurnStateProbe) OpenAICodexTurnStateOfferResult {
 	create := expectedProbe == nil
 	canonical, currentGeneration := c.resolveKeyGenerationLocked(key, now, create)
 	if !currentGeneration {
@@ -752,22 +858,56 @@ func (c *OpenAICodexTurnStateCollector) offerIfRefreshNeededLocked(key OpenAICod
 		return OpenAICodexTurnStateOfferSkippedHealthy
 	}
 	c.counts.offers.Add(1)
-	c.offerEntryLocked(entry, token, route, now)
+	c.offerSnapshotEntryLocked(entry, snapshot, now)
 	return OpenAICodexTurnStateOfferPublished
 }
 
 func (c *OpenAICodexTurnStateCollector) offerEntryLocked(entry *openAICodexTurnStateCollectorEntry, token OpenAICodexTurnStateToken, route string, now time.Time) {
+	c.offerSnapshotEntryLocked(entry, OpenAICodexTurnStateSnapshot{Token: token, Route: route}, now)
+}
+
+func normalizeOpenAICodexTurnStateSnapshot(snapshot OpenAICodexTurnStateSnapshot) OpenAICodexTurnStateSnapshot {
+	snapshot.Route = strings.TrimSpace(snapshot.Route)
+	snapshot.EgressProxyURL = strings.TrimSpace(snapshot.EgressProxyURL)
+	snapshot.HarvestSessionID = strings.TrimSpace(snapshot.HarvestSessionID)
+	if len(snapshot.Route) > openAICodexTurnStateCollectorMaxRouteLength {
+		snapshot.Route = snapshot.Route[:openAICodexTurnStateCollectorMaxRouteLength]
+	}
+	if len(snapshot.EgressProxyURL) > 4096 {
+		snapshot.EgressProxyURL = ""
+		snapshot.EgressPinned = false
+	}
+	if len(snapshot.HarvestSessionID) > 256 {
+		snapshot.HarvestSessionID = ""
+	}
+	if len(snapshot.HarvestCookies) > openAICodexTurnStateMaxCookies {
+		snapshot.HarvestCookies = snapshot.HarvestCookies[:openAICodexTurnStateMaxCookies]
+	}
+	snapshot.HarvestCookies = append([]OpenAICodexTurnStateCookie(nil), snapshot.HarvestCookies...)
+	return snapshot
+}
+
+func (c *OpenAICodexTurnStateCollector) offerSnapshotEntryLocked(entry *openAICodexTurnStateCollectorEntry, snapshot OpenAICodexTurnStateSnapshot, now time.Time) {
+	snapshot = normalizeOpenAICodexTurnStateSnapshot(snapshot)
+	token, route := snapshot.Token, snapshot.Route
 	if len(route) > openAICodexTurnStateCollectorMaxRouteLength {
 		route = route[:openAICodexTurnStateCollectorMaxRouteLength]
 	}
+	snapshot.Route = route
 	if entry.active.Token.Fingerprint == token.Fingerprint {
+		if snapshot.EgressPinned || snapshot.HarvestSessionID != "" || len(snapshot.HarvestCookies) > 0 {
+			entry.version++
+			snapshot.Version = entry.version
+			entry.active = cloneOpenAICodexTurnStateSnapshot(snapshot)
+		}
 		entry.forceRefresh = false
 		c.counts.acceptedOffers.Add(1)
 		return
 	}
 	if !c.policy.Accept(entry.active.Token, now) {
 		entry.version++
-		entry.active = OpenAICodexTurnStateSnapshot{Token: token, Route: route, Version: entry.version}
+		snapshot.Version = entry.version
+		entry.active = cloneOpenAICodexTurnStateSnapshot(snapshot)
 		entry.ready = OpenAICodexTurnStateSnapshot{}
 		entry.strikes = 0
 		entry.forceRefresh = false
@@ -776,11 +916,91 @@ func (c *OpenAICodexTurnStateCollector) offerEntryLocked(entry *openAICodexTurnS
 		return
 	}
 	if entry.ready.Token.Value == "" || !c.policy.Accept(entry.ready.Token, now) || !token.IssuedAt.Before(entry.ready.Token.IssuedAt) {
-		entry.ready = OpenAICodexTurnStateSnapshot{Token: token, Route: route}
+		snapshot.Version = 0
+		entry.ready = cloneOpenAICodexTurnStateSnapshot(snapshot)
 	}
 	c.promoteLocked(entry, now)
 	entry.candidates++
 	c.counts.acceptedOffers.Add(1)
+}
+
+// ObserveQualified advances an exact, server-owned ticket after a completed,
+// model-matched response. Stale responses fail the version/fingerprint CAS and
+// cannot mutate a replacement ticket. Cookie time moves only when the qualified
+// response actually supplied one or more cookie pairs.
+func (c *OpenAICodexTurnStateCollector) ObserveQualified(
+	key OpenAICodexTurnStateKey,
+	value string,
+	used OpenAICodexTurnStateSnapshot,
+	cookies []OpenAICodexTurnStateCookie,
+	now time.Time,
+) bool {
+	if c == nil || strings.TrimSpace(value) == "" || used.Route == "client" {
+		return false
+	}
+	now = collectorNow(now)
+	token, err := ValidateOpenAICodexTurnState(value, c.policy, now)
+	if err != nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entryLocked(key, now, false)
+	if !ok || used.Version != entry.active.Version || used.Token.Fingerprint != entry.active.Token.Fingerprint {
+		return false
+	}
+	entry.observed++
+	c.counts.observations.Add(1)
+	next := cloneOpenAICodexTurnStateSnapshot(entry.active)
+	next.Token = token
+	next.Route = entry.active.Route
+	if len(cookies) > 0 {
+		currentCookies := entry.active.HarvestCookies
+		if !entry.active.cookiesFresh(now) {
+			currentCookies = nil
+		}
+		next.HarvestCookies = mergeOpenAICodexTurnStateCookies(currentCookies, cookies)
+		next.HarvestCookiesAt = now
+	}
+	changed := token.Fingerprint != entry.active.Token.Fingerprint || len(cookies) > 0
+	if changed {
+		entry.version++
+		next.Version = entry.version
+		entry.active = cloneOpenAICodexTurnStateSnapshot(next)
+		entry.ready = OpenAICodexTurnStateSnapshot{}
+		entry.candidates++
+		c.counts.promotions.Add(1)
+	}
+	entry.strikes = 0
+	entry.forceRefresh = false
+	return true
+}
+
+func mergeOpenAICodexTurnStateCookies(current, updates []OpenAICodexTurnStateCookie) []OpenAICodexTurnStateCookie {
+	merged := make([]OpenAICodexTurnStateCookie, 0, min(len(current)+len(updates), openAICodexTurnStateMaxCookies))
+	positions := make(map[string]int, len(current)+len(updates))
+	appendCookie := func(cookie OpenAICodexTurnStateCookie) {
+		cookie.Name = strings.TrimSpace(cookie.Name)
+		if cookie.Name == "" || len(cookie.Name) > 256 || len(cookie.Value) > 4096 {
+			return
+		}
+		if index, exists := positions[cookie.Name]; exists {
+			merged[index] = cookie
+			return
+		}
+		if len(merged) >= openAICodexTurnStateMaxCookies {
+			return
+		}
+		positions[cookie.Name] = len(merged)
+		merged = append(merged, cookie)
+	}
+	for _, cookie := range current {
+		appendCookie(cookie)
+	}
+	for _, cookie := range updates {
+		appendCookie(cookie)
+	}
+	return merged
 }
 
 // OfferValue parses and offers a wire header in one operation.
@@ -1041,6 +1261,17 @@ func openAICodexTurnStateStatus(entry *openAICodexTurnStateCollectorEntry, polic
 		seconds := int(entry.active.Token.IssuedAt.Add(policy.TTL).Sub(now).Seconds())
 		if seconds > 0 {
 			status.RemainingSeconds = seconds
+		}
+	}
+	status.CookieCount = len(entry.active.HarvestCookies)
+	if status.CookieCount > 0 {
+		if entry.active.cookiesFresh(now) {
+			remaining := entry.active.HarvestCookiesAt.Add(openAICodexTurnStateCookieTTL).Sub(now)
+			// Round up so the last fraction of a valid second is not reported as
+			// expired while the same cookie is still eligible for injection.
+			status.CookieRemainingSeconds = int((remaining + time.Second - 1) / time.Second)
+		} else {
+			status.CookieExpired = true
 		}
 	}
 	return status

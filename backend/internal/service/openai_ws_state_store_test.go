@@ -106,7 +106,7 @@ func TestOpenAIWSStateStore_SessionTurnStateIsolatedByModel(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestOpenAIWSStateStore_TurnStateGenerationAndRefreshGate(t *testing.T) {
+func TestOpenAIWSStateStore_TurnStateGenerationAndResponseRotation(t *testing.T) {
 	store, ok := NewOpenAIWSStateStore(nil).(*defaultOpenAIWSStateStore)
 	require.True(t, ok)
 	now := time.Now().UTC()
@@ -120,11 +120,11 @@ func TestOpenAIWSStateStore_TurnStateGenerationAndRefreshGate(t *testing.T) {
 	)
 
 	require.True(t, store.BindSessionTurnStateIfRefreshNeeded(groupID, accountID, "scope", first, generation, time.Hour, policy, now, "gpt-5"))
-	require.False(t, store.BindSessionTurnStateIfRefreshNeeded(groupID, accountID, "scope", second, generation, time.Hour, policy, now, "gpt-5"),
-		"a new response token must not replace a healthy binding")
+	require.True(t, store.BindSessionTurnStateIfRefreshNeeded(groupID, accountID, "scope", second, generation, time.Hour, policy, now, "gpt-5"),
+		"a qualifying response token advances the model-scoped binding")
 	got, found := store.GetSessionTurnStateForGeneration(groupID, accountID, "scope", generation, "gpt-5")
 	require.True(t, found)
-	require.Equal(t, first, got)
+	require.Equal(t, second, got)
 	_, found = store.GetSessionTurnStateForGeneration(groupID, accountID, "scope", generation+1, "gpt-5")
 	require.False(t, found, "a replacement collector generation must not trust the old binding")
 

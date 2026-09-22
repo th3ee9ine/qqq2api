@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 )
@@ -74,10 +75,14 @@ type openAICodexTurnStateRequestBinding struct {
 }
 
 type openAICodexTurnStateRuntimeSettings struct {
-	probeEnabled          bool
-	cacheInjectionEnabled bool
-	proxyPoolURLs         []string
-	proxyPoolGeneration   uint64
+	probeEnabled           bool
+	cacheInjectionEnabled  bool
+	proxyPoolURLs          []string
+	proxyPoolGeneration    uint64
+	harvestSpeedPreset     string
+	harvestRoundInterval   time.Duration
+	harvestRequestBudget   int
+	harvestFailureCooldown time.Duration
 }
 
 // codexTurnStateGroupIDContextKey carries the concrete scheduling group into
@@ -151,9 +156,27 @@ func (s *OpenAIGatewayService) SetCodexTurnStateRuntimeSettings(probeEnabled, ca
 // immutable runtime snapshot. The pool is deliberately independent of an
 // account's normal proxy binding.
 func (s *OpenAIGatewayService) SetCodexTurnStateRuntimeSettingsWithProxyPool(probeEnabled, cacheInjectionEnabled bool, proxyPoolURLs []string) {
+	controls := defaultCodexTurnStateHarvestControls()
+	if s != nil {
+		if current := s.codexTurnStateRuntime.Load(); current != nil {
+			controls.SpeedPreset = current.harvestSpeedPreset
+			controls.MaxRequestsPerRound = current.harvestRequestBudget
+			controls.FailureCooldownSeconds = int(current.harvestFailureCooldown / time.Second)
+		}
+	}
+	s.SetCodexTurnStateRuntimeSettingsWithControls(probeEnabled, cacheInjectionEnabled, proxyPoolURLs, controls)
+}
+
+func (s *OpenAIGatewayService) SetCodexTurnStateRuntimeSettingsWithControls(
+	probeEnabled, cacheInjectionEnabled bool,
+	proxyPoolURLs []string,
+	controls CodexTurnStateHarvestControls,
+) {
 	if s == nil {
 		return
 	}
+	controls = normalizeCodexTurnStateHarvestControls(controls)
+	preset := codexTurnStateHarvestPresets[controls.SpeedPreset]
 	pool, err := normalizeOpenAICodexTurnStateProxyPool(proxyPoolURLs)
 	if err != nil {
 		pool = nil
@@ -176,12 +199,43 @@ func (s *OpenAIGatewayService) SetCodexTurnStateRuntimeSettingsWithProxyPool(pro
 		s.codexTurnStateSuccessfulIPs = nil
 		s.codexTurnStateIPRegions = nil
 		s.codexTurnStateProxyProbeLast = nil
+		s.codexTurnStateHarvestNodes = nil
+		s.codexTurnStateManualTickets = nil
+		s.codexTurnStateProbeGates = nil
+		if previous != nil && s.codexTurnStateCollector != nil {
+			// A ticket pins its collection egress. Retire old generations before
+			// the new pool becomes visible so removed routes cannot be reused.
+			s.codexTurnStateCollector.DeleteAll()
+		}
+	}
+	if previous == nil || previous.harvestRoundInterval != time.Duration(preset.RoundIntervalSeconds)*time.Second || previous.harvestRequestBudget != controls.MaxRequestsPerRound {
+		s.codexTurnStateHarvestRoundStart = time.Time{}
+		s.codexTurnStateHarvestRoundUsed = 0
 	}
 	s.codexTurnStateRuntime.Store(&openAICodexTurnStateRuntimeSettings{
-		probeEnabled:          probeEnabled,
-		cacheInjectionEnabled: cacheInjectionEnabled,
-		proxyPoolURLs:         pool,
-		proxyPoolGeneration:   poolGeneration,
+		probeEnabled:           probeEnabled,
+		cacheInjectionEnabled:  cacheInjectionEnabled,
+		proxyPoolURLs:          pool,
+		proxyPoolGeneration:    poolGeneration,
+		harvestSpeedPreset:     controls.SpeedPreset,
+		harvestRoundInterval:   time.Duration(preset.RoundIntervalSeconds) * time.Second,
+		harvestRequestBudget:   controls.MaxRequestsPerRound,
+		harvestFailureCooldown: time.Duration(controls.FailureCooldownSeconds) * time.Second,
+	})
+}
+
+func (s *OpenAIGatewayService) CodexTurnStateHarvestControls() CodexTurnStateHarvestControls {
+	if s == nil {
+		return defaultCodexTurnStateHarvestControls()
+	}
+	settings := s.codexTurnStateRuntime.Load()
+	if settings == nil {
+		return defaultCodexTurnStateHarvestControls()
+	}
+	return normalizeCodexTurnStateHarvestControls(CodexTurnStateHarvestControls{
+		SpeedPreset:            settings.harvestSpeedPreset,
+		MaxRequestsPerRound:    settings.harvestRequestBudget,
+		FailureCooldownSeconds: int(settings.harvestFailureCooldown / time.Second),
 	})
 }
 
@@ -216,6 +270,7 @@ type openAICodexTurnStateProbeFailure struct {
 	code       string
 	statusCode int
 	err        error
+	dispatched bool
 }
 
 func (e *openAICodexTurnStateProbeFailure) Error() string {
@@ -610,14 +665,24 @@ func (s *OpenAIGatewayService) prepareCodexTurnState(ctx context.Context, c *gin
 				}
 				s.recordCodexTurnStateCandidateReason("invalid_state")
 			} else if token, err := ValidateOpenAICodexTurnState(value, s.codexTurnStatePolicy(), now); err == nil {
-				// A valid native client value is authoritative for this attempt.
-				// Envelope checks do not authenticate an opaque state, so client input
-				// must never become a reusable collector candidate until the selected
-				// HTTPS upstream returns it on an authoritative successful response.
+				// A client can echo the state we just returned from a harvested ticket.
+				// Keep its server-owned identity through the ordinary cache path below;
+				// treating that exact echo as native would drop its egress and cookies.
+				serverOwnedEcho := false
 				if collectorEligible {
-					s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{Token: token, Route: "client"}, false)
+					_, injectionEnabled := s.CodexTurnStateRuntimeSettings()
+					active, usable := s.codexTurnStateCollector.Acquire(key, now)
+					serverOwnedEcho = injectionEnabled && usable && active.Token.Value == value &&
+						active.Route != "client" && (active.EgressPinned || active.HarvestSessionID != "")
 				}
-				return OpenAICodexTurnStateSnapshot{Token: token, Route: "client"}, true
+				if !serverOwnedEcho {
+					// Proven native state remains authoritative without becoming a
+					// reusable collector candidate based on client input alone.
+					if collectorEligible {
+						s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{Token: token, Route: "client"}, false)
+					}
+					return OpenAICodexTurnStateSnapshot{Token: token, Route: "client"}, true
+				}
 			}
 			// Never forward a malformed/expired value when a usable cached value
 			// or a bounded probe can be selected below.
@@ -668,6 +733,7 @@ func (s *OpenAIGatewayService) prepareCodexTurnState(ctx context.Context, c *gin
 		s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{}, false)
 		return OpenAICodexTurnStateSnapshot{}, false
 	}
+	s.consumeManualCodexTurnStateTicket(key, now)
 	probeEnabled, cacheInjectionEnabled := s.CodexTurnStateRuntimeSettings()
 	// Always inspect the active entry, even when injection is disabled. The
 	// injection switch controls whether a usable value is attached to this
@@ -779,7 +845,7 @@ func (s *OpenAIGatewayService) prepareCodexTurnState(ctx context.Context, c *gin
 	if len(probeIdentity) > 0 && probeIdentity[0] != nil {
 		identity = probeIdentity[0]
 	}
-	if token, failure := s.probeCodexTurnState(probeCtx, account, key.Model, identity); failure == nil {
+	if ticket, failure := s.probeCodexTurnStateTicket(probeCtx, account, key.Model, identity); failure == nil {
 		if err := probeCtx.Err(); err != nil {
 			discardProbeEntry = true
 			s.recordCodexTurnStateProbeFailure(codexTurnStateProbeContextFailure(probeCtx, err).code)
@@ -803,14 +869,14 @@ func (s *OpenAIGatewayService) prepareCodexTurnState(ctx context.Context, c *gin
 			s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{}, false)
 			return OpenAICodexTurnStateSnapshot{}, false
 		}
-		offerResult := s.codexTurnStateCollector.OfferProbeIfRefreshNeeded(probe, token, "probe", time.Now())
+		offerResult := s.codexTurnStateCollector.OfferProbeSnapshotIfRefreshNeeded(probe, ticket, time.Now())
 		if offerResult == OpenAICodexTurnStateOfferPublished {
 			// A successful synthetic probe is an authoritative fresh state even
 			// when the normal response relay is not involved. Clear the prior
 			// model-scoped tombstone only after the candidate is accepted; a probe
 			// discarded by an eligibility/generation fence must not resurrect the
 			// old lineage.
-			s.clearOpenAICodexTurnStateInvalidationForModel(c, model, token.Value)
+			s.clearOpenAICodexTurnStateInvalidationForModel(c, model, ticket.Token.Value)
 			if activeUsable {
 				s.recordCodexTurnStateCandidateReason("refresh_due")
 			} else {
@@ -950,8 +1016,13 @@ func openAICodexTurnStateProbeAttemptCount(routeCount int, timeout time.Duration
 // same prefix. The bounded subset prevents a large pool from shrinking every
 // route deadline to an unusable duration.
 func (s *OpenAIGatewayService) probeCodexTurnState(parent context.Context, account *Account, model string, identityHeaders ...http.Header) (OpenAICodexTurnStateToken, *openAICodexTurnStateProbeFailure) {
+	ticket, failure := s.probeCodexTurnStateTicket(parent, account, model, identityHeaders...)
+	return ticket.Token, failure
+}
+
+func (s *OpenAIGatewayService) probeCodexTurnStateTicket(parent context.Context, account *Account, model string, identityHeaders ...http.Header) (ticket OpenAICodexTurnStateSnapshot, failure *openAICodexTurnStateProbeFailure) {
 	if s == nil || s.httpUpstream == nil || !codexTurnStateEligibleAccount(account) {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe is unavailable")}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe is unavailable")}
 	}
 	if parent == nil {
 		parent = context.Background()
@@ -974,16 +1045,23 @@ func (s *OpenAIGatewayService) probeCodexTurnState(parent context.Context, accou
 		if reason == "" {
 			reason = "account_unschedulable"
 		}
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{
 			code: reason,
 			err:  errors.New("turn-state collection account is not currently schedulable"),
 		}
 	}
 	account = collectionAccount
+	lease, gateFailure := s.beginCodexTurnStateProbe(account.ID, model, time.Now())
+	if gateFailure != nil {
+		return OpenAICodexTurnStateSnapshot{}, gateFailure
+	}
+	defer func() {
+		s.finishCodexTurnStateProbe(lease, failure, time.Now())
+	}()
 	diagnosticsGeneration := s.codexTurnStateDiagnosticsGeneration()
 	routes := s.codexTurnStateProbeRoutes(account)
 	if len(routes) == 0 {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe has no egress route")}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe has no egress route")}
 	}
 	// Add returns the post-increment value. Subtract one so a fresh gateway
 	// starts at route zero. After the round, advance by any additional routes
@@ -1004,12 +1082,15 @@ func (s *OpenAIGatewayService) probeCodexTurnState(parent context.Context, accou
 	// starting route for pool-wide fairness and diagnostics coverage.
 	probeDeadline, hasProbeDeadline := probeCtx.Deadline()
 	var lastFailure *openAICodexTurnStateProbeFailure
-	for offset := 0; offset < attemptCount; offset++ {
+	for offset := 0; offset < len(routes) && attempted < attemptCount; offset++ {
 		proxyURL := routes[(start+offset)%len(routes)]
+		if !s.codexTurnStateHarvestRouteAvailable(proxyURL, time.Now()) {
+			continue
+		}
 		routeCtx := probeCtx
 		var routeCancel context.CancelFunc
 		if hasProbeDeadline {
-			remainingRoutes := attemptCount - offset
+			remainingRoutes := attemptCount - attempted
 			remainingBudget := time.Until(probeDeadline)
 			if remainingBudget <= 0 {
 				break
@@ -1021,16 +1102,23 @@ func (s *OpenAIGatewayService) probeCodexTurnState(parent context.Context, accou
 			routeCtx, routeCancel = context.WithTimeout(probeCtx, routeBudget)
 		}
 		attempted++
-		token, failure := s.probeCodexTurnStateViaProxy(routeCtx, account, model, proxyURL, identityHeaders...)
+		attemptStart := time.Now()
+		ticket, failure := s.probeCodexTurnStateTicketViaProxy(routeCtx, account, model, proxyURL, identityHeaders...)
 		if routeCancel != nil {
 			routeCancel()
+		}
+		if failure != nil && failure.code == "request_budget_exhausted" {
+			return OpenAICodexTurnStateSnapshot{}, failure
+		}
+		if failure == nil || failure.dispatched {
+			s.recordCodexTurnStateHarvestNode(proxyURL, failure, time.Since(attemptStart), time.Now(), diagnosticsGeneration)
 		}
 		if failure == nil {
 			// Exit-IP diagnostics are best effort and deliberately do not affect
 			// state validity or route selection. An empty route is meaningful: it
 			// represents direct egress when no account or dedicated proxy is set.
 			s.recordCodexTurnStateProxySuccessAsync(proxyURL, diagnosticsGeneration)
-			return token, nil
+			return ticket, nil
 		}
 		lastFailure = failure
 		if probeCtx.Err() != nil {
@@ -1038,9 +1126,12 @@ func (s *OpenAIGatewayService) probeCodexTurnState(parent context.Context, accou
 		}
 	}
 	if lastFailure != nil {
-		return OpenAICodexTurnStateToken{}, lastFailure
+		return OpenAICodexTurnStateSnapshot{}, lastFailure
 	}
-	return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe failed without a route result")}
+	if attempted == 0 && probeCtx.Err() == nil {
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "routes_cooling_down", err: errors.New("routes_cooling_down")}
+	}
+	return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe failed without a route result")}
 }
 
 func (s *OpenAIGatewayService) codexTurnStateProbeRoutes(account *Account) []string {
@@ -1053,9 +1144,9 @@ func (s *OpenAIGatewayService) codexTurnStateProbeRoutes(account *Account) []str
 	return []string{resolveAccountProxyURL(account)}
 }
 
-func (s *OpenAIGatewayService) probeCodexTurnStateViaProxy(probeCtx context.Context, account *Account, model, proxyURL string, identityHeaders ...http.Header) (OpenAICodexTurnStateToken, *openAICodexTurnStateProbeFailure) {
+func (s *OpenAIGatewayService) probeCodexTurnStateTicketViaProxy(probeCtx context.Context, account *Account, model, proxyURL string, identityHeaders ...http.Header) (ticket OpenAICodexTurnStateSnapshot, failure *openAICodexTurnStateProbeFailure) {
 	if s == nil || s.httpUpstream == nil || !codexTurnStateEligibleAccount(account) {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe is unavailable")}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe is unavailable")}
 	}
 	if probeCtx == nil {
 		probeCtx = context.Background()
@@ -1064,7 +1155,7 @@ func (s *OpenAIGatewayService) probeCodexTurnStateViaProxy(probeCtx context.Cont
 
 	model = codexTurnStateModel(model)
 	if model == "" {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "invalid_model", err: errors.New("final upstream model is unavailable")}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "invalid_model", err: errors.New("final upstream model is unavailable")}
 	}
 	payload, err := json.Marshal(map[string]any{
 		"model":               model,
@@ -1076,11 +1167,11 @@ func (s *OpenAIGatewayService) probeCodexTurnStateViaProxy(probeCtx context.Cont
 		"store":               false,
 	})
 	if err != nil {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: err}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: err}
 	}
 	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamProfile(probeCtx, HTTPUpstreamProfileOpenAI)), http.MethodPost, chatgptCodexURL, bytes.NewReader(payload))
 	if err != nil {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: err}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: err}
 	}
 	if len(identityHeaders) > 0 {
 		copyCodexTurnStateProbeIdentity(req.Header, identityHeaders[0])
@@ -1088,17 +1179,17 @@ func (s *OpenAIGatewayService) probeCodexTurnStateViaProxy(probeCtx context.Cont
 	if strings.TrimSpace(req.Header.Get("Authorization")) == "" {
 		token, _, tokenErr := s.GetAccessToken(probeCtx, account)
 		if tokenErr != nil {
-			return OpenAICodexTurnStateToken{}, codexTurnStateProbeContextFailure(probeCtx, tokenErr)
+			return OpenAICodexTurnStateSnapshot{}, codexTurnStateProbeContextFailure(probeCtx, tokenErr)
 		}
 		authHeaders, authErr := s.buildOpenAIAuthenticationHeaders(probeCtx, account, token)
 		if authErr != nil {
-			return OpenAICodexTurnStateToken{}, codexTurnStateProbeContextFailure(probeCtx, authErr)
+			return OpenAICodexTurnStateSnapshot{}, codexTurnStateProbeContextFailure(probeCtx, authErr)
 		}
 		copyCodexTurnStateHeaderValues(req.Header, authHeaders)
 	}
 	req.Host = "chatgpt.com"
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(probeCtx, s.accountRepo, req.Header, account); err != nil {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: err}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: err}
 	}
 	req.Header.Set("accept", "text/event-stream")
 	req.Header.Set("content-type", "application/json")
@@ -1111,11 +1202,22 @@ func (s *OpenAIGatewayService) probeCodexTurnStateViaProxy(probeCtx context.Cont
 	}
 	enforceCodexIdentityHeadersWithAccount(req.Header, account)
 	account.ApplyHeaderOverrides(req.Header)
+	harvestSessionID := uuid.NewString()
+	applyOpenAICodexTurnStateTicketHeaders(req.Header, OpenAICodexTurnStateSnapshot{HarvestSessionID: harvestSessionID}, time.Now())
+	req.Header.Del(openAICodexTurnStateHeader)
 
 	credentialAccount, credentialErr := resolveCredentialAccount(probeCtx, s.accountRepo, account)
 	if credentialErr != nil {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: credentialErr}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: credentialErr}
 	}
+	if !s.reserveCodexTurnStateHarvestRequest(time.Now()) {
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "request_budget_exhausted", err: errors.New("request_budget_exhausted")}
+	}
+	defer func() {
+		if failure != nil {
+			failure.dispatched = true
+		}
+	}()
 	response, _, err := doOpenAIOAuthTransportWithCredentialAccount(
 		req,
 		proxyURL,
@@ -1127,10 +1229,10 @@ func (s *OpenAIGatewayService) probeCodexTurnStateViaProxy(probeCtx context.Cont
 		true,
 	)
 	if err != nil {
-		return OpenAICodexTurnStateToken{}, codexTurnStateProbeContextFailure(probeCtx, err)
+		return OpenAICodexTurnStateSnapshot{}, codexTurnStateProbeContextFailure(probeCtx, err)
 	}
 	if response == nil {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: errors.New("nil probe response")}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "transport_error", err: errors.New("nil probe response")}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -1149,7 +1251,7 @@ func (s *OpenAIGatewayService) probeCodexTurnStateViaProxy(probeCtx context.Cont
 		case response.StatusCode >= http.StatusInternalServerError:
 			code = "upstream_5xx"
 		}
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: code, statusCode: response.StatusCode, err: errors.New(code)}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: code, statusCode: response.StatusCode, err: errors.New(code)}
 	}
 	maxBytes := cfg.MaxProbeResponseBytes
 	if maxBytes <= 0 {
@@ -1163,33 +1265,48 @@ func (s *OpenAIGatewayService) probeCodexTurnStateViaProxy(probeCtx context.Cont
 		} else if errors.Is(readErr, context.DeadlineExceeded) || errors.Is(probeCtx.Err(), context.DeadlineExceeded) {
 			code = "probe_timeout"
 		}
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: code, err: readErr}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: code, err: readErr}
 	}
 	if outcome.failureEvent != "" {
 		code := classifyCodexTurnStateProbeStreamFailure(outcome.failureEvent, outcome.failureCode)
 		if code == "upstream_rate_limited" {
 			s.handleCodexTurnStateProbeUpstreamError(probeCtx, account, http.StatusTooManyRequests, response.Header, nil)
 		}
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: code, err: errors.New(code)}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: code, err: errors.New(code)}
 	}
 	if !outcome.completed {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "incomplete_stream", err: errors.New("probe did not receive response.completed")}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "incomplete_stream", err: errors.New("probe did not receive response.completed")}
 	}
 	if !codexTurnStateProbeModelsMatch(model, outcome.models) {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "response_model_mismatch", err: errors.New("response_model_mismatch")}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "response_model_mismatch", err: errors.New("response_model_mismatch")}
 	}
 	state := strings.TrimSpace(response.Header.Get(openAICodexTurnStateHeader))
 	if state == "" {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "invalid_state", err: errors.New("probe response omitted turn state")}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "invalid_state", err: errors.New("probe response omitted turn state")}
 	}
 	tokenValue, err := ValidateOpenAICodexTurnState(state, s.codexTurnStatePolicy(), time.Now())
 	if err != nil {
-		return OpenAICodexTurnStateToken{}, &openAICodexTurnStateProbeFailure{code: "invalid_state", err: err}
+		return OpenAICodexTurnStateSnapshot{}, &openAICodexTurnStateProbeFailure{code: "invalid_state", err: err}
 	}
 	if err := probeCtx.Err(); err != nil {
-		return OpenAICodexTurnStateToken{}, codexTurnStateProbeContextFailure(probeCtx, err)
+		return OpenAICodexTurnStateSnapshot{}, codexTurnStateProbeContextFailure(probeCtx, err)
 	}
-	return tokenValue, nil
+	now := time.Now()
+	cookies := responseOpenAICodexTurnStateCookies(response.Header)
+	return OpenAICodexTurnStateSnapshot{
+		Token:            tokenValue,
+		Route:            "probe",
+		EgressProxyURL:   strings.TrimSpace(proxyURL),
+		EgressPinned:     true,
+		HarvestSessionID: harvestSessionID,
+		HarvestCookies:   cookies,
+		HarvestCookiesAt: func() time.Time {
+			if len(cookies) > 0 {
+				return now
+			}
+			return time.Time{}
+		}(),
+	}, nil
 }
 
 type openAICodexTurnStateProbeSSEOutcome struct {
@@ -1587,10 +1704,41 @@ func (s *OpenAIGatewayService) observeCodexTurnStateResponseDetails(c *gin.Conte
 		return
 	}
 	if binding.used {
-		// Keep suspect-response accounting for the state that was actually used;
-		// a valid, non-tombstoned response is the only value allowed to continue
-		// through the healthy-active/candidate path below.
-		s.codexTurnStateCollector.Observe(binding.key, state, binding.snapshot, now)
+		// A completed, model-matched response advances the exact ticket that this
+		// request consumed. Re-check eligibility and authoritative identity before
+		// the CAS so a disabled/replaced account cannot refresh either state or
+		// cookies while the request is draining.
+		collectionCtx := context.Background()
+		if c != nil && c.Request != nil {
+			collectionCtx = c.Request.Context()
+		}
+		if groupID := codexTurnStateGroupIDForRequest(c, collectionCtx); groupID != nil {
+			collectionCtx = withCodexTurnStateGroupID(collectionCtx, groupID)
+		}
+		if eligible, reason := s.codexTurnStateCollectionEligibility(collectionCtx, account, model); !eligible {
+			s.recordCodexTurnStateCandidateReason(reason)
+			return
+		}
+		currentAccount, reason := s.authoritativeCodexTurnStateCollectionAccount(collectionCtx, account, model)
+		if currentAccount == nil {
+			s.recordCodexTurnStateCandidateReason(reason)
+			return
+		}
+		if !s.codexTurnStateCollectionIdentityCurrent(collectionCtx, c, account, currentAccount) {
+			s.recordCodexTurnStateCandidateReason("account_identity_changed")
+			return
+		}
+		// ObserveQualified owns both state rotation and the independent cookie
+		// timestamp. A failed CAS means another request already replaced this
+		// ticket; never feed the stale response into the ordinary offer path.
+		s.codexTurnStateCollector.ObserveQualified(
+			binding.key,
+			state,
+			binding.snapshot,
+			responseOpenAICodexTurnStateCookies(upstream),
+			now,
+		)
+		return
 	}
 	// A response can still be relayed to a native client without a reliable
 	// execution scope, but it must never create a reusable collector entry.
@@ -1695,6 +1843,7 @@ func (s *OpenAIGatewayService) CodexTurnStateReliabilitySnapshot(ctx context.Con
 	statuses := s.codexTurnStateCollector.Statuses(now, metrics.Entries)
 	active, ready, collecting := 0, 0, false
 	cooling := false
+	cookieCount, cookieActive, cookieExpired, cookieRemaining := 0, 0, 0, 0
 	for _, status := range statuses {
 		if status.Usable {
 			active++
@@ -1704,6 +1853,17 @@ func (s *OpenAIGatewayService) CodexTurnStateReliabilitySnapshot(ctx context.Con
 		}
 		collecting = collecting || status.ProbeInFlight
 		cooling = cooling || (!status.NextProbeAt.IsZero() && now.Before(status.NextProbeAt))
+		cookieCount += status.CookieCount
+		if status.CookieCount > 0 {
+			if status.CookieExpired {
+				cookieExpired += status.CookieCount
+			} else {
+				if cookieActive == 0 || status.CookieRemainingSeconds < cookieRemaining {
+					cookieRemaining = status.CookieRemainingSeconds
+				}
+				cookieActive += status.CookieCount
+			}
+		}
 	}
 	status := "idle"
 	switch {
@@ -1733,25 +1893,34 @@ func (s *OpenAIGatewayService) CodexTurnStateReliabilitySnapshot(ctx context.Con
 	}
 	probeEnabled, cacheInjectionEnabled := s.CodexTurnStateRuntimeSettings()
 	successfulIPs, ipRegions, candidateBreakdown := s.codexTurnStateDiagnostics()
+	nodes, budgetUsed, budgetLimit, budgetResetAt := s.codexTurnStateHarvestSummary(now)
 	return OpenAICodexTurnStateReliabilitySnapshot{
-		Enabled:             true,
-		ProbeEnabled:        probeEnabled,
-		InjectionEnabled:    cacheInjectionEnabled,
-		Status:              status,
-		Ready:               active > 0,
-		Collecting:          collecting,
-		ActiveEntries:       active,
-		ReadyCandidates:     ready,
-		Observations:        metrics.Observations,
-		Successes:           s.codexTurnStateProbeSuccesses.Load(),
-		Failures:            s.codexTurnStateProbeFailures.Load(),
-		LastSuccessAt:       lastSuccess,
-		LastFailureAt:       lastFailure,
-		LastErrorCode:       lastError,
-		ProxyPool:           summarizeOpenAICodexTurnStateProxyPool(s.CodexTurnStateProxyPool()),
-		SuccessfulIPRegions: ipRegions,
-		SuccessfulIPs:       successfulIPs,
-		CandidateBreakdown:  candidateBreakdown,
+		Enabled:                true,
+		ProbeEnabled:           probeEnabled,
+		InjectionEnabled:       cacheInjectionEnabled,
+		Status:                 status,
+		Ready:                  active > 0,
+		Collecting:             collecting,
+		ActiveEntries:          active,
+		ReadyCandidates:        ready,
+		Observations:           metrics.Observations,
+		Successes:              s.codexTurnStateProbeSuccesses.Load(),
+		Failures:               s.codexTurnStateProbeFailures.Load(),
+		LastSuccessAt:          lastSuccess,
+		LastFailureAt:          lastFailure,
+		LastErrorCode:          lastError,
+		CookieCount:            cookieCount,
+		CookieActiveCount:      cookieActive,
+		CookieExpiredCount:     cookieExpired,
+		CookieRemainingSeconds: cookieRemaining,
+		HarvestNodes:           nodes,
+		BudgetUsed:             budgetUsed,
+		BudgetLimit:            budgetLimit,
+		BudgetResetAt:          budgetResetAt,
+		ProxyPool:              summarizeOpenAICodexTurnStateProxyPool(s.CodexTurnStateProxyPool()),
+		SuccessfulIPRegions:    ipRegions,
+		SuccessfulIPs:          successfulIPs,
+		CandidateBreakdown:     candidateBreakdown,
 	}
 }
 

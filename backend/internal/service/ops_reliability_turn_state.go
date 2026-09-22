@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -19,24 +20,32 @@ import (
 // non-blocking status read. Timestamps are optional and are copied by the
 // projection before being exposed to the administrator UI.
 type OpenAICodexTurnStateReliabilitySnapshot struct {
-	Enabled             bool
-	ProbeEnabled        bool
-	InjectionEnabled    bool
-	Status              string
-	Ready               bool
-	Collecting          bool
-	ActiveEntries       int
-	ReadyCandidates     int
-	Observations        uint64
-	Successes           uint64
-	Failures            uint64
-	LastSuccessAt       *time.Time
-	LastFailureAt       *time.Time
-	LastErrorCode       string
-	ProxyPool           []OpenAICodexTurnStateProxySummary
-	SuccessfulIPRegions []OpenAICodexTurnStateIPRegion
-	SuccessfulIPs       []OpenAICodexTurnStateSuccessfulIP
-	CandidateBreakdown  []OpenAICodexTurnStateCandidateBreakdown
+	Enabled                bool
+	ProbeEnabled           bool
+	InjectionEnabled       bool
+	Status                 string
+	Ready                  bool
+	Collecting             bool
+	ActiveEntries          int
+	ReadyCandidates        int
+	Observations           uint64
+	Successes              uint64
+	Failures               uint64
+	LastSuccessAt          *time.Time
+	LastFailureAt          *time.Time
+	LastErrorCode          string
+	CookieCount            int
+	CookieActiveCount      int
+	CookieExpiredCount     int
+	CookieRemainingSeconds int
+	HarvestNodes           []OpenAICodexTurnStateHarvestNodeSummary
+	BudgetUsed             int
+	BudgetLimit            int
+	BudgetResetAt          *time.Time
+	ProxyPool              []OpenAICodexTurnStateProxySummary
+	SuccessfulIPRegions    []OpenAICodexTurnStateIPRegion
+	SuccessfulIPs          []OpenAICodexTurnStateSuccessfulIP
+	CandidateBreakdown     []OpenAICodexTurnStateCandidateBreakdown
 }
 
 // OpenAICodexTurnStateReliabilityProvider is implemented by the OpenAI
@@ -50,24 +59,32 @@ type OpenAICodexTurnStateReliabilityProvider interface {
 // OpsReliabilityTurnStateCollector is the safe JSON projection of the
 // collector snapshot. It contains no opaque token or identity-bearing key.
 type OpsReliabilityTurnStateCollector struct {
-	Enabled             bool                                        `json:"enabled"`
-	ProbeEnabled        bool                                        `json:"probe_enabled"`
-	InjectionEnabled    bool                                        `json:"injection_enabled"`
-	Status              string                                      `json:"status,omitempty"`
-	Ready               bool                                        `json:"ready"`
-	Collecting          bool                                        `json:"collecting"`
-	ActiveEntries       int                                         `json:"active_entries"`
-	ReadyCandidates     int                                         `json:"ready_candidates"`
-	Observations        uint64                                      `json:"observations"`
-	Successes           uint64                                      `json:"successes"`
-	Failures            uint64                                      `json:"failures"`
-	LastSuccessAt       *time.Time                                  `json:"last_success_at,omitempty"`
-	LastFailureAt       *time.Time                                  `json:"last_failure_at,omitempty"`
-	LastErrorCode       string                                      `json:"last_error_code,omitempty"`
-	ProxyPool           []OpsReliabilityTurnStateProxy              `json:"proxy_pool,omitempty"`
-	SuccessfulIPRegions []OpsReliabilityTurnStateIPRegion           `json:"successful_ip_regions,omitempty"`
-	SuccessfulIPs       []OpsReliabilityTurnStateSuccessfulIP       `json:"successful_ips,omitempty"`
-	CandidateBreakdown  []OpsReliabilityTurnStateCandidateBreakdown `json:"candidate_breakdown,omitempty"`
+	Enabled                bool                                        `json:"enabled"`
+	ProbeEnabled           bool                                        `json:"probe_enabled"`
+	InjectionEnabled       bool                                        `json:"injection_enabled"`
+	Status                 string                                      `json:"status,omitempty"`
+	Ready                  bool                                        `json:"ready"`
+	Collecting             bool                                        `json:"collecting"`
+	ActiveEntries          int                                         `json:"active_entries"`
+	ReadyCandidates        int                                         `json:"ready_candidates"`
+	Observations           uint64                                      `json:"observations"`
+	Successes              uint64                                      `json:"successes"`
+	Failures               uint64                                      `json:"failures"`
+	LastSuccessAt          *time.Time                                  `json:"last_success_at,omitempty"`
+	LastFailureAt          *time.Time                                  `json:"last_failure_at,omitempty"`
+	LastErrorCode          string                                      `json:"last_error_code,omitempty"`
+	CookieCount            int                                         `json:"cookie_count"`
+	CookieActiveCount      int                                         `json:"cookie_active_count"`
+	CookieExpiredCount     int                                         `json:"cookie_expired_count"`
+	CookieRemainingSeconds int                                         `json:"cookie_remaining_seconds"`
+	Nodes                  []OpsReliabilityTurnStateNode               `json:"nodes,omitempty"`
+	BudgetUsed             int                                         `json:"budget_used"`
+	BudgetLimit            int                                         `json:"budget_limit"`
+	BudgetResetAt          *time.Time                                  `json:"budget_reset_at,omitempty"`
+	ProxyPool              []OpsReliabilityTurnStateProxy              `json:"proxy_pool,omitempty"`
+	SuccessfulIPRegions    []OpsReliabilityTurnStateIPRegion           `json:"successful_ip_regions,omitempty"`
+	SuccessfulIPs          []OpsReliabilityTurnStateSuccessfulIP       `json:"successful_ips,omitempty"`
+	CandidateBreakdown     []OpsReliabilityTurnStateCandidateBreakdown `json:"candidate_breakdown,omitempty"`
 }
 
 // These are deliberately separate from the gateway diagnostics structs: the
@@ -76,6 +93,17 @@ type OpsReliabilityTurnStateProxy struct {
 	Protocol string `json:"protocol"`
 	Host     string `json:"host"`
 	Port     int    `json:"port"`
+}
+
+type OpsReliabilityTurnStateNode struct {
+	NodeID                   string `json:"node_id"`
+	Label                    string `json:"label"`
+	Successes                uint64 `json:"successes"`
+	Failures                 uint64 `json:"failures"`
+	ConsecutiveFailures      uint64 `json:"consecutive_failures"`
+	LastLatencyMS            int64  `json:"last_latency_ms"`
+	LastResult               string `json:"last_result"`
+	CooldownRemainingSeconds int    `json:"cooldown_remaining_seconds"`
 }
 
 type OpsReliabilityTurnStateIPRegion struct {
@@ -154,6 +182,8 @@ var reliabilityTurnStateCandidateReasonAllowlist = map[string]struct{}{
 	"shadow_parent_unhealthy":     {},
 	"state_time_rejected":         {},
 	"unreliable_key":              {},
+	"request_budget_exhausted":    {},
+	"routes_cooling_down":         {},
 	"unknown":                     {},
 	"other":                       {},
 }
@@ -164,26 +194,79 @@ var reliabilityTurnStateCandidateReasonAllowlist = map[string]struct{}{
 // text or deployment details.
 func reliabilityTurnStateCollectorFromSnapshot(snapshot OpenAICodexTurnStateReliabilitySnapshot) *OpsReliabilityTurnStateCollector {
 	projected := &OpsReliabilityTurnStateCollector{
-		Enabled:          snapshot.Enabled,
-		ProbeEnabled:     snapshot.ProbeEnabled,
-		InjectionEnabled: snapshot.InjectionEnabled,
-		Status:           normalizeTurnStateCollectorStatus(snapshot.Status),
-		Ready:            snapshot.Ready,
-		Collecting:       snapshot.Collecting,
-		ActiveEntries:    maxNonNegative(snapshot.ActiveEntries),
-		ReadyCandidates:  maxNonNegative(snapshot.ReadyCandidates),
-		Observations:     snapshot.Observations,
-		Successes:        snapshot.Successes,
-		Failures:         snapshot.Failures,
-		LastSuccessAt:    copyReliabilityTime(snapshot.LastSuccessAt),
-		LastFailureAt:    copyReliabilityTime(snapshot.LastFailureAt),
-		LastErrorCode:    normalizeTurnStateCollectorErrorCode(snapshot.LastErrorCode),
+		Enabled:                snapshot.Enabled,
+		ProbeEnabled:           snapshot.ProbeEnabled,
+		InjectionEnabled:       snapshot.InjectionEnabled,
+		Status:                 normalizeTurnStateCollectorStatus(snapshot.Status),
+		Ready:                  snapshot.Ready,
+		Collecting:             snapshot.Collecting,
+		ActiveEntries:          maxNonNegative(snapshot.ActiveEntries),
+		ReadyCandidates:        maxNonNegative(snapshot.ReadyCandidates),
+		Observations:           snapshot.Observations,
+		Successes:              snapshot.Successes,
+		Failures:               snapshot.Failures,
+		LastSuccessAt:          copyReliabilityTime(snapshot.LastSuccessAt),
+		LastFailureAt:          copyReliabilityTime(snapshot.LastFailureAt),
+		LastErrorCode:          normalizeTurnStateCollectorErrorCode(snapshot.LastErrorCode),
+		CookieCount:            maxNonNegative(snapshot.CookieCount),
+		CookieActiveCount:      maxNonNegative(snapshot.CookieActiveCount),
+		CookieExpiredCount:     maxNonNegative(snapshot.CookieExpiredCount),
+		CookieRemainingSeconds: maxNonNegative(snapshot.CookieRemainingSeconds),
+		BudgetUsed:             maxNonNegative(snapshot.BudgetUsed),
+		BudgetLimit:            maxNonNegative(snapshot.BudgetLimit),
+		BudgetResetAt:          copyReliabilityTime(snapshot.BudgetResetAt),
 	}
+	projected.Nodes = projectReliabilityTurnStateNodes(snapshot.HarvestNodes)
 	projected.ProxyPool = projectReliabilityTurnStateProxyPool(snapshot.ProxyPool)
 	projected.SuccessfulIPRegions = projectReliabilityTurnStateIPRegions(snapshot.SuccessfulIPRegions)
 	projected.SuccessfulIPs = projectReliabilityTurnStateSuccessfulIPs(snapshot.SuccessfulIPs)
 	projected.CandidateBreakdown = projectReliabilityTurnStateCandidateBreakdown(snapshot.CandidateBreakdown)
 	return projected
+}
+
+func projectReliabilityTurnStateNodes(values []OpenAICodexTurnStateHarvestNodeSummary) []OpsReliabilityTurnStateNode {
+	result := make([]OpsReliabilityTurnStateNode, 0, reliabilityMinInt(len(values), maxReliabilityTurnStateDiagnosticsEntries))
+	for _, node := range values {
+		if len(node.NodeID) != 16 {
+			continue
+		}
+		validID := true
+		for _, c := range node.NodeID {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				validID = false
+				break
+			}
+		}
+		if !validID {
+			continue
+		}
+		label := boundedReliabilityLabel(node.Label, 300)
+		if label != "direct" {
+			parsed, err := url.Parse(label)
+			if err != nil || parsed.User != nil || parsed.Hostname() == "" || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" ||
+				(parsed.Scheme != "http" && parsed.Scheme != "https" && parsed.Scheme != "socks5") {
+				continue
+			}
+		}
+		lastResult := node.LastResult
+		if lastResult != "success" {
+			lastResult = normalizeTurnStateCollectorErrorCode(lastResult)
+		}
+		latency := node.LastLatencyMS
+		if latency < 0 {
+			latency = 0
+		}
+		result = append(result, OpsReliabilityTurnStateNode{
+			NodeID: node.NodeID, Label: label, Successes: node.Successes, Failures: node.Failures,
+			ConsecutiveFailures: node.ConsecutiveFailures, LastLatencyMS: latency,
+			LastResult: lastResult, CooldownRemainingSeconds: maxNonNegative(node.CooldownRemainingSeconds),
+		})
+		if len(result) >= maxReliabilityTurnStateDiagnosticsEntries {
+			break
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].NodeID < result[j].NodeID })
+	return result
 }
 
 func boundedReliabilityLabel(value string, maxRunes int) string {

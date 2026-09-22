@@ -570,6 +570,14 @@ type OpenAIGatewayService struct {
 	// bounded even when many probes complete at the same time.
 	codexTurnStateProxyProbeSem  chan struct{}
 	codexTurnStateProxyProbeLast map[string]time.Time
+	// Protected by codexTurnStateProxyStatsMu. Keys are digests, never proxy URLs.
+	codexTurnStateHarvestNodes      map[string]*codexTurnStateHarvestNode
+	codexTurnStateHarvestRoundStart time.Time
+	codexTurnStateHarvestRoundUsed  int
+	codexTurnStateManualTickets     map[codexTurnStateManualKey]codexTurnStateManualTicket
+	// Probe gates are bounded account/model coordination metadata. They contain
+	// no credentials, proxy URLs, cookies, or opaque Turn-State values.
+	codexTurnStateProbeGates map[codexTurnStateProbeGateKey]codexTurnStateProbeGateState
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

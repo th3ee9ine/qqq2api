@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -130,17 +131,19 @@ type openAIWSTurnStateSequenceDialer struct {
 	conns      []openAIWSClientConn
 	handshakes []http.Header
 	headers    []http.Header
+	proxies    []string
 }
 
 func (d *openAIWSTurnStateSequenceDialer) Dial(
 	_ context.Context,
 	_ string,
 	headers http.Header,
-	_ string,
+	proxyURL string,
 ) (openAIWSClientConn, int, http.Header, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.headers = append(d.headers, cloneHeader(headers))
+	d.proxies = append(d.proxies, proxyURL)
 	if len(d.conns) == 0 {
 		return nil, http.StatusServiceUnavailable, nil, errors.New("no test websocket connection")
 	}
@@ -162,6 +165,23 @@ func (d *openAIWSTurnStateSequenceDialer) Headers() []http.Header {
 		result[i] = cloneHeader(d.headers[i])
 	}
 	return result
+}
+
+func (d *openAIWSTurnStateSequenceDialer) Proxies() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.proxies...)
+}
+
+func requireOpenAICodexWSTicketBodyIsolated(t *testing.T, body map[string]any) {
+	t.Helper()
+	require.NotContains(t, body, "prompt_cache_key")
+	require.NotContains(t, body, "device_id")
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	// The writer may add its own timing marker under client_metadata.
+	require.False(t, gjson.GetBytes(raw, "client_metadata.old_marker").Exists())
+	require.False(t, gjson.GetBytes(raw, "client_metadata.session_id").Exists())
 }
 
 type openAIWSTurnStateWriteFailConn struct{}
@@ -244,6 +264,243 @@ func TestOpenAIGatewayService_Forward_WSv2_HandshakeTurnStateCommitGate(t *testi
 			}
 		})
 	}
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_CollectorTicketRotation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for index, test := range []struct {
+		name           string
+		stream         bool
+		eventType      string
+		stale          bool
+		ticketIdentity bool
+	}{
+		{name: "completed_non_stream", eventType: "response.completed"},
+		{name: "completed_stream", stream: true, eventType: "response.completed"},
+		{name: "completed_ticket_identity", eventType: "response.completed", ticketIdentity: true},
+		{name: "failed", eventType: "response.failed"},
+		{name: "stale_completed", eventType: "response.completed", stale: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := newOpenAIWSTurnStateLifecycleConfig()
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
+			now := time.Now().UTC()
+			active := collectorTestToken(t, now.Add(-2*time.Minute), 2, byte(150+index*3))
+			handshake := collectorTestToken(t, now.Add(-time.Minute), 2, byte(151+index*3))
+			replacement := collectorTestToken(t, now.Add(-30*time.Second), 2, byte(152+index*3))
+			event := fmt.Sprintf(`{"type":%q,"response":{"id":"resp_ticket_rotation","model":"gpt-5.5","status":%q,"usage":{"input_tokens":1,"output_tokens":1}}}`,
+				test.eventType, strings.TrimPrefix(test.eventType, "response."))
+			var conn openAIWSClientConn = &openAIWSCaptureConn{events: [][]byte{[]byte(event)}}
+			var gated *openAIWSGatedConn
+			if test.stale {
+				gated = newOpenAIWSGatedConn(event)
+				conn = gated
+			}
+			dialer := &openAIWSTurnStateSequenceDialer{
+				conns: []openAIWSClientConn{conn}, handshakes: []http.Header{openAIWSTurnStateLifecycleHandshake(handshake)},
+			}
+			svc, store := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)
+			svc.initCodexTurnStateCollector()
+			account := codexTurnStateGatewayTestAccount(8920 + int64(index))
+			account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
+			body := []byte(fmt.Sprintf(`{"model":"gpt-5.5","stream":%t,"input":"hello"}`, test.stream))
+			if test.ticketIdentity {
+				body = []byte(`{"model":"gpt-5.5","stream":false,"input":"hello","prompt_cache_key":"old-cache","client_metadata":{"old_marker":"client","session_id":"foreign-session"},"device_id":"old-device"}`)
+			}
+			c := newOpenAIWSTurnStateLifecycleContext(t, nil, nil, "rotation-v2-"+test.name)
+			scope, _ := resolveOpenAIWSExecutionScope(c, body, openAIWSTurnStateLifecycleAPIKeyID)
+			require.NotEmpty(t, scope)
+			bindOpenAICodexTurnStateExecutionScopeValue(c, scope)
+			key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+			if test.ticketIdentity {
+				token, err := ValidateOpenAICodexTurnState(active, svc.codexTurnStatePolicy(), now)
+				require.NoError(t, err)
+				require.True(t, svc.codexTurnStateCollector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+					Token: token, Route: "seed", HarvestSessionID: "harvest-session-a",
+				}, now))
+			} else {
+				require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, active, "seed", now))
+			}
+
+			forward := func() error {
+				result, err := svc.Forward(context.Background(), c, account, body)
+				if err == nil && result == nil {
+					return errors.New("nil forwarding result")
+				}
+				return err
+			}
+			if test.stale {
+				outcomeCh := make(chan error, 1)
+				go func() { outcomeCh <- forward() }()
+				select {
+				case <-gated.sent:
+				case <-time.After(3 * time.Second):
+					close(gated.gate)
+					t.Fatal("timed out waiting for the in-flight request")
+				}
+				issued, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+				require.True(t, ok)
+				require.Equal(t, active, issued.Token.Value)
+				require.True(t, svc.codexTurnStateCollector.ObserveQualified(key, replacement, issued, nil, time.Now()))
+				close(gated.gate)
+				select {
+				case err := <-outcomeCh:
+					require.NoError(t, err)
+				case <-time.After(5 * time.Second):
+					t.Fatal("timed out waiting for the stale response")
+				}
+			} else {
+				require.NoError(t, forward())
+			}
+			headers := dialer.Headers()
+			require.Len(t, headers, 1)
+			require.Equal(t, active, headers[0].Get(openAIWSTurnStateHeader))
+			if test.ticketIdentity {
+				capture := conn.(*openAIWSCaptureConn)
+				requireOpenAICodexWSTicketBodyIsolated(t, capture.lastWrite)
+				require.Equal(t, "harvest-session-a", headers[0].Get("session_id"))
+			}
+			current, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+			require.True(t, ok)
+			wantState := active
+			if test.stale {
+				wantState = replacement
+			} else if test.eventType == "response.completed" {
+				wantState = handshake
+			}
+			require.Equal(t, wantState, current.Token.Value)
+			stored, ok := store.GetSessionTurnState(openAIWSTurnStateLifecycleGroupID, account.ID, scope, "gpt-5.5")
+			if test.eventType == "response.completed" && !test.stale {
+				require.True(t, ok)
+				require.Equal(t, handshake, stored)
+			} else {
+				require.False(t, ok, "a failed or stale response must not commit its handshake state")
+			}
+		})
+	}
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_ConsumesHandshakeEvidenceOncePerConnection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for index, test := range []struct {
+		name             string
+		firstEvent       string
+		handshakeRotates bool
+	}{
+		{name: "completed_then_completed"},
+		{name: "failed_then_completed", firstEvent: "response.failed", handshakeRotates: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := newOpenAIWSTurnStateLifecycleConfig()
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
+			now := time.Now().UTC()
+			active := collectorTestToken(t, now.Add(-2*time.Minute), 2, byte(205+index*3))
+			handshakeState := active
+			if test.handshakeRotates {
+				handshakeState = collectorTestToken(t, now.Add(-time.Minute), 2, byte(206+index*3))
+			}
+			firstEvent := test.firstEvent
+			if firstEvent == "" {
+				firstEvent = "response.completed"
+			}
+			conn := &openAIWSCaptureConn{events: [][]byte{
+				[]byte(fmt.Sprintf(`{"type":%q,"response":{"id":"resp_handshake_evidence_1","model":"gpt-5.5","status":%q,"usage":{"input_tokens":1,"output_tokens":1}}}`,
+					firstEvent, strings.TrimPrefix(firstEvent, "response."))),
+				[]byte(`{"type":"response.completed","response":{"id":"resp_handshake_evidence_2","model":"gpt-5.5","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			}}
+			handshake := openAIWSTurnStateLifecycleHandshake(handshakeState)
+			handshake.Add("Set-Cookie", "session=stable-cookie; Path=/; HttpOnly")
+			dialer := &openAIWSTurnStateSequenceDialer{
+				conns: []openAIWSClientConn{conn}, handshakes: []http.Header{handshake},
+			}
+			svc, _ := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)
+			svc.initCodexTurnStateCollector()
+			account := codexTurnStateGatewayTestAccount(8980 + int64(index))
+			account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
+			body := []byte(`{"model":"gpt-5.5","stream":false,"input":"hello"}`)
+			sessionID := "handshake-evidence-" + test.name
+			seedContext := newOpenAIWSTurnStateLifecycleContext(t, nil, nil, sessionID)
+			scope, _ := resolveOpenAIWSExecutionScope(seedContext, body, openAIWSTurnStateLifecycleAPIKeyID)
+			bindOpenAICodexTurnStateExecutionScopeValue(seedContext, scope)
+			key := svc.codexTurnStateKey(seedContext, account, "gpt-5.5")
+			token, err := ValidateOpenAICodexTurnState(active, svc.codexTurnStatePolicy(), now)
+			require.NoError(t, err)
+			initialCookieAt := now.Add(-time.Minute)
+			require.True(t, svc.codexTurnStateCollector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+				Token: token, Route: "seed", HarvestSessionID: "harvest-session",
+				HarvestCookies: []OpenAICodexTurnStateCookie{{Name: "session", Value: "stable-cookie"}}, HarvestCookiesAt: initialCookieAt,
+			}, now))
+			initial, ok := svc.codexTurnStateCollector.Acquire(key, now)
+			require.True(t, ok)
+
+			forward := func() {
+				c := newOpenAIWSTurnStateLifecycleContext(t, nil, nil, sessionID)
+				result, forwardErr := svc.Forward(context.Background(), c, account, body)
+				require.NoError(t, forwardErr)
+				require.NotNil(t, result)
+			}
+			forward()
+			afterFirst, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+			require.True(t, ok)
+			if firstEvent == "response.failed" {
+				require.Equal(t, initial.Version, afterFirst.Version, "a failed turn must not consume or apply handshake evidence")
+				require.Equal(t, initialCookieAt, afterFirst.HarvestCookiesAt)
+			} else {
+				require.Greater(t, afterFirst.Version, initial.Version)
+				require.True(t, afterFirst.HarvestCookiesAt.After(initialCookieAt))
+			}
+
+			forward()
+			afterSecond, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+			require.True(t, ok)
+			require.Len(t, dialer.Headers(), 1, "both downstream requests must reuse the same upstream connection")
+			if firstEvent == "response.failed" {
+				require.Equal(t, handshakeState, afterSecond.Token.Value)
+				require.Greater(t, afterSecond.Version, afterFirst.Version)
+				require.True(t, afterSecond.HarvestCookiesAt.After(initialCookieAt))
+			} else {
+				require.Equal(t, afterFirst.Version, afterSecond.Version, "immutable handshake evidence must not advance the collector twice")
+				require.Equal(t, afterFirst.HarvestCookiesAt, afterSecond.HarvestCookiesAt, "reused Set-Cookie must not refresh cookie age")
+			}
+		})
+	}
+}
+
+func TestResolveOpenAIWSCodexTurnStatePreservesMatchingHarvestedTicket(t *testing.T) {
+	cfg := newOpenAIWSTurnStateLifecycleConfig()
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
+	svc, _ := newOpenAIWSTurnStateLifecycleService(t, cfg, &openAIWSTurnStateSequenceDialer{})
+	svc.initCodexTurnStateCollector()
+	account := codexTurnStateGatewayTestAccount(8990)
+	account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
+	body := []byte(`{"model":"gpt-5.5","stream":false,"input":"hello"}`)
+	c := newOpenAIWSTurnStateLifecycleContext(t, nil, nil, "matching-harvested-ticket")
+	scope, _ := resolveOpenAIWSExecutionScope(c, body, openAIWSTurnStateLifecycleAPIKeyID)
+	bindOpenAICodexTurnStateExecutionScopeValue(c, scope)
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	now := time.Now().UTC()
+	state := collectorTestToken(t, now.Add(-time.Minute), 2, 219)
+	token, err := ValidateOpenAICodexTurnState(state, svc.codexTurnStatePolicy(), now)
+	require.NoError(t, err)
+	require.True(t, svc.codexTurnStateCollector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+		Token: token, Route: "probe", HarvestSessionID: "harvested-session",
+		HarvestCookies: []OpenAICodexTurnStateCookie{{Name: "session", Value: "harvested-cookie"}}, HarvestCookiesAt: now,
+		EgressPinned: true, EgressProxyURL: "http://127.0.0.1:8990",
+	}, now))
+
+	resolved := svc.resolveOpenAIWSCodexTurnState(context.Background(), c, account, "gpt-5.5", state, false)
+	require.Equal(t, state, resolved)
+	binding, bound := svc.codexTurnStateBinding(c, account, "gpt-5.5")
+	require.True(t, bound)
+	require.True(t, binding.used)
+	require.Equal(t, "harvested-session", binding.snapshot.HarvestSessionID)
+
+	headers := http.Header{"Session-Id": []string{"foreign-session"}, "Cookie": []string{"foreign=cookie"}}
+	proxyURL := svc.pinOpenAICodexTurnStateWSIdentity(c, account, "gpt-5.5", headers, "http://127.0.0.1:8000")
+	require.Equal(t, "http://127.0.0.1:8990", proxyURL)
+	require.Equal(t, "harvested-session", headers.Get("session_id"))
+	require.Equal(t, "session=harvested-cookie", headers.Get("Cookie"))
+	require.Empty(t, headers.Get("session-id"))
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_AdminDisabledLateBindDoesNotCommitHandshakeState(t *testing.T) {
@@ -667,6 +924,7 @@ func startOpenAIWSTurnStateIngressServer(
 	t *testing.T,
 	svc *OpenAIGatewayService,
 	account *Account,
+	hooks ...*OpenAIWSIngressHooks,
 ) (*httptest.Server, <-chan error, <-chan string) {
 	t.Helper()
 	serverErrCh := make(chan error, 1)
@@ -693,7 +951,11 @@ func startOpenAIWSTurnStateIngressServer(
 			serverErrCh <- readErr
 			return
 		}
-		proxyErr := svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, nil)
+		var ingressHooks *OpenAIWSIngressHooks
+		if len(hooks) > 0 {
+			ingressHooks = hooks[0]
+		}
+		proxyErr := svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "sk-test", firstMessage, ingressHooks)
 		scope, _ := boundOpenAICodexTurnStateExecutionScope(ginCtx)
 		scopeCh <- scope
 		serverErrCh <- proxyErr
@@ -970,6 +1232,224 @@ func TestOpenAIGatewayService_IngressResponseFailedDoesNotCommitHandshakeState(t
 	require.False(t, stored)
 }
 
+func TestOpenAIGatewayService_IngressFailedTurnPreservesHandshakeEvidenceForLaterSuccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := newOpenAIWSTurnStateLifecycleConfig()
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
+	now := time.Now().UTC()
+	active := collectorTestToken(t, now.Add(-2*time.Minute), 2, 225)
+	handshakeState := collectorTestToken(t, now.Add(-time.Minute), 2, 226)
+	conn := &openAIWSCaptureConn{events: [][]byte{
+		[]byte(`{"type":"response.failed","response":{"id":"resp_ingress_evidence_failed","model":"gpt-5.5","status":"failed","error":{"code":"server_error","message":"failed"}}}`),
+		[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_evidence_completed","model":"gpt-5.5","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}`),
+	}}
+	handshake := openAIWSTurnStateLifecycleHandshake(handshakeState)
+	handshake.Add("Set-Cookie", "session=stable-cookie; Path=/; HttpOnly")
+	dialer := &openAIWSTurnStateSequenceDialer{
+		conns: []openAIWSClientConn{conn}, handshakes: []http.Header{handshake},
+	}
+	svc, store := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)
+	svc.initCodexTurnStateCollector()
+	account := codexTurnStateGatewayTestAccount(8991)
+	account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
+	const sessionID = "ingress-failed-then-success-evidence"
+	body := []byte(`{"type":"response.create","model":"gpt-5.5","stream":false,"input":"hello"}`)
+	seedContext := newOpenAIWSTurnStateLifecycleContext(t, nil, nil, sessionID)
+	scope, _ := resolveOpenAIWSExecutionScope(seedContext, body, openAIWSTurnStateLifecycleAPIKeyID)
+	bindOpenAICodexTurnStateExecutionScopeValue(seedContext, scope)
+	key := svc.codexTurnStateKey(seedContext, account, "gpt-5.5")
+	token, err := ValidateOpenAICodexTurnState(active, svc.codexTurnStatePolicy(), now)
+	require.NoError(t, err)
+	initialCookieAt := now.Add(-time.Minute)
+	require.True(t, svc.codexTurnStateCollector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+		Token: token, Route: "seed", HarvestSessionID: "harvest-session",
+		HarvestCookies: []OpenAICodexTurnStateCookie{{Name: "session", Value: "stable-cookie"}}, HarvestCookiesAt: initialCookieAt,
+	}, now))
+
+	server, serverErrCh, scopeCh := startOpenAIWSTurnStateIngressServer(t, svc, account)
+	client := dialOpenAIWSTurnStateIngressClient(t, server.URL, sessionID)
+	writeOpenAIWSTurnStateIngressMessage(t, client, string(body))
+	failed := readOpenAIWSTurnStateIngressMessage(t, client)
+	require.Equal(t, "response.failed", gjson.GetBytes(failed, "type").String())
+	afterFailure, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.True(t, ok)
+	require.Equal(t, active, afterFailure.Token.Value)
+	require.Equal(t, initialCookieAt, afterFailure.HarvestCookiesAt)
+
+	writeOpenAIWSTurnStateIngressMessage(t, client, string(body))
+	completed := readOpenAIWSTurnStateIngressMessage(t, client)
+	require.Equal(t, "response.completed", gjson.GetBytes(completed, "type").String())
+	require.NoError(t, client.Close(coderws.StatusNormalClosure, "done"))
+	select {
+	case proxyErr := <-serverErrCh:
+		require.NoError(t, proxyErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ingress websocket to finish")
+	}
+	require.Equal(t, scope, <-scopeCh)
+	require.Len(t, dialer.Headers(), 1)
+	afterSuccess, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.True(t, ok)
+	require.Equal(t, handshakeState, afterSuccess.Token.Value)
+	require.True(t, afterSuccess.HarvestCookiesAt.After(initialCookieAt))
+	stored, ok := store.GetSessionTurnState(openAIWSTurnStateLifecycleGroupID, account.ID, scope, "gpt-5.5")
+	require.True(t, ok)
+	require.Equal(t, handshakeState, stored)
+}
+
+func TestOpenAIGatewayService_IngressCollectorTicketRotation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for index, test := range []struct {
+		name           string
+		eventType      string
+		stale          bool
+		ticketIdentity bool
+	}{
+		{name: "completed", eventType: "response.completed"},
+		{name: "completed_ticket_identity", eventType: "response.completed", ticketIdentity: true},
+		{name: "failed", eventType: "response.failed"},
+		{name: "stale_completed", eventType: "response.completed", stale: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := newOpenAIWSTurnStateLifecycleConfig()
+			enableOpenAIWSTurnStateLifecycleCollector(cfg)
+			now := time.Now().UTC()
+			active := collectorTestToken(t, now.Add(-2*time.Minute), 2, byte(175+index*3))
+			handshake := collectorTestToken(t, now.Add(-time.Minute), 2, byte(176+index*3))
+			replacement := collectorTestToken(t, now.Add(-30*time.Second), 2, byte(177+index*3))
+			event := fmt.Sprintf(`{"type":%q,"response":{"id":"resp_ingress_ticket_rotation","model":"gpt-5.5","status":%q,"usage":{"input_tokens":1,"output_tokens":1}}}`,
+				test.eventType, strings.TrimPrefix(test.eventType, "response."))
+			var conn openAIWSClientConn = &openAIWSCaptureConn{events: [][]byte{[]byte(event)}}
+			var gated *openAIWSGatedConn
+			var secondCapture *openAIWSCaptureConn
+			conns := []openAIWSClientConn{conn}
+			if test.stale {
+				gated = newOpenAIWSGatedConn(event)
+				conn = gated
+				secondCapture = &openAIWSCaptureConn{events: [][]byte{[]byte(
+					`{"type":"response.completed","response":{"id":"resp_after_stale_reconnect","model":"gpt-5.5","status":"completed"}}`,
+				)}}
+				conns = []openAIWSClientConn{gated, secondCapture}
+			}
+			dialer := &openAIWSTurnStateSequenceDialer{
+				conns: conns, handshakes: []http.Header{openAIWSTurnStateLifecycleHandshake(handshake)},
+			}
+			svc, store := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)
+			svc.initCodexTurnStateCollector()
+			account := codexTurnStateGatewayTestAccount(8950 + int64(index))
+			account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
+			sessionID := "rotation-ingress-" + test.name
+			body := `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"hello"}`
+			if test.ticketIdentity {
+				body = `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"hello","prompt_cache_key":"old-cache","client_metadata":{"old_marker":"client","session_id":"foreign-session"},"device_id":"old-device"}`
+			}
+			seedContext := newOpenAIWSTurnStateLifecycleContext(t, nil, nil, sessionID)
+			scope, _ := resolveOpenAIWSExecutionScope(seedContext, []byte(body), openAIWSTurnStateLifecycleAPIKeyID)
+			require.NotEmpty(t, scope)
+			bindOpenAICodexTurnStateExecutionScopeValue(seedContext, scope)
+			key := svc.codexTurnStateKey(seedContext, account, "gpt-5.5")
+			if test.stale || test.ticketIdentity {
+				token, err := ValidateOpenAICodexTurnState(active, svc.codexTurnStatePolicy(), now)
+				require.NoError(t, err)
+				require.True(t, svc.codexTurnStateCollector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+					Token: token, Route: "seed", HarvestSessionID: "harvest-session-a",
+					HarvestCookies: []OpenAICodexTurnStateCookie{{Name: "session", Value: "cookie-a"}}, HarvestCookiesAt: now,
+					EgressPinned: true, EgressProxyURL: "http://127.0.0.1:8123",
+				}, now))
+			} else {
+				require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, active, "seed", now))
+			}
+
+			firstTurnDone := make(chan struct{})
+			server, serverErrCh, scopeCh := startOpenAIWSTurnStateIngressServer(t, svc, account, &OpenAIWSIngressHooks{
+				AfterTurn: func(turn int, _ *OpenAIForwardResult, _ error) {
+					if turn == 1 {
+						close(firstTurnDone)
+					}
+				},
+			})
+			client := dialOpenAIWSTurnStateIngressClient(t, server.URL, sessionID)
+			writeOpenAIWSTurnStateIngressMessage(t, client, body)
+			if test.stale {
+				select {
+				case <-gated.sent:
+				case <-time.After(3 * time.Second):
+					close(gated.gate)
+					t.Fatal("timed out waiting for the in-flight ingress turn")
+				}
+				issued, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+				require.True(t, ok)
+				require.Equal(t, active, issued.Token.Value)
+				svc.codexTurnStateCollector.DeleteAndForceRefresh(key)
+				replacementToken, err := ValidateOpenAICodexTurnState(replacement, svc.codexTurnStatePolicy(), time.Now())
+				require.NoError(t, err)
+				require.True(t, svc.codexTurnStateCollector.OfferSnapshot(key, OpenAICodexTurnStateSnapshot{
+					Token: replacementToken, Route: "seed", HarvestSessionID: "harvest-session-c",
+					HarvestCookies: []OpenAICodexTurnStateCookie{{Name: "session", Value: "cookie-c"}}, HarvestCookiesAt: time.Now(),
+					EgressPinned: true, EgressProxyURL: "http://127.0.0.1:8124",
+				}, time.Now()))
+				close(gated.gate)
+			}
+			terminal := readOpenAIWSTurnStateIngressMessage(t, client)
+			require.Equal(t, test.eventType, gjson.GetBytes(terminal, "type").String())
+			if test.stale {
+				select {
+				case <-firstTurnDone:
+				case <-time.After(3 * time.Second):
+					t.Fatal("timed out waiting for the stale turn to complete")
+				}
+				require.NoError(t, gated.Close())
+				writeOpenAIWSTurnStateIngressMessage(t, client,
+					`{"type":"response.create","model":"gpt-5.5","stream":false,"prompt_cache_key":"next-rotation","client_metadata":{"old_marker":"next","session_id":"foreign-next"},"device_id":"old-device","input":"next"}`)
+				second := readOpenAIWSTurnStateIngressMessage(t, client)
+				require.Equal(t, "response.completed", gjson.GetBytes(second, "type").String())
+			}
+			require.NoError(t, client.Close(coderws.StatusNormalClosure, "done"))
+			select {
+			case err := <-serverErrCh:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for ingress to finish")
+			}
+			require.Equal(t, scope, <-scopeCh)
+			headers := dialer.Headers()
+			if test.stale {
+				require.Len(t, headers, 2)
+				require.Equal(t, replacement, headers[1].Get(openAIWSTurnStateHeader), "a reconnect must use the current ticket, not A or rejected B")
+				require.Equal(t, "harvest-session-a", headers[0].Get("session_id"))
+				require.Equal(t, "session=cookie-a", headers[0].Get("Cookie"))
+				require.Equal(t, "harvest-session-c", headers[1].Get("session_id"))
+				require.Equal(t, "session=cookie-c", headers[1].Get("Cookie"))
+				require.Equal(t, []string{"http://127.0.0.1:8123", "http://127.0.0.1:8124"}, dialer.Proxies())
+				requireOpenAICodexWSTicketBodyIsolated(t, secondCapture.lastWrite)
+			} else {
+				require.Len(t, headers, 1)
+				if test.ticketIdentity {
+					require.Equal(t, "harvest-session-a", headers[0].Get("session_id"))
+					requireOpenAICodexWSTicketBodyIsolated(t, conn.(*openAIWSCaptureConn).lastWrite)
+				}
+			}
+			require.Equal(t, active, headers[0].Get(openAIWSTurnStateHeader))
+			current, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+			require.True(t, ok)
+			wantState := active
+			if test.stale {
+				wantState = replacement
+			} else if test.eventType == "response.completed" {
+				wantState = handshake
+			}
+			require.Equal(t, wantState, current.Token.Value)
+			stored, ok := store.GetSessionTurnState(openAIWSTurnStateLifecycleGroupID, account.ID, scope, "gpt-5.5")
+			if test.eventType == "response.completed" && !test.stale {
+				require.True(t, ok)
+				require.Equal(t, handshake, stored)
+			} else {
+				require.False(t, ok, "a failed or stale response must not commit its handshake state")
+			}
+		})
+	}
+}
+
 func TestOpenAIGatewayService_IngressTurnStateModelSwitchFailsClosed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	conn := &openAIWSCaptureConn{events: [][]byte{[]byte(
@@ -987,6 +1467,17 @@ func TestOpenAIGatewayService_IngressTurnStateModelSwitchFailsClosed(t *testing.
 	writeOpenAIWSTurnStateIngressMessage(t, client, `{"type":"response.create","model":"gpt-5.1","stream":false,"input":"first"}`)
 	completed := readOpenAIWSTurnStateIngressMessage(t, client)
 	require.Equal(t, "response.completed", gjson.GetBytes(completed, "type").String())
+	accountPool, ok := svc.getOpenAIWSConnPool().getAccountPool(account.ID)
+	require.True(t, ok)
+	accountPool.mu.Lock()
+	var pooledConn *openAIWSConn
+	for _, conn := range accountPool.conns {
+		pooledConn = conn
+		break
+	}
+	accountPool.mu.Unlock()
+	require.NotNil(t, pooledConn)
+	require.True(t, pooledConn.matchesHandshakeTurnStateModel("gpt-5.1"), "ingress must bind the state-bearing connection to the final upstream model")
 	writeOpenAIWSTurnStateIngressMessage(t, client, `{"type":"response.create","model":"gpt-5.2","stream":false,"input":"second"}`)
 
 	select {

@@ -1187,9 +1187,10 @@ func TestProbeCodexTurnStateUsesIsolatedReferenceEnvelope(t *testing.T) {
 	require.Equal(t, "Bearer finalized-probe-credential", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "test-chatgpt-account", upstream.lastReq.Header.Get("ChatGPT-Account-Id"))
 	require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.NotEmpty(t, upstream.lastReq.Header.Get("session_id"), "the collector creates its own session identity")
+	require.NotEqual(t, "must-not-copy", upstream.lastReq.Header.Get("session_id"))
 	for _, name := range []string{
 		openAICodexTurnStateHeader,
-		"session_id",
 		"conversation_id",
 		"previous_response_id",
 		"x-codex-turn-metadata",
@@ -1527,4 +1528,124 @@ func TestCodexTurnStateReliabilityJSONNeverLeaksCollectorIdentity(t *testing.T) 
 			require.Equal(t, code, got.LastErrorCode)
 		})
 	}
+}
+
+func TestCodexTurnStateReliabilityCookieSummaryCountsCookiesAndUsesShortestLifetime(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	now := time.Now().UTC()
+	for index, seed := range []struct {
+		accountID int64
+		cookieAge time.Duration
+		cookies   []OpenAICodexTurnStateCookie
+	}{
+		{accountID: 1101, cookieAge: 30 * time.Second, cookies: []OpenAICodexTurnStateCookie{{Name: "a", Value: "one"}, {Name: "b", Value: "two"}}},
+		{accountID: 1102, cookieAge: 90 * time.Second, cookies: []OpenAICodexTurnStateCookie{{Name: "c", Value: "three"}}},
+		{accountID: 1103, cookieAge: 241 * time.Second, cookies: []OpenAICodexTurnStateCookie{{Name: "d", Value: "four"}, {Name: "e", Value: "five"}}},
+	} {
+		value := collectorTestToken(t, now.Add(-time.Minute), 2, byte(110+index))
+		token, err := ParseOpenAICodexTurnState(value)
+		require.NoError(t, err)
+		require.True(t, svc.codexTurnStateCollector.OfferSnapshot(
+			OpenAICodexTurnStateKey{AccountID: seed.accountID, Scope: "cookie-summary", Model: "gpt-5.5"},
+			OpenAICodexTurnStateSnapshot{
+				Token: token, Route: "probe", HarvestCookies: seed.cookies,
+				HarvestCookiesAt: now.Add(-seed.cookieAge),
+			},
+			now,
+		))
+	}
+
+	snapshot := svc.CodexTurnStateReliabilitySnapshot(context.Background())
+	require.Equal(t, 5, snapshot.CookieCount)
+	require.Equal(t, 3, snapshot.CookieActiveCount)
+	require.Equal(t, 2, snapshot.CookieExpiredCount)
+	require.GreaterOrEqual(t, snapshot.CookieRemainingSeconds, 148)
+	require.LessOrEqual(t, snapshot.CookieRemainingSeconds, 150)
+}
+
+func TestCodexTurnStateHarvestFreshSessionAndQualifiedCookieCapture(t *testing.T) {
+	installConfiguredCodexIdentityForOutboundTest(t)
+	now := time.Now().UTC()
+	state := collectorTestToken(t, now, 2, 120)
+	response := func(value, cookie string) *http.Response {
+		resp := finalTurnStateChatResponse(value, "gpt-5.5")
+		resp.Header.Add("Set-Cookie", cookie+"; Path=/; Secure; HttpOnly")
+		return resp
+	}
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		response(state, "session=first"),
+		response(state, "session=second"),
+		response("invalid-state", "session=unqualified"),
+	}}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	account := codexTurnStateGatewayTestAccount(1120)
+	identity := make(http.Header)
+	identity.Set("session_id", "caller-session")
+	identity.Set("conversation_id", "caller-conversation")
+	identity.Set("Cookie", "caller=private")
+	identity.Set(openAICodexTurnStateHeader, state)
+	proxyURL := "http://harvest.example:8080"
+	var previousSession string
+	for _, wantCookie := range []string{"first", "second"} {
+		ticket, failure := svc.probeCodexTurnStateTicketViaProxy(context.Background(), account, "gpt-5.5", proxyURL, identity)
+		require.Nil(t, failure)
+		require.Equal(t, state, ticket.Token.Value)
+		require.True(t, ticket.EgressPinned)
+		require.Equal(t, proxyURL, ticket.EgressProxyURL)
+		require.Equal(t, proxyURL, upstream.lastProxyURL)
+		require.NotEmpty(t, ticket.HarvestSessionID)
+		require.NotEqual(t, "caller-session", ticket.HarvestSessionID)
+		require.NotEqual(t, previousSession, ticket.HarvestSessionID)
+		require.Equal(t, ticket.HarvestSessionID, upstream.lastReq.Header.Get("session_id"))
+		require.Empty(t, upstream.lastReq.Header.Get("conversation_id"))
+		require.Empty(t, upstream.lastReq.Header.Get("Cookie"))
+		require.Empty(t, upstream.lastReq.Header.Get(openAICodexTurnStateHeader))
+		require.Equal(t, []OpenAICodexTurnStateCookie{{Name: "session", Value: wantCookie}}, ticket.HarvestCookies)
+		require.True(t, ticket.cookiesFresh(time.Now()))
+		previousSession = ticket.HarvestSessionID
+	}
+
+	ticket, failure := svc.probeCodexTurnStateTicketViaProxy(context.Background(), account, "gpt-5.5", proxyURL, identity)
+	require.NotNil(t, failure)
+	require.Equal(t, "invalid_state", failure.code)
+	require.Empty(t, ticket.Token.Value)
+	require.Empty(t, ticket.HarvestCookies)
+	require.True(t, ticket.HarvestCookiesAt.IsZero())
+}
+
+func TestCodexTurnStateTicketEchoKeepsHTTPHarvestIdentity(t *testing.T) {
+	installConfiguredCodexIdentityForOutboundTest(t)
+	upstream := &codexTicketCaptureUpstream{}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	account := codexTurnStateGatewayTestAccount(1121)
+	c := newCodexTurnStateGatewayTestContext(t, "harvest-ticket-echo")
+	now := time.Now().UTC()
+	ticket := codexTicketTestSnapshot(now)
+	var err error
+	ticket.Token, err = ParseOpenAICodexTurnState(collectorTestToken(t, now, 2, 121))
+	require.NoError(t, err)
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferSnapshot(key, ticket, now))
+	svc.noteOpenAICodexTurnStateProvenance(c, account, ticket.Token.Value, "gpt-5.5")
+	c.Request.Header.Set(openAICodexTurnStateHeader, ticket.Token.Value)
+	c.Request.Header.Set("session_id", "caller-session")
+
+	req, err := svc.buildUpstreamRequest(context.Background(), c, account,
+		[]byte(`{"model":"gpt-5.5","input":[],"stream":true,"prompt_cache_key":"caller-session"}`),
+		"test-access-token", true, "caller-session", true, "gpt-5.5")
+	require.NoError(t, err)
+	bound, ok := openAICodexTurnStateTicketFromContext(req.Context())
+	require.True(t, ok, "a server-issued echo must bind the complete ticket to HTTP transport")
+	require.Equal(t, ticket.HarvestSessionID, bound.HarvestSessionID)
+	binding, ok := svc.codexTurnStateBinding(c, account, "gpt-5.5")
+	require.True(t, ok)
+	require.True(t, binding.used, "qualified responses must keep advancing the server ticket")
+
+	resp, err := svc.doOpenAIUpstream(req, "http://account-proxy.example:8080", account)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, ticket.Token.Value, upstream.request.Header.Get(openAICodexTurnStateHeader))
+	require.Equal(t, ticket.HarvestSessionID, upstream.request.Header.Get("session_id"))
+	require.Equal(t, ticket.EgressProxyURL, upstream.proxy)
+	require.Equal(t, "__cf_bm=ticket-cookie; clearance=ticket-clearance", upstream.request.Header.Get("Cookie"))
 }

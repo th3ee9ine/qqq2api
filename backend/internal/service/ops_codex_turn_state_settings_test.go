@@ -71,7 +71,10 @@ func TestCodexTurnStateRuntimeSettingsDefaultsMissingAndMalformedValuesToEnabled
 
 	settings, err = (*OpsService)(nil).GetCodexTurnStateRuntimeSettings(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, &CodexTurnStateRuntimeSettings{ProbeEnabled: true, InjectionEnabled: true}, settings)
+	require.Equal(t, &CodexTurnStateRuntimeSettings{
+		ProbeEnabled: true, InjectionEnabled: true,
+		Harvest: defaultCodexTurnStateHarvestControls(),
+	}, settings)
 }
 
 func TestCodexTurnStateRuntimeSettingsMalformedPersistedPoolReturnsError(t *testing.T) {
@@ -139,6 +142,7 @@ func TestCodexTurnStateRuntimeSettingsLoadAndUpdateGatewaySnapshot(t *testing.T)
 		ProbeEnabled:     true,
 		InjectionEnabled: false,
 		ProxyPoolURLs:    []string{"http://proxy.example:8080"},
+		Harvest:          defaultCodexTurnStateHarvestControls(),
 	}, updated)
 	require.Equal(t, "true", repo.values[SettingKeyCodexTurnStateProbeEnabled])
 	require.Equal(t, "false", repo.values[SettingKeyCodexTurnStateCacheInjectionEnabled])
