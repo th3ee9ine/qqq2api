@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
@@ -161,32 +160,6 @@ func (h *OpsHandler) UpdateCodexTurnStateRuntimeSettings(c *gin.Context) {
 		return
 	}
 	response.Success(c, projectCodexTurnStateRuntimeSettings(updated))
-}
-
-type startCodexTurnStateHarvestRequest struct {
-	AccountID int64  `json:"account_id"`
-	Model     string `json:"model"`
-}
-
-// StartCodexTurnStateHarvest runs a bounded probe for one account and model.
-// POST /api/v1/admin/reliability/turn-state-harvest
-func (h *OpsHandler) StartCodexTurnStateHarvest(c *gin.Context) {
-	c.Header("Cache-Control", "no-store")
-	if h == nil || h.opsService == nil {
-		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
-		return
-	}
-	var req startCodexTurnStateHarvestRequest
-	if err := c.ShouldBindJSON(&req); err != nil || req.AccountID <= 0 || strings.TrimSpace(req.Model) == "" || len(req.Model) > 200 {
-		response.BadRequest(c, "account_id and model are required")
-		return
-	}
-	accepted, err := h.opsService.StartCodexTurnStateHarvest(c.Request.Context(), req.AccountID, strings.TrimSpace(req.Model))
-	if err != nil {
-		writeReliabilityStatusError(c, err)
-		return
-	}
-	response.Success(c, gin.H{"accepted": accepted})
 }
 
 func writeReliabilityStatusError(c *gin.Context, err error) {

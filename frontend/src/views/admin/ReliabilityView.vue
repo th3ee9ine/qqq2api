@@ -216,57 +216,6 @@
             </button>
           </div>
         </div>
-        <form
-          class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700"
-          data-testid="turn-state-harvest-control"
-          @submit.prevent="startTurnStateHarvest"
-        >
-          <div class="flex flex-wrap items-end gap-3">
-            <label class="min-w-0 flex-1 text-xs font-medium text-gray-600 dark:text-dark-300 sm:min-w-40">
-              {{ t('admin.reliability.turnState.harvestAccountID') }}
-              <input
-                v-model="turnStateHarvestAccountID"
-                type="number"
-                min="1"
-                step="1"
-                inputmode="numeric"
-                class="input mt-1 w-full"
-                data-testid="turn-state-harvest-account"
-                :disabled="turnStateHarvestBusy"
-              />
-            </label>
-            <label class="min-w-0 flex-[2] text-xs font-medium text-gray-600 dark:text-dark-300 sm:min-w-64">
-              {{ t('admin.reliability.turnState.harvestModel') }}
-              <input
-                v-model="turnStateHarvestModel"
-                type="text"
-                maxlength="160"
-                autocomplete="off"
-                class="input mt-1 w-full"
-                data-testid="turn-state-harvest-model"
-                :disabled="turnStateHarvestBusy"
-              />
-            </label>
-            <button
-              type="submit"
-              class="btn btn-primary shrink-0"
-              data-testid="turn-state-harvest-submit"
-              :disabled="turnStateHarvestBusy || !turnStateHarvestValid"
-            >
-              <Icon name="refresh" size="sm" :class="{ 'animate-spin': turnStateHarvestBusy }" />
-              {{ turnStateHarvestBusy ? t('admin.reliability.turnState.harvestSubmitting') : t('admin.reliability.turnState.harvestSubmit') }}
-            </button>
-          </div>
-          <p
-            v-if="turnStateHarvestFeedback"
-            class="mt-2 text-xs"
-            :class="turnStateHarvestAccepted ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'"
-            :role="turnStateHarvestAccepted ? 'status' : 'alert'"
-            data-testid="turn-state-harvest-feedback"
-          >
-            {{ turnStateHarvestFeedback }}
-          </p>
-        </form>
         <dl class="mt-4 grid gap-3 border-t border-gray-100 pt-4 sm:grid-cols-2 dark:border-dark-700 lg:grid-cols-3 xl:grid-cols-5">
           <div>
             <dt class="text-xs font-medium text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.supported') }}</dt>
@@ -606,15 +555,10 @@ const turnStateProxyPoolError = ref('')
 const turnStateProxyPoolSaving = computed(() => turnStateSettingSaving.value === 'proxy_pool')
 const turnStatePolicySaving = computed(() => turnStateSettingSaving.value === 'policy')
 const turnStateSettingsHasProxyPool = ref(false)
-const turnStateHarvestAccountID = ref('')
-const turnStateHarvestModel = ref('')
-const turnStateHarvestBusy = ref(false)
-const turnStateHarvestFeedback = ref('')
-const turnStateHarvestAccepted = ref(false)
 
 const turnStateSettingsBusy = computed(() => turnStateSettingsLoading.value || turnStateSettingSaving.value !== null)
 const pageLoading = computed(() => loading.value || turnStateSettingsLoading.value)
-const pageBusy = computed(() => pageLoading.value || turnStateSettingSaving.value !== null || turnStateHarvestBusy.value)
+const pageBusy = computed(() => pageLoading.value || turnStateSettingSaving.value !== null)
 
 const turnState = computed(() => normalizeReliabilityStatus(status.value ?? {}).turn_state ?? {})
 const turnStateCollector = computed(() => {
@@ -628,12 +572,6 @@ const turnStatePolicyValid = computed(() => (
   && isIntegerInBounds(turnStateFailureCooldownSeconds.value, failureCooldownBounds.value)
   && turnStateSpeedPresets.value.includes(turnStateSpeedPreset.value)
 ))
-const turnStateHarvestValid = computed(() => {
-  const accountID = Number(turnStateHarvestAccountID.value)
-  const model = turnStateHarvestModel.value.trim()
-  return Number.isSafeInteger(accountID) && accountID > 0 && model.length > 0 && model.length <= 160
-})
-
 const collectorNodes = computed<ReliabilityTurnStateCollectorNodeSummary[]>(() => {
   const value: unknown = turnStateCollector.value?.nodes
   if (!Array.isArray(value)) return []
@@ -1193,34 +1131,6 @@ async function saveTurnStateProxyPool() {
     appStore.showError(turnStateProxyPoolError.value)
   } finally {
     turnStateSettingSaving.value = null
-  }
-}
-
-async function startTurnStateHarvest() {
-  if (turnStateHarvestBusy.value || !turnStateHarvestValid.value) return
-  turnStateHarvestBusy.value = true
-  turnStateHarvestFeedback.value = ''
-  turnStateHarvestAccepted.value = false
-  try {
-    const response = await reliabilityAPI.startTurnStateHarvest({
-      account_id: Number(turnStateHarvestAccountID.value),
-      model: turnStateHarvestModel.value.trim(),
-    })
-    turnStateHarvestAccepted.value = response?.accepted === true
-    turnStateHarvestFeedback.value = turnStateHarvestAccepted.value
-      ? t('admin.reliability.turnState.harvestAccepted')
-      : t('admin.reliability.turnState.harvestRejected')
-    if (turnStateHarvestAccepted.value) {
-      appStore.showSuccess(turnStateHarvestFeedback.value)
-      await loadData()
-    } else {
-      appStore.showError(turnStateHarvestFeedback.value)
-    }
-  } catch {
-    turnStateHarvestFeedback.value = t('admin.reliability.turnState.harvestFailed')
-    appStore.showError(turnStateHarvestFeedback.value)
-  } finally {
-    turnStateHarvestBusy.value = false
   }
 }
 

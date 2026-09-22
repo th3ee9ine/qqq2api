@@ -5,7 +5,6 @@ import ReliabilityView from '../ReliabilityView.vue'
 const mocks = vi.hoisted(() => ({
   getStatus: vi.fn(),
   getTurnStateSettings: vi.fn(),
-  startTurnStateHarvest: vi.fn(),
   updateTurnStateSettings: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn(),
@@ -18,7 +17,6 @@ vi.mock('@/api/admin/reliability', async (importOriginal) => {
     reliabilityAPI: {
       getStatus: mocks.getStatus,
       getTurnStateSettings: mocks.getTurnStateSettings,
-      startTurnStateHarvest: mocks.startTurnStateHarvest,
       updateTurnStateSettings: mocks.updateTurnStateSettings,
     },
   }
@@ -78,7 +76,6 @@ describe('ReliabilityView', () => {
   beforeEach(() => {
     mocks.getStatus.mockReset()
     mocks.getTurnStateSettings.mockReset()
-    mocks.startTurnStateHarvest.mockReset()
     mocks.updateTurnStateSettings.mockReset()
     mocks.showSuccess.mockReset()
     mocks.showError.mockReset()
@@ -95,7 +92,6 @@ describe('ReliabilityView', () => {
         failure_cooldown_seconds: { min: 10, max: 3600, step: 10 },
       },
     })
-    mocks.startTurnStateHarvest.mockResolvedValue({ accepted: true, message: 'collected' })
     mocks.updateTurnStateSettings.mockImplementation(async (settings) => settings)
   })
 
@@ -138,6 +134,7 @@ describe('ReliabilityView', () => {
       'http-tls-timeout',
       'ws-dial-timeout',
       'diagnostics-empty',
+      'turn-state-harvest-control',
     ]
     for (const testId of removedTestIds) {
       expect(wrapper.find(`[data-testid="${testId}"]`).exists()).toBe(false)
@@ -431,48 +428,6 @@ describe('ReliabilityView', () => {
     await buttons[3].trigger('click')
     expect((wrapper.get('[data-testid="turn-state-max-requests"]').element as HTMLInputElement).value).toBe('20')
     expect((wrapper.get('[data-testid="turn-state-failure-cooldown"]').element as HTMLInputElement).value).toBe('1')
-  })
-
-  it('starts a targeted collection without rendering the backend message', async () => {
-    mocks.startTurnStateHarvest.mockResolvedValue({
-      accepted: true,
-      message: 'queued via https://proxy-user:proxy-password@proxy.example.com',
-    })
-    const wrapper = mountView()
-    await flushPromises()
-
-    const submit = wrapper.get('[data-testid="turn-state-harvest-submit"]')
-    expect(submit.attributes('disabled')).toBeDefined()
-    await wrapper.get('[data-testid="turn-state-harvest-account"]').setValue('42')
-    await wrapper.get('[data-testid="turn-state-harvest-model"]').setValue('  gpt-5.6-sol  ')
-    await submit.trigger('submit')
-    await flushPromises()
-
-    expect(mocks.startTurnStateHarvest).toHaveBeenCalledWith({ account_id: 42, model: 'gpt-5.6-sol' })
-    expect(wrapper.get('[data-testid="turn-state-harvest-feedback"]').text()).toContain('harvestAccepted')
-    expect(wrapper.text()).not.toContain('proxy-user')
-    expect(wrapper.text()).not.toContain('proxy-password')
-    expect(mocks.getStatus).toHaveBeenCalledTimes(2)
-  })
-
-  it('uses fixed safe feedback when a collection request is rejected', async () => {
-    mocks.startTurnStateHarvest.mockResolvedValue({
-      accepted: false,
-      message: 'cookie_name=session; cookie_value=secret; turn-state=opaque',
-    })
-    const wrapper = mountView()
-    await flushPromises()
-    await wrapper.get('[data-testid="turn-state-harvest-account"]').setValue('7')
-    await wrapper.get('[data-testid="turn-state-harvest-model"]').setValue('gpt-5')
-    await wrapper.get('[data-testid="turn-state-harvest-submit"]').trigger('submit')
-    await flushPromises()
-
-    const feedback = wrapper.get('[data-testid="turn-state-harvest-feedback"]')
-    expect(feedback.attributes('role')).toBe('alert')
-    expect(feedback.text()).toContain('harvestRejected')
-    expect(wrapper.text()).not.toContain('cookie_name')
-    expect(wrapper.text()).not.toContain('cookie_value')
-    expect(wrapper.text()).not.toContain('turn-state=opaque')
   })
 
   it('renders aggregate cookie and node health without sensitive node fields', async () => {

@@ -6,14 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/url"
-	"strings"
 	"time"
 )
 
 const openAICodexTurnStateMaxHarvestNodes = 1024
-const openAICodexTurnStateMaxManualTickets = 256
 const openAICodexTurnStateMaxProbeGates = 2048
-const openAICodexTurnStateManualSeedTTL = 240 * time.Second
 
 type codexTurnStateHarvestNode struct {
 	id                  string
@@ -36,17 +33,6 @@ type OpenAICodexTurnStateHarvestNodeSummary struct {
 	LastLatencyMS            int64
 	LastResult               string
 	CooldownRemainingSeconds int
-}
-
-type codexTurnStateManualKey struct {
-	accountID int64
-	model     string
-}
-
-type codexTurnStateManualTicket struct {
-	snapshot OpenAICodexTurnStateSnapshot
-	key      OpenAICodexTurnStateKey
-	storedAt time.Time
 }
 
 type codexTurnStateProbeGateKey struct {
@@ -102,9 +88,9 @@ func (s *OpenAIGatewayService) codexTurnStateHarvestRouteAvailable(proxyURL stri
 	return available
 }
 
-// beginCodexTurnStateProbe coordinates manual and automatic collection for one
-// account and concrete model. A lease covers the entire multi-route probe, not
-// an individual egress attempt.
+// beginCodexTurnStateProbe coordinates automatic collection for one account
+// and concrete model. A lease covers the entire multi-route probe, not an
+// individual egress attempt.
 func (s *OpenAIGatewayService) beginCodexTurnStateProbe(accountID int64, model string, now time.Time) (codexTurnStateProbeLease, *openAICodexTurnStateProbeFailure) {
 	if s == nil {
 		return codexTurnStateProbeLease{}, &openAICodexTurnStateProbeFailure{code: "unavailable", err: errors.New("turn-state probe is unavailable")}
@@ -161,8 +147,7 @@ func (s *OpenAIGatewayService) finishCodexTurnStateProbe(lease codexTurnStatePro
 }
 
 // The shared budget is reserved only after credentials have been prepared and
-// immediately before the outbound transport. Both automatic and manual probes
-// go through this boundary.
+// immediately before the outbound transport.
 func (s *OpenAIGatewayService) reserveCodexTurnStateHarvestRequest(now time.Time) bool {
 	s.codexTurnStateProxyStatsMu.Lock()
 	defer s.codexTurnStateProxyStatsMu.Unlock()
@@ -256,97 +241,4 @@ func (s *OpenAIGatewayService) codexTurnStateHarvestSummary(now time.Time) ([]Op
 	}
 	s.codexTurnStateProxyStatsMu.RUnlock()
 	return nodes, used, limit, &reset
-}
-
-func (s *OpenAIGatewayService) storeManualCodexTurnStateTicket(key OpenAICodexTurnStateKey, ticket OpenAICodexTurnStateSnapshot, now time.Time) {
-	s.codexTurnStateProxyStatsMu.Lock()
-	defer s.codexTurnStateProxyStatsMu.Unlock()
-	if s.codexTurnStateManualTickets == nil {
-		s.codexTurnStateManualTickets = make(map[codexTurnStateManualKey]codexTurnStateManualTicket)
-	}
-	for candidate, stored := range s.codexTurnStateManualTickets {
-		if !s.codexTurnStatePolicy().Accept(stored.snapshot.Token, now) ||
-			!now.Before(stored.storedAt.Add(openAICodexTurnStateManualSeedTTL)) {
-			delete(s.codexTurnStateManualTickets, candidate)
-		}
-	}
-	if len(s.codexTurnStateManualTickets) >= openAICodexTurnStateMaxManualTickets {
-		var oldest codexTurnStateManualKey
-		for candidate, stored := range s.codexTurnStateManualTickets {
-			if oldest.accountID == 0 || stored.storedAt.Before(s.codexTurnStateManualTickets[oldest].storedAt) {
-				oldest = candidate
-			}
-		}
-		delete(s.codexTurnStateManualTickets, oldest)
-	}
-	s.codexTurnStateManualTickets[codexTurnStateManualKey{key.AccountID, key.Model}] = codexTurnStateManualTicket{
-		snapshot: cloneOpenAICodexTurnStateSnapshot(ticket), key: key, storedAt: now,
-	}
-}
-
-func (s *OpenAIGatewayService) consumeManualCodexTurnStateTicket(key OpenAICodexTurnStateKey, now time.Time) {
-	lookup := codexTurnStateManualKey{key.AccountID, key.Model}
-	s.codexTurnStateProxyStatsMu.Lock()
-	stored, ok := s.codexTurnStateManualTickets[lookup]
-	if ok {
-		delete(s.codexTurnStateManualTickets, lookup)
-	}
-	s.codexTurnStateProxyStatsMu.Unlock()
-	if !ok || !s.codexTurnStateCollector.IsCurrentKey(stored.key) ||
-		!s.codexTurnStateCollector.IsCurrentKey(key) ||
-		!now.Before(stored.storedAt.Add(openAICodexTurnStateManualSeedTTL)) ||
-		!s.codexTurnStatePolicy().Accept(stored.snapshot.Token, now) {
-		return
-	}
-	s.codexTurnStateCollector.AdoptManualSnapshot(key, stored.snapshot, now)
-}
-
-// StartCodexTurnStateHarvest probes exactly the selected account/model. It
-// shares route cooldown and request budget with automatic collection; the
-// qualified ticket is adopted by the next real execution scope for that pair.
-func (s *OpsService) StartCodexTurnStateHarvest(ctx context.Context, accountID int64, model string) (bool, error) {
-	if s == nil || s.openAIGatewayService == nil || s.accountRepo == nil || accountID <= 0 {
-		return false, errors.New("account_unavailable")
-	}
-	model = codexTurnStateModel(model)
-	if model == "" {
-		return false, errors.New("invalid_model")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	account, err := s.accountRepo.GetByID(ctx, accountID)
-	if err != nil || account == nil {
-		return false, errors.New("account_unavailable")
-	}
-	gateway := s.openAIGatewayService
-	if enabled, _ := gateway.CodexTurnStateRuntimeSettings(); !enabled || gateway.codexTurnStateCollector == nil {
-		return false, errors.New("probe_disabled")
-	}
-	current, reason := gateway.authoritativeCodexTurnStateCollectionAccount(ctx, account, model)
-	if current == nil {
-		return false, errors.New(reason)
-	}
-	key := gateway.codexTurnStateCollector.BindKey(OpenAICodexTurnStateKey{AccountID: accountID, Scope: "manual", Model: model})
-	ticket, failure := gateway.probeCodexTurnStateTicket(ctx, current, model)
-	if failure != nil {
-		gateway.recordCodexTurnStateProbeFailure(failure.code)
-		return false, errors.New(failure.code)
-	}
-	if !gateway.codexTurnStateCollector.IsCurrentKey(key) {
-		return false, errors.New("account_identity_changed")
-	}
-	rechecked, reason := gateway.authoritativeCodexTurnStateCollectionAccount(ctx, current, model)
-	if rechecked == nil || !sameCodexTurnStateCredentialIdentity(current, rechecked) {
-		if reason == "" {
-			reason = "account_identity_changed"
-		}
-		return false, errors.New(reason)
-	}
-	if strings.TrimSpace(ticket.Token.Value) == "" {
-		return false, errors.New("invalid_state")
-	}
-	gateway.storeManualCodexTurnStateTicket(key, ticket, time.Now())
-	gateway.recordCodexTurnStateProbeSuccess()
-	return true, nil
 }

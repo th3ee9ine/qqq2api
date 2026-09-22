@@ -617,9 +617,8 @@ func (c *OpenAICodexTurnStateCollector) Acquire(key OpenAICodexTurnStateKey, now
 	return snapshot, snapshot.usable(c.policy, now)
 }
 
-// OfferSnapshot publishes a complete server-owned ticket. Callers use it for
-// manually collected seeds; the ordinary Offer API remains token-only for
-// compatibility with existing collector users.
+// OfferSnapshot publishes a complete server-owned ticket; the ordinary Offer
+// API remains token-only for compatibility with existing collector users.
 func (c *OpenAICodexTurnStateCollector) OfferSnapshot(key OpenAICodexTurnStateKey, snapshot OpenAICodexTurnStateSnapshot, now time.Time) bool {
 	if c == nil {
 		return false
@@ -635,36 +634,6 @@ func (c *OpenAICodexTurnStateCollector) OfferSnapshot(key OpenAICodexTurnStateKe
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.offerSnapshotLocked(key, snapshot, now, nil)
-}
-
-// AdoptManualSnapshot transfers a qualified, account-fenced manual ticket to
-// one real execution scope. Incrementing the version fences outstanding
-// responses bound to the previous ticket, including when it is still healthy.
-func (c *OpenAICodexTurnStateCollector) AdoptManualSnapshot(key OpenAICodexTurnStateKey, snapshot OpenAICodexTurnStateSnapshot, now time.Time) bool {
-	if c == nil {
-		return false
-	}
-	now = collectorNow(now)
-	token, valid := c.normalizeOfferToken(snapshot.Token, now)
-	if !valid {
-		return false
-	}
-	snapshot.Token = token
-	snapshot = normalizeOpenAICodexTurnStateSnapshot(snapshot)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	entry, current := c.entryLocked(key, now, true)
-	if !current {
-		return false
-	}
-	entry.version++
-	snapshot.Version = entry.version
-	entry.active = cloneOpenAICodexTurnStateSnapshot(snapshot)
-	entry.ready = OpenAICodexTurnStateSnapshot{}
-	entry.strikes = 0
-	entry.forceRefresh = false
-	c.counts.acceptedOffers.Add(1)
-	return true
 }
 
 // Offer publishes a validated candidate. A healthy active value is never

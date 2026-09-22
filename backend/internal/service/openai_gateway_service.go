@@ -574,7 +574,6 @@ type OpenAIGatewayService struct {
 	codexTurnStateHarvestNodes      map[string]*codexTurnStateHarvestNode
 	codexTurnStateHarvestRoundStart time.Time
 	codexTurnStateHarvestRoundUsed  int
-	codexTurnStateManualTickets     map[codexTurnStateManualKey]codexTurnStateManualTicket
 	// Probe gates are bounded account/model coordination metadata. They contain
 	// no credentials, proxy URLs, cookies, or opaque Turn-State values.
 	codexTurnStateProbeGates map[codexTurnStateProbeGateKey]codexTurnStateProbeGateState

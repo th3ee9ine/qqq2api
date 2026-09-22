@@ -2,25 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
-  post: vi.fn(),
   put: vi.fn(),
 }))
 
 vi.mock('@/api/client', () => ({
-  apiClient: { get: mocks.get, post: mocks.post, put: mocks.put },
+  apiClient: { get: mocks.get, put: mocks.put },
 }))
 
 import {
   getReliabilityStatus,
   getReliabilityTurnStateSettings,
   normalizeReliabilityStatus,
-  startReliabilityTurnStateHarvest,
   updateReliabilityTurnStateSettings,
 } from '@/api/admin/reliability'
 
 beforeEach(() => {
   mocks.get.mockReset()
-  mocks.post.mockReset()
   mocks.put.mockReset()
 })
 
@@ -87,16 +84,5 @@ describe('turn-state reliability settings API', () => {
 
     await expect(updateReliabilityTurnStateSettings(settings)).resolves.toEqual(settings)
     expect(mocks.put).toHaveBeenCalledWith('/admin/reliability/turn-state-settings', settings)
-  })
-})
-
-describe('turn-state harvest API', () => {
-  it('requests bounded collection for one account and model', async () => {
-    const request = { account_id: 42, model: 'gpt-5.6-sol' }
-    const response = { accepted: true, message: 'queued' }
-    mocks.post.mockResolvedValue({ data: response })
-
-    await expect(startReliabilityTurnStateHarvest(request)).resolves.toEqual(response)
-    expect(mocks.post).toHaveBeenCalledWith('/admin/reliability/turn-state-harvest', request)
   })
 })

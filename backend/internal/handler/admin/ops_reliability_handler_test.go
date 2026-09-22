@@ -162,28 +162,6 @@ func TestCodexTurnStateRuntimeSettingsHandlersUpdateHarvestPolicy(t *testing.T) 
 	}
 }
 
-func TestStartCodexTurnStateHarvestRejectsMalformedInputAndUnavailableService(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-	router.POST("/turn-state-harvest", NewOpsHandler(nil).StartCodexTurnStateHarvest)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/turn-state-harvest", bytes.NewBufferString(`{"account_id":42,"model":"gpt-5.5"}`))
-	request.Header.Set("Content-Type", "application/json")
-	router.ServeHTTP(recorder, request)
-	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	require.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
-
-	serviceRouter := gin.New()
-	serviceRouter.POST("/turn-state-harvest", NewOpsHandler(service.NewOpsService(nil, newTestSettingRepo(), nil, nil, nil, nil, nil, nil, nil, nil, nil)).StartCodexTurnStateHarvest)
-	for _, body := range []string{`{}`, `{"account_id":0,"model":"gpt-5.5"}`, `{"account_id":42,"model":" "}`, `{"account_id":"42","model":"gpt-5.5"}`} {
-		invalidRequest := httptest.NewRequest(http.MethodPost, "/turn-state-harvest", bytes.NewBufferString(body))
-		invalidRequest.Header.Set("Content-Type", "application/json")
-		invalidRecorder := httptest.NewRecorder()
-		serviceRouter.ServeHTTP(invalidRecorder, invalidRequest)
-		require.Equal(t, http.StatusBadRequest, invalidRecorder.Code, body)
-	}
-}
-
 func TestCodexTurnStateRuntimeSettingsHandlersNeverEchoProxyCredentials(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newTestSettingRepo()

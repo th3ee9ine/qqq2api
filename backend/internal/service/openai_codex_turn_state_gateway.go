@@ -200,7 +200,6 @@ func (s *OpenAIGatewayService) SetCodexTurnStateRuntimeSettingsWithControls(
 		s.codexTurnStateIPRegions = nil
 		s.codexTurnStateProxyProbeLast = nil
 		s.codexTurnStateHarvestNodes = nil
-		s.codexTurnStateManualTickets = nil
 		s.codexTurnStateProbeGates = nil
 		if previous != nil && s.codexTurnStateCollector != nil {
 			// A ticket pins its collection egress. Retire old generations before
@@ -733,7 +732,6 @@ func (s *OpenAIGatewayService) prepareCodexTurnState(ctx context.Context, c *gin
 		s.bindCodexTurnStateRequest(c, key, model, OpenAICodexTurnStateSnapshot{}, false)
 		return OpenAICodexTurnStateSnapshot{}, false
 	}
-	s.consumeManualCodexTurnStateTicket(key, now)
 	probeEnabled, cacheInjectionEnabled := s.CodexTurnStateRuntimeSettings()
 	// Always inspect the active entry, even when injection is disabled. The
 	// injection switch controls whether a usable value is attached to this

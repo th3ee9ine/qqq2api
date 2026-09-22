@@ -182,17 +182,6 @@ export interface ReliabilityTurnStateSettingsUpdate {
   proxy_pool_urls?: string[]
 }
 
-export interface ReliabilityTurnStateHarvestRequest {
-  account_id: number
-  model: string
-}
-
-export interface ReliabilityTurnStateHarvestResponse {
-  accepted: boolean
-  /** Informational backend text; callers should not render it directly. */
-  message?: string
-}
-
 /** Keep compatibility with both nested and flat Turn State responses. */
 export function normalizeReliabilityStatus(response: ReliabilityStatusResponse): ReliabilityStatusSummary {
   return {
@@ -220,21 +209,10 @@ export async function updateReliabilityTurnStateSettings(
   return data
 }
 
-export async function startReliabilityTurnStateHarvest(
-  request: ReliabilityTurnStateHarvestRequest,
-): Promise<ReliabilityTurnStateHarvestResponse> {
-  const { data } = await apiClient.post<ReliabilityTurnStateHarvestResponse>(
-    '/admin/reliability/turn-state-harvest',
-    request,
-  )
-  return data
-}
-
 export const reliabilityAPI = {
   getStatus: getReliabilityStatus,
   getTurnStateSettings: getReliabilityTurnStateSettings,
   updateTurnStateSettings: updateReliabilityTurnStateSettings,
-  startTurnStateHarvest: startReliabilityTurnStateHarvest,
 }
 
 export default reliabilityAPI
