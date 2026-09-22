@@ -64,6 +64,34 @@ func TestRelayOpenAICodexTurnState_SetsHeaderAndRecordsProvenance(t *testing.T) 
 	require.True(t, origin.expiresAt.After(time.Now()))
 }
 
+func TestOpenAICodexTurnStateProvenanceTTLOutlivesShortStickyTTL(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.StickySessionTTLSeconds = 180
+	svc := &OpenAIGatewayService{cfg: cfg}
+	svc.codexTurnStateCollector = NewOpenAICodexTurnStateCollector(collectorTestPolicy())
+
+	// The WS sticky session may be configured for three minutes, while the
+	// default collector accepts a state for one hour (plus clock skew).  The
+	// account binding must not disappear at the shorter boundary.
+	require.Equal(t, time.Hour+openAICodexTurnStateCollectorDefaultClockSkew, svc.openAICodexTurnStateProvenanceTTL())
+
+	c, _ := newTurnStateTestContext(t, 7, "sess-short-sticky")
+	state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 199)
+	svc.noteOpenAICodexTurnStateProvenance(c, codexTurnStateGatewayTestAccount(42), state, "gpt-5.5")
+
+	seed := openAICodexTurnStateSeed(c)
+	origin, _, ok := svc.loadOpenAICodexTurnStateOrigin(seed, "gpt-5.5")
+	require.True(t, ok)
+	require.True(t, origin.expiresAt.After(time.Now().Add(time.Hour)))
+
+	// A failover after the three-minute sticky window must still reject the
+	// state when it is presented to another account.
+	h := http.Header{}
+	h.Set(openAICodexTurnStateHeader, state)
+	svc.guardOpenAICodexTurnStateEcho(c, codexTurnStateGatewayTestAccount(43), h, "gpt-5.5")
+	require.Empty(t, h.Get(openAICodexTurnStateHeader))
+}
+
 func TestRelayOpenAICodexTurnState_ClearsStaleValueWhenUpstreamAbsent(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	c, _ := newTurnStateTestContext(t, 7, "sess-stale")
@@ -110,23 +138,25 @@ func TestStageOpenAICodexTurnState_StagedHeaders(t *testing.T) {
 // 首输出超时导致 attempt 被丢弃时，溯源不得被该 attempt 污染——否则后续
 // 请求会把客户端持有的合法 blob 误判成跨账号回带而剥离。
 func TestStagedTurnState_AbandonedAttemptDoesNotPoisonProvenance(t *testing.T) {
-	svc := &OpenAIGatewayService{}
+	svc := newCodexTurnStateGatewayTestService(nil)
 	c, _ := newTurnStateTestContext(t, 11, "sess-abandoned")
+	state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 180)
 
 	// 账号 A 的 attempt 暂存了 blob，但从未提交（首输出超时 → failover）
 	var staged http.Header
 	upstreamA := http.Header{}
-	upstreamA.Set("x-codex-turn-state", "blob-A")
+	upstreamA.Set("x-codex-turn-state", state)
 	stageOpenAICodexTurnState(&staged, upstreamA)
 
 	// 账号 B 接手并真正提交
-	svc.relayOpenAICodexTurnState(c, &Account{ID: 52}, upstreamA)
+	account := codexTurnStateGatewayTestAccount(52)
+	svc.relayOpenAICodexTurnState(c, account, upstreamA, "gpt-5.5")
 
 	// 客户端回带的 blob 来自 B，出站到 B 时不得被剥离
 	h := http.Header{}
-	h.Set("x-codex-turn-state", "blob-A")
-	svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 52}, h)
-	require.Equal(t, "blob-A", h.Get("x-codex-turn-state"))
+	h.Set("x-codex-turn-state", state)
+	svc.guardOpenAICodexTurnStateEcho(c, account, h, "gpt-5.5")
+	require.Equal(t, state, h.Get("x-codex-turn-state"))
 
 	raw, ok := svc.openaiCodexTurnStateOrigins.Load("11\x00sess-abandoned")
 	require.True(t, ok)
@@ -156,59 +186,70 @@ func TestGuardOpenAICodexTurnStateEcho(t *testing.T) {
 	}
 
 	t.Run("same_account_keeps_echo", func(t *testing.T) {
-		svc := &OpenAIGatewayService{}
+		svc := newCodexTurnStateGatewayTestService(nil)
 		c, _ := newTurnStateTestContext(t, 7, "sess-g1")
+		account := codexTurnStateGatewayTestAccount(42)
+		state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 181)
 		upstream := http.Header{}
-		upstream.Set("x-codex-turn-state", "blob-A")
-		svc.relayOpenAICodexTurnState(c, &Account{ID: 42}, upstream)
+		upstream.Set("x-codex-turn-state", state)
+		svc.relayOpenAICodexTurnState(c, account, upstream, "gpt-5.5")
 
-		h := newOutbound("blob-A")
-		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 42}, h)
-		require.Equal(t, "blob-A", h.Get("x-codex-turn-state"))
+		h := newOutbound(state)
+		svc.guardOpenAICodexTurnStateEcho(c, account, h, "gpt-5.5")
+		require.Equal(t, state, h.Get("x-codex-turn-state"))
 	})
 
 	t.Run("foreign_account_strips_echo", func(t *testing.T) {
-		svc := &OpenAIGatewayService{}
+		svc := newCodexTurnStateGatewayTestService(nil)
 		c, _ := newTurnStateTestContext(t, 7, "sess-g2")
+		state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 182)
 		upstream := http.Header{}
-		upstream.Set("x-codex-turn-state", "blob-A")
-		svc.relayOpenAICodexTurnState(c, &Account{ID: 42}, upstream)
+		upstream.Set("x-codex-turn-state", state)
+		svc.relayOpenAICodexTurnState(c, codexTurnStateGatewayTestAccount(42), upstream, "gpt-5.5")
 
 		// failover 换到账号 43：blob 由 42 铸造，必须剥离
-		h := newOutbound("blob-A")
-		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 43}, h)
+		h := newOutbound(state)
+		svc.guardOpenAICodexTurnStateEcho(c, codexTurnStateGatewayTestAccount(43), h, "gpt-5.5")
 		require.Empty(t, h.Get("x-codex-turn-state"))
 	})
 
-	t.Run("no_provenance_passthrough", func(t *testing.T) {
-		svc := &OpenAIGatewayService{}
+	t.Run("no_provenance_fails_closed", func(t *testing.T) {
+		svc := newCodexTurnStateGatewayTestService(nil)
 		c, _ := newTurnStateTestContext(t, 7, "sess-g3")
-		h := newOutbound("blob-unknown")
-		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 43}, h)
-		require.Equal(t, "blob-unknown", h.Get("x-codex-turn-state"))
+		state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 183)
+		h := newOutbound(state)
+		svc.guardOpenAICodexTurnStateEcho(c, codexTurnStateGatewayTestAccount(43), h, "gpt-5.5")
+		require.Empty(t, h.Get("x-codex-turn-state"))
 	})
 
-	t.Run("expired_provenance_passthrough_and_pruned", func(t *testing.T) {
-		svc := &OpenAIGatewayService{}
+	t.Run("expired_provenance_fails_closed_and_is_pruned", func(t *testing.T) {
+		svc := newCodexTurnStateGatewayTestService(nil)
 		c, _ := newTurnStateTestContext(t, 7, "sess-g4")
-		svc.openaiCodexTurnStateOrigins.Store("7\x00sess-g4", openAICodexTurnStateOrigin{
-			accountID: 42,
-			stateHash: sha256.Sum256([]byte("blob-A")),
-			expiresAt: time.Now().Add(-time.Minute),
+		account := codexTurnStateGatewayTestAccount(42)
+		state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 184)
+		key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+		originKey := openAICodexTurnStateOriginModelKey("7\x00sess-g4", "gpt-5.5")
+		svc.openaiCodexTurnStateOrigins.Store(originKey, openAICodexTurnStateOrigin{
+			accountID:  account.ID,
+			model:      "gpt-5.5",
+			stateHash:  sha256.Sum256([]byte(state)),
+			expiresAt:  time.Now().Add(-time.Minute),
+			generation: key.generation,
 		})
-		h := newOutbound("blob-A")
-		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 43}, h)
-		require.Equal(t, "blob-A", h.Get("x-codex-turn-state"))
-		_, ok := svc.openaiCodexTurnStateOrigins.Load("7\x00sess-g4")
+		h := newOutbound(state)
+		svc.guardOpenAICodexTurnStateEcho(c, account, h, "gpt-5.5")
+		require.Empty(t, h.Get("x-codex-turn-state"))
+		_, ok := svc.openaiCodexTurnStateOrigins.Load(originKey)
 		require.False(t, ok)
 	})
 
-	t.Run("no_session_seed_noop", func(t *testing.T) {
-		svc := &OpenAIGatewayService{}
+	t.Run("no_session_seed_fails_closed", func(t *testing.T) {
+		svc := newCodexTurnStateGatewayTestService(nil)
 		c, _ := newTurnStateTestContext(t, 7, "")
-		h := newOutbound("blob-A")
-		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: 43}, h)
-		require.Equal(t, "blob-A", h.Get("x-codex-turn-state"))
+		state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 185)
+		h := newOutbound(state)
+		svc.guardOpenAICodexTurnStateEcho(c, codexTurnStateGatewayTestAccount(43), h, "gpt-5.5")
+		require.Empty(t, h.Get("x-codex-turn-state"))
 	})
 
 	t.Run("no_echo_noop", func(t *testing.T) {
@@ -220,9 +261,101 @@ func TestGuardOpenAICodexTurnStateEcho(t *testing.T) {
 	})
 }
 
+func TestGuardOpenAICodexTurnStateEchoStripsKnownSameAccountDifferentModel(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	c, _ := newTurnStateTestContext(t, 17, "sess-model-mismatch")
+	account := codexTurnStateGatewayTestAccount(42)
+	state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 186)
+	upstream := http.Header{}
+	upstream.Set(openAICodexTurnStateHeader, state)
+	svc.relayOpenAICodexTurnState(c, account, upstream, "gpt-5.5")
+
+	h := http.Header{}
+	h.Set(openAICodexTurnStateHeader, state)
+	svc.guardOpenAICodexTurnStateEcho(c, account, h, "gpt-6-astra")
+	require.Empty(t, h.Get(openAICodexTurnStateHeader))
+	_, exists := svc.openaiCodexTurnStateOrigins.Load("17\x00sess-model-mismatch")
+	require.False(t, exists, "model mismatch must retire the provenance record")
+}
+
+func TestOpenAICodexTurnStateProvenanceIsolatedByConcurrentModel(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	c, _ := newTurnStateTestContext(t, 18, "sess-model-concurrent")
+	account := codexTurnStateGatewayTestAccount(42)
+	stateA := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 190)
+	stateB := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 191)
+
+	// Two model requests can share one downstream execution scope. Their
+	// provenance records must not overwrite one another.
+	svc.noteOpenAICodexTurnStateProvenance(c, account, stateA, "gpt-5.5")
+	svc.noteOpenAICodexTurnStateProvenance(c, account, stateB, "gpt-6-astra")
+
+	for _, test := range []struct {
+		name, model, state string
+	}{
+		{name: "model_a", model: "gpt-5.5", state: stateA},
+		{name: "model_b", model: "gpt-6-astra", state: stateB},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := http.Header{}
+			h.Set(openAICodexTurnStateHeader, test.state)
+			svc.guardOpenAICodexTurnStateEcho(c, account, h, test.model)
+			require.Equal(t, test.state, h.Get(openAICodexTurnStateHeader))
+		})
+	}
+
+	// A state from the sibling model is still rejected when presented for the
+	// current model, even though both provenance shards belong to the account.
+	h := http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{stateB}}
+	svc.guardOpenAICodexTurnStateEcho(c, account, h, "gpt-5.5")
+	require.Empty(t, h.Get(openAICodexTurnStateHeader))
+}
+
+func TestClearOpenAICodexTurnStateProvenanceForModelPreservesSibling(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	c, _ := newTurnStateTestContext(t, 19, "sess-model-clear")
+	account := codexTurnStateGatewayTestAccount(42)
+	stateA := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 192)
+	stateB := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 193)
+	svc.noteOpenAICodexTurnStateProvenance(c, account, stateA, "gpt-5.5")
+	svc.noteOpenAICodexTurnStateProvenance(c, account, stateB, "gpt-6-astra")
+
+	seed := openAICodexTurnStateSeed(c)
+	modelAKey := openAICodexTurnStateOriginModelKey(seed, "gpt-5.5")
+	modelBKey := openAICodexTurnStateOriginModelKey(seed, "gpt-6-astra")
+	if _, ok := svc.openaiCodexTurnStateOrigins.Load(modelAKey); !ok {
+		t.Fatal("model A provenance shard was not recorded")
+	}
+	if _, ok := svc.openaiCodexTurnStateOrigins.Load(modelBKey); !ok {
+		t.Fatal("model B provenance shard was not recorded")
+	}
+
+	svc.clearOpenAICodexTurnStateProvenanceForModel(c, "gpt-5.5")
+
+	_, modelAExists := svc.openaiCodexTurnStateOrigins.Load(modelAKey)
+	_, modelBExists := svc.openaiCodexTurnStateOrigins.Load(modelBKey)
+	require.False(t, modelAExists)
+	require.True(t, modelBExists, "clearing one model must preserve the sibling provenance shard")
+	origin, _, ok := svc.loadOpenAICodexTurnStateOrigin(seed, "gpt-6-astra")
+	require.True(t, ok)
+	require.Equal(t, account.ID, origin.accountID)
+	require.Equal(t, sha256.Sum256([]byte(stateB)), origin.stateHash)
+
+	// If the target shard is gone, the guard may fall back to the shared seed
+	// record for the sibling model. Reject the echo but do not delete that
+	// sibling binding as a side effect.
+	h := http.Header{}
+	h.Set(openAICodexTurnStateHeader, stateA)
+	svc.guardOpenAICodexTurnStateEcho(c, account, h, "gpt-5.5")
+	require.Empty(t, h.Get(openAICodexTurnStateHeader))
+	_, siblingSeedExists := svc.openaiCodexTurnStateOrigins.Load(seed)
+	require.True(t, siblingSeedExists, "a model mismatch against the legacy seed must preserve the sibling record")
+}
+
 func TestOpenAICodexTurnStateProvenanceIsolatesSiblingExecutionScopes(t *testing.T) {
-	svc := &OpenAIGatewayService{}
+	svc := newCodexTurnStateGatewayTestService(nil)
 	const apiKeyID = int64(71)
+	const model = "gpt-5.5"
 	bodyA := []byte(`{"client_metadata":{"thread_id":"child-a"}}`)
 	bodyB := []byte(`{"client_metadata":{"thread_id":"child-b"}}`)
 	cA, _ := newTurnStateTestContext(t, apiKeyID, "shared-session")
@@ -234,23 +367,28 @@ func TestOpenAICodexTurnStateProvenanceIsolatesSiblingExecutionScopes(t *testing
 	require.NotEqual(t, scopeA, scopeB)
 	require.Equal(t, scopeA, BindOpenAICodexTurnStateExecutionScope(cA, bodyB), "scope binding must be immutable for the request lifecycle")
 
-	svc.noteOpenAICodexTurnStateProvenance(cA, &Account{ID: 91}, "state-a")
-	svc.noteOpenAICodexTurnStateProvenance(cB, &Account{ID: 92}, "state-b")
+	stateA := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 187)
+	stateB := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 188)
+	accountA := codexTurnStateGatewayTestAccount(91)
+	accountB := codexTurnStateGatewayTestAccount(92)
+	svc.noteOpenAICodexTurnStateProvenance(cA, accountA, stateA, model)
+	svc.noteOpenAICodexTurnStateProvenance(cB, accountB, stateB, model)
 
 	assertGuard := func(c *gin.Context, accountID int64, state string, wantKept bool) {
 		h := http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{state}}
-		svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: accountID}, h)
+		svc.guardOpenAICodexTurnStateEcho(c, codexTurnStateGatewayTestAccount(accountID), h, model)
 		if wantKept {
 			require.Equal(t, state, h.Get(openAICodexTurnStateHeader))
 		} else {
 			require.Empty(t, h.Get(openAICodexTurnStateHeader))
 		}
 	}
-	assertGuard(cA, 91, "state-a", true)
-	assertGuard(cB, 92, "state-b", true)
-	assertGuard(cA, 92, "state-a", false)
-	assertGuard(cB, 91, "state-b", false)
-	assertGuard(cA, 91, "stale-state-a", false)
+	assertGuard(cA, 91, stateA, true)
+	assertGuard(cB, 92, stateB, true)
+	assertGuard(cA, 92, stateA, false)
+	assertGuard(cB, 91, stateB, false)
+	staleState := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 189)
+	assertGuard(cA, 91, staleState, false)
 }
 
 func TestClearOpenAIWSTurnStateForAccountSwitch_ClearsOnlyAttemptScopes(t *testing.T) {
@@ -260,16 +398,20 @@ func TestClearOpenAIWSTurnStateForAccountSwitch_ClearsOnlyAttemptScopes(t *testi
 	)
 	groupID := int64(81)
 	stateStore := NewOpenAIWSStateStore(nil)
-	svc := &OpenAIGatewayService{openaiWSStateStore: stateStore}
+	svc := newCodexTurnStateGatewayTestService(nil)
+	svc.openaiWSStateStore = stateStore
+	accountA := codexTurnStateGatewayTestAccount(accountID)
+	accountB := codexTurnStateGatewayTestAccount(accountID + 1)
 	requestBody := []byte(`{"model":"gpt-5.1","client_metadata":{"thread_id":"child-a"},"input":"hello"}`)
 	siblingBody := []byte(`{"model":"gpt-5.1","client_metadata":{"thread_id":"child-b"},"input":"hello"}`)
 	c, _ := newTurnStateTestContext(t, apiKeyID, "shared-session")
 	c.Set("api_key", &APIKey{ID: apiKeyID, GroupID: &groupID})
-	c.Request.Header.Set(openAICodexTurnStateHeader, "state-from-account-a")
-	c.Writer.Header().Set(openAICodexTurnStateHeader, "staged-state-from-account-a")
 	executionScope := BindOpenAICodexTurnStateExecutionScope(c, requestBody)
 	require.NotEmpty(t, executionScope)
-	svc.noteOpenAICodexTurnStateProvenance(c, &Account{ID: accountID}, "state-from-account-a")
+	stateFromAccountA := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 190)
+	c.Request.Header.Set(openAICodexTurnStateHeader, stateFromAccountA)
+	c.Writer.Header().Set(openAICodexTurnStateHeader, stateFromAccountA)
+	svc.noteOpenAICodexTurnStateProvenance(c, accountA, stateFromAccountA, "gpt-5.1")
 	stateStore.BindSessionTurnState(groupID, accountID, executionScope, "account-a-state", time.Hour)
 	stateStore.BindSessionConn(groupID, executionScope, "account-a-conn", time.Hour)
 
@@ -279,7 +421,8 @@ func TestClearOpenAIWSTurnStateForAccountSwitch_ClearsOnlyAttemptScopes(t *testi
 	require.NotEqual(t, executionScope, siblingScope)
 	stateStore.BindSessionTurnState(groupID, accountID, siblingScope, "sibling-state", time.Hour)
 	stateStore.BindSessionConn(groupID, siblingScope, "sibling-conn", time.Hour)
-	svc.noteOpenAICodexTurnStateProvenance(siblingContext, &Account{ID: accountID}, "sibling-state")
+	siblingStateValue := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 191)
+	svc.noteOpenAICodexTurnStateProvenance(siblingContext, accountA, siblingStateValue, "gpt-5.1")
 
 	svc.ClearOpenAIWSTurnStateForAccountSwitch(c, "legacy-sticky-hash")
 
@@ -300,8 +443,8 @@ func TestClearOpenAIWSTurnStateForAccountSwitch_ClearsOnlyAttemptScopes(t *testi
 	require.True(t, activeOriginExists, "immutable provenance must survive mutable state cleanup")
 	require.True(t, siblingOriginExists)
 
-	oldState := http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{"state-from-account-a"}}
-	svc.guardOpenAICodexTurnStateEcho(c, &Account{ID: accountID + 1}, oldState)
+	oldState := http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{stateFromAccountA}}
+	svc.guardOpenAICodexTurnStateEcho(c, accountB, oldState, "gpt-5.1")
 	require.Empty(t, oldState.Get(openAICodexTurnStateHeader))
 }
 
@@ -373,6 +516,30 @@ func TestWriteOpenAIPassthroughResponseHeaders_RelaysReasoningIncluded(t *testin
 		responseheaders.CompileHeaderFilter(config.ResponseHeaderConfig{}),
 	)
 	require.Equal(t, "1", dst.Get("X-Reasoning-Included"))
+}
+
+func TestNewStreamHeaderWriter_DoesNotGenericallyRelayTurnState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	upstream := http.Header{
+		"Content-Type":       []string{"text/event-stream"},
+		"X-Codex-Turn-State": []string{"opaque-state"},
+		"X-Request-Id":       []string{"request-1"},
+	}
+	svc := &OpenAIGatewayService{
+		responseHeaderFilter: responseheaders.CompileHeaderFilter(config.ResponseHeaderConfig{
+			Enabled:           true,
+			AdditionalAllowed: []string{"x-codex-turn-state"},
+		}),
+	}
+
+	svc.newStreamHeaderWriter(c, upstream)()
+
+	require.Empty(t, recorder.Header().Get(openAICodexTurnStateHeader))
+	require.Equal(t, "request-1", recorder.Header().Get("X-Request-Id"))
+	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
 }
 
 func TestEnsureOpenAIRemoteCompactionV2BetaFeature(t *testing.T) {

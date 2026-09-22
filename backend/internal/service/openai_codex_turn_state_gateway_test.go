@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,25 @@ type codexTurnStateReleasedBody struct {
 	release <-chan struct{}
 	once    sync.Once
 }
+
+type codexTurnStateErrorBody struct {
+	reader *strings.Reader
+	done   bool
+}
+
+func (b *codexTurnStateErrorBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, errors.New("synthetic upstream read failure")
+	}
+	n, err := b.reader.Read(p)
+	if err == io.EOF {
+		b.done = true
+		return n, nil
+	}
+	return n, err
+}
+
+func (b *codexTurnStateErrorBody) Close() error { return nil }
 
 func (b *codexTurnStateReleasedBody) Read(p []byte) (int, error) {
 	b.once.Do(func() { close(b.started) })
@@ -80,14 +100,49 @@ func newCodexTurnStateGatewayTestContext(t *testing.T, scope string) *gin.Contex
 
 func codexTurnStateGatewayTestAccount(id int64) *Account {
 	return &Account{
-		ID:       id,
-		Platform: PlatformOpenAI,
-		Type:     AccountTypeOAuth,
+		ID:          id,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
 		Credentials: map[string]any{
 			"access_token":       "test-access-token",
 			"chatgpt_account_id": "test-chatgpt-account",
 		},
 	}
+}
+
+func TestCodexTurnStateCollectionEligibilityNormalizesQuotaPauseReason(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(1001)
+	account.Extra = map[string]any{
+		OpenAIAutoResetCreditEnabledExtraKey:     true,
+		OpenAIAutoResetCredit5hThresholdExtraKey: 1.0,
+		OpenAIAutoResetCredit7dThresholdExtraKey: 1.0,
+		"auto_pause_5h_threshold":                0.8,
+		"auto_pause_7d_disabled":                 true,
+		"codex_5h_used_percent":                  90.0,
+		"codex_usage_updated_at":                 time.Now().UTC().Format(time.RFC3339),
+		"codex_5h_reset_at":                      time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+	}
+
+	eligible, reason := svc.codexTurnStateCollectionEligibility(context.Background(), account, "gpt-5.5")
+
+	require.False(t, eligible)
+	require.Equal(t, "quota_auto_pause", reason)
+	require.True(t, isCodexTurnStateCollectionEligibilityReason(reason))
+}
+
+func TestCodexTurnStateCollectionEligibilityHonorsSameAccountRetryPin(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(1002)
+	ctx := WithOpenAISameAccountRetryTarget(context.Background(), account.ID+1)
+
+	eligible, reason := svc.codexTurnStateCollectionEligibility(ctx, account, "gpt-5.5")
+
+	require.False(t, eligible)
+	require.Equal(t, "same_account_retry_mismatch", reason)
+	require.True(t, isCodexTurnStateCollectionEligibilityReason(reason))
 }
 
 func TestPrepareCodexTurnStatePrefersValidClientStateForCurrentAttempt(t *testing.T) {
@@ -99,6 +154,9 @@ func TestPrepareCodexTurnStatePrefersValidClientStateForCurrentAttempt(t *testin
 	clientValue := collectorTestToken(t, now.Add(-time.Minute), 2, 2)
 	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
 	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, cachedValue, "cached", now))
+	// The native value is authoritative only after the gateway recorded that
+	// this exact account/model/generation delivered it downstream.
+	svc.noteOpenAICodexTurnStateProvenance(c, account, clientValue, "gpt-5.5")
 
 	incoming := make(http.Header)
 	incoming.Set(openAICodexTurnStateHeader, clientValue)
@@ -121,12 +179,13 @@ func TestPrepareCodexTurnStatePrefersValidClientStateForCurrentAttempt(t *testin
 	require.Equal(t, uint64(1), svc.codexTurnStateCollector.Metrics().Offers, "client input must not publish an unauthenticated reusable candidate")
 }
 
-func TestPrepareCodexTurnStateNativeStateIsNotPublishedWithoutUpstreamConfirmation(t *testing.T) {
+func TestPrepareCodexTurnStateProvenanceValidatedNativeStateIsNotPublishedAsCandidate(t *testing.T) {
 	svc := newCodexTurnStateGatewayTestService(nil)
 	account := codexTurnStateGatewayTestAccount(102)
 	c := newCodexTurnStateGatewayTestContext(t, "execution-client-unconfirmed")
 	now := time.Now().UTC()
 	clientValue := collectorTestToken(t, now.Add(-time.Minute), 2, 3)
+	svc.noteOpenAICodexTurnStateProvenance(c, account, clientValue, "gpt-5.5")
 	incoming := make(http.Header)
 	incoming.Set(openAICodexTurnStateHeader, clientValue)
 
@@ -139,6 +198,32 @@ func TestPrepareCodexTurnStateNativeStateIsNotPublishedWithoutUpstreamConfirmati
 	require.False(t, reusable)
 	require.Zero(t, svc.codexTurnStateCollector.Metrics().Offers)
 	require.Zero(t, svc.codexTurnStateCollector.Metrics().Entries)
+}
+
+func TestPrepareCodexTurnStateResponseHeaderRejectsInvalidStateBeforeCommit(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(103)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-invalid-response-state")
+
+	for _, test := range []struct {
+		name  string
+		state string
+	}{
+		{name: "malformed", state: "not-a-turn-state"},
+		{name: "expired", state: collectorTestToken(t, time.Now().Add(-20*time.Minute), 2, 4)},
+		{name: "wrong block count", state: collectorTestToken(t, time.Now().Add(-time.Minute), 1, 5)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			upstream := make(http.Header)
+			upstream.Set(openAICodexTurnStateHeader, test.state)
+			staged, deliverable := svc.prepareOpenAICodexTurnStateForWrite(c, account, upstream)
+
+			require.Empty(t, upstream.Get(openAICodexTurnStateHeader))
+			require.Empty(t, staged.Get(openAICodexTurnStateHeader))
+			require.Empty(t, c.Writer.Header().Get(openAICodexTurnStateHeader))
+			require.True(t, deliverable)
+		})
+	}
 }
 
 func TestPrepareCodexTurnStateDoesNotReuseStateAcrossAccountSwitch(t *testing.T) {
@@ -191,6 +276,40 @@ func TestPrepareCodexTurnStateAPIKeyNeverProbesOrInjects(t *testing.T) {
 	})
 }
 
+func TestPrepareCodexTurnStatePreservesValidNativeStateForNonCollectorAccount(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-native-non-collector")
+	state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 141)
+	incoming := make(http.Header)
+	incoming.Set(openAICodexTurnStateHeader, state)
+	account := &Account{ID: 442, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive}
+
+	snapshot, ok := svc.prepareCodexTurnState(context.Background(), c, account, "gpt-5.5", incoming, true)
+
+	require.True(t, ok)
+	require.Equal(t, state, snapshot.Token.Value)
+	require.Equal(t, "client", snapshot.Route)
+	require.Equal(t, state, incoming.Get(openAICodexTurnStateHeader))
+	require.Zero(t, svc.codexTurnStateCollector.Metrics().Entries)
+}
+
+func TestPrepareCodexTurnStateStripsUnprovenNativeStateWhenAccountIsTemporarilyUnschedulable(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-native-unschedulable")
+	state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 143)
+	incoming := make(http.Header)
+	incoming.Set(openAICodexTurnStateHeader, state)
+	account := codexTurnStateGatewayTestAccount(444)
+	account.Schedulable = false
+
+	snapshot, ok := svc.prepareCodexTurnState(context.Background(), c, account, "gpt-5.5", incoming, true)
+
+	require.False(t, ok)
+	require.Empty(t, snapshot.Token.Value)
+	require.Empty(t, incoming.Get(openAICodexTurnStateHeader))
+	require.Zero(t, svc.codexTurnStateCollector.Metrics().Entries)
+}
+
 func TestPrepareCodexTurnStateInjectionDisabledDoesNotConsumeCachedState(t *testing.T) {
 	upstream := &httpUpstreamRecorder{}
 	svc := newCodexTurnStateGatewayTestService(upstream)
@@ -235,7 +354,7 @@ func TestPrepareCodexTurnStateMissingFinalModelFailsClosed(t *testing.T) {
 	require.False(t, binding.used)
 }
 
-func TestPrepareCodexTurnStateMissingFinalModelPreservesValidNativeState(t *testing.T) {
+func TestPrepareCodexTurnStateMissingFinalModelStripsUnprovenNativeState(t *testing.T) {
 	svc := newCodexTurnStateGatewayTestService(nil)
 	account := codexTurnStateGatewayTestAccount(405)
 	c := newCodexTurnStateGatewayTestContext(t, "execution-native-model-unknown")
@@ -245,9 +364,9 @@ func TestPrepareCodexTurnStateMissingFinalModelPreservesValidNativeState(t *test
 
 	snapshot, ok := svc.prepareCodexTurnState(context.Background(), c, account, "", incoming, true)
 
-	require.True(t, ok)
-	require.Equal(t, state, snapshot.Token.Value)
-	require.Equal(t, state, incoming.Get(openAICodexTurnStateHeader))
+	require.False(t, ok)
+	require.Empty(t, snapshot.Token.Value)
+	require.Empty(t, incoming.Get(openAICodexTurnStateHeader))
 	require.Zero(t, svc.codexTurnStateCollector.Metrics().Entries, "a native value without a final model must not become reusable")
 }
 
@@ -275,6 +394,105 @@ func TestObserveCodexTurnStateResponseRequiresCompleteKeyAndLiveClient(t *testin
 		require.Zero(t, svc.codexTurnStateCollector.Metrics().Entries)
 		require.Zero(t, svc.codexTurnStateCollector.Metrics().Offers)
 	})
+
+	t.Run("mismatch still invalidates after client cancellation", func(t *testing.T) {
+		svc := newCodexTurnStateGatewayTestService(nil)
+		c := newCodexTurnStateGatewayTestContext(t, "execution-response-cancelled-mismatch")
+		requestCtx, cancel := context.WithCancel(c.Request.Context())
+		c.Request = c.Request.WithContext(requestCtx)
+		account := codexTurnStateGatewayTestAccount(4071)
+		state := collectorTestToken(t, now.Add(-time.Minute), 2, 181)
+		key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+		require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, state, "seed", now))
+		snapshot, usable := svc.codexTurnStateCollector.Acquire(key, now)
+		require.True(t, usable)
+		svc.bindCodexTurnStateRequest(c, key, "gpt-5.5", snapshot, true)
+		cancel()
+
+		svc.observeCodexTurnStateResponseDetails(c, account, "gpt-5.5", make(http.Header), "gpt-6-astra", false)
+		_, usable = svc.codexTurnStateCollector.Acquire(key, time.Now())
+		require.False(t, usable)
+	})
+}
+
+func TestObserveCodexTurnStateResponseModelMismatchInvalidatesActiveWithoutStateHeader(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(407)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-response-model-mismatch-no-state")
+	now := time.Now().UTC()
+	state := collectorTestToken(t, now.Add(-time.Minute), 2, 49)
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, state, "seed", now))
+	snapshot, usable := svc.codexTurnStateCollector.Acquire(key, now)
+	require.True(t, usable)
+	svc.bindCodexTurnStateRequest(c, key, "gpt-5.5", snapshot, true)
+
+	// The upstream can reject/translate a request before emitting a state
+	// header. Its response model is still authoritative evidence that the
+	// active state belongs to the wrong model.
+	svc.observeCodexTurnStateResponse(c, account, "gpt-5.5", make(http.Header), "gpt-6-astra")
+	_, usable = svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.False(t, usable)
+	require.Equal(t, "response_model_mismatch", svc.codexTurnStateLastError.Load())
+}
+
+func TestObserveCodexTurnStateResponseConflictInvalidatesWSActiveState(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(409)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-response-model-conflict")
+	now := time.Now().UTC()
+	state := collectorTestToken(t, now.Add(-time.Minute), 2, 52)
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, state, "seed", now))
+	snapshot, usable := svc.codexTurnStateCollector.Acquire(key, now)
+	require.True(t, usable)
+	svc.bindCodexTurnStateRequest(c, key, "gpt-5.5", snapshot, true)
+
+	// The terminal model happens to match the request, but an earlier
+	// response.created declaration disagreed. WS must still retire the state.
+	svc.observeCodexTurnStateResponseDetails(c, account, "gpt-5.5", make(http.Header), "gpt-5.5", true)
+	_, usable = svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.False(t, usable)
+	require.Equal(t, "response_model_mismatch", svc.codexTurnStateLastError.Load())
+}
+
+func TestObserveCodexTurnStateResponseMismatchRetiresStateWhenCollectorUnavailable(t *testing.T) {
+	cfg := &config.Config{}
+	svc := &OpenAIGatewayService{cfg: cfg}
+	account := codexTurnStateGatewayTestAccount(4091)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-response-model-mismatch-no-collector")
+	state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 53)
+	upstream := http.Header{}
+	upstream.Set(openAICodexTurnStateHeader, state)
+
+	// The collector can be absent during startup/reconfiguration, but a
+	// contradictory response must still remove the response header and leave a
+	// bounded tombstone for the client echo.
+	svc.observeCodexTurnStateResponseDetails(c, account, "gpt-5.5", upstream, "gpt-6-astra", false)
+	require.Empty(t, upstream.Get(openAICodexTurnStateHeader))
+	require.True(t, svc.openAICodexTurnStateInvalidated(c, "gpt-5.5", state))
+}
+
+func TestObserveCodexTurnStateResponseDoesNotQueueCandidateForHealthyActiveWhenInjectionDisabled(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	svc.SetCodexTurnStateRuntimeSettings(true, false)
+	account := codexTurnStateGatewayTestAccount(408)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-response-no-injection-candidate")
+	now := time.Now().UTC()
+	active := collectorTestToken(t, now.Add(-time.Minute), 2, 50)
+	newState := collectorTestToken(t, now, 2, 51)
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, active, "seed", now))
+	// Injection is disabled, so this request has no `used` binding. A healthy
+	// active value must still suppress a new standby candidate.
+	responseHeaders := make(http.Header)
+	responseHeaders.Set(openAICodexTurnStateHeader, newState)
+	svc.observeCodexTurnStateResponse(c, account, "gpt-5.5", responseHeaders, "gpt-5.5")
+	status := svc.codexTurnStateCollector.Status(key, time.Now())
+	require.False(t, status.Ready)
+	snapshot, ok := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.True(t, ok)
+	require.Equal(t, active, snapshot.Token.Value)
 }
 
 func TestPrepareCodexTurnStateStripsInvalidIncomingBeforeCachedInjection(t *testing.T) {
@@ -441,6 +659,74 @@ func TestPrepareCodexTurnStateClientCancellationDiscardsSuccessfulDetachedProbe(
 	require.Equal(t, "cancelled", svc.codexTurnStateLastError.Load())
 }
 
+func TestPrepareCodexTurnStateFencedProbeDoesNotReuseStaleActive(t *testing.T) {
+	now := time.Now().UTC()
+	active := collectorTestToken(t, now.Add(-9*time.Minute), 2, 35)
+	candidate := collectorTestToken(t, now, 2, 36)
+	release := make(chan struct{})
+	body := &codexTurnStateReleasedBody{
+		reader: strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.created","response":{"model":"gpt-5.5"}}`,
+			``,
+			`data: {"type":"response.completed","response":{"model":"gpt-5.5"}}`,
+			``,
+		}, "\n")),
+		started: make(chan struct{}),
+		release: release,
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{candidate},
+		},
+		Body: body,
+	}}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	account := codexTurnStateGatewayTestAccount(3031)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-fenced-probe")
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, active, "seed", now))
+
+	type prepareResult struct {
+		snapshot OpenAICodexTurnStateSnapshot
+		ok       bool
+	}
+	result := make(chan prepareResult, 1)
+	go func() {
+		snapshot, ok := svc.prepareCodexTurnState(context.Background(), c, account, "gpt-5.5", make(http.Header), true)
+		result <- prepareResult{snapshot: snapshot, ok: ok}
+	}()
+
+	select {
+	case <-body.started:
+	case <-time.After(time.Second):
+		t.Fatal("probe did not begin reading the upstream response")
+	}
+	// Retire the key while the probe is still blocked in the upstream read. The
+	// late response must be fenced, and the pre-probe active snapshot must not
+	// be reused after OfferProbe rejects that lease.
+	svc.codexTurnStateCollector.Delete(key)
+	close(release)
+
+	var got prepareResult
+	select {
+	case got = <-result:
+	case <-time.After(time.Second):
+		t.Fatal("fenced probe did not finish")
+	}
+	require.False(t, got.ok)
+	require.Empty(t, got.snapshot.Token.Value)
+	binding, bound := svc.codexTurnStateBinding(c, account, "gpt-5.5")
+	require.True(t, bound)
+	require.False(t, binding.used)
+	require.Empty(t, binding.snapshot.Token.Value, "a fenced probe must not rebind the stale active state")
+	_, usable := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.False(t, usable)
+	require.Equal(t, 1, svc.codexTurnStateCollector.Metrics().Entries,
+		"an exact invalidation retains one bounded force-refresh marker")
+}
+
 func TestPrepareCodexTurnStateCancelledClientNeverStartsProbe(t *testing.T) {
 	upstream := &httpUpstreamRecorder{}
 	svc := newCodexTurnStateGatewayTestService(upstream)
@@ -564,6 +850,247 @@ func TestCodexTurnStateCollectionRequiresSuccessfulResponseTerminal(t *testing.T
 	})
 }
 
+func TestCodexTurnStateResponseModelMismatchInvalidatesBeforeFailureOrReadError(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		readError bool
+	}{
+		{
+			name: "response failed terminal",
+			body: strings.Join([]string{
+				`data: {"type":"response.created","response":{"model":"gpt-5.5"}}`,
+				``,
+				`data: {"type":"response.failed","response":{"model":"gpt-6-astra","error":{"code":"server_error","message":"failed"}}}`,
+				``,
+			}, "\n"),
+		},
+		{
+			name: "error event",
+			body: strings.Join([]string{
+				`data: {"type":"response.created","response":{"model":"gpt-5.5"}}`,
+				``,
+				`data: {"type":"error","model":"gpt-6-astra","error":{"code":"server_error","message":"failed"}}`,
+				``,
+			}, "\n"),
+		},
+		{
+			name: "read error after contradictory event",
+			body: strings.Join([]string{
+				`data: {"type":"response.created","response":{"model":"gpt-6-astra"}}`,
+				``,
+			}, "\n"),
+			readError: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			svc := newCodexTurnStateGatewayTestService(nil)
+			account := codexTurnStateGatewayTestAccount(610)
+			c := newCodexTurnStateGatewayTestContext(t, "mismatch-terminal-"+strings.ReplaceAll(test.name, " ", "-"))
+			now := time.Now().UTC()
+			state := collectorTestToken(t, now.Add(-time.Minute), 2, byte(70+len(test.name)))
+			key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+			require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, state, "seed", now))
+			snapshot, usable := svc.codexTurnStateCollector.Acquire(key, now)
+			require.True(t, usable)
+			svc.bindCodexTurnStateRequest(c, key, "gpt-5.5", snapshot, true)
+
+			var body io.ReadCloser
+			if test.readError {
+				body = &codexTurnStateErrorBody{reader: strings.NewReader(test.body)}
+			} else {
+				body = io.NopCloser(strings.NewReader(test.body))
+			}
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"text/event-stream"},
+					http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{state},
+				},
+				Body: body,
+			}
+			_, _ = svc.handleStreamingResponse(context.Background(), resp, c, account, time.Now(), "gpt-5.5", "gpt-5.5")
+
+			_, usable = svc.codexTurnStateCollector.Acquire(key, time.Now())
+			require.False(t, usable, "a contradictory response must retire the active state before terminal/read-error handling")
+			require.Empty(t, c.Writer.Header().Get(openAICodexTurnStateHeader), "invalidated state must not remain staged for the client")
+		})
+	}
+}
+
+func TestCodexTurnStateResponseModelMismatchRemovesUpstreamHeaderBeforeStaging(t *testing.T) {
+	now := time.Now().UTC()
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(611)
+	c := newCodexTurnStateGatewayTestContext(t, "mismatch-header-staging")
+	state := collectorTestToken(t, now.Add(-time.Minute), 2, 92)
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, state, "seed", now))
+	snapshot, usable := svc.codexTurnStateCollector.Acquire(key, now)
+	require.True(t, usable)
+	svc.bindCodexTurnStateRequest(c, key, "gpt-5.5", snapshot, true)
+
+	upstream := http.Header{}
+	upstream.Set(openAICodexTurnStateHeader, state)
+	svc.observeCodexTurnStateResponseDetails(c, account, "gpt-5.5", upstream, "gpt-6-astra", false)
+
+	require.Empty(t, upstream.Get(openAICodexTurnStateHeader), "invalidated state must not be staged from the response header")
+}
+
+func TestCodexTurnStateModelMismatchTombstoneRejectsEchoBeforeNativeFastPath(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(612)
+	c := newCodexTurnStateGatewayTestContext(t, "mismatch-tombstone-echo")
+	now := time.Now().UTC()
+	oldState := collectorTestToken(t, now.Add(-time.Minute), 2, 93)
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, oldState, "seed", now))
+	snapshot, usable := svc.codexTurnStateCollector.Acquire(key, now)
+	require.True(t, usable)
+	svc.bindCodexTurnStateRequest(c, key, "gpt-5.5", snapshot, true)
+	svc.noteOpenAICodexTurnStateProvenance(c, account, oldState, "gpt-5.5")
+
+	response := http.Header{}
+	response.Set(openAICodexTurnStateHeader, oldState)
+	svc.observeCodexTurnStateResponseDetails(c, account, "gpt-5.5", response, "gpt-6-astra", false)
+	require.Empty(t, response.Get(openAICodexTurnStateHeader))
+
+	// The downstream client can still echo the value issued before the
+	// contradictory response. The tombstone must suppress it even though the
+	// collector and provenance records have already been retired.
+	echo := http.Header{}
+	echo.Set(openAICodexTurnStateHeader, oldState)
+	svc.guardOpenAICodexTurnStateEcho(c, account, echo, "gpt-5.5")
+	require.Empty(t, echo.Get(openAICodexTurnStateHeader))
+
+	// A subsequent request with the same scope must not take the valid-shape
+	// value through the anonymous native-state fast path.
+	cNext := newCodexTurnStateGatewayTestContext(t, "mismatch-tombstone-echo")
+	incoming := http.Header{}
+	incoming.Set(openAICodexTurnStateHeader, oldState)
+	next, forwarded := svc.prepareCodexTurnState(context.Background(), cNext, account, "gpt-5.5", incoming, false)
+	require.False(t, forwarded)
+	require.Empty(t, next.Token.Value)
+	require.Empty(t, incoming.Get(openAICodexTurnStateHeader))
+	require.Empty(t, cNext.Request.Header.Get(openAICodexTurnStateHeader))
+	// The exact tombstone remains until a fresh state is observed or it expires.
+	require.True(t, svc.openAICodexTurnStateInvalidated(cNext, "gpt-5.5", oldState))
+
+	// Even a later response that declares the requested model must not promote
+	// the exact retired blob back into the collector.
+	lateResponse := http.Header{}
+	lateResponse.Set(openAICodexTurnStateHeader, oldState)
+	svc.observeCodexTurnStateResponse(cNext, account, "gpt-5.5", lateResponse, "gpt-5.5")
+	require.Empty(t, lateResponse.Get(openAICodexTurnStateHeader))
+	_, usable = svc.codexTurnStateCollector.Acquire(svc.codexTurnStateKey(cNext, account, "gpt-5.5"), time.Now())
+	require.False(t, usable, "an exact tombstoned state must not be re-offered")
+	svc.noteOpenAICodexTurnStateProvenance(cNext, account, oldState, "gpt-5.5")
+	_, _, originExists := svc.loadOpenAICodexTurnStateOrigin(openAICodexTurnStateSeed(cNext), "gpt-5.5")
+	require.False(t, originExists, "an exact tombstoned state must not recreate provenance")
+}
+
+func TestCodexTurnStateModelMismatchTombstonesNativeRequestStateInsteadOfResponseState(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(615)
+	c := newCodexTurnStateGatewayTestContext(t, "native-mismatch-tombstone")
+	now := time.Now().UTC()
+	requestState := collectorTestToken(t, now.Add(-time.Minute), 2, 97)
+	responseState := collectorTestToken(t, now, 2, 98)
+	svc.noteOpenAICodexTurnStateProvenance(c, account, requestState, "gpt-5.5")
+
+	incoming := http.Header{}
+	incoming.Set(openAICodexTurnStateHeader, requestState)
+	snapshot, forwarded := svc.prepareCodexTurnState(context.Background(), c, account, "gpt-5.5", incoming, false)
+	require.True(t, forwarded)
+	require.Equal(t, requestState, snapshot.Token.Value)
+	binding, bound := svc.codexTurnStateBinding(c, account, "gpt-5.5")
+	require.True(t, bound)
+	require.False(t, binding.used, "native state must not be treated as a collector snapshot")
+	require.Equal(t, requestState, binding.snapshot.Token.Value)
+
+	response := http.Header{}
+	response.Set(openAICodexTurnStateHeader, responseState)
+	svc.observeCodexTurnStateResponseDetails(c, account, "gpt-5.5", response, "gpt-6-astra", false)
+	require.Empty(t, response.Get(openAICodexTurnStateHeader))
+	require.True(t, svc.openAICodexTurnStateInvalidated(c, "gpt-5.5", requestState),
+		"the mismatch must fence the state actually sent on the request")
+	require.False(t, svc.openAICodexTurnStateInvalidated(c, "gpt-5.5", responseState),
+		"a different state from the mismatched response must not replace the request-lineage tombstone")
+
+	// With provenance cleared by the mismatch, a repeated client echo would look
+	// anonymous without the request-state tombstone and take the native fast path.
+	cNext := newCodexTurnStateGatewayTestContext(t, "native-mismatch-tombstone")
+	cNext.Request.Header.Set(openAICodexTurnStateHeader, requestState)
+	next, forwarded := svc.prepareCodexTurnState(context.Background(), cNext, account, "gpt-5.5", cNext.Request.Header, false)
+	require.False(t, forwarded)
+	require.Empty(t, next.Token.Value)
+	require.Empty(t, cNext.Request.Header.Get(openAICodexTurnStateHeader))
+}
+
+func TestCodexTurnStateModelMismatchTombstoneAllowsFreshProbe(t *testing.T) {
+	installConfiguredCodexIdentityForOutboundTest(t)
+	now := time.Now().UTC()
+	oldState := collectorTestToken(t, now.Add(-time.Minute), 2, 94)
+	freshState := collectorTestToken(t, now, 2, 95)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{freshState},
+		},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.created","response":{"model":"gpt-5.5"}}`,
+			``,
+			`data: {"type":"response.completed","response":{"model":"gpt-5.5"}}`,
+			``,
+		}, "\n"))),
+	}}}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	account := codexTurnStateGatewayTestAccount(613)
+	c := newCodexTurnStateGatewayTestContext(t, "mismatch-tombstone-probe")
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, oldState, "seed", now))
+	snapshot, usable := svc.codexTurnStateCollector.Acquire(key, now)
+	require.True(t, usable)
+	svc.bindCodexTurnStateRequest(c, key, "gpt-5.5", snapshot, true)
+
+	response := http.Header{}
+	response.Set(openAICodexTurnStateHeader, oldState)
+	svc.observeCodexTurnStateResponseDetails(c, account, "gpt-5.5", response, "gpt-6-astra", false)
+
+	cNext := newCodexTurnStateGatewayTestContext(t, "mismatch-tombstone-probe")
+	incoming := http.Header{}
+	incoming.Set(openAICodexTurnStateHeader, oldState)
+	fresh, forwarded := svc.prepareCodexTurnState(context.Background(), cNext, account, "gpt-5.5", incoming, true)
+	require.True(t, forwarded)
+	require.Equal(t, freshState, fresh.Token.Value)
+	require.NotEqual(t, oldState, fresh.Token.Value)
+	require.Equal(t, 1, len(upstream.requests), "the fenced old echo must result in one fresh probe")
+	require.Empty(t, incoming.Get(openAICodexTurnStateHeader))
+	require.False(t, svc.openAICodexTurnStateInvalidated(cNext, "gpt-5.5", freshState), "observing a fresh state clears the old tombstone")
+}
+
+func TestCodexTurnStateFreshResponseClearsUnknownLineageTombstone(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(614)
+	c := newCodexTurnStateGatewayTestContext(t, "mismatch-tombstone-unknown-lineage")
+	// A model mismatch without a response header or provenance creates the
+	// conservative zero-hash marker, which must be released by the first valid
+	// state observed for this model.
+	svc.invalidateOpenAICodexTurnStateForModel(c, "gpt-5.5", "")
+	freshState := collectorTestToken(t, time.Now(), 2, 96)
+	response := http.Header{}
+	response.Set(openAICodexTurnStateHeader, freshState)
+	svc.observeCodexTurnStateResponse(c, account, "gpt-5.5", response, "gpt-5.5")
+
+	require.False(t, svc.openAICodexTurnStateInvalidated(c, "gpt-5.5", freshState))
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	_, usable := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.True(t, usable)
+}
+
 func TestOpenAIJSONResponseCompletedRequiresAuthoritativeCompletion(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -598,6 +1125,21 @@ func TestReadCodexTurnStateProbeSSEExplicitFailureOverridesCompletion(t *testing
 	require.NoError(t, err)
 	require.True(t, completed)
 	require.Equal(t, "response.failed", terminal, "an explicit failure must prevent publication even if a later event claims completion")
+}
+
+func TestReadCodexTurnStateProbeSSEAcceptsTopLevelModel(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.created","model":"gpt-5.5"}`,
+		``,
+		`data: {"type":"response.completed","model":"gpt-5.5"}`,
+		``,
+	}, "\n")
+
+	model, completed, terminal, err := readCodexTurnStateProbeSSE(strings.NewReader(body), 64*1024)
+	require.NoError(t, err)
+	require.True(t, completed)
+	require.Empty(t, terminal)
+	require.Equal(t, "gpt-5.5", model)
 }
 
 func TestProbeCodexTurnStateUsesIsolatedReferenceEnvelope(t *testing.T) {
@@ -792,6 +1334,33 @@ func TestProbeCodexTurnStateRejectsResponseModelMismatch(t *testing.T) {
 	require.NotNil(t, failure)
 	require.Equal(t, "response_model_mismatch", failure.code)
 	require.NotContains(t, failure.Error(), candidate)
+}
+
+func TestPrepareCodexTurnStateDoesNotReuseActiveAfterProbeModelMismatch(t *testing.T) {
+	now := time.Now().UTC()
+	active := collectorTestToken(t, now.Add(-9*time.Minute), 2, 190)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.created","response":{"model":"gpt-5.5"}}`,
+			``,
+			`data: {"type":"response.completed","response":{"model":"gpt-6-astra"}}`,
+			``,
+		}, "\n"))),
+	}}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	account := codexTurnStateGatewayTestAccount(803)
+	c := newCodexTurnStateGatewayTestContext(t, "execution-probe-model-mismatch")
+	key := svc.codexTurnStateKey(c, account, "gpt-5.5")
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, active, "seed", now))
+
+	snapshot, usable := svc.prepareCodexTurnState(context.Background(), c, account, "gpt-5.5", make(http.Header), true)
+
+	require.False(t, usable)
+	require.Empty(t, snapshot.Token.Value)
+	_, activeUsable := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.False(t, activeUsable, "a model-mismatched refresh must retire the prior active state")
 }
 
 func TestProbeCodexTurnStateUsesOnlyAllowlistedSSEErrorCodes(t *testing.T) {

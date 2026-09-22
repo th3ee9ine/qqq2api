@@ -697,6 +697,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		return nil, ErrAccountNotFound
 	}
 	runtimeIdentityBefore := snapshotOpenAIAccountRuntimeIdentity(account)
+	runtimeStatusBefore := account.Status
+	runtimeSchedulableBefore := account.Schedulable
+	var runtimeExpiresAtBefore *time.Time
+	if account.ExpiresAt != nil {
+		expiresAt := *account.ExpiresAt
+		runtimeExpiresAtBefore = &expiresAt
+	}
+	runtimeAutoPauseBefore := account.AutoPauseOnExpired
 	runtimeStatePersisted := false
 	defer func() {
 		if runtimeStatePersisted {
@@ -1053,8 +1061,15 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
+	runtimeExpiresAtChanged := (runtimeExpiresAtBefore == nil) != (account.ExpiresAt == nil)
+	if runtimeExpiresAtBefore != nil && account.ExpiresAt != nil {
+		runtimeExpiresAtChanged = !runtimeExpiresAtBefore.Equal(*account.ExpiresAt)
+	}
+	runtimeGroupBindingChanged := input.GroupIDs != nil && !sameInt64Set(account.GroupIDs, *input.GroupIDs)
 	runtimeStateChanged := account.Platform == PlatformOpenAI &&
-		(input.AutoAssignProxy || runtimeIdentityBefore != snapshotOpenAIAccountRuntimeIdentity(account))
+		(input.AutoAssignProxy || runtimeIdentityBefore != snapshotOpenAIAccountRuntimeIdentity(account) ||
+			runtimeStatusBefore != account.Status || runtimeSchedulableBefore != account.Schedulable ||
+			runtimeExpiresAtChanged || runtimeAutoPauseBefore != account.AutoPauseOnExpired)
 	billingSettingsAppliedAtomically := false
 	if input.AutoAssignProxy {
 		if automaticRepo, ok := s.accountRepo.(AccountAutomaticProxyRepository); ok {
@@ -1129,6 +1144,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.GroupIDs != nil {
 		if err := s.accountRepo.BindGroups(ctx, account.ID, *input.GroupIDs); err != nil {
 			return nil, err
+		}
+		if account.Platform == PlatformOpenAI && runtimeGroupBindingChanged {
+			runtimeStatePersisted = true
 		}
 	}
 
@@ -1294,20 +1312,33 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 	}
 	targetsByID := make(map[int64]*Account, len(cachedTargets))
+	type bulkOpenAIRuntimeState struct {
+		identity    openAIAccountRuntimeIdentity
+		status      string
+		schedulable bool
+	}
+	runtimeBeforeByID := make(map[int64]bulkOpenAIRuntimeState, len(cachedTargets))
+	runtimeGroupChanged := make(map[int64]bool, len(cachedTargets))
 	for _, account := range cachedTargets {
 		if account != nil {
 			targetsByID[account.ID] = account
+			if account.Platform == PlatformOpenAI {
+				runtimeBeforeByID[account.ID] = bulkOpenAIRuntimeState{
+					identity:    snapshotOpenAIAccountRuntimeIdentity(account),
+					status:      account.Status,
+					schedulable: account.Schedulable,
+				}
+				runtimeGroupChanged[account.ID] = input.GroupIDs != nil && !sameInt64Set(account.GroupIDs, *input.GroupIDs)
+			}
 		}
 	}
-	runtimeStateChanged := len(input.Credentials) > 0 || input.ProxyID != nil || input.AutoAssignProxy ||
+	runtimeBulkMutationRequested := len(input.Credentials) > 0 || input.ProxyID != nil || input.AutoAssignProxy ||
 		updatesOpenAIAccountRuntimeIdentityExtra(input.Extra)
-	runtimeStatePersisted := false
+	runtimeBulkMutationRequested = runtimeBulkMutationRequested || input.Status != "" || input.Schedulable != nil
+	runtimeInvalidationIDs := make(map[int64]struct{}, len(runtimeBeforeByID))
 	defer func() {
-		if !runtimeStatePersisted || !runtimeStateChanged {
-			return
-		}
-		for _, account := range cachedTargets {
-			invalidateOpenAIAccountRuntimeStateWithShadows(ctx, s.runtimeBlocker, s.accountRepo, account)
+		for accountID := range runtimeInvalidationIDs {
+			invalidateOpenAIAccountRuntimeStateWithShadows(ctx, s.runtimeBlocker, s.accountRepo, targetsByID[accountID])
 		}
 	}()
 	if accountAdminScoped {
@@ -1527,7 +1558,30 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if _, err := s.accountRepo.BulkUpdate(ctx, input.AccountIDs, repoUpdates); err != nil {
 		return nil, err
 	}
-	runtimeStatePersisted = true
+	if runtimeBulkMutationRequested && len(runtimeBeforeByID) > 0 {
+		persistedTargets, readErr := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
+		if readErr != nil {
+			// The write already committed. Without an authoritative post-write view,
+			// fail closed for every OpenAI target that this patch could have changed.
+			for accountID := range runtimeBeforeByID {
+				runtimeInvalidationIDs[accountID] = struct{}{}
+			}
+			return nil, readErr
+		}
+		persistedByID := make(map[int64]*Account, len(persistedTargets))
+		for _, account := range persistedTargets {
+			if account != nil {
+				persistedByID[account.ID] = account
+			}
+		}
+		for accountID, before := range runtimeBeforeByID {
+			after := persistedByID[accountID]
+			if after == nil || before.identity != snapshotOpenAIAccountRuntimeIdentity(after) ||
+				before.status != after.Status || before.schedulable != after.Schedulable {
+				runtimeInvalidationIDs[accountID] = struct{}{}
+			}
+		}
+	}
 
 	// Source-bound moves update parents and spark shadows in the repository's
 	// transaction. Keep the legacy propagation path for ordinary bulk edits.
@@ -1555,6 +1609,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 				result.FailedIDs = append(result.FailedIDs, accountID)
 				result.Results = append(result.Results, entry)
 				continue
+			}
+			if runtimeGroupChanged[accountID] {
+				runtimeInvalidationIDs[accountID] = struct{}{}
 			}
 		}
 
@@ -1720,8 +1777,12 @@ func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, 
 	if err := requireActiveAccountPlatform(account.Platform); err != nil {
 		return nil, err
 	}
+	runtimeStateChanged := account.Platform == PlatformOpenAI && account.Schedulable != schedulable
 	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
 		return nil, err
+	}
+	if runtimeStateChanged {
+		invalidateOpenAIAccountRuntimeStateWithShadows(ctx, s.runtimeBlocker, s.accountRepo, account)
 	}
 	updated, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {

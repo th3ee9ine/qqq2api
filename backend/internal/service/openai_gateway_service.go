@@ -475,6 +475,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
 	proxyRepo             ProxyRepository
+	proxyProber           ProxyExitInfoProber
 	accountRepo           AccountRepository
 	usageLogRepo          UsageLogRepository
 	usageBillingRepo      UsageBillingRepository
@@ -542,7 +543,12 @@ type OpenAIGatewayService struct {
 	// openaiCodexTurnStateOrigins: immutable execution scope -> issuing account
 	// and state digest. The raw opaque blob is never retained.
 	openaiCodexTurnStateOrigins sync.Map
-	openaiCodexTurnStateWrites  atomic.Uint64
+	// openaiCodexTurnStateInvalidations remembers a model-scoped state digest
+	// that an upstream response proved invalid. It prevents a client from
+	// re-echoing the same already-issued blob after the collector entry was
+	// retired, while allowing a newly collected state for the model through.
+	openaiCodexTurnStateInvalidations sync.Map
+	openaiCodexTurnStateWrites        atomic.Uint64
 	// codexTurnStateCollector is an in-memory, account/scope/model isolated
 	// cache. It remains optional only for hand-built test services without a
 	// configuration; production services always initialize it.
@@ -553,6 +559,17 @@ type OpenAIGatewayService struct {
 	codexTurnStateLastSuccessUnix atomic.Int64
 	codexTurnStateLastFailureUnix atomic.Int64
 	codexTurnStateLastError       atomic.Value
+	// Turn-State probe diagnostics are bounded in-memory aggregates. They never
+	// retain proxy credentials or opaque state values.
+	codexTurnStateProxyStatsMu     sync.RWMutex
+	codexTurnStateSuccessfulIPs    map[string]*OpenAICodexTurnStateSuccessfulIP
+	codexTurnStateIPRegions        map[string]*OpenAICodexTurnStateIPRegion
+	codexTurnStateCandidateReasons map[string]uint64
+	codexTurnStateProxyCursor      atomic.Uint64
+	// Exit-IP lookups are telemetry only. Keep their asynchronous fan-out
+	// bounded even when many probes complete at the same time.
+	codexTurnStateProxyProbeSem  chan struct{}
+	codexTurnStateProxyProbeLast map[string]time.Time
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -179,7 +180,8 @@ func TestOpenAISetupTokenMessagesUsesCodexBridgeAndTurnState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	firstResp := openAICompatSSECompletedResponse("resp_setup_first", "gpt-5.4")
-	firstResp.Header.Set("x-codex-turn-state", "turn_state_setup")
+	firstTurnState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 215)
+	firstResp.Header.Set("x-codex-turn-state", firstTurnState)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		firstResp,
 		openAICompatSSECompletedResponse("resp_setup_second", "gpt-5.4"),
@@ -188,6 +190,8 @@ func TestOpenAISetupTokenMessagesUsesCodexBridgeAndTurnState(t *testing.T) {
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 		httpUpstream: upstream,
 	}
+	svc.initCodexTurnStateCollector()
+	svc.SetCodexTurnStateRuntimeSettings(false, true)
 	account := openAISetupTokenCompatAccount(72)
 
 	messages := make([]string, 0, openAICompatAnthropicReplayMaxTailMessages+3)
@@ -227,7 +231,7 @@ func TestOpenAISetupTokenMessagesUsesCodexBridgeAndTurnState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, secondResult)
 	require.True(t, isOpenAICompatMessagesBridgeContext(secondCtx))
-	require.Equal(t, "turn_state_setup", upstream.requests[1].Header.Get("x-codex-turn-state"))
+	require.Equal(t, firstTurnState, upstream.requests[1].Header.Get("x-codex-turn-state"))
 	require.Equal(t, generateSessionUUID(isolateOpenAIUpstreamSessionID(0, account, "stable-cache-key")), upstream.requests[1].Header.Get("session_id"))
 	require.Empty(t, upstream.requests[1].Header.Get("conversation_id"))
 	requireOpenAIMessagesCodexIdentity(t, upstream.requests[1], codexCLIUserAgent, openai.CodexDefaultOriginator)
@@ -239,6 +243,8 @@ func openAISetupTokenCompatAccount(id int64) *Account {
 		Name:        "openai-setup-token",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeSetupToken,
+		Status:      StatusActive,
+		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":       "setup-token-value",

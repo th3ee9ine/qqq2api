@@ -199,6 +199,63 @@ func TestForwardAsChatCompletions_UnknownModelWithoutMessagesDispatchKeepsReques
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestForwardAsChatCompletionsUsesFinalMappedModelForTurnStateGuard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const (
+		requestedModel = "public-codex-alias"
+		mappedModel    = "gpt-5.4"
+		sessionID      = "chat-completions-turn-state-session"
+	)
+	state := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 222)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	body := []byte(`{"model":"` + requestedModel + `","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("session_id", sessionID)
+	c.Request.Header.Set(openAICodexTurnStateHeader, state)
+
+	account := &Account{
+		ID:          9101,
+		Name:        "openai-oauth-mapped-turn-state",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+			"model_mapping":      map[string]any{requestedModel: mappedModel},
+		},
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"invalid_request_error","message":"stop after request capture"}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		httpUpstream: upstream,
+	}
+	svc.initCodexTurnStateCollector()
+	svc.SetCodexTurnStateRuntimeSettings(false, true)
+
+	// Seed provenance with the final mapped model. The request body is rewritten
+	// to that model before buildUpstreamRequest runs; the guard must compare the
+	// same final model rather than the client's public alias.
+	BindOpenAICodexTurnStateExecutionScope(c, body)
+	svc.noteOpenAICodexTurnStateProvenance(c, account, state, mappedModel)
+
+	result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, state, upstream.lastReq.Header.Get(openAICodexTurnStateHeader))
+	require.Equal(t, mappedModel, gjson.GetBytes(upstream.lastBody, "model").String())
+}
+
 func TestForwardAsChatCompletions_APIKeyPropagatesPromptCacheKeyInResponsesBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -186,6 +186,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpsMetricsIntervalSeconds:           "60",
 		SettingKeyCodexTurnStateProbeEnabled:          "true",
 		SettingKeyCodexTurnStateCacheInjectionEnabled: "true",
+		SettingKeyCodexTurnStateProxyPool:             "[]",
 
 		// Channel monitor defaults (enabled, 60s)
 		SettingKeyChannelMonitorEnabled:                "true",

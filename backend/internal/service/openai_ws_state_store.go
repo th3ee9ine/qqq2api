@@ -38,9 +38,10 @@ type openAIWSConnBinding struct {
 }
 
 type openAIWSTurnStateBinding struct {
-	accountID int64
-	turnState string
-	expiresAt time.Time
+	accountID  int64
+	turnState  string
+	generation uint64
+	expiresAt  time.Time
 }
 
 type openAIWSSessionConnBinding struct {
@@ -93,6 +94,24 @@ type OpenAIWSStateStore interface {
 	// HasAnySessionInvalidEncryptedContent 是热路径快速探测：全局无记录时
 	// 调用方可跳过会话哈希计算与摘要匹配。
 	HasAnySessionInvalidEncryptedContent() bool
+}
+
+// openAIWSSessionTurnStateModelDeleter is an optional capability used when a
+// response proves that one account/model lineage is invalid. Keeping it out of
+// OpenAIWSStateStore preserves source compatibility for narrow test stores and
+// alternate implementations; the default store supports exact deletion.
+type openAIWSSessionTurnStateModelDeleter interface {
+	DeleteSessionTurnStateForModel(groupID, accountID int64, sessionHash, model string)
+}
+
+// openAIWSSessionTurnStateGenerationStore is the strict OAuth/Codex extension
+// implemented by the default store. It keeps legacy OpenAIWSStateStore
+// implementations source-compatible while allowing production writes to be
+// atomically refresh-gated and fenced by the collector generation.
+type openAIWSSessionTurnStateGenerationStore interface {
+	BindSessionTurnStateIfRefreshNeeded(groupID, accountID int64, sessionHash, turnState string, generation uint64, ttl time.Duration, policy OpenAICodexTurnStatePolicy, now time.Time, model ...string) bool
+	GetSessionTurnStateForGeneration(groupID, accountID int64, sessionHash string, generation uint64, model ...string) (string, bool)
+	DeleteSessionTurnStateIfMatch(groupID, accountID int64, sessionHash, turnState string, generation uint64, model ...string)
 }
 
 type defaultOpenAIWSStateStore struct {
@@ -344,9 +363,81 @@ func (s *defaultOpenAIWSStateStore) BindSessionTurnState(groupID, accountID int6
 	s.sessionToTurnStateMu.Lock()
 	ensureBindingCapacity(s.sessionToTurnState, key, openAIWSStateStoreMaxEntriesPerMap)
 	s.sessionToTurnState[key] = openAIWSTurnStateBinding{
-		accountID: accountID,
-		turnState: state,
-		expiresAt: time.Now().Add(ttl),
+		accountID:  accountID,
+		turnState:  state,
+		generation: 0,
+		expiresAt:  time.Now().Add(ttl),
+	}
+	s.sessionToTurnStateMu.Unlock()
+}
+
+func (s *defaultOpenAIWSStateStore) BindSessionTurnStateIfRefreshNeeded(
+	groupID, accountID int64,
+	sessionHash, turnState string,
+	generation uint64,
+	ttl time.Duration,
+	policy OpenAICodexTurnStatePolicy,
+	now time.Time,
+	model ...string,
+) bool {
+	key := openAIWSSessionModelTurnStateKey(groupID, sessionHash, model...)
+	state := strings.TrimSpace(turnState)
+	if key == "" || accountID <= 0 || generation == 0 || state == "" {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	ttl = normalizeOpenAIWSTTL(ttl)
+	policy = policy.normalized()
+	s.maybeCleanup()
+
+	s.sessionToTurnStateMu.Lock()
+	defer s.sessionToTurnStateMu.Unlock()
+	if existing, ok := s.sessionToTurnState[key]; ok && existing.accountID == accountID &&
+		existing.generation == generation && now.Before(existing.expiresAt) {
+		if token, err := ValidateOpenAICodexTurnState(existing.turnState, policy, now); err == nil &&
+			!openAICodexTurnStateTokenNeedsRefresh(token, policy, now) {
+			return false
+		}
+	}
+	ensureBindingCapacity(s.sessionToTurnState, key, openAIWSStateStoreMaxEntriesPerMap)
+	s.sessionToTurnState[key] = openAIWSTurnStateBinding{
+		accountID:  accountID,
+		turnState:  state,
+		generation: generation,
+		expiresAt:  now.Add(ttl),
+	}
+	return true
+}
+
+func (s *defaultOpenAIWSStateStore) GetSessionTurnStateForGeneration(groupID, accountID int64, sessionHash string, generation uint64, model ...string) (string, bool) {
+	key := openAIWSSessionModelTurnStateKey(groupID, sessionHash, model...)
+	if key == "" || generation == 0 {
+		return "", false
+	}
+	s.maybeCleanup()
+	now := time.Now()
+	s.sessionToTurnStateMu.RLock()
+	binding, ok := s.sessionToTurnState[key]
+	s.sessionToTurnStateMu.RUnlock()
+	if !ok || now.After(binding.expiresAt) || binding.accountID != accountID ||
+		binding.generation != generation || strings.TrimSpace(binding.turnState) == "" {
+		return "", false
+	}
+	return binding.turnState, true
+}
+
+func (s *defaultOpenAIWSStateStore) DeleteSessionTurnStateIfMatch(groupID, accountID int64, sessionHash, turnState string, generation uint64, model ...string) {
+	key := openAIWSSessionModelTurnStateKey(groupID, sessionHash, model...)
+	state := strings.TrimSpace(turnState)
+	if key == "" || state == "" || generation == 0 {
+		return
+	}
+	s.sessionToTurnStateMu.Lock()
+	if binding, ok := s.sessionToTurnState[key]; ok && binding.accountID == accountID &&
+		binding.generation == generation && binding.turnState == state {
+		delete(s.sessionToTurnState, key)
 	}
 	s.sessionToTurnStateMu.Unlock()
 }
@@ -383,6 +474,25 @@ func (s *defaultOpenAIWSStateStore) DeleteSessionTurnState(groupID int64, sessio
 	s.sessionToTurnStateMu.Unlock()
 }
 
+// DeleteSessionTurnStateForModel removes only the exact account/model binding
+// for one execution scope. A model mismatch must not erase a sibling model's
+// valid state or another account's state that happens to share the scope.
+func (s *defaultOpenAIWSStateStore) DeleteSessionTurnStateForModel(groupID, accountID int64, sessionHash, model string) {
+	if s == nil || accountID <= 0 {
+		return
+	}
+	key := openAIWSSessionModelTurnStateKey(groupID, sessionHash, model)
+	if key == "" {
+		return
+	}
+	s.maybeCleanup()
+	s.sessionToTurnStateMu.Lock()
+	if binding, exists := s.sessionToTurnState[key]; exists && binding.accountID == accountID {
+		delete(s.sessionToTurnState, key)
+	}
+	s.sessionToTurnStateMu.Unlock()
+}
+
 // DeleteAccountTurnStates removes every in-process session binding minted by
 // one upstream account. It is intentionally an optional concrete capability,
 // rather than part of OpenAIWSStateStore, so narrow test stores and alternate
@@ -397,6 +507,18 @@ func (s *defaultOpenAIWSStateStore) DeleteAccountTurnStates(accountID int64) {
 			delete(s.sessionToTurnState, key)
 		}
 	}
+	s.sessionToTurnStateMu.Unlock()
+}
+
+// DeleteAllSessionTurnStates is the fail-closed counterpart to the account
+// scoped cleanup. Response ownership and encrypted-content recovery state are
+// unrelated to OAuth identity and are intentionally preserved.
+func (s *defaultOpenAIWSStateStore) DeleteAllSessionTurnStates() {
+	if s == nil {
+		return
+	}
+	s.sessionToTurnStateMu.Lock()
+	clear(s.sessionToTurnState)
 	s.sessionToTurnStateMu.Unlock()
 }
 

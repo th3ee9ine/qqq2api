@@ -21,6 +21,51 @@ export interface ReliabilityTurnStateSummary {
   [key: string]: unknown
 }
 
+/** A configured collector egress URL, exposed without credentials. */
+export interface ReliabilityTurnStateProxyPoolEntry {
+  protocol?: string
+  host?: string
+  port?: number | string
+  /** Optional aggregate fields returned by newer gateway builds. */
+  configured?: boolean
+  usable?: boolean
+  status?: string
+  [key: string]: unknown
+}
+
+export interface ReliabilityTurnStateIPRegionSummary {
+  region?: string
+  country?: string
+  country_code?: string
+  count?: number
+  /** Egress diagnostic observations, sampled after successful collections. */
+  successes?: number
+  [key: string]: unknown
+}
+
+export interface ReliabilityTurnStateSuccessfulIP {
+  ip?: string
+  address?: string
+  ip_address?: string
+  region?: string
+  area?: string
+  country?: string
+  country_code?: string
+  /** Egress diagnostic observations, sampled after successful collections. */
+  successes?: number
+  count?: number
+  last_success_at?: string
+  [key: string]: unknown
+}
+
+export interface ReliabilityTurnStateCandidateBreakdown {
+  reason?: string
+  code?: string
+  cause?: string
+  count?: number
+  [key: string]: unknown
+}
+
 /** Aggregate collector health only; the opaque state value is never returned. */
 export interface ReliabilityTurnStateCollectorSummary {
   enabled?: boolean
@@ -36,6 +81,19 @@ export interface ReliabilityTurnStateCollectorSummary {
   last_success_at?: string
   last_failure_at?: string
   last_error_code?: string
+  /** Configured egress pool, with credentials removed by the backend. */
+  proxy_pool?: ReliabilityTurnStateProxyPoolEntry[]
+  successful_ip_regions?: ReliabilityTurnStateIPRegionSummary[]
+  successful_ips?: ReliabilityTurnStateSuccessfulIP[]
+  candidate_breakdown?: ReliabilityTurnStateCandidateBreakdown[]
+  /** Compatibility aliases accepted while rolling out the projection. */
+  ip_regions?: ReliabilityTurnStateIPRegionSummary[] | Record<string, number>
+  successful_ip_addresses?: string[]
+  candidate_reasons?: ReliabilityTurnStateCandidateBreakdown[] | Record<string, number>
+  /** Optional aggregate aliases used by older/newer gateways. */
+  proxy_pool_count?: number
+  successful_ip_count?: number
+  [key: string]: unknown
 }
 
 export interface ReliabilityStatusResponse {
@@ -52,6 +110,11 @@ export interface ReliabilityStatusSummary {
 export interface ReliabilityTurnStateSettings {
   probe_enabled: boolean
   injection_enabled: boolean
+  /** The pool is write-only; credentials are never returned by the backend. */
+  proxy_pool_urls?: string[]
+  /** Credential-free metadata returned by the settings endpoint. */
+  proxy_pool_configured?: boolean
+  proxy_pool_count?: number
 }
 
 /** Keep compatibility with both nested and flat Turn State responses. */

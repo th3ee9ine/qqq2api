@@ -71,6 +71,10 @@ type openAIWSAcquireRequest struct {
 	Account *Account
 	WSURL   string
 	Headers http.Header
+	// TurnStateModel scopes a connection whose request or response handshake
+	// carries X-Codex-Turn-State. Connections without a handshake state remain
+	// reusable across models; state-bearing connections do not.
+	TurnStateModel string
 	// HeadersFactory is evaluated inside dialConn. It exists so credentials
 	// whose authorization is per-dial (Agent Identity) are never cached in
 	// lastAcquire or delayed prewarm state.
@@ -310,6 +314,10 @@ type openAIWSConn struct {
 	handshakeHeaders       http.Header
 	handshakeCompatibility openAIWSHandshakeCompatibilityKey
 	routingAffinity        string
+
+	handshakeTurnStateModelMu    sync.Mutex
+	handshakeTurnStateModel      string
+	handshakeTurnStateModelBound bool
 
 	leaseCh   chan struct{}
 	closedCh  chan struct{}
@@ -801,6 +809,36 @@ func (c *openAIWSConn) handshakeHeader(name string) string {
 	return strings.TrimSpace(c.handshakeHeaders.Get(strings.TrimSpace(name)))
 }
 
+func (c *openAIWSConn) bindHandshakeTurnStateModel(model string) {
+	if c == nil {
+		return
+	}
+	c.handshakeTurnStateModelMu.Lock()
+	defer c.handshakeTurnStateModelMu.Unlock()
+	if c.handshakeTurnStateModelBound {
+		return
+	}
+	c.handshakeTurnStateModel = codexTurnStateModelIdentity(model)
+	c.handshakeTurnStateModelBound = true
+}
+
+func (c *openAIWSConn) matchesHandshakeTurnStateModel(model string) bool {
+	if c == nil {
+		return false
+	}
+	c.handshakeTurnStateModelMu.Lock()
+	defer c.handshakeTurnStateModelMu.Unlock()
+	if !c.handshakeTurnStateModelBound {
+		return true
+	}
+	identity := codexTurnStateModelIdentity(model)
+	return identity != "" && c.handshakeTurnStateModel != "" && c.handshakeTurnStateModel == identity
+}
+
+func (l *openAIWSConnLease) MatchesHandshakeTurnStateModel(model string) bool {
+	return l != nil && l.conn != nil && l.conn.matchesHandshakeTurnStateModel(model)
+}
+
 func (c *openAIWSConn) matchesHandshakeCompatibility(compatibility openAIWSHandshakeCompatibilityKey) bool {
 	return c != nil && c.handshakeCompatibility == compatibility
 }
@@ -1243,7 +1281,8 @@ retryAcquire:
 				return nil, errOpenAIWSPreferredConnUnavailable
 			}
 			preferredConn, ok := ap.conns[preferredConnID]
-			if !ok || !preferredConn.matchesContinuationHandshakeCompatibility(compatibility) {
+			if !ok || !preferredConn.matchesContinuationHandshakeCompatibility(compatibility) ||
+				!preferredConn.matchesHandshakeTurnStateModel(req.TurnStateModel) {
 				p.recordConnPickDuration(time.Since(pickStartedAt))
 				ap.mu.Unlock()
 				closeOpenAIWSConns(evicted)
@@ -1335,7 +1374,8 @@ retryAcquire:
 		}
 
 		if preferredConnID != "" {
-			if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesHandshakeCompatibility(compatibility) && conn.tryAcquire() {
+			if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesHandshakeCompatibility(compatibility) &&
+				conn.matchesHandshakeTurnStateModel(req.TurnStateModel) && conn.tryAcquire() {
 				connPick := time.Since(pickStartedAt)
 				p.recordConnPickDuration(connPick)
 				ap.mu.Unlock()
@@ -1363,7 +1403,7 @@ retryAcquire:
 		// A routing hint is advisory at WebSocket dial time. Prefer a pooled
 		// connection whose handshake used the same hint, but do not make that
 		// preference a continuation compatibility requirement.
-		best := p.pickLeastBusyConnWithRoutingAffinityLocked(ap, compatibility, routingAffinity)
+		best := p.pickLeastBusyConnWithRoutingAffinityLocked(ap, compatibility, routingAffinity, req.TurnStateModel)
 		if best != nil && best.tryAcquire() {
 			connPick := time.Since(pickStartedAt)
 			p.recordConnPickDuration(connPick)
@@ -1389,7 +1429,8 @@ retryAcquire:
 		}
 		if routingAffinity == "" || len(ap.conns)+ap.creating >= effectiveMaxConns {
 			for _, conn := range ap.conns {
-				if conn == nil || conn == best || !conn.matchesHandshakeCompatibility(compatibility) {
+				if conn == nil || conn == best || !conn.matchesHandshakeCompatibility(compatibility) ||
+					!conn.matchesHandshakeTurnStateModel(req.TurnStateModel) {
 					continue
 				}
 				if conn.tryAcquire() {
@@ -1420,13 +1461,13 @@ retryAcquire:
 
 	createLimit := effectiveMaxConns
 	if !req.ForceNewConn && len(ap.conns)+ap.creating >= effectiveMaxConns {
-		affine := p.pickLeastBusyConnWithRoutingAffinityLocked(ap, compatibility, routingAffinity)
-		if idle := p.pickOldestIdleConnWithoutHandshakeCompatibilityLocked(ap, compatibility); idle != nil {
+		affine := p.pickLeastBusyConnWithRoutingAffinityLocked(ap, compatibility, routingAffinity, req.TurnStateModel)
+		if idle := p.pickOldestIdleConnWithoutHandshakeCompatibilityLocked(ap, compatibility, req.TurnStateModel); idle != nil {
 			delete(ap.conns, idle.id)
 			evicted = append(evicted, idle)
 			p.metrics.scaleDownTotal.Add(1)
 		} else if affine == nil {
-			compatible := p.pickLeastBusyConnLocked(ap, "", compatibility)
+			compatible := p.pickLeastBusyConnLocked(ap, "", compatibility, req.TurnStateModel)
 			if compatible != nil {
 				// Capacity is full and every compatible connection is busy. The
 				// hint remains soft here: queue on a compatible connection below.
@@ -1538,7 +1579,7 @@ retryAcquire:
 	}
 
 acquireAtCapacity:
-	target := p.pickLeastBusyConnLocked(ap, req.PreferredConnID, compatibility)
+	target := p.pickLeastBusyConnLocked(ap, req.PreferredConnID, compatibility, req.TurnStateModel)
 	connPick := time.Since(pickStartedAt)
 	p.recordConnPickDuration(connPick)
 	if target == nil {
@@ -1649,6 +1690,7 @@ func (p *openAIWSConnPool) pickOldestIdleConnLocked(ap *openAIWSAccountPool) *op
 func (p *openAIWSConnPool) pickOldestIdleConnWithoutHandshakeCompatibilityLocked(
 	ap *openAIWSAccountPool,
 	compatibility openAIWSHandshakeCompatibilityKey,
+	turnStateModel string,
 ) *openAIWSConn {
 	if ap == nil || len(ap.conns) == 0 {
 		return nil
@@ -1656,7 +1698,7 @@ func (p *openAIWSConnPool) pickOldestIdleConnWithoutHandshakeCompatibilityLocked
 	var oldest *openAIWSConn
 	for _, conn := range ap.conns {
 		if conn == nil ||
-			conn.matchesHandshakeCompatibility(compatibility) ||
+			(conn.matchesHandshakeCompatibility(compatibility) && conn.matchesHandshakeTurnStateModel(turnStateModel)) ||
 			conn.isLeased() || conn.waiters.Load() > 0 || p.isConnPinnedLocked(ap, conn.id) {
 			continue
 		}
@@ -1915,13 +1957,15 @@ func (p *openAIWSConnPool) pickLeastBusyConnLocked(
 	ap *openAIWSAccountPool,
 	preferredConnID string,
 	compatibility openAIWSHandshakeCompatibilityKey,
+	turnStateModel string,
 ) *openAIWSConn {
 	if ap == nil || len(ap.conns) == 0 {
 		return nil
 	}
 	preferredConnID = stringsTrim(preferredConnID)
 	if preferredConnID != "" {
-		if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesHandshakeCompatibility(compatibility) {
+		if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesHandshakeCompatibility(compatibility) &&
+			conn.matchesHandshakeTurnStateModel(turnStateModel) {
 			return conn
 		}
 	}
@@ -1929,7 +1973,8 @@ func (p *openAIWSConnPool) pickLeastBusyConnLocked(
 	var bestWaiters int32
 	var bestLastUsed time.Time
 	for _, conn := range ap.conns {
-		if conn == nil || !conn.matchesHandshakeCompatibility(compatibility) {
+		if conn == nil || !conn.matchesHandshakeCompatibility(compatibility) ||
+			!conn.matchesHandshakeTurnStateModel(turnStateModel) {
 			continue
 		}
 		waiters := conn.waiters.Load()
@@ -1949,6 +1994,7 @@ func (p *openAIWSConnPool) pickLeastBusyConnWithRoutingAffinityLocked(
 	ap *openAIWSAccountPool,
 	compatibility openAIWSHandshakeCompatibilityKey,
 	routingAffinity string,
+	turnStateModel string,
 ) *openAIWSConn {
 	if ap == nil || len(ap.conns) == 0 {
 		return nil
@@ -1959,6 +2005,7 @@ func (p *openAIWSConnPool) pickLeastBusyConnWithRoutingAffinityLocked(
 	for _, conn := range ap.conns {
 		if conn == nil ||
 			!conn.matchesHandshakeCompatibility(compatibility) ||
+			!conn.matchesHandshakeTurnStateModel(turnStateModel) ||
 			!conn.matchesRoutingAffinity(routingAffinity) {
 			continue
 		}
@@ -2199,6 +2246,25 @@ func (p *openAIWSConnPool) ClearAccount(accountID int64) {
 	closeOpenAIWSConns(conns)
 }
 
+// ClearAll retires pooled connections and pending prewarm state without
+// stopping the pool workers. It is used for fail-closed identity invalidation,
+// after which normal traffic may establish fresh connections immediately.
+func (p *openAIWSConnPool) ClearAll() {
+	if p == nil {
+		return
+	}
+	accountIDs := make([]int64, 0)
+	p.accounts.Range(func(key, _ any) bool {
+		if accountID, ok := key.(int64); ok && accountID > 0 {
+			accountIDs = append(accountIDs, accountID)
+		}
+		return true
+	})
+	for _, accountID := range accountIDs {
+		p.ClearAccount(accountID)
+	}
+}
+
 // dropDeadConnLocked 在池锁内把已关闭或已判脏的连接移出账号池并释放容量，
 // 连接本身交给调用方在解锁后关闭。
 func (p *openAIWSConnPool) dropDeadConnLocked(ap *openAIWSAccountPool, conn *openAIWSConn, evicted *[]*openAIWSConn) bool {
@@ -2365,6 +2431,10 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	}
 	id := p.nextConnID(req.Account.ID)
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
+	if strings.TrimSpace(headers.Get(openAIWSTurnStateHeader)) != "" ||
+		strings.TrimSpace(handshakeHeaders.Get(openAIWSTurnStateHeader)) != "" {
+		pooledConn.bindHandshakeTurnStateModel(req.TurnStateModel)
+	}
 	pooledConn.sentIdentity = sentIdentity
 	accountID := req.Account.ID
 	evict := func() { p.evictConn(accountID, id) }
@@ -2536,6 +2606,7 @@ func cloneOpenAIWSAcquireRequest(req openAIWSAcquireRequest) openAIWSAcquireRequ
 	copied.WSURL = stringsTrim(req.WSURL)
 	copied.ProxyURL = stringsTrim(req.ProxyURL)
 	copied.PreferredConnID = stringsTrim(req.PreferredConnID)
+	copied.TurnStateModel = stringsTrim(req.TurnStateModel)
 	return copied
 }
 
@@ -2550,6 +2621,7 @@ func cloneOpenAIWSAcquireRequestPtr(req *openAIWSAcquireRequest) *openAIWSAcquir
 func sameOpenAIWSPrewarmTarget(a, b openAIWSAcquireRequest) bool {
 	return stringsTrim(a.WSURL) == stringsTrim(b.WSURL) &&
 		stringsTrim(a.ProxyURL) == stringsTrim(b.ProxyURL) &&
+		codexTurnStateModelIdentity(a.TurnStateModel) == codexTurnStateModelIdentity(b.TurnStateModel) &&
 		normalizeOpenAIWSHandshakeCompatibility(a.Account, a.Headers) == normalizeOpenAIWSHandshakeCompatibility(b.Account, b.Headers)
 }
 

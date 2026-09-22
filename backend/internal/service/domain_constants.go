@@ -465,6 +465,9 @@ const (
 	// depending on deployment configuration or restarting the process.
 	SettingKeyCodexTurnStateProbeEnabled          = "codex_turn_state_probe_enabled"
 	SettingKeyCodexTurnStateCacheInjectionEnabled = "codex_turn_state_cache_injection_enabled"
+	// SettingKeyCodexTurnStateProxyPool stores the JSON array of dedicated
+	// collector egress URLs. It is intentionally separate from account proxies.
+	SettingKeyCodexTurnStateProxyPool = "codex_turn_state_proxy_pool"
 
 	// SettingKeyOpsAdvancedSettings stores JSON config for ops advanced settings (data retention, aggregation).
 	SettingKeyOpsAdvancedSettings = "ops_advanced_settings"

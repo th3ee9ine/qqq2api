@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	openAICodexTurnStateCollectorDefaultTTL            = time.Hour
-	openAICodexTurnStateCollectorDefaultRefreshBefore  = 20 * time.Minute
+	openAICodexTurnStateCollectorDefaultTTL = time.Hour
+	// A healthy state is reusable for 55 minutes of its one-hour local TTL.
+	openAICodexTurnStateCollectorDefaultRefreshBefore  = 5 * time.Minute
 	openAICodexTurnStateCollectorDefaultClockSkew      = 30 * time.Second
 	openAICodexTurnStateCollectorDefaultProbeCooldown  = 3 * time.Minute
 	openAICodexTurnStateCollectorDefaultMaxEntries     = 2048
@@ -283,6 +284,14 @@ type openAICodexTurnStateCollectorEntry struct {
 	lastProbe  time.Time
 	nextProbe  time.Time
 	probeDone  chan struct{}
+	// probeEpoch fences a response that was already in flight when this key
+	// was invalidated. probeInvalidated remains set until the lease is released
+	// so a stale probe cannot recreate the entry through Offer.
+	probeEpoch       uint64
+	probeInvalidated bool
+	// forceRefresh bypasses sibling-health throttling after an exact-key
+	// invalidation (for example a response model mismatch).
+	forceRefresh bool
 }
 
 type openAICodexTurnStateAccountGeneration struct {
@@ -296,7 +305,36 @@ type OpenAICodexTurnStateProbe struct {
 	Key       OpenAICodexTurnStateKey
 	StartedAt time.Time
 	done      chan struct{}
+	epoch     uint64
 }
+
+// OpenAICodexTurnStateProbeStartResult distinguishes a real single-flight
+// conflict from a healthy state that appeared before the probe lease could be
+// acquired. Callers can reuse the latter immediately without waiting or
+// spending an upstream probe.
+type OpenAICodexTurnStateProbeStartResult uint8
+
+const (
+	OpenAICodexTurnStateProbeStartUnavailable OpenAICodexTurnStateProbeStartResult = iota
+	OpenAICodexTurnStateProbeStarted
+	OpenAICodexTurnStateProbeSkippedHealthy
+	OpenAICodexTurnStateProbeInFlight
+	OpenAICodexTurnStateProbeCooldown
+	OpenAICodexTurnStateProbeCapacity
+	OpenAICodexTurnStateProbeSkippedAccountModelHealthy
+)
+
+// OpenAICodexTurnStateOfferResult describes an automatic collection offer.
+// Automatic offers are admitted only when the key has no usable active state
+// or its refresh window has opened. The decision and publication happen under
+// one collector lock so concurrent responses cannot leave a standby backlog.
+type OpenAICodexTurnStateOfferResult uint8
+
+const (
+	OpenAICodexTurnStateOfferRejected OpenAICodexTurnStateOfferResult = iota
+	OpenAICodexTurnStateOfferPublished
+	OpenAICodexTurnStateOfferSkippedHealthy
+)
 
 type openAICodexTurnStateCollectorCounters struct {
 	offers, acceptedOffers, rejectedOffers atomic.Uint64
@@ -527,6 +565,7 @@ func (c *OpenAICodexTurnStateCollector) promoteLocked(entry *openAICodexTurnStat
 		entry.active = entry.ready
 		entry.ready = OpenAICodexTurnStateSnapshot{}
 		entry.strikes = 0
+		entry.forceRefresh = false
 		c.counts.promotions.Add(1)
 	}
 }
@@ -558,42 +597,183 @@ func (c *OpenAICodexTurnStateCollector) Offer(key OpenAICodexTurnStateKey, token
 	}
 	now = collectorNow(now)
 	c.counts.offers.Add(1)
-	if token.Value == "" || token.Fingerprint == "" {
-		c.counts.rejectedOffers.Add(1)
+	var ok bool
+	if token, ok = c.normalizeOfferToken(token, now); !ok {
 		return false
-	}
-	if parsed, err := parseOpenAICodexTurnState(token.Value, c.policy.MaxTokenBytes); err != nil {
-		c.counts.rejectedOffers.Add(1)
-		return false
-	} else {
-		token = parsed
-	}
-	if !c.policy.Accept(token, now) {
-		c.counts.rejectedOffers.Add(1)
-		return false
-	}
-	if len(route) > openAICodexTurnStateCollectorMaxRouteLength {
-		route = route[:openAICodexTurnStateCollectorMaxRouteLength]
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	entry, ok := c.entryLocked(key, now, true)
+	return c.offerLocked(key, token, route, now, nil)
+}
+
+// OfferProbe publishes a candidate only while the exact probe lease that
+// produced it is still current. This closes the invalidate-vs-probe race: a
+// model-mismatch response can retire a key while its older probe is reading,
+// and that probe must not recreate the entry after the invalidation.
+func (c *OpenAICodexTurnStateCollector) OfferProbe(probe OpenAICodexTurnStateProbe, token OpenAICodexTurnStateToken, route string, now time.Time) bool {
+	if c == nil || probe.done == nil {
+		return false
+	}
+	now = collectorNow(now)
+	c.counts.offers.Add(1)
+	var ok bool
+	if token, ok = c.normalizeOfferToken(token, now); !ok {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.offerLocked(probe.Key, token, route, now, &probe)
+}
+
+// OfferIfRefreshNeeded atomically checks the current active state and publishes
+// token only when collection is due for this account/model. A healthy sibling
+// scope suppresses collection without sharing its state; explicit invalidation
+// bypasses that gate. Unlike Offer, this never creates a standby candidate
+// behind a healthy active state. Gateway response collection uses this method.
+func (c *OpenAICodexTurnStateCollector) OfferIfRefreshNeeded(key OpenAICodexTurnStateKey, token OpenAICodexTurnStateToken, route string, now time.Time) OpenAICodexTurnStateOfferResult {
+	if c == nil {
+		return OpenAICodexTurnStateOfferRejected
+	}
+	now = collectorNow(now)
+	var ok bool
+	if token, ok = c.normalizeOfferToken(token, now); !ok {
+		c.counts.offers.Add(1)
+		return OpenAICodexTurnStateOfferRejected
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.offerIfRefreshNeededLocked(key, token, route, now, nil)
+}
+
+// OfferProbeIfRefreshNeeded applies the same atomic refresh gate while also
+// requiring the exact probe lease to remain current. Lease validation happens
+// before the healthy-state shortcut so a fenced probe is rejected, not reported
+// as a harmless concurrent skip.
+func (c *OpenAICodexTurnStateCollector) OfferProbeIfRefreshNeeded(probe OpenAICodexTurnStateProbe, token OpenAICodexTurnStateToken, route string, now time.Time) OpenAICodexTurnStateOfferResult {
+	if c == nil || probe.done == nil {
+		return OpenAICodexTurnStateOfferRejected
+	}
+	now = collectorNow(now)
+	var ok bool
+	if token, ok = c.normalizeOfferToken(token, now); !ok {
+		c.counts.offers.Add(1)
+		return OpenAICodexTurnStateOfferRejected
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.offerIfRefreshNeededLocked(probe.Key, token, route, now, &probe)
+}
+
+// ProbeCurrent reports whether a probe lease is still allowed to publish.
+// Callers use this to distinguish a fenced lease from an ordinary probe
+// validation failure, where a still-healthy active snapshot may be retained.
+func (c *OpenAICodexTurnStateCollector) ProbeCurrent(probe OpenAICodexTurnStateProbe) bool {
+	if c == nil || probe.done == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key, ok := c.resolveKeyGenerationLocked(probe.Key, time.Now(), false)
 	if !ok {
+		return false
+	}
+	entry := c.entries[key]
+	return entry != nil && entry.probeDone == probe.done &&
+		entry.probeEpoch == probe.epoch && !entry.probeInvalidated
+}
+
+func (c *OpenAICodexTurnStateCollector) normalizeOfferToken(token OpenAICodexTurnStateToken, now time.Time) (OpenAICodexTurnStateToken, bool) {
+	if token.Value == "" || token.Fingerprint == "" {
+		c.counts.rejectedOffers.Add(1)
+		return OpenAICodexTurnStateToken{}, false
+	}
+	parsed, err := parseOpenAICodexTurnState(token.Value, c.policy.MaxTokenBytes)
+	if err != nil || !c.policy.Accept(parsed, now) {
+		c.counts.rejectedOffers.Add(1)
+		return OpenAICodexTurnStateToken{}, false
+	}
+	return parsed, true
+}
+
+func (c *OpenAICodexTurnStateCollector) offerLocked(key OpenAICodexTurnStateKey, token OpenAICodexTurnStateToken, route string, now time.Time, expectedProbe *OpenAICodexTurnStateProbe) bool {
+	create := expectedProbe == nil
+	entry, ok := c.entryLocked(key, now, create)
+	if !ok || (expectedProbe != nil &&
+		(entry.probeDone != expectedProbe.done || entry.probeEpoch != expectedProbe.epoch || entry.probeInvalidated)) {
 		c.counts.rejectedOffers.Add(1)
 		return false
 	}
+	c.offerEntryLocked(entry, token, route, now)
+	return true
+}
+
+func (c *OpenAICodexTurnStateCollector) offerIfRefreshNeededLocked(key OpenAICodexTurnStateKey, token OpenAICodexTurnStateToken, route string, now time.Time, expectedProbe *OpenAICodexTurnStateProbe) OpenAICodexTurnStateOfferResult {
+	create := expectedProbe == nil
+	canonical, currentGeneration := c.resolveKeyGenerationLocked(key, now, create)
+	if !currentGeneration {
+		c.counts.offers.Add(1)
+		c.counts.rejectedOffers.Add(1)
+		return OpenAICodexTurnStateOfferRejected
+	}
+	entry := c.entries[canonical]
+	if entry == nil && create {
+		// Check before allocating the per-scope entry so high-cardinality
+		// execution scopes cannot evict the healthy account/model sibling.
+		if c.hasHealthyAccountModelSiblingLocked(canonical, now) {
+			return OpenAICodexTurnStateOfferSkippedHealthy
+		}
+		var ok bool
+		entry, ok = c.entryLocked(canonical, now, true)
+		if !ok {
+			c.counts.offers.Add(1)
+			c.counts.rejectedOffers.Add(1)
+			return OpenAICodexTurnStateOfferRejected
+		}
+	} else if entry != nil {
+		entry.lastAccess = now
+	}
+	if entry == nil || (expectedProbe != nil &&
+		(entry.probeDone != expectedProbe.done || entry.probeEpoch != expectedProbe.epoch || entry.probeInvalidated)) {
+		c.counts.offers.Add(1)
+		c.counts.rejectedOffers.Add(1)
+		return OpenAICodexTurnStateOfferRejected
+	}
+	c.promoteLocked(entry, now)
+	readyRefreshQueued := c.policy.Accept(entry.ready.Token, now) &&
+		entry.ready.Token.IssuedAt.After(entry.active.Token.IssuedAt)
+	if !c.needsRefreshLocked(entry, now) || readyRefreshQueued {
+		return OpenAICodexTurnStateOfferSkippedHealthy
+	}
+	// A response or probe may have allocated this exact scope before another
+	// scope published a healthy account/model state. Re-check after validating
+	// the probe lease and exact entry, while preserving explicit invalidation's
+	// force-refresh bypass.
+	if !entry.forceRefresh && c.hasHealthyAccountModelSiblingLocked(entry.key, now) {
+		return OpenAICodexTurnStateOfferSkippedHealthy
+	}
+	c.counts.offers.Add(1)
+	c.offerEntryLocked(entry, token, route, now)
+	return OpenAICodexTurnStateOfferPublished
+}
+
+func (c *OpenAICodexTurnStateCollector) offerEntryLocked(entry *openAICodexTurnStateCollectorEntry, token OpenAICodexTurnStateToken, route string, now time.Time) {
+	if len(route) > openAICodexTurnStateCollectorMaxRouteLength {
+		route = route[:openAICodexTurnStateCollectorMaxRouteLength]
+	}
 	if entry.active.Token.Fingerprint == token.Fingerprint {
+		entry.forceRefresh = false
 		c.counts.acceptedOffers.Add(1)
-		return true
+		return
 	}
 	if !c.policy.Accept(entry.active.Token, now) {
 		entry.version++
 		entry.active = OpenAICodexTurnStateSnapshot{Token: token, Route: route, Version: entry.version}
 		entry.ready = OpenAICodexTurnStateSnapshot{}
 		entry.strikes = 0
+		entry.forceRefresh = false
 		c.counts.promotions.Add(1)
 		c.counts.acceptedOffers.Add(1)
-		return true
+		return
 	}
 	if entry.ready.Token.Value == "" || !c.policy.Accept(entry.ready.Token, now) || !token.IssuedAt.Before(entry.ready.Token.IssuedAt) {
 		entry.ready = OpenAICodexTurnStateSnapshot{Token: token, Route: route}
@@ -601,7 +781,6 @@ func (c *OpenAICodexTurnStateCollector) Offer(key OpenAICodexTurnStateKey, token
 	c.promoteLocked(entry, now)
 	entry.candidates++
 	c.counts.acceptedOffers.Add(1)
-	return true
 }
 
 // OfferValue parses and offers a wire header in one operation.
@@ -715,6 +894,42 @@ func (c *OpenAICodexTurnStateCollector) RejectAndPromote(key OpenAICodexTurnStat
 	return c.policy.Accept(entry.active.Token, now)
 }
 
+// Invalidate clears the exact active snapshot represented by used. Unlike
+// RejectAndPromote, an invalidation never promotes the standby candidate: a
+// model-mismatched response is evidence that the whole state lineage is no
+// longer trustworthy and the next request must collect a fresh value.
+func (c *OpenAICodexTurnStateCollector) Invalidate(key OpenAICodexTurnStateKey, used OpenAICodexTurnStateSnapshot, now time.Time) bool {
+	if c == nil {
+		return false
+	}
+	now = collectorNow(now)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entryLocked(key, now, false)
+	if !ok {
+		return false
+	}
+	// A model mismatch invalidates the whole key lineage. Fence any probe that
+	// is still reading the old upstream response even when the request that
+	// observed the mismatch did not borrow the active snapshot.
+	if entry.probeDone != nil {
+		entry.probeInvalidated = true
+		entry.probeEpoch++
+	}
+	if used.Version != entry.active.Version || used.Token.Fingerprint != entry.active.Token.Fingerprint {
+		return false
+	}
+	entry.active = OpenAICodexTurnStateSnapshot{}
+	entry.ready = OpenAICodexTurnStateSnapshot{}
+	// A model mismatch is an explicit invalidation signal. Do not carry a
+	// cooldown from an earlier probe into the fresh collection round.
+	entry.nextProbe = time.Time{}
+	entry.strikes = 0
+	entry.version++
+	entry.forceRefresh = true
+	return true
+}
+
 // NeedsRefresh reports whether a key should start a bounded collection round.
 func (c *OpenAICodexTurnStateCollector) NeedsRefresh(key OpenAICodexTurnStateKey, now time.Time) bool {
 	if c == nil {
@@ -728,10 +943,34 @@ func (c *OpenAICodexTurnStateCollector) NeedsRefresh(key OpenAICodexTurnStateKey
 		return true
 	}
 	c.promoteLocked(entry, now)
+	return c.needsRefreshLocked(entry, now)
+}
+
+func (c *OpenAICodexTurnStateCollector) needsRefreshLocked(entry *openAICodexTurnStateCollectorEntry, now time.Time) bool {
+	if entry == nil {
+		return true
+	}
 	if !c.policy.Accept(entry.active.Token, now) || entry.strikes >= 2 {
 		return true
 	}
 	return c.policy.RefreshBefore > 0 && now.Add(c.policy.RefreshBefore).After(entry.active.Token.IssuedAt.Add(c.policy.TTL))
+}
+
+func (c *OpenAICodexTurnStateCollector) hasHealthyAccountModelSiblingLocked(
+	key OpenAICodexTurnStateKey,
+	now time.Time,
+) bool {
+	for siblingKey, sibling := range c.entries {
+		if sibling == nil || siblingKey == key || siblingKey.AccountID != key.AccountID ||
+			siblingKey.Model != key.Model || siblingKey.generation != key.generation || sibling.forceRefresh {
+			continue
+		}
+		c.promoteLocked(sibling, now)
+		if !c.needsRefreshLocked(sibling, now) {
+			return true
+		}
+	}
+	return false
 }
 
 // Status returns bounded metadata for one key.
@@ -856,10 +1095,84 @@ func (c *OpenAICodexTurnStateCollector) StartProbe(key OpenAICodexTurnStateKey, 
 		return OpenAICodexTurnStateProbe{}, false
 	}
 	entry.lastProbe = now
+	entry.probeEpoch++
+	if entry.probeEpoch == 0 {
+		entry.probeEpoch = 1
+	}
+	entry.probeInvalidated = false
 	entry.probeDone = make(chan struct{})
 	c.probes++
 	c.counts.probeStarted.Add(1)
-	return OpenAICodexTurnStateProbe{Key: entry.key, StartedAt: now, done: entry.probeDone}, true
+	return OpenAICodexTurnStateProbe{Key: entry.key, StartedAt: now, done: entry.probeDone, epoch: entry.probeEpoch}, true
+}
+
+// StartProbeIfRefreshNeeded atomically promotes any ready state, re-checks the
+// refresh window, and acquires the single-flight lease only when collection is
+// still necessary. This closes the Acquire/NeedsRefresh-to-StartProbe gap where
+// a concurrent response could publish a fresh active state yet the request
+// would still spend an unnecessary synthetic probe.
+func (c *OpenAICodexTurnStateCollector) StartProbeIfRefreshNeeded(
+	key OpenAICodexTurnStateKey,
+	now time.Time,
+) (OpenAICodexTurnStateProbe, OpenAICodexTurnStateProbeStartResult) {
+	if c == nil {
+		return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeStartUnavailable
+	}
+	now = collectorNow(now)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	canonical, currentGeneration := c.resolveKeyGenerationLocked(key, now, true)
+	if !currentGeneration {
+		return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeStartUnavailable
+	}
+	entry := c.entries[canonical]
+	if entry == nil {
+		// Check the account/model collection gate before allocating a per-scope
+		// placeholder. Otherwise a stream of new scopes can fill MaxEntries and
+		// evict the healthy entry that should suppress those probes.
+		if c.hasHealthyAccountModelSiblingLocked(canonical, now) {
+			return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeSkippedAccountModelHealthy
+		}
+		var ok bool
+		entry, ok = c.entryLocked(canonical, now, true)
+		if !ok {
+			return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeCapacity
+		}
+	} else {
+		entry.lastAccess = now
+	}
+	c.promoteLocked(entry, now)
+	if !c.needsRefreshLocked(entry, now) {
+		return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeSkippedHealthy
+	}
+	if !entry.forceRefresh && c.hasHealthyAccountModelSiblingLocked(entry.key, now) {
+		return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeSkippedAccountModelHealthy
+	}
+	if entry.probeDone != nil {
+		c.counts.probeCoalesced.Add(1)
+		return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeInFlight
+	}
+	if c.probes >= c.policy.MaxProbeSlots {
+		return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeCapacity
+	}
+	if !entry.nextProbe.IsZero() && now.Before(entry.nextProbe) {
+		return OpenAICodexTurnStateProbe{}, OpenAICodexTurnStateProbeCooldown
+	}
+	entry.lastProbe = now
+	entry.probeEpoch++
+	if entry.probeEpoch == 0 {
+		entry.probeEpoch = 1
+	}
+	entry.probeInvalidated = false
+	entry.probeDone = make(chan struct{})
+	c.probes++
+	c.counts.probeStarted.Add(1)
+	return OpenAICodexTurnStateProbe{
+		Key:       entry.key,
+		StartedAt: now,
+		done:      entry.probeDone,
+		epoch:     entry.probeEpoch,
+	}, OpenAICodexTurnStateProbeStarted
 }
 
 // FinishProbe releases the single-flight lease and starts the next cooldown.
@@ -878,14 +1191,22 @@ func (c *OpenAICodexTurnStateCollector) FinishProbe(probe OpenAICodexTurnStatePr
 	if entry == nil || entry.probeDone != probe.done {
 		return
 	}
+	invalidated := entry.probeInvalidated || entry.probeEpoch != probe.epoch
 	entry.probeDone = nil
-	now = collectorNow(now)
-	entry.nextProbe = now.Add(c.policy.ProbeCooldown)
 	if c.probes > 0 {
 		c.probes--
 	}
 	close(probe.done)
 	c.counts.probeFinished.Add(1)
+	if invalidated {
+		entry.probeInvalidated = false
+		entry.forceRefresh = true
+		entry.nextProbe = time.Time{}
+		return
+	}
+	now = collectorNow(now)
+	entry.nextProbe = now.Add(c.policy.ProbeCooldown)
+	entry.probeInvalidated = false
 }
 
 // AbortProbe releases a probe without imposing cooldown and removes its empty
@@ -906,12 +1227,23 @@ func (c *OpenAICodexTurnStateCollector) AbortProbe(probe OpenAICodexTurnStatePro
 	if entry == nil || entry.probeDone != probe.done {
 		return
 	}
+	invalidated := entry.probeInvalidated || entry.probeEpoch != probe.epoch
 	entry.probeDone = nil
 	if c.probes > 0 {
 		c.probes--
 	}
 	close(probe.done)
 	c.counts.probeFinished.Add(1)
+	if invalidated {
+		entry.probeInvalidated = false
+		entry.forceRefresh = true
+		entry.nextProbe = time.Time{}
+		return
+	}
+	if entry.forceRefresh {
+		entry.nextProbe = time.Time{}
+		return
+	}
 	if !entry.active.usable(c.policy, now) && !entry.ready.usable(c.policy, now) {
 		delete(c.entries, key)
 	}
@@ -959,9 +1291,46 @@ func (c *OpenAICodexTurnStateCollector) Delete(key OpenAICodexTurnStateKey) {
 	if ok {
 		if entry := c.entries[canonical]; entry == nil || entry.probeDone == nil {
 			delete(c.entries, canonical)
+		} else {
+			// Keep the lease alive so waiters and the global probe slot remain
+			// well-defined, but fence its eventual result and clear the key when
+			// the old probe releases the lease.
+			entry.probeInvalidated = true
+			entry.probeEpoch++
+			entry.active = OpenAICodexTurnStateSnapshot{}
+			entry.ready = OpenAICodexTurnStateSnapshot{}
+			entry.strikes = 0
+			entry.version++
 		}
 	}
 	c.mu.Unlock()
+}
+
+// DeleteAndForceRefresh retires an exact scope while leaving a bounded marker
+// that bypasses account/model sibling-health suppression. This is used for
+// explicit invalidation evidence such as a response-model mismatch, including
+// native states that were never borrowed from the collector.
+func (c *OpenAICodexTurnStateCollector) DeleteAndForceRefresh(key OpenAICodexTurnStateKey) {
+	if c == nil {
+		return
+	}
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entryLocked(key, now, true)
+	if !ok {
+		return
+	}
+	if entry.probeDone != nil {
+		entry.probeInvalidated = true
+		entry.probeEpoch++
+	}
+	entry.active = OpenAICodexTurnStateSnapshot{}
+	entry.ready = OpenAICodexTurnStateSnapshot{}
+	entry.nextProbe = time.Time{}
+	entry.strikes = 0
+	entry.version++
+	entry.forceRefresh = true
 }
 
 // DeleteAccount invalidates all keys owned by one upstream account. Removing
@@ -975,5 +1344,30 @@ func (c *OpenAICodexTurnStateCollector) DeleteAccount(accountID int64) {
 	}
 	c.mu.Lock()
 	c.removeAccountLocked(accountID, false)
+	c.mu.Unlock()
+}
+
+// DeleteAll invalidates every account generation and removes every cached
+// state. generationSequence is deliberately preserved so an in-flight request
+// can never become current again after a later BindKey recreates its account.
+func (c *OpenAICodexTurnStateCollector) DeleteAll() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	for _, entry := range c.entries {
+		if entry == nil || entry.probeDone == nil {
+			continue
+		}
+		close(entry.probeDone)
+		entry.probeDone = nil
+		if c.probes > 0 {
+			c.probes--
+		}
+		c.counts.probeFinished.Add(1)
+	}
+	c.entries = make(map[OpenAICodexTurnStateKey]*openAICodexTurnStateCollectorEntry)
+	c.accountGenerations = make(map[int64]openAICodexTurnStateAccountGeneration)
+	c.probes = 0
 	c.mu.Unlock()
 }

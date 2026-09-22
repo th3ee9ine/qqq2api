@@ -191,7 +191,18 @@ func (s *OpsService) initRuntimeSettings(ctx context.Context) {
 	}
 	defaults := defaultOpsAdvancedSettingsForConfig(s.cfg)
 	s.runtimeSettings.Store(&opsRuntimeSettingsSnapshot{monitoringEnabled: true, advanced: *defaults})
-	_ = s.RefreshRuntimeSettings(ctx)
+	// A malformed persisted proxy pool must not silently fall back to an
+	// account's ordinary proxy on a cold start. If the gateway has no prior
+	// last-known-good runtime snapshot, fail closed for automatic collection
+	// until an administrator repairs the setting. Ordinary database failures
+	// retain the historical default-on behavior and a previously published
+	// snapshot is never disabled by a later bad refresh.
+	hasGatewaySnapshot := s.openAIGatewayService != nil && s.openAIGatewayService.codexTurnStateRuntime.Load() != nil
+	if err := s.RefreshRuntimeSettings(ctx); err != nil &&
+		errors.Is(err, ErrInvalidOpenAICodexTurnStateProxyPool) &&
+		!hasGatewaySnapshot && s.openAIGatewayService != nil {
+		s.openAIGatewayService.SetCodexTurnStateRuntimeSettingsWithProxyPool(false, false, nil)
+	}
 }
 
 // RefreshRuntimeSettings is the cold-path database load used at startup and by
@@ -213,6 +224,7 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 		SettingKeyOpsRuntimeLogConfig,
 		SettingKeyCodexTurnStateProbeEnabled,
 		SettingKeyCodexTurnStateCacheInjectionEnabled,
+		SettingKeyCodexTurnStateProxyPool,
 	})
 	if err != nil {
 		return err
@@ -229,9 +241,17 @@ func (s *OpsService) RefreshRuntimeSettings(ctx context.Context) error {
 		}
 	}
 	normalizeOpsAdvancedSettings(advanced)
+	codexTurnStateSettings, err := codexTurnStateRuntimeSettingsFromValues(values)
+	if err != nil {
+		// Keep both the Ops snapshot and the gateway's last known-good
+		// turn-state runtime snapshot intact. In particular, a malformed
+		// persisted proxy pool must not be interpreted as an empty pool, which
+		// would silently fall back to the account's ordinary proxy route.
+		return err
+	}
 
 	s.runtimeSettings.Store(&opsRuntimeSettingsSnapshot{monitoringEnabled: monitoringEnabled, advanced: *advanced})
-	s.applyCodexTurnStateRuntimeSettings(codexTurnStateRuntimeSettingsFromValues(values))
+	s.applyCodexTurnStateRuntimeSettings(codexTurnStateSettings)
 	if s.systemLogSink != nil {
 		persistAccessLogs := false
 		if raw, ok := values[SettingKeyOpsRuntimeLogConfig]; ok {

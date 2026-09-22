@@ -244,6 +244,7 @@ func TestProxyResponsesWebSocketFromClient_MarksCyberPolicyBeforeEarlyReturn(t *
 
 			markCh := make(chan *CyberPolicyMark, 1)
 			serverErrCh := make(chan error, 1)
+			ingressTurnState := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 192)
 			wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{CompressionMode: coderws.CompressionContextTakeover})
 				if err != nil {
@@ -263,7 +264,7 @@ func TestProxyResponsesWebSocketFromClient_MarksCyberPolicyBeforeEarlyReturn(t *
 				recorder := httptest.NewRecorder()
 				ginCtx, _ := gin.CreateTestContext(recorder)
 				ginCtx.Request = r.Clone(r.Context())
-				ginCtx.Request.Header.Set(openAIWSTurnStateHeader, "ingress-turn-state")
+				ginCtx.Request.Header.Set(openAIWSTurnStateHeader, ingressTurnState)
 				ginCtx.Request.Header.Set("User-Agent", "ingress-agent/9.9.9")
 				hooks := &OpenAIWSIngressHooks{AfterTurn: func(_ int, _ *OpenAIForwardResult, _ error) {
 					markCh <- GetOpsCyberPolicy(ginCtx)
@@ -305,7 +306,7 @@ func TestProxyResponsesWebSocketFromClient_MarksCyberPolicyBeforeEarlyReturn(t *
 				captureDialer.mu.Lock()
 				dialHeaders := captureDialer.lastHeaders.Clone()
 				captureDialer.mu.Unlock()
-				require.Equal(t, "ingress-turn-state", dialHeaders.Get(openAIWSTurnStateHeader))
+				require.Equal(t, ingressTurnState, dialHeaders.Get(openAIWSTurnStateHeader))
 				require.Equal(t, *mark.UpstreamOriginator, dialHeaders.Get("Originator"))
 				require.Equal(t, *mark.UpstreamUserAgent, dialHeaders.Get("User-Agent"))
 				require.Equal(t, *mark.UpstreamVersion, dialHeaders.Get("Version"))

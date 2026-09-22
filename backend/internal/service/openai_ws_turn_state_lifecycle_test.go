@@ -246,6 +246,39 @@ func TestOpenAIGatewayService_Forward_WSv2_HandshakeTurnStateCommitGate(t *testi
 	}
 }
 
+func TestOpenAIGatewayService_Forward_WSv2_AdminDisabledLateBindDoesNotCommitHandshakeState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := newOpenAIWSTurnStateLifecycleConfig()
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
+	handshakeState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 89)
+	conn := &openAIWSCaptureConn{events: [][]byte{[]byte(
+		`{"type":"response.completed","response":{"id":"resp_admin_disabled_v2","model":"gpt-5.5","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}`,
+	)}}
+	dialer := &openAIWSTurnStateSequenceDialer{
+		conns:      []openAIWSClientConn{conn},
+		handshakes: []http.Header{openAIWSTurnStateLifecycleHandshake(handshakeState)},
+	}
+	svc, store := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)
+	svc.initCodexTurnStateCollector()
+	account := codexTurnStateGatewayTestAccount(8809)
+	account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
+	current := *account
+	current.Schedulable = false
+	svc.accountRepo = &openAIWSTurnStateAuthoritativeRepo{current: &current}
+	body := []byte(`{"model":"gpt-5.5","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	recorder := httptest.NewRecorder()
+	c := newOpenAIWSTurnStateLifecycleContext(t, recorder, nil, "late-bind-disabled-v2")
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	scope, _ := boundOpenAICodexTurnStateExecutionScope(c)
+	_, stored := store.GetSessionTurnState(openAIWSTurnStateLifecycleGroupID, account.ID, scope, "gpt-5.5")
+	require.False(t, stored)
+	require.Empty(t, recorder.Header().Get(openAIWSTurnStateHeader), "an old identity's handshake state must not be exposed after admin disable")
+}
+
 func TestOpenAIGatewayService_Forward_WSv2_TurnStateIsolatedByFinalModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tests := []struct {
@@ -282,14 +315,15 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateIsolatedByFinalModel(t *test
 			))
 			c := newOpenAIWSTurnStateLifecycleContext(t, nil, nil, "final-model-isolation")
 			scope, _ := resolveOpenAIWSExecutionScope(c, body, openAIWSTurnStateLifecycleAPIKeyID)
-			store.BindSessionTurnState(
+			require.True(t, svc.bindOpenAIWSSessionTurnStateIfRefreshNeeded(
+				c,
+				store,
 				openAIWSTurnStateLifecycleGroupID,
-				account.ID,
+				account,
 				scope,
-				storedState,
-				time.Minute,
 				"upstream-a",
-			)
+				storedState,
+			))
 
 			result, err := svc.Forward(context.Background(), c, account, body)
 			require.NoError(t, err)
@@ -305,7 +339,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateIsolatedByFinalModel(t *test
 	}
 }
 
-func TestOpenAIGatewayService_Forward_WSv2_InjectionDisabledIgnoresStoreAndPreservesNativeState(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2_InjectionDisabledIgnoresStoreAndStripsUnprovenNativeState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC()
 	tests := []struct {
@@ -315,9 +349,8 @@ func TestOpenAIGatewayService_Forward_WSv2_InjectionDisabledIgnoresStoreAndPrese
 	}{
 		{name: "stored_state_is_not_injected"},
 		{
-			name:        "native_state_is_forwarded",
+			name:        "unproven_native_state_is_stripped",
 			nativeState: collectorTestToken(t, now.Add(-time.Minute), 2, 22),
-			wantState:   collectorTestToken(t, now.Add(-time.Minute), 2, 22),
 		},
 	}
 	for index, test := range tests {
@@ -688,7 +721,7 @@ func dialOpenAIWSTurnStateIngressClientWithState(t *testing.T, serverURL, sessio
 	return conn
 }
 
-func TestOpenAIGatewayService_Ingress_InjectionDisabledIgnoresStoreAndPreservesNativeState(t *testing.T) {
+func TestOpenAIGatewayService_Ingress_InjectionDisabledIgnoresStoreAndStripsUnprovenNativeState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	now := time.Now().UTC()
 	tests := []struct {
@@ -698,9 +731,8 @@ func TestOpenAIGatewayService_Ingress_InjectionDisabledIgnoresStoreAndPreservesN
 	}{
 		{name: "stored_state_is_not_injected"},
 		{
-			name:        "native_state_is_forwarded",
+			name:        "unproven_native_state_is_stripped",
 			nativeState: collectorTestToken(t, now.Add(-time.Minute), 2, 51),
-			wantState:   collectorTestToken(t, now.Add(-time.Minute), 2, 51),
 		},
 	}
 	for index, test := range tests {
@@ -746,6 +778,45 @@ func TestOpenAIGatewayService_Ingress_InjectionDisabledIgnoresStoreAndPreservesN
 			require.Equal(t, test.wantState, headers[0].Get(openAIWSTurnStateHeader))
 		})
 	}
+}
+
+func TestOpenAIGatewayService_Ingress_AdminDisabledLateBindDoesNotCommitHandshakeState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	cfg := newOpenAIWSTurnStateLifecycleConfig()
+	enableOpenAIWSTurnStateLifecycleCollector(cfg)
+	handshakeState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 69)
+	conn := &openAIWSCaptureConn{events: [][]byte{[]byte(
+		`{"type":"response.completed","response":{"id":"resp_admin_disabled_ingress","model":"gpt-5.5","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}`,
+	)}}
+	dialer := &openAIWSTurnStateSequenceDialer{
+		conns:      []openAIWSClientConn{conn},
+		handshakes: []http.Header{openAIWSTurnStateLifecycleHandshake(handshakeState)},
+	}
+	svc, store := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)
+	svc.initCodexTurnStateCollector()
+	account := codexTurnStateGatewayTestAccount(8899)
+	account.Extra = map[string]any{"responses_websockets_v2_enabled": true}
+	current := *account
+	current.Schedulable = false
+	svc.accountRepo = &openAIWSTurnStateAuthoritativeRepo{current: &current}
+	body := `{"type":"response.create","model":"gpt-5.5","stream":false,"input":"hello"}`
+	sessionID := "late-bind-disabled-ingress"
+	server, serverErrCh, scopeCh := startOpenAIWSTurnStateIngressServer(t, svc, account)
+	client := dialOpenAIWSTurnStateIngressClient(t, server.URL, sessionID)
+
+	writeOpenAIWSTurnStateIngressMessage(t, client, body)
+	completed := readOpenAIWSTurnStateIngressMessage(t, client)
+	require.Equal(t, "response.completed", gjson.GetBytes(completed, "type").String())
+	require.NoError(t, client.Close(coderws.StatusNormalClosure, "done"))
+	select {
+	case err := <-serverErrCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ingress websocket to finish")
+	}
+	scope := <-scopeCh
+	_, stored := store.GetSessionTurnState(openAIWSTurnStateLifecycleGroupID, account.ID, scope, "gpt-5.5")
+	require.False(t, stored)
 }
 
 func TestOpenAIGatewayService_Ingress_NoReliableScopeDoesNotUseFallbackTurnStateStore(t *testing.T) {

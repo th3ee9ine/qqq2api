@@ -148,11 +148,21 @@ func (snapshot *upstreamIdentitySnapshot) applyToOpenAIResult(result *OpenAIForw
 }
 
 func (snapshot *upstreamIdentitySnapshot) applyToOpenAIResultIfUnset(result *OpenAIForwardResult) {
-	if result == nil || result.UpstreamTurnState != nil || result.UpstreamOriginator != nil ||
-		result.UpstreamUserAgent != nil || result.UpstreamVersion != nil {
+	if snapshot == nil || result == nil {
 		return
 	}
-	snapshot.applyToOpenAIResult(result)
+	// Turn-State is independent of the transport identity and must still be
+	// recorded when a WS handshake supplied an explicit User-Agent. The remaining
+	// identity fields are one coherent source: avoid mixing a partial handshake
+	// identity with an HTTP fallback snapshot.
+	if result.UpstreamTurnState == nil {
+		result.UpstreamTurnState = snapshot.turnState
+	}
+	if result.UpstreamOriginator == nil && result.UpstreamUserAgent == nil && result.UpstreamVersion == nil {
+		result.UpstreamOriginator = snapshot.originator
+		result.UpstreamUserAgent = snapshot.userAgent
+		result.UpstreamVersion = snapshot.version
+	}
 }
 
 func (snapshot *upstreamIdentitySnapshot) applyToForwardResult(result *ForwardResult) {
@@ -166,11 +176,17 @@ func (snapshot *upstreamIdentitySnapshot) applyToForwardResult(result *ForwardRe
 }
 
 func (snapshot *upstreamIdentitySnapshot) applyToForwardResultIfUnset(result *ForwardResult) {
-	if result == nil || result.UpstreamTurnState != nil || result.UpstreamOriginator != nil ||
-		result.UpstreamUserAgent != nil || result.UpstreamVersion != nil {
+	if snapshot == nil || result == nil {
 		return
 	}
-	snapshot.applyToForwardResult(result)
+	if result.UpstreamTurnState == nil {
+		result.UpstreamTurnState = snapshot.turnState
+	}
+	if result.UpstreamOriginator == nil && result.UpstreamUserAgent == nil && result.UpstreamVersion == nil {
+		result.UpstreamOriginator = snapshot.originator
+		result.UpstreamUserAgent = snapshot.userAgent
+		result.UpstreamVersion = snapshot.version
+	}
 }
 
 func (snapshot *upstreamIdentitySnapshot) applyToCyberPolicyMark(mark *CyberPolicyMark) {

@@ -60,6 +60,52 @@ func TestPrepareOpenAIWSHTTPBridgeBodyStripsNoneReasoningForCompatibleEndpoint(t
 	require.Equal(t, "none", gjson.GetBytes(officialBody, "reasoning.effort").String())
 }
 
+func TestProxyOpenAIWSHTTPBridgeTurnUsesFinalModelForTurnStateGuard(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const (
+		requestedModel = "public-codex-alias"
+		mappedModel    = "gpt-5.4"
+		sessionID      = "ws-http-bridge-turn-state-session"
+	)
+	state := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 223)
+	sse := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"resp_bridge_turn_state","model":"` + mappedModel + `","status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}`,
+		``,
+	}, "\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(sse)),
+	}}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	svc.cfg.Gateway.MaxLineSize = defaultMaxLineSize
+	account := codexTurnStateGatewayTestAccount(9102)
+	account.Name = "openai-oauth-ws-http-bridge"
+	account.Concurrency = 1
+	account.Credentials["model_mapping"] = map[string]any{requestedModel: mappedModel}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("session_id", sessionID)
+	c.Request.Header.Set(openAICodexTurnStateHeader, state)
+	payload := []byte(`{"type":"response.create","model":"` + mappedModel + `","stream":true,"input":"hi"}`)
+	BindOpenAICodexTurnStateExecutionScope(c, payload)
+	svc.noteOpenAICodexTurnStateProvenance(c, account, state, mappedModel)
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(), c, account, "oauth-token", payload, len(payload),
+		requestedModel, "", "", "", "", 1,
+		func([]byte) error { return nil },
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, state, upstream.lastReq.Header.Get(openAICodexTurnStateHeader))
+	require.Equal(t, mappedModel, gjson.GetBytes(upstream.lastBody, "model").String())
+}
+
 func TestProxyOpenAIWSHTTPBridgeTurn_KeepsOutboundAndObservedServiceTiersSeparate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +68,60 @@ func TestReliabilityTurnStateCollectorProjectionUsesAllowLists(t *testing.T) {
 			require.Equal(t, test.wantC, got.LastErrorCode)
 		})
 	}
+}
+
+func TestReliabilityTurnStateCollectorProjectionIncludesBoundedDiagnostics(t *testing.T) {
+	lastSuccess := time.Date(2026, 9, 21, 10, 11, 12, 0, time.FixedZone("CST", 8*60*60))
+	projected := reliabilityTurnStateCollectorFromSnapshot(OpenAICodexTurnStateReliabilitySnapshot{
+		ProxyPool: []OpenAICodexTurnStateProxySummary{
+			{Protocol: "HTTP", Host: "proxy.example.com", Port: 8080},
+			{Protocol: "http", Host: "user:password@proxy.example.com", Port: 8080},
+			{Protocol: "ftp", Host: "ignored.example.com", Port: 21},
+		},
+		SuccessfulIPRegions: []OpenAICodexTurnStateIPRegion{{Region: "North America", Country: "United States", CountryCode: "us", Successes: 4}},
+		SuccessfulIPs: []OpenAICodexTurnStateSuccessfulIP{
+			{IP: "198.51.100.8", Region: "North America", Country: "United States", CountryCode: "us", Successes: 3, LastSuccessAt: lastSuccess},
+			{IP: "not-an-ip", Successes: 99},
+		},
+		CandidateBreakdown: []OpenAICodexTurnStateCandidateBreakdown{
+			{Reason: "active_healthy_skipped", Count: 4},
+			{Reason: "active_healthy_skipped", Count: 2},
+			{Reason: "capability_mismatch", Count: 3},
+			{Reason: "group_mismatch", Count: 2},
+			{Reason: "privacy_not_set", Count: 1},
+			{Reason: "channel_upstream_restricted", Count: 1},
+			{Reason: "same_account_retry_mismatch", Count: 1},
+			{Reason: "upstream raw error text", Count: 7},
+		},
+	})
+
+	require.Len(t, projected.ProxyPool, 1)
+	require.Equal(t, "http", projected.ProxyPool[0].Protocol)
+	require.Equal(t, "proxy.example.com", projected.ProxyPool[0].Host)
+	require.Len(t, projected.SuccessfulIPRegions, 1)
+	require.Equal(t, uint64(4), projected.SuccessfulIPRegions[0].Successes)
+	require.Len(t, projected.SuccessfulIPs, 1)
+	require.Equal(t, "198.51.100.8", projected.SuccessfulIPs[0].IP)
+	require.Equal(t, lastSuccess.UTC(), *projected.SuccessfulIPs[0].LastSuccessAt)
+	require.Len(t, projected.CandidateBreakdown, 7)
+	counts := make(map[string]uint64, len(projected.CandidateBreakdown))
+	for _, entry := range projected.CandidateBreakdown {
+		counts[entry.Reason] = entry.Count
+	}
+	require.Equal(t, uint64(7), counts["other"])
+	require.Equal(t, uint64(6), counts["active_healthy_skipped"])
+	require.Equal(t, uint64(3), counts["capability_mismatch"])
+	require.Equal(t, uint64(2), counts["group_mismatch"])
+	require.Equal(t, uint64(1), counts["privacy_not_set"])
+	require.Equal(t, uint64(1), counts["channel_upstream_restricted"])
+	require.Equal(t, uint64(1), counts["same_account_retry_mismatch"])
+
+	encoded, err := json.Marshal(projected)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "password")
+	require.NotContains(t, string(encoded), "raw error")
+	require.NotContains(t, string(encoded), "not-an-ip")
+	require.True(t, strings.Contains(string(encoded), "198.51.100.8"))
 }
 
 func TestReliabilityTurnStateCollectorStatusUnavailableWithoutProvider(t *testing.T) {

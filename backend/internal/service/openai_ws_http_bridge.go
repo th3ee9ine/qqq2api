@@ -497,7 +497,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if account.Platform == PlatformGrok {
 			upstreamReq, buildErr = buildGrokResponsesRequest(upstreamCtx, c, account, requestBody, token, grokCacheIdentity, s.cfg, s.settingService)
 		} else {
-			upstreamReq, buildErr = s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, requestBody, token, originalModel)
+			// The ingress payload has already been rewritten to the final upstream
+			// model before this bridge is entered. The Turn-State provenance guard
+			// must compare against that model, not the client's public alias.
+			modelForGuard := strings.TrimSpace(gjson.GetBytes(requestBody, "model").String())
+			if modelForGuard == "" {
+				modelForGuard = originalModel
+			}
+			upstreamReq, buildErr = s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, requestBody, token, modelForGuard)
 		}
 		if buildErr != nil {
 			return nil, buildErr
@@ -652,8 +659,36 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			mappedModelBytes = []byte(mappedModel)
 		}
 	}
+	// A bridge response can reveal a model conflict before its terminal event
+	// (for example, response.created declares one model and response.completed
+	// declares another). Retire the bound Turn-State at the first contradiction
+	// and keep the marker for the rest of this turn so a later terminal event
+	// cannot publish the same invalid lineage again.
+	turnStateResponseMismatchHandled := false
+	observeTurnStateResponseMismatch := func() {
+		if turnStateResponseMismatchHandled || openAIWSTurnStateModelMismatchMarked(c) {
+			return
+		}
+		if !codexTurnStateResponseModelMismatch(mappedModel, responseModelObserver.Model(), responseModelObserver.Conflict()) {
+			return
+		}
+		turnStateResponseMismatchHandled = true
+		s.observeCodexTurnStateResponseDetails(
+			c,
+			account,
+			mappedModel,
+			resp.Header,
+			responseModelObserver.Model(),
+			responseModelObserver.Conflict(),
+		)
+	}
 
 	resultWithUsage := func() *OpenAIForwardResult {
+		// Failed/incomplete bridge turns return before the normal successful
+		// terminal observer. Sanitize the copied response headers here as well so
+		// a malformed or expired state cannot be carried into the next bridge
+		// turn through ResponseHeaders.
+		s.sanitizeOpenAICodexTurnStateResponseHeader(account, resp.Header)
 		imageCount := imageCounter.Count()
 		result := &OpenAIForwardResult{
 			RequestID:                     responseID,
@@ -762,6 +797,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 		responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
+		observeTurnStateResponseMismatch()
 		if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
 		}
@@ -938,6 +974,22 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 				upstreamTerminalEvent = s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, resp.Header, upstreamMessage)
 			}
 			terminalEventCount++
+			// Only a client-visible successful terminal can confirm a response
+			// Turn-State. Failed/cancelled/incomplete turns must not create or
+			// refresh a reusable candidate. Model mismatches were already retired
+			// above and are deliberately excluded from this normal observation.
+			if !clientDisconnected &&
+				(eventType == "response.completed" || eventType == "response.done") &&
+				!openAIWSTurnStateModelMismatchMarked(c) {
+				s.observeCodexTurnStateResponseDetails(
+					c,
+					account,
+					mappedModel,
+					resp.Header,
+					responseModelObserver.Model(),
+					responseModelObserver.Conflict(),
+				)
+			}
 			firstTokenMsValue := -1
 			if firstTokenMs != nil {
 				firstTokenMsValue = *firstTokenMs

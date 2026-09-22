@@ -123,6 +123,20 @@ func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredSOCKSProxy(t *testing.T) {
 	require.Equal(t, int64(1), upstreamCalls.Load())
 }
 
+func TestRedactedProxyURLForLogNeverEmitsCredentials(t *testing.T) {
+	for _, raw := range []string{
+		"https://user:secret-password@proxy.example:8443",
+		"socks5://another-user:another-secret@[::1]:1080",
+	} {
+		redacted := redactedProxyURLForLog(raw)
+		require.NotContains(t, redacted, "secret-password")
+		require.NotContains(t, redacted, "another-secret")
+		require.NotContains(t, redacted, "user")
+		require.NotContains(t, redacted, "another-user")
+	}
+	require.Equal(t, "configured", redactedProxyURLForLog("https://user:secret@"))
+}
+
 func TestTLSFingerprintHTTPSProxyFallsBackWithoutBypassingProxy(t *testing.T) {
 	proxyURL, err := url.Parse("https://user:pass@proxy.example:8443")
 	require.NoError(t, err)

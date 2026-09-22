@@ -367,7 +367,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		SetOpsUpstreamModel(c, actualModel)
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token, reqModel)
+		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token, actualModel)
 		releaseUpstreamCtx()
 		if buildErr != nil {
 			return nil, buildErr
@@ -630,7 +630,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站（openai_codex_turn_state.go）。
-	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
+	modelForGuard := ""
+	if len(clientModels) > 0 {
+		modelForGuard = clientModels[0]
+	}
+	s.guardOpenAICodexTurnStateEcho(c, account, req.Header, modelForGuard)
 
 	// 覆盖入站鉴权残留，并注入上游认证
 	req.Header.Del("authorization")
@@ -728,7 +732,14 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	if account.UsesOpenAICodexProtocol() {
+		// Compact passthrough may rewrite the body model for this account. The
+		// actual model sent to the upstream is the explicit clientModels value;
+		// bind Turn-State to it so a public alias cannot cross-contaminate a
+		// different mapped model's cache entry.
 		stateModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+		if len(clientModels) > 0 && strings.TrimSpace(clientModels[0]) != "" {
+			stateModel = strings.TrimSpace(clientModels[0])
+		}
 		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, true); ok && req.Header.Get(openAICodexTurnStateHeader) == "" {
 			req.Header.Set(openAICodexTurnStateHeader, snapshot.Token.Value)
 		}
@@ -1845,6 +1856,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	var stagedTurnState http.Header
+	s.sanitizeOpenAICodexTurnStateResponseHeader(account, resp.Header)
 	stageOpenAICodexTurnState(&stagedTurnState, resp.Header)
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	deleteOpenAIPassthroughHeader(c.Writer.Header(), openAICodexTurnStateHeader)
@@ -1895,12 +1907,12 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			return
 		}
 		c.Writer.Header().Set(openAICodexTurnStateHeader, stagedTurnState.Get(openAICodexTurnStateHeader))
-		s.noteStagedOpenAICodexTurnStateCommitted(c, account, stagedTurnState)
+		s.noteStagedOpenAICodexTurnStateCommitted(c, account, stagedTurnState, turnStateModel)
 		turnStateCommitted = true
 	}
 	turnStateObserved := false
 	observeCompletedTurnState := func() {
-		if turnStateObserved || !sawTurnStateTerminal || sawFailedEvent || clientDisconnected {
+		if turnStateObserved || !sawTurnStateTerminal || sawFailedEvent || clientDisconnected || openAIWSTurnStateModelMismatchMarked(c) {
 			return
 		}
 		s.observeCodexTurnStateResponse(c, account, turnStateModel, resp.Header)
@@ -2025,6 +2037,18 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			trimmedData := strings.TrimSpace(data)
 			rawEventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
 			observer.ObserveOpenAI(dataBytes, rawEventType)
+			if codexTurnStateResponseModelMismatch(turnStateModel, observer.Model(), observer.Conflict()) &&
+				!openAIWSTurnStateModelMismatchMarked(c) {
+				// Passthrough can return immediately on response.failed or a read
+				// error. Retire a contradictory lineage before those exits and drop
+				// any private/staged response header that has not reached the client.
+				s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
+				deleteOpenAIPassthroughHeader(stagedTurnState, openAICodexTurnStateHeader)
+				deleteOpenAIPassthroughHeader(resp.Header, openAICodexTurnStateHeader)
+				if c != nil && c.Writer != nil && !c.Writer.Written() {
+					deleteOpenAIPassthroughHeader(c.Writer.Header(), openAICodexTurnStateHeader)
+				}
+			}
 			if needModelReplace && strings.Contains(data, mappedModel) {
 				line = s.replaceModelInSSELine(line, mappedModel, originalModel)
 				if replacedData, replaced := extractOpenAISSEDataLine(line); replaced {
@@ -2327,6 +2351,15 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	} else {
 		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
 	}
+	turnStateModel := firstNonEmpty(mappedModel, originalModel)
+	if codexTurnStateResponseModelMismatch(turnStateModel, observer.Model(), observer.Conflict()) &&
+		!openAIWSTurnStateModelMismatchMarked(c) {
+		// The passthrough JSON/SSE bridge may take an error return before the
+		// normal post-write observer. Remove the invalid upstream header before
+		// response-header staging can expose it downstream.
+		s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
+		deleteOpenAIPassthroughHeader(resp.Header, openAICodexTurnStateHeader)
+	}
 
 	// Detect SSE responses from upstream and convert to JSON.
 	// Some upstreams (e.g. other sub2api instances) may return SSE even when
@@ -2372,9 +2405,8 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if err := s.bindHTTPResponseAccountBeforeWrite(ctx, c, account, responseID); err != nil {
 		return nil, err
 	}
-	turnStateModel := firstNonEmpty(mappedModel, originalModel)
 	responseCompleted := openAIJSONResponseCompleted(resp.StatusCode, body)
-	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header)
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header, turnStateModel)
 	downstreamWriteSucceeded := writeOpenAINonStreamingResponse(c, resp.StatusCode, contentType, body)
 	s.commitOpenAICodexTurnStateAfterWrite(
 		c, account, turnStateModel, resp.Header, stagedTurnState, responseCompleted, downstreamWriteSucceeded, turnStateHeaderDeliverable,
@@ -2449,7 +2481,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		return nil, err
 	}
 	writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header)
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header, firstNonEmpty(mappedModel, originalModel))
 	responseCompleted := ok && (terminalType == "response.completed" || terminalType == "response.done")
 	logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, usage, terminalType, false)
 

@@ -107,6 +107,13 @@ type OpenAIAccountRuntimeStateInvalidator interface {
 	InvalidateOpenAIAccountRuntimeState(accountID int64)
 }
 
+// OpenAIAccountRuntimeStateGlobalInvalidator is the fail-closed fallback used
+// when a parent account changed but its credential shadows cannot be listed.
+// Production gateways implement it; narrow blockers may omit it.
+type OpenAIAccountRuntimeStateGlobalInvalidator interface {
+	InvalidateAllOpenAIAccountRuntimeState()
+}
+
 func invalidateOpenAIAccountRuntimeState(blocker AccountRuntimeBlocker, accountID int64) {
 	if blocker == nil || accountID <= 0 {
 		return
@@ -142,6 +149,9 @@ func invalidateOpenAIAccountRuntimeStateWithShadows(ctx context.Context, blocker
 	shadows, err := repo.ListShadowsByParent(lookupCtx, account.ID)
 	if err != nil {
 		slog.Warn("openai.runtime_state_shadow_lookup_failed", "account_id", account.ID, "error", err)
+		if globalInvalidator, ok := blocker.(OpenAIAccountRuntimeStateGlobalInvalidator); ok && globalInvalidator != nil {
+			globalInvalidator.InvalidateAllOpenAIAccountRuntimeState()
+		}
 		return
 	}
 	for _, shadow := range shadows {
@@ -162,6 +172,7 @@ func (s *OpenAIGatewayService) InvalidateOpenAIAccountRuntimeState(accountID int
 	if s.codexTurnStateCollector != nil {
 		s.codexTurnStateCollector.DeleteAccount(accountID)
 	}
+	s.invalidateOpenAICompatSessionResponsesForAccount(accountID)
 	s.openaiCodexTurnStateOrigins.Range(func(key, value any) bool {
 		origin, ok := value.(openAICodexTurnStateOrigin)
 		if !ok || origin.accountID == accountID {
@@ -176,6 +187,31 @@ func (s *OpenAIGatewayService) InvalidateOpenAIAccountRuntimeState(accountID int
 	}
 	if pool := s.getOpenAIWSConnPool(); pool != nil {
 		pool.ClearAccount(accountID)
+	}
+}
+
+// InvalidateAllOpenAIAccountRuntimeState synchronously retires every in-memory
+// identity-bearing OpenAI state. It is intentionally broader than the ordinary
+// account-scoped path: a failed parent-to-shadow lookup means the affected
+// account IDs are unknowable, so retaining any shadow binding would risk mixing
+// a new parent credential with state minted by its previous identity.
+func (s *OpenAIGatewayService) InvalidateAllOpenAIAccountRuntimeState() {
+	if s == nil {
+		return
+	}
+	if s.codexTurnStateCollector != nil {
+		s.codexTurnStateCollector.DeleteAll()
+	}
+	s.openaiCompatSessionResponses.Clear()
+	s.openaiCodexTurnStateOrigins.Clear()
+	s.openaiCodexTurnStateInvalidations.Clear()
+	if stateStore := s.getOpenAIWSStateStore(); stateStore != nil {
+		if cleaner, ok := stateStore.(interface{ DeleteAllSessionTurnStates() }); ok {
+			cleaner.DeleteAllSessionTurnStates()
+		}
+	}
+	if pool := s.getOpenAIWSConnPool(); pool != nil {
+		pool.ClearAll()
 	}
 }
 

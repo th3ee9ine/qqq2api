@@ -13,6 +13,14 @@ import (
 type CodexTurnStateRuntimeSettings struct {
 	ProbeEnabled     bool `json:"probe_enabled"`
 	InjectionEnabled bool `json:"injection_enabled"`
+	// ProxyPoolURLs is the dedicated collector egress pool. A nil slice means
+	// the caller did not request a change; an explicit empty slice clears it.
+	//
+	// The pool can contain proxy credentials. Keep the value available to the
+	// internal settings/update path, but never serialize it through an
+	// administrator response. The HTTP handler exposes only credential-free
+	// metadata (configured/count) instead.
+	ProxyPoolURLs []string `json:"-"`
 }
 
 func defaultCodexTurnStateRuntimeSettings() CodexTurnStateRuntimeSettings {
@@ -30,7 +38,7 @@ func parseCodexTurnStateRuntimeEnabled(raw string) bool {
 	return value
 }
 
-func codexTurnStateRuntimeSettingsFromValues(values map[string]string) CodexTurnStateRuntimeSettings {
+func codexTurnStateRuntimeSettingsFromValues(values map[string]string) (CodexTurnStateRuntimeSettings, error) {
 	settings := defaultCodexTurnStateRuntimeSettings()
 	if raw, ok := values[SettingKeyCodexTurnStateProbeEnabled]; ok {
 		settings.ProbeEnabled = parseCodexTurnStateRuntimeEnabled(raw)
@@ -38,13 +46,23 @@ func codexTurnStateRuntimeSettingsFromValues(values map[string]string) CodexTurn
 	if raw, ok := values[SettingKeyCodexTurnStateCacheInjectionEnabled]; ok {
 		settings.InjectionEnabled = parseCodexTurnStateRuntimeEnabled(raw)
 	}
-	return settings
+	if raw, ok := values[SettingKeyCodexTurnStateProxyPool]; ok {
+		pool, err := parseOpenAICodexTurnStateProxyPool(raw)
+		if err != nil {
+			return settings, fmt.Errorf("parse persisted Codex turn-state proxy pool: %w", err)
+		}
+		settings.ProxyPoolURLs = pool
+	}
+	return settings, nil
 }
 
 // GetCodexTurnStateRuntimeSettings reads the persisted administrator settings.
-// Missing or malformed values independently fall back to true. This is an
-// administrative cold path; request forwarding reads the gateway atomic
-// snapshot populated at startup, on refresh, and after successful updates.
+// Missing boolean values fall back to true. A malformed persisted proxy pool is
+// an explicit configuration error: return it to the administrator instead of
+// silently publishing an empty pool that would route probes through an account
+// proxy. This is an administrative cold path; request forwarding reads the
+// gateway atomic snapshot populated at startup, on refresh, and after
+// successful updates.
 func (s *OpsService) GetCodexTurnStateRuntimeSettings(ctx context.Context) (*CodexTurnStateRuntimeSettings, error) {
 	defaults := defaultCodexTurnStateRuntimeSettings()
 	if s == nil || s.settingRepo == nil {
@@ -56,11 +74,15 @@ func (s *OpsService) GetCodexTurnStateRuntimeSettings(ctx context.Context) (*Cod
 	values, err := s.settingRepo.GetMultiple(ctx, []string{
 		SettingKeyCodexTurnStateProbeEnabled,
 		SettingKeyCodexTurnStateCacheInjectionEnabled,
+		SettingKeyCodexTurnStateProxyPool,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get Codex turn-state runtime settings: %w", err)
 	}
-	settings := codexTurnStateRuntimeSettingsFromValues(values)
+	settings, err := codexTurnStateRuntimeSettingsFromValues(values)
+	if err != nil {
+		return nil, err
+	}
 	return &settings, nil
 }
 
@@ -76,14 +98,42 @@ func (s *OpsService) UpdateCodexTurnStateRuntimeSettings(ctx context.Context, se
 
 	s.runtimeSettingsMu.Lock()
 	defer s.runtimeSettingsMu.Unlock()
+	pool := settings.ProxyPoolURLs
+	if pool == nil {
+		// Older callers only know about the two switches. Preserve the existing
+		// pool when they omit the new field.
+		current, readErr := s.settingRepo.GetMultiple(ctx, []string{SettingKeyCodexTurnStateProxyPool})
+		if readErr != nil {
+			return nil, fmt.Errorf("read existing Codex turn-state proxy pool: %w", readErr)
+		}
+		var parseErr error
+		pool, parseErr = parseOpenAICodexTurnStateProxyPool(current[SettingKeyCodexTurnStateProxyPool])
+		if parseErr != nil {
+			return nil, fmt.Errorf("read existing Codex turn-state proxy pool: %w", parseErr)
+		}
+	}
+	var normalizedPool []string
+	if pool != nil {
+		var err error
+		normalizedPool, err = NormalizeOpenAICodexTurnStateProxyPool(pool)
+		if err != nil {
+			return nil, fmt.Errorf("update Codex turn-state proxy pool: %w", err)
+		}
+	}
+	poolJSON, err := marshalOpenAICodexTurnStateProxyPool(normalizedPool)
+	if err != nil {
+		return nil, fmt.Errorf("encode Codex turn-state proxy pool: %w", err)
+	}
 	if err := s.settingRepo.SetMultiple(ctx, map[string]string{
 		SettingKeyCodexTurnStateProbeEnabled:          strconv.FormatBool(settings.ProbeEnabled),
 		SettingKeyCodexTurnStateCacheInjectionEnabled: strconv.FormatBool(settings.InjectionEnabled),
+		SettingKeyCodexTurnStateProxyPool:             poolJSON,
 	}); err != nil {
 		return nil, fmt.Errorf("update Codex turn-state runtime settings: %w", err)
 	}
-	s.applyCodexTurnStateRuntimeSettings(settings)
 	updated := settings
+	updated.ProxyPoolURLs = normalizedPool
+	s.applyCodexTurnStateRuntimeSettings(updated)
 	return &updated, nil
 }
 
@@ -91,5 +141,5 @@ func (s *OpsService) applyCodexTurnStateRuntimeSettings(settings CodexTurnStateR
 	if s == nil || s.openAIGatewayService == nil {
 		return
 	}
-	s.openAIGatewayService.SetCodexTurnStateRuntimeSettings(settings.ProbeEnabled, settings.InjectionEnabled)
+	s.openAIGatewayService.SetCodexTurnStateRuntimeSettingsWithProxyPool(settings.ProbeEnabled, settings.InjectionEnabled, settings.ProxyPoolURLs)
 }

@@ -108,7 +108,7 @@ func (o *upstreamResponseModelObserver) ObserveOpenAI(payload []byte, eventType 
 	if eventType == "" {
 		eventType = strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 	}
-	model := firstValidTrimmedGJSONString(payload, "response.model", "model")
+	model := firstValidTrimmedGJSONString(payload, "response.model", "model", "error.model", "response.error.model")
 	terminal := isUpstreamResponseModelTerminalEvent(eventType)
 	o.Observe(model, terminal)
 	// Every payload that declares a service tier also declares a model, so

@@ -38,6 +38,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if s == nil || account == nil {
 		return nil, wrapOpenAIWSFallback("invalid_state", errors.New("service or account is nil"))
 	}
+	clearOpenAIWSTurnStateModelMismatch(c)
 	bindOpenAICodexTurnStateExecutionScopeValue(c, executionScope)
 	responseModelObserver := &upstreamResponseModelObserver{}
 
@@ -68,9 +69,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	turnState := ""
 	turnMetadata := ""
 	if c != nil && c.Request != nil {
+		clearOpenAICodexTurnStateTrustedInjection(c)
 		// A client can echo a state minted by an earlier HTTP/WS attempt. Apply
 		// the same account-origin guard used by HTTP before building WS headers.
-		s.guardOpenAICodexTurnStateEcho(c, account, c.Request.Header)
+		s.guardOpenAICodexTurnStateEcho(c, account, c.Request.Header, mappedModel)
 		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
@@ -138,8 +140,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		sessionHash = turnStateScope
 	}
 	if turnState == "" && stateStore != nil && s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, turnStateModel) {
-		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, account.ID, turnStateScope, turnStateModel); ok {
-			if s.openAIWSSessionTurnStateUsable(account, savedTurnState) {
+		if savedTurnState, ok := s.getOpenAIWSSessionTurnState(c, stateStore, groupID, account, turnStateScope, turnStateModel); ok {
+			if s.openAIWSSessionTurnStateUsable(account, savedTurnState) &&
+				!s.openAIWSSessionTurnStateNeedsRefresh(account, savedTurnState) &&
+				s.markCurrentOpenAICodexTurnStateTrustedInjection(c, account, turnStateModel, savedTurnState) {
 				turnState = savedTurnState
 			}
 		}
@@ -187,6 +191,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 	if account.UsesOpenAICodexProtocol() {
 		turnState = s.resolveOpenAIWSCodexTurnState(ctx, c, account, mappedModel, turnState, true, wsHeaders)
+		clearOpenAICodexTurnStateTrustedInjection(c)
 		if turnState == "" {
 			wsHeaders.Del(openAIWSTurnStateHeader)
 		} else {
@@ -355,11 +360,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	)
 	commitHandshakeTurnState := func() {
 		if handshakeTurnState == "" || stateStore == nil ||
+			openAIWSTurnStateModelMismatchMarked(c) ||
 			!s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, turnStateModel) ||
-			!s.canCommitOpenAIWSSessionTurnState(c, account, handshakeTurnState) {
+			!s.canCommitOpenAIWSSessionTurnState(ctx, c, account, turnStateModel, handshakeTurnState) {
 			return
 		}
-		stateStore.BindSessionTurnState(groupID, account.ID, turnStateScope, handshakeTurnState, s.openAIWSSessionStickyTTL(), turnStateModel)
+		s.bindOpenAIWSSessionTurnStateIfRefreshNeeded(c, stateStore, groupID, account, turnStateScope, turnStateModel, handshakeTurnState)
 	}
 
 	if err := s.performOpenAIWSGeneratePrewarm(
@@ -436,17 +442,18 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	turnStateProvenanceCommitted := false
 	stageTurnStateHeader := func() {
 		if turnStateHeaderStaged || handshakeTurnState == "" || c == nil ||
-			!s.canCommitOpenAIWSSessionTurnState(c, account, handshakeTurnState) {
+			openAIWSTurnStateModelMismatchMarked(c) ||
+			!s.canCommitOpenAIWSSessionTurnState(ctx, c, account, turnStateModel, handshakeTurnState) {
 			return
 		}
 		c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
 		turnStateHeaderStaged = true
 	}
 	commitTurnStateProvenance := func() {
-		if turnStateProvenanceCommitted || handshakeTurnState == "" {
+		if turnStateProvenanceCommitted || handshakeTurnState == "" || openAIWSTurnStateModelMismatchMarked(c) {
 			return
 		}
-		s.noteOpenAICodexTurnStateProvenance(c, account, handshakeTurnState)
+		s.noteOpenAICodexTurnStateProvenance(c, account, handshakeTurnState, mappedModel)
 		turnStateProvenanceCommitted = true
 	}
 	needModelReplace := originalModel != mappedModel
@@ -697,6 +704,12 @@ readLoop:
 			continue
 		}
 		responseModelObserver.ObserveOpenAI(message, eventType)
+		if codexTurnStateResponseModelMismatch(mappedModel, responseModelObserver.Model(), responseModelObserver.Conflict()) &&
+			!openAIWSTurnStateModelMismatchMarked(c) {
+			// Retire the state before an error/read failure can return from this
+			// loop.  The terminal observer below remains as a defensive fallback.
+			s.observeCodexTurnStateResponseDetails(c, account, mappedModel, lease.HandshakeHeaders(), responseModelObserver.Model(), responseModelObserver.Conflict())
+		}
 		eventCount++
 		if firstEventType == "" {
 			firstEventType = eventType
@@ -929,15 +942,25 @@ readLoop:
 			commitTurnStateProvenance()
 		}
 		if !clientDisconnected && (lastEventType == "response.completed" || lastEventType == "response.done") {
-			commitHandshakeTurnState()
-			s.observeCodexTurnStateResponse(c, account, mappedModel, lease.HandshakeHeaders())
+			if !openAIWSTurnStateModelMismatchMarked(c) {
+				commitHandshakeTurnState()
+				s.observeCodexTurnStateResponseDetails(c, account, mappedModel, lease.HandshakeHeaders(), responseModelObserver.Model(), responseModelObserver.Conflict())
+			}
+			if consumeOpenAIWSTurnStateModelMismatch(c) {
+				lease.MarkBroken()
+			}
 		}
 	} else {
 		flushStreamWriter(true)
 		markClientRequestCanceled()
 		if !clientDisconnected && (lastEventType == "response.completed" || lastEventType == "response.done") {
-			commitHandshakeTurnState()
-			s.observeCodexTurnStateResponse(c, account, mappedModel, lease.HandshakeHeaders())
+			if !openAIWSTurnStateModelMismatchMarked(c) {
+				commitHandshakeTurnState()
+				s.observeCodexTurnStateResponseDetails(c, account, mappedModel, lease.HandshakeHeaders(), responseModelObserver.Model(), responseModelObserver.Conflict())
+			}
+			if consumeOpenAIWSTurnStateModelMismatch(c) {
+				lease.MarkBroken()
+			}
 		}
 	}
 	firstTokenMsValue := -1

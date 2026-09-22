@@ -36,6 +36,15 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	ctx, identityCapture := withUpstreamIdentityCapture(ctx)
 	defer func() { applyCapturedUpstreamIdentityToOpenAIResult(identityCapture, result, c) }()
 	rememberOpenCodeInboundBody(c, body)
+	// Messages failover retries reuse the same Gin context. Do not let a model
+	// conflict found by an earlier attempt suppress observation/commit decisions
+	// for the next account attempt.
+	clearOpenAIWSTurnStateModelMismatch(c)
+	clearOpenAICompatTurnStateTerminal(c)
+	// Bind the client execution scope before any model/account rewriting. The
+	// compatibility bridge may derive a prompt-cache key later, but Turn-State
+	// isolation must remain tied to the original downstream session identity.
+	BindOpenAICodexTurnStateExecutionScope(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -127,10 +136,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	compatContinuationEnabled := openAICompatContinuationEnabled(account, upstreamModel)
 	previousResponseID := ""
 	if compatContinuationEnabled {
-		previousResponseID = s.getOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
+		previousResponseID = s.getOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, upstreamModel)
 	}
 	compatContinuationDisabled := compatContinuationEnabled &&
-		s.isOpenAICompatSessionContinuationDisabled(ctx, c, account, promptCacheKey)
+		s.isOpenAICompatSessionContinuationDisabled(ctx, c, account, promptCacheKey, upstreamModel)
 	compatTurnState := ""
 	// ChatGPT/Codex credentials rely on session_id + x-codex-turn-state; trimming to a
 	// sliding 12-message window makes the cached prefix stall at system/tools.
@@ -252,7 +261,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), apiKeyID)
 		delete(reqBody, "prompt_cache_key")
 		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
-			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey)
+			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, upstreamModel)
 		}
 		// OAuth codex transform forces stream=true upstream, so always use
 		// the streaming response handler regardless of what the client asked.
@@ -351,7 +360,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Platform == PlatformGrok {
 		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token, grokCacheIdentity, s.cfg, s.settingService)
 	} else {
-		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, isStream, promptCacheKey, false)
+		restoreCompatTurnStateHeader := func() {}
+		if account.UsesOpenAICodexProtocol() && compatTurnState != "" {
+			restoreCompatTurnStateHeader = stageOpenAICompatSessionTurnState(c, compatTurnState)
+		}
+		upstreamReq, err = func() (*http.Request, error) {
+			defer restoreCompatTurnStateHeader()
+			return s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, isStream, promptCacheKey, false, upstreamModel)
+		}()
 	}
 	releaseUpstreamCtx()
 	if err != nil {
@@ -383,10 +399,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.UsesOpenAICodexProtocol() && promptCacheKey != "" && strings.TrimSpace(c.GetHeader("conversation_id")) == "" {
 		upstreamReq.Header.Del("conversation_id")
 	}
-	if compatTurnState != "" && upstreamReq.Header.Get("x-codex-turn-state") == "" {
-		upstreamReq.Header.Set("x-codex-turn-state", compatTurnState)
-	}
-
 	// 7. Send request
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -448,6 +460,23 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if account.UsesOpenAICodexProtocol() && observeOpenAICompatResponseModelPayload(c, upstreamModel, respBody) {
+			// Error payloads can still declare the model that handled the request.
+			// Treat that as authoritative evidence that the cached state is unsafe,
+			// even when this bridge has no prompt-cache key for its session binding.
+			s.observeCodexTurnStateResponseDetails(
+				c,
+				account,
+				upstreamModel,
+				resp.Header,
+				observedUpstreamResponseModel(c),
+				true,
+			)
+			if promptCacheKey != "" {
+				s.invalidateOpenAICompatSessionTurnStateOnModelMismatch(c, account, promptCacheKey)
+			}
+			deleteOpenAIHeaderEqualFold(resp.Header, openAICodexTurnStateHeader)
+		}
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
@@ -457,9 +486,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 		if previousResponseID != "" && (isOpenAICompatPreviousResponseNotFound(resp.StatusCode, upstreamMsg, respBody) || isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody)) {
 			if isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody) {
-				s.disableOpenAICompatSessionContinuation(ctx, c, account, promptCacheKey)
+				s.disableOpenAICompatSessionContinuation(ctx, c, account, promptCacheKey, upstreamModel)
 			} else {
-				s.deleteOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
+				s.deleteOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, upstreamModel)
 			}
 			logger.L().Info("openai messages: previous_response_id unavailable, retrying without continuation",
 				zap.Int64("account_id", account.ID),
@@ -491,12 +520,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		s.updateGrokUsageFromResponse(withGrokTeamRateLimitModel(ctx, upstreamModel), account, resp.Header, resp.StatusCode)
 	}
 
-	if account.UsesOpenAICodexProtocol() && promptCacheKey != "" {
-		if turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state")); turnState != "" {
-			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)
-		}
-	}
-
 	// 9. Handle normal response
 	// Upstream is always streaming; choose response format based on client preference.
 	var handleErr error
@@ -505,6 +528,32 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	} else {
 		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
 		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime)
+	}
+
+	// Bind a Turn-State only after the complete response has been observed. The
+	// response model observer covers both streaming and buffered Messages flows;
+	// a mismatch means the upstream state belongs to a different model and must
+	// be retired before any later request can reuse it.
+	if account.UsesOpenAICodexProtocol() {
+		if openAICompatTurnStateResponseModelMismatch(c, upstreamModel) {
+			if !openAIWSTurnStateModelMismatchMarked(c) {
+				s.observeCodexTurnStateResponse(c, account, upstreamModel, resp.Header)
+			}
+			if promptCacheKey != "" {
+				s.invalidateOpenAICompatSessionTurnStateOnModelMismatch(c, account, promptCacheKey)
+			}
+			deleteOpenAIHeaderEqualFold(resp.Header, openAICodexTurnStateHeader)
+		} else if handleErr == nil && openAICompatTurnStateSuccessfulTerminal(c) {
+			// The custom Messages handlers do not pass through the generic
+			// Responses commit path, so explicitly observe successful responses
+			// here to publish or refresh the collector entry.
+			s.observeCodexTurnStateResponse(c, account, upstreamModel, resp.Header)
+			if promptCacheKey != "" {
+				if turnState := strings.TrimSpace(resp.Header.Get(openAICodexTurnStateHeader)); turnState != "" {
+					s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState, upstreamModel)
+				}
+			}
+		}
 	}
 
 	// cyber_policy：标记已设、error 已按 Anthropic 格式发给客户端。丢弃 result、返回哨兵，
@@ -519,7 +568,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// Propagate ServiceTier and ReasoningEffort to result for billing
 	if handleErr == nil && result != nil {
 		if compatContinuationEnabled && promptCacheKey != "" && result.ResponseID != "" {
-			s.bindOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, result.ResponseID)
+			s.bindOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, result.ResponseID, upstreamModel)
 		}
 		if promptCacheKey != "" && anthropicDigestChain != "" {
 			s.bindOpenAICompatAnthropicDigestPromptCacheKey(account, apiKeyID, anthropicDigestChain, promptCacheKey, anthropicMatchedDigestChain)
@@ -591,6 +640,15 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	requestID := resp.Header.Get("x-request-id")
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, c, "openai messages buffered", requestID)
+	// The buffered reader can return a read error after it has already consumed a
+	// contradictory model event. Retire the state before propagating that error;
+	// otherwise the outer compatibility binding would only clear its session map
+	// and leave the collector entry reusable.
+	if account != nil && account.UsesOpenAICodexProtocol() &&
+		codexTurnStateResponseModelMismatch(upstreamModel, observedUpstreamResponseModel(c), observedUpstreamResponseModelConflict(c)) &&
+		!openAIWSTurnStateModelMismatchMarked(c) {
+		s.observeCodexTurnStateResponse(c, account, upstreamModel, resp.Header)
+	}
 	if err != nil {
 		var readErr *openAICompatBufferedReadError
 		if errors.As(err, &readErr) && readErr != nil {
@@ -609,6 +667,15 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	}
 	observer.Observe(finalResponse.Model, true)
 	observer.ObserveServiceTier(finalResponse.ServiceTier, true)
+	// A completed terminal is the only successful proof that a returned
+	// Turn-State can be reused. Incomplete/failed Responses may still carry a
+	// header, but must never refresh the collector.
+	switch strings.TrimSpace(finalResponse.Status) {
+	case "completed", "done":
+		markOpenAICompatTurnStateTerminal(c, "response.completed")
+	default:
+		markOpenAICompatTurnStateTerminal(c, "response.incomplete")
+	}
 
 	if strings.TrimSpace(finalResponse.Status) == "failed" {
 		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
@@ -768,6 +835,10 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	if resp == nil || resp.Body == nil {
 		return nil, usage, acc, errors.New("upstream response body is nil")
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	scanner, scanBuf := s.newUpstreamSSEScanner(resp.Body)
 
@@ -843,9 +914,11 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 					payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 					var event apicompat.ResponsesStreamEvent
 					if err := json.Unmarshal([]byte(payload), &event); err == nil {
+						observer.ObserveOpenAI([]byte(payload), event.Type)
 						s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 						acc.ProcessEvent(&event)
 						if response := openAICompatTerminalResponse(&event, []byte(payload)); isOpenAICompatResponsesTerminalEvent(event.Type) && response != nil {
+							markOpenAICompatTurnStateTerminal(c, event.Type)
 							if event.Usage != nil {
 								usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
 								if response.Usage == nil {
@@ -890,11 +963,13 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				)
 				continue
 			}
+			observer.ObserveOpenAI([]byte(payload), event.Type)
 			s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 
 			acc.ProcessEvent(&event)
 
 			if response := openAICompatTerminalResponse(&event, []byte(payload)); isOpenAICompatResponsesTerminalEvent(event.Type) && response != nil {
+				markOpenAICompatTurnStateTerminal(c, event.Type)
 				if event.Usage != nil {
 					usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
 					if response.Usage == nil {
@@ -1015,12 +1090,21 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			return false
 		}
 		observer.ObserveOpenAI([]byte(payload), event.Type)
+		if account != nil && account.UsesOpenAICodexProtocol() &&
+			codexTurnStateResponseModelMismatch(upstreamModel, observer.Model(), observer.Conflict()) &&
+			!openAIWSTurnStateModelMismatchMarked(c) {
+			// Invalidate as soon as a streamed Messages response proves that the
+			// cached state belongs to another model. The event may be followed by a
+			// failure terminal or a body read error.
+			s.observeCodexTurnStateResponseDetails(c, account, upstreamModel, resp.Header, observer.Model(), observer.Conflict())
+		}
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 
 		eventType := strings.TrimSpace(event.Type)
 		isBareErrorEvent := eventType == "error"
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(eventType) || isBareErrorEvent
 		if isTerminalEvent {
+			markOpenAICompatTurnStateTerminal(c, eventType)
 			terminalEventType = eventType
 			if event.Response != nil {
 				if id := strings.TrimSpace(event.Response.ID); id != "" {

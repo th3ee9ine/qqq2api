@@ -341,6 +341,8 @@ func openAIImageUploadToDataURL(upload OpenAIImagesUpload) (string, error) {
 // matching image_generation tool are always both present and never client-controlled.
 type openAIImagesSelfBuiltRequestContextKey struct{}
 
+type openAIImagesCodexTurnStateProbeDisabledContextKey struct{}
+
 func withOpenAIImagesSelfBuiltRequest(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -354,6 +356,21 @@ func isOpenAIImagesSelfBuiltRequest(ctx context.Context) bool {
 	}
 	selfBuilt, _ := ctx.Value(openAIImagesSelfBuiltRequestContextKey{}).(bool)
 	return selfBuilt
+}
+
+func withOpenAIImagesCodexTurnStateProbeDisabled(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, openAIImagesCodexTurnStateProbeDisabledContextKey{}, true)
+}
+
+func isOpenAIImagesCodexTurnStateProbeDisabled(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	disabled, _ := ctx.Value(openAIImagesCodexTurnStateProbeDisabledContextKey{}).(bool)
+	return disabled
 }
 
 func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel string) ([]byte, error) {
@@ -1333,6 +1350,8 @@ func boundedJSONNonNegativeInt(value gjson.Result) (int, bool) {
 func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
+	turnStateModel string,
 	responseFormat string,
 	fallbackModel string,
 ) (OpenAIUsage, int, []string, error) {
@@ -1344,10 +1363,20 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 		return OpenAIUsage{}, 0, nil, err
 	}
 
+	// The bridge's top-level Responses driver model belongs to Turn-State, not
+	// image billing. Keep it out of the request-scoped response-model observer,
+	// where it would be compared with tools[0].model and logged as a false image
+	// model mismatch.
+	observer := &upstreamResponseModelObserver{}
 	var usage OpenAIUsage
 	forEachOpenAISSEDataPayload(string(body), func(data []byte) {
+		observer.ObserveOpenAI(data, strings.TrimSpace(gjson.GetBytes(data, "type").String()))
 		s.parseOpenAIImagesSSEUsageBytes(data, &usage)
 	})
+	modelMismatch := codexTurnStateResponseModelMismatch(turnStateModel, observer.Model(), observer.Conflict())
+	if modelMismatch && !openAIWSTurnStateModelMismatchMarked(c) {
+		s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
+	}
 	results, createdAt, usageRaw, firstMeta, _, err := collectOpenAIImagesFromResponsesBody(body)
 	if err != nil {
 		return OpenAIUsage{}, 0, nil, err
@@ -1388,7 +1417,11 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 	if err != nil {
 		return OpenAIUsage{}, 0, nil, err
 	}
+	if !modelMismatch {
+		s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
+	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	s.relayOpenAICodexTurnState(c, account, resp.Header, turnStateModel)
 	c.Data(resp.StatusCode, "application/json; charset=utf-8", responseBody)
 	return usage, len(results), openAIResponsesImageResultSizes(results), nil
 }
@@ -1396,12 +1429,18 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
+	turnStateModel string,
 	startTime time.Time,
 	responseFormat string,
 	streamPrefix string,
 	fallbackModel string,
 ) (OpenAIUsage, int, []string, *int, error) {
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	// Turn-State is admitted explicitly after the response model is observed.
+	// This prevents an operator-added response-header allowlist entry from
+	// relaying a malformed or model-mismatched value before the first image.
+	deleteOpenAIHeaderEqualFold(c.Writer.Header(), openAICodexTurnStateHeader)
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -1443,6 +1482,32 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 	var processDataErr error
 	processDataDone := false
 	writerSizeBeforeResponse := OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
+	// Use a bridge-local observer for the same reason as the aggregated path:
+	// the driver model validates Turn-State but is not the billed image model.
+	observer := &upstreamResponseModelObserver{}
+	turnStateObserved := false
+	turnStateRelayed := false
+	observeModelMismatch := func() bool {
+		mismatch := codexTurnStateResponseModelMismatch(turnStateModel, observer.Model(), observer.Conflict())
+		if mismatch && !openAIWSTurnStateModelMismatchMarked(c) {
+			s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
+		}
+		return mismatch
+	}
+	observeSuccessfulTurnState := func() {
+		if turnStateObserved || observeModelMismatch() {
+			return
+		}
+		turnStateObserved = true
+		s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
+	}
+	relayTurnState := func() {
+		if turnStateRelayed || openAIWSTurnStateModelMismatchMarked(c) {
+			return
+		}
+		turnStateRelayed = true
+		s.relayOpenAICodexTurnState(c, account, resp.Header, turnStateModel)
+	}
 
 	processData := func(dataBytes []byte) {
 		if processDataDone || processDataErr != nil {
@@ -1456,6 +1521,9 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 		if !gjson.ValidBytes(dataBytes) {
 			return
 		}
+		eventType := strings.TrimSpace(gjson.GetBytes(dataBytes, "type").String())
+		observer.ObserveOpenAI(dataBytes, eventType)
+		observeModelMismatch()
 		if meta, eventCreatedAt, ok := extractOpenAIResponsesImageMetaFromLifecycleEvent(dataBytes); ok {
 			mergeOpenAIResponsesImageMeta(&streamMeta, meta)
 			if eventCreatedAt > 0 {
@@ -1485,6 +1553,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 				createdAt,
 				partialMeta,
 			)
+			relayTurnState()
 			s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, eventName, payload)
 		case "response.output_item.done":
 			img, itemID, ok, extractErr := extractOpenAIImageFromResponsesOutputItemDone(dataBytes)
@@ -1550,6 +1619,8 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 				processDataDone = true
 				return
 			}
+			observeSuccessfulTurnState()
+			relayTurnState()
 			eventName := streamPrefix + ".completed"
 			for _, img := range finalResults {
 				key := openAIResponsesImageResultKey("", img)
@@ -1834,10 +1905,16 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 	upstreamCtx = withOpenAIImagesSelfBuiltRequest(upstreamCtx)
-	// Turn-state model scope may target the model supplied by the client, the
-	// channel-mapped request model, or the final upstream image model.  The
-	// Responses bridge puts its own protocol model at the top level and carries
-	// the image model in tools[0], so pass all known candidates explicitly.
+	if direct {
+		// The direct images endpoint may return a model-scoped state, but a
+		// synthetic /responses probe with an image model is not a valid way to
+		// obtain one. Existing healthy state can still be reused.
+		upstreamCtx = withOpenAIImagesCodexTurnStateProbeDisabled(upstreamCtx)
+	}
+	// Turn-State is minted by the request's top-level execution model. For the
+	// Responses image bridge that differs from tools[0].model, which only selects
+	// the image tool. Direct image requests keep the image model at the top level.
+	turnStateModel := strings.TrimSpace(gjson.GetBytes(responsesBody, "model").String())
 	upstreamReq, err := s.buildUpstreamRequest(
 		upstreamCtx,
 		c,
@@ -1847,9 +1924,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		true,
 		parsed.StickySessionSeed(),
 		false,
-		parsed.Model,
-		requestModel,
-		upstreamModel,
+		turnStateModel,
 	)
 	if err != nil {
 		return nil, err
@@ -1936,6 +2011,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return s.handleOpenAIImagesErrorResponse(upstreamCtx, resp, c, account, upstreamModel)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	s.sanitizeOpenAICodexTurnStateResponseHeader(account, resp.Header)
 
 	var (
 		usage            OpenAIUsage
@@ -1950,7 +2026,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		if direct {
 			usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesStreamingResponse(resp, c, startTime, parsed)
 		} else {
-			usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), upstreamModel)
+			usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, account, turnStateModel, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), upstreamModel)
 		}
 		if err != nil {
 			if imageCount > 0 {
@@ -1988,7 +2064,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		if direct {
 			usage, imageCount, imageOutputSizes, err = s.handleCodexDirectImagesNonStreamingResponse(resp, c, parsed)
 		} else {
-			usage, imageCount, imageOutputSizes, err = s.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, parsed.ResponseFormat, requestModel)
+			usage, imageCount, imageOutputSizes, err = s.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, account, turnStateModel, parsed.ResponseFormat, requestModel)
 		}
 		if err != nil {
 			return nil, s.handleOpenAIImagesOAuthResponseError(
@@ -2001,6 +2077,12 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 				writerSizeBeforeResponse,
 				err,
 			)
+		}
+	}
+	if direct {
+		observer := upstreamResponseModelObserverFromContext(c)
+		if observer != nil {
+			s.observeCodexTurnStateResponseDetails(c, account, turnStateModel, resp.Header, observer.Model(), observer.Conflict())
 		}
 	}
 	if imageCount <= 0 {

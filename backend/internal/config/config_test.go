@@ -2655,7 +2655,7 @@ func TestLoadDefaultGatewayCodexTurnStateConfig(t *testing.T) {
 
 	turnState := cfg.Gateway.CodexTurnState
 	require.Equal(t, 15, turnState.ProbeTimeoutSeconds)
-	require.Equal(t, 1200, turnState.RefreshBeforeSeconds)
+	require.Equal(t, 300, turnState.RefreshBeforeSeconds)
 	require.Equal(t, 180, turnState.CooldownSeconds)
 	require.Equal(t, 3600, turnState.TTLSeconds)
 	require.Zero(t, turnState.ExpectedBlocks)

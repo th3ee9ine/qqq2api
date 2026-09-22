@@ -74,6 +74,12 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
 	rememberOpenCodeInboundBody(c, body)
+	// Resolve the client execution scope before the Chat Completions payload is
+	// converted or the account/model-specific Codex transform rewrites it. The
+	// downstream Responses request reuses the same Turn-State collector, so this
+	// must match the native /v1/responses and Messages paths for session/model
+	// isolation and cross-IP reuse.
+	BindOpenAICodexTurnStateExecutionScope(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -374,7 +380,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		upstreamCtx, cancelUpstream = context.WithCancel(upstreamCtx)
 	}
 	defer cancelUpstream()
-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false, originalModel)
+	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false, upstreamModel)
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -406,6 +412,20 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if account.UsesOpenAICodexProtocol() && observeOpenAICompatResponseModelPayload(c, upstreamModel, respBody) {
+			// Error bodies can still identify the model that rejected the state. A
+			// mismatch is authoritative invalidation evidence even though this
+			// attempt will not publish the response Turn-State.
+			s.observeCodexTurnStateResponseDetails(
+				c,
+				account,
+				upstreamModel,
+				resp.Header,
+				observedUpstreamResponseModel(c),
+				true,
+			)
+			deleteOpenAIHeaderEqualFold(resp.Header, openAICodexTurnStateHeader)
+		}
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
 			expectedTaskID := account.GetCredential("task_id")
 			if err := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); err != nil {
@@ -544,6 +564,16 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	requestID := resp.Header.Get("x-request-id")
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, c, "openai chat_completions buffered", requestID)
+	turnStateMismatchHandled := false
+	if account != nil && account.UsesOpenAICodexProtocol() &&
+		codexTurnStateResponseModelMismatch(upstreamModel, observedUpstreamResponseModel(c), observedUpstreamResponseModelConflict(c)) {
+		// The buffered reader may fail or return a failed/incomplete terminal after
+		// it has already observed a contradictory model. Retire the request state
+		// immediately; successful completion is required only for publication, not
+		// for invalidation evidence.
+		s.observeCodexTurnStateResponse(c, account, upstreamModel, resp.Header)
+		turnStateMismatchHandled = true
+	}
 	if err != nil {
 		return nil, s.newOpenAICompatBufferedReadFailoverError(c, account, resp, requestID, err)
 	}
@@ -612,16 +642,38 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	acc.SupplementResponseOutput(finalResponse)
 
 	chatResp := apicompat.ResponsesToChatCompletions(finalResponse, originalModel)
+	responseCompleted := strings.EqualFold(strings.TrimSpace(finalResponse.Status), "completed")
+	if !turnStateMismatchHandled && responseCompleted && codexTurnStateResponseModelMismatch(upstreamModel, observer.Model(), observer.Conflict()) {
+		// A mismatch must retire the request's bound state before the JSON write
+		// commits response headers. Normal matching observations are deferred until
+		// after a successful downstream write so a disconnected client cannot seed
+		// reusable state it never received.
+		s.observeCodexTurnStateResponseDetails(c, account, upstreamModel, resp.Header, observer.Model(), observer.Conflict())
+		turnStateMismatchHandled = true
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header, upstreamModel)
 	// 非流式响应必须为标准 JSON。上游被强制流式，其响应头 Content-Type 为
 	// text/event-stream，会经 WriteFilteredHeaders 透传进来；而 c.JSON 走 Gin 的
 	// writeContentType 仅在头不存在时才设置，无法覆盖。这里显式 Set 强制改回 JSON，
 	// 否则下游"看头判流式"的中间层（如 new-api）会把本应聚合的 JSON 当成 SSE 处理。
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writeErrorsBefore := len(c.Errors)
 	c.JSON(http.StatusOK, chatResp)
+	downstreamWriteSucceeded := len(c.Errors) == writeErrorsBefore
+	s.commitOpenAICodexTurnStateAfterWrite(
+		c,
+		account,
+		upstreamModel,
+		resp.Header,
+		stagedTurnState,
+		responseCompleted && !turnStateMismatchHandled,
+		downstreamWriteSucceeded,
+		turnStateHeaderDeliverable,
+	)
 
 	result := &OpenAIForwardResult{
 		RequestID:                     requestID,
@@ -701,7 +753,6 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	requestBodyLen int,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
-	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 
 	state := apicompat.NewResponsesEventToChatState()
 	state.Model = originalModel
@@ -727,6 +778,37 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 	}
+	// Validate the opaque response header before the first converted chunk can
+	// commit it. Model mismatch is learned from the SSE body below and is fenced
+	// immediately when the first contradictory model appears.
+	s.sanitizeOpenAICodexTurnStateResponseHeader(account, resp.Header)
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header, upstreamModel)
+	// The generic SSE writer deliberately strips Turn-State. Keep the validated
+	// value staged until response-model evidence has been parsed, then restore it
+	// in the same critical section that commits the headers. In particular, a
+	// model-mismatched first event must invalidate the request state before this
+	// callback can make the response state visible to the client.
+	deleteOpenAIHeaderEqualFold(c.Writer.Header(), openAICodexTurnStateHeader)
+	turnStateMismatchHandled := false
+	turnStateHeaderDelivered := false
+	writeStreamHeaders := s.newStreamHeaderWriterBeforeCommit(c, resp.Header, func() {
+		if !turnStateHeaderDeliverable || turnStateMismatchHandled ||
+			strings.TrimSpace(stagedTurnState.Get(openAICodexTurnStateHeader)) == "" {
+			return
+		}
+		observedModel := observer.Model()
+		if observedModel == "" || codexTurnStateResponseModelMismatch(upstreamModel, observedModel, observer.Conflict()) {
+			return
+		}
+		if terminalEventType != "" && terminalEventType != "response.completed" && terminalEventType != "response.done" {
+			return
+		}
+			if !s.openAICodexTurnStateResponseCommitAllowed(c, account, stagedTurnState.Get(openAICodexTurnStateHeader), upstreamModel) {
+				return
+			}
+		c.Writer.Header().Set(openAICodexTurnStateHeader, stagedTurnState.Get(openAICodexTurnStateHeader))
+		turnStateHeaderDelivered = true
+	})
 
 	scanner, scanBuf := s.newUpstreamSSEScanner(resp.Body)
 
@@ -785,6 +867,10 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return false
 		}
 		observer.ObserveOpenAI([]byte(payload), event.Type)
+		if !turnStateMismatchHandled && codexTurnStateResponseModelMismatch(upstreamModel, observer.Model(), observer.Conflict()) {
+			s.observeCodexTurnStateResponseDetails(c, account, upstreamModel, resp.Header, observer.Model(), observer.Conflict())
+			turnStateMismatchHandled = true
+		}
 		refusalDetector.ObservePayload([]byte(payload))
 		s.parseSSEUsageBytesWithType([]byte(payload), event.Type, &usage)
 
@@ -1006,6 +1092,19 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			c.Writer.Flush()
 		}
 		logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, &usage, terminalEventType, clientDisconnected)
+		responseCompleted := terminalEventType == "response.completed" || terminalEventType == "response.done"
+		if responseCompleted && !clientDisconnected && !turnStateMismatchHandled {
+			s.commitOpenAICodexTurnStateAfterWrite(
+				c,
+				account,
+				upstreamModel,
+				resp.Header,
+				stagedTurnState,
+				true,
+				true,
+				turnStateHeaderDelivered,
+			)
+		}
 		return resultWithUsage(), nil
 	}
 

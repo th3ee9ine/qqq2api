@@ -52,7 +52,11 @@ describe('turn-state reliability status API', () => {
 
 describe('turn-state reliability settings API', () => {
   it('loads the active probe and injection settings', async () => {
-    const settings = { probe_enabled: true, injection_enabled: false }
+    const settings = {
+      probe_enabled: true,
+      injection_enabled: false,
+      proxy_pool_urls: ['https://proxy.example.com:443'],
+    }
     mocks.get.mockResolvedValue({ data: settings })
 
     await expect(getReliabilityTurnStateSettings()).resolves.toEqual(settings)
@@ -60,7 +64,11 @@ describe('turn-state reliability settings API', () => {
   })
 
   it('persists both settings together', async () => {
-    const settings = { probe_enabled: false, injection_enabled: true }
+    const settings = {
+      probe_enabled: false,
+      injection_enabled: true,
+      proxy_pool_urls: ['socks5://proxy.example.com:1080'],
+    }
     mocks.put.mockResolvedValue({ data: settings })
 
     await expect(updateReliabilityTurnStateSettings(settings)).resolves.toEqual(settings)

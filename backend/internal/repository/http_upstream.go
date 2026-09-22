@@ -271,7 +271,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	}
 	proxyInfo := "direct"
 	if proxyURL != "" {
-		proxyInfo = proxyURL
+		proxyInfo = redactedProxyURLForLog(proxyURL)
 	}
 	slog.Debug("tls_fingerprint_enabled", "account_id", accountID, "target", targetHost, "proxy", proxyInfo, "profile", profile.Name)
 
@@ -303,6 +303,32 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	})
 
 	return resp, nil
+}
+
+// redactedProxyURLForLog keeps transport diagnostics useful without ever
+// emitting proxy credentials supplied by an account or the dedicated
+// Turn-State pool. Invalid values are intentionally represented generically;
+// the raw string may contain a password and must not cross the log boundary.
+func redactedProxyURLForLog(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return directProxyKey
+	}
+	if raw == directProxyKey {
+		return directProxyKey
+	}
+	_, parsed, err := proxyurl.Parse(raw)
+	if err != nil || parsed == nil {
+		return "configured"
+	}
+	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host}).String()
+}
+
+// hashUpstreamCacheKeyForLog preserves a stable correlation value for client
+// pool diagnostics without exposing the proxy URL (including userinfo) that is
+// embedded in the internal cache key.
+func hashUpstreamCacheKeyForLog(raw string) string {
+	digest := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("%x", digest[:8])
 }
 
 // httpClientForUpstreamRequest 按请求上下文的标记派生客户端：禁用重定向，或对重定向的每一跳做主机校验。
@@ -531,7 +557,10 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 			atomic.AddInt64(&entry.inFlight, 1)
 		}
 		s.mu.RUnlock()
-		slog.Debug("tls_fingerprint_reusing_client", "account_id", accountID, "cache_key", cacheKey)
+		slog.Debug("tls_fingerprint_reusing_client",
+			"account_id", accountID,
+			"cache_key_sha256", hashUpstreamCacheKeyForLog(cacheKey),
+			"proxy", redactedProxyURLForLog(proxyKey))
 		return entry, nil
 	}
 	s.mu.RUnlock()
@@ -555,12 +584,16 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 				atomic.AddInt64(&entry.inFlight, 1)
 			}
 			s.mu.Unlock()
-			slog.Debug("tls_fingerprint_reusing_client", "account_id", accountID, "cache_key", cacheKey)
+			slog.Debug("tls_fingerprint_reusing_client",
+				"account_id", accountID,
+				"cache_key_sha256", hashUpstreamCacheKeyForLog(cacheKey),
+				"proxy", redactedProxyURLForLog(proxyKey))
 			return entry, nil
 		}
 		slog.Debug("tls_fingerprint_evicting_stale_client",
 			"account_id", accountID,
-			"cache_key", cacheKey,
+			"cache_key_sha256", hashUpstreamCacheKeyForLog(cacheKey),
+			"proxy", redactedProxyURLForLog(proxyKey),
 			"proxy_changed", entry.proxyKey != proxyKey,
 			"pool_changed", entry.poolKey != poolKey)
 		s.removeClientLocked(cacheKey, entry)
@@ -579,7 +612,9 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 
 	// Transport 已在锁外构建，避免阻塞其他缓存键的请求。
-	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
+	// proxyKey and cacheKey include the proxy URL's userinfo so they must never
+	// cross the log boundary. Keep only the credential-free endpoint summary.
+	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "proxy", redactedProxyURLForLog(proxyKey))
 
 	client := &http.Client{Transport: transport}
 	if s.shouldValidateResolvedIP() {
@@ -1157,7 +1192,7 @@ func (s *httpUpstreamService) recordOpenAIHTTP2Failure(profile service.HTTPUpstr
 	activated, until := state.recordFailure(time.Now(), settings.fallbackErrorThreshold, settings.fallbackWindow, settings.fallbackTTL)
 	if activated {
 		slog.Warn("openai_http2_proxy_fallback_activated",
-			"proxy", proxyKey,
+			"proxy", redactedProxyURLForLog(proxyKey),
 			"fallback_until", until.Format(time.RFC3339))
 	}
 }

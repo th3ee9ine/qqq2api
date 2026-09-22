@@ -1508,6 +1508,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
+					// Messages retries reuse the same Gin request. Once the scheduler
+					// switches accounts, remove any client/WS Turn-State and attempt-
+					// local session binding minted for the failed credential before
+					// rebuilding the upstream request for the replacement account.
+					// Same-account retries intentionally take the branch above and keep
+					// the state intact.
+					h.gatewayService.ClearOpenAIWSTurnStateForAccountSwitch(c, sessionHash)
 					reqLog.Warn("openai_messages.upstream_failover_switching",
 						zap.Int64("account_id", account.ID),
 						zap.Int("upstream_status", failoverErr.StatusCode),

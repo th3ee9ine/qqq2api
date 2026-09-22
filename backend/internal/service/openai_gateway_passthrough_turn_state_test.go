@@ -62,6 +62,22 @@ func (w *turnStateShortWriteFailureWriter) WriteString(data string) (int, error)
 	return w.Write([]byte(data))
 }
 
+type passthroughTurnStateReadError struct {
+	payload []byte
+	sent    bool
+}
+
+func (r *passthroughTurnStateReadError) Read(data []byte) (int, error) {
+	if r.sent {
+		return 0, errors.New("upstream read failure")
+	}
+	r.sent = true
+	n := copy(data, r.payload)
+	return n, errors.New("upstream read failure")
+}
+
+func (r *passthroughTurnStateReadError) Close() error { return nil }
+
 func newPassthroughTurnStateTestContext(t *testing.T, scope string) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -124,15 +140,22 @@ func TestOpenAIPassthroughStreamingCompletedStagesAndCollectsTurnState(t *testin
 
 func TestOpenAIPassthroughStreamingUnsuccessfulResponsesNeverCollectTurnState(t *testing.T) {
 	tests := []struct {
-		name           string
-		body           string
-		wantError      bool
-		wantStateRelay bool
+		name              string
+		body              string
+		wantError         bool
+		wantStateRelay    bool
+		wantForcedRefresh bool
 	}{
 		{
 			name:      "failed before output",
 			body:      `data: {"type":"response.failed","response":{"status":"failed","error":{"code":"content_policy","message":"blocked"}}}` + "\n\n",
 			wantError: true,
+		},
+		{
+			name:              "failed after response model mismatch",
+			body:              `data: {"type":"response.failed","response":{"model":"gpt-6-astra","status":"failed","error":{"code":"server_error","message":"wrong model"}}}` + "\n\n",
+			wantError:         true,
+			wantForcedRefresh: true,
 		},
 		{
 			name: "incomplete before output",
@@ -171,7 +194,20 @@ func TestOpenAIPassthroughStreamingUnsuccessfulResponsesNeverCollectTurnState(t 
 				_, provenanceRecorded := svc.openaiCodexTurnStateOrigins.Load(scope)
 				require.False(t, provenanceRecorded)
 			}
-			require.Zero(t, svc.codexTurnStateCollector.Metrics().Entries)
+			metrics := svc.codexTurnStateCollector.Metrics()
+			if test.wantForcedRefresh {
+				require.Equal(t, 1, metrics.Entries, "a model mismatch keeps only the exact-scope forced-refresh marker")
+				require.Zero(t, metrics.Offers)
+				status := svc.codexTurnStateCollector.Status(
+					svc.codexTurnStateKey(c, account, "gpt-5.6-sol"),
+					time.Now(),
+				)
+				require.False(t, status.Usable)
+				require.False(t, status.Ready)
+				require.Zero(t, status.Candidates)
+			} else {
+				require.Zero(t, metrics.Entries)
+			}
 		})
 	}
 }
@@ -196,6 +232,32 @@ func TestOpenAIPassthroughStreamingClientDisconnectDoesNotCollectCompletedTurnSt
 
 	require.NoError(t, err, "the handler drains a completed upstream after the downstream disconnects")
 	require.Zero(t, svc.codexTurnStateCollector.Metrics().Entries)
+}
+
+func TestOpenAIPassthroughStreamingModelMismatchInvalidatesBeforeReadError(t *testing.T) {
+	svc := newCodexTurnStateGatewayTestService(nil)
+	account := codexTurnStateGatewayTestAccount(1225)
+	c, recorder := newPassthroughTurnStateTestContext(t, "passthrough-stream-model-mismatch-read-error")
+	state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 45)
+	model := "gpt-5.6-sol"
+	key := svc.codexTurnStateKey(c, account, model)
+	require.True(t, svc.codexTurnStateCollector.OfferValueMust(key, state, "seed", time.Now()))
+	snapshot, usable := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.True(t, usable)
+	svc.bindCodexTurnStateRequest(c, key, model, snapshot, true)
+
+	resp := newPassthroughTurnStateResponse(state, "text/event-stream", "")
+	resp.Body = &passthroughTurnStateReadError{payload: []byte(
+		`data: {"type":"response.failed","response":{"model":"gpt-6-astra","status":"failed","error":{"code":"server_error"}}}` + "\n\n",
+	)}
+	_, err := svc.handleStreamingResponsePassthrough(
+		context.Background(), resp, c, account, time.Now(), model, model,
+	)
+
+	require.Error(t, err)
+	_, usable = svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.False(t, usable, "a response model mismatch must retire the active state before a read error returns")
+	require.Empty(t, recorder.Result().Header.Get(openAICodexTurnStateHeader))
 }
 
 func TestOpenAIPassthroughNonStreamingSuccessCollectsTurnState(t *testing.T) {
@@ -358,7 +420,7 @@ func TestOpenAINonStreamingCommittedKeepaliveTurnStateCommitSemantics(t *testing
 		state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 96)
 		upstream := make(http.Header)
 		upstream.Set(openAICodexTurnStateHeader, state)
-		staged, headerDeliverable := svc.prepareOpenAICodexTurnStateForWrite(c, account, upstream)
+		staged, headerDeliverable := svc.prepareOpenAICodexTurnStateForWrite(c, account, upstream, "gpt-5.6-sol")
 		require.False(t, headerDeliverable)
 
 		body := []byte(`{"id":"resp_committed_keepalive","model":"gpt-5.6-sol","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
@@ -389,7 +451,7 @@ func TestOpenAINonStreamingCommittedKeepaliveTurnStateCommitSemantics(t *testing
 		state := collectorTestToken(t, time.Now().Add(-time.Minute), 2, 97)
 		upstream := make(http.Header)
 		upstream.Set(openAICodexTurnStateHeader, state)
-		staged, headerDeliverable := svc.prepareOpenAICodexTurnStateForWrite(c, account, upstream)
+		staged, headerDeliverable := svc.prepareOpenAICodexTurnStateForWrite(c, account, upstream, "gpt-5.6-sol")
 		require.False(t, headerDeliverable)
 
 		wrote := writeOpenAINonStreamingResponse(

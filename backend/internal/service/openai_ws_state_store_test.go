@@ -106,6 +106,56 @@ func TestOpenAIWSStateStore_SessionTurnStateIsolatedByModel(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestOpenAIWSStateStore_TurnStateGenerationAndRefreshGate(t *testing.T) {
+	store, ok := NewOpenAIWSStateStore(nil).(*defaultOpenAIWSStateStore)
+	require.True(t, ok)
+	now := time.Now().UTC()
+	policy := collectorTestPolicy()
+	first := collectorTestToken(t, now.Add(-time.Minute), 2, 101)
+	second := collectorTestToken(t, now, 2, 102)
+	const (
+		groupID    = int64(9)
+		accountID  = int64(707)
+		generation = uint64(11)
+	)
+
+	require.True(t, store.BindSessionTurnStateIfRefreshNeeded(groupID, accountID, "scope", first, generation, time.Hour, policy, now, "gpt-5"))
+	require.False(t, store.BindSessionTurnStateIfRefreshNeeded(groupID, accountID, "scope", second, generation, time.Hour, policy, now, "gpt-5"),
+		"a new response token must not replace a healthy binding")
+	got, found := store.GetSessionTurnStateForGeneration(groupID, accountID, "scope", generation, "gpt-5")
+	require.True(t, found)
+	require.Equal(t, first, got)
+	_, found = store.GetSessionTurnStateForGeneration(groupID, accountID, "scope", generation+1, "gpt-5")
+	require.False(t, found, "a replacement collector generation must not trust the old binding")
+
+	require.True(t, store.BindSessionTurnStateIfRefreshNeeded(groupID, accountID, "scope", second, generation+1, time.Hour, policy, now, "gpt-5"))
+	store.DeleteSessionTurnStateIfMatch(groupID, accountID, "scope", first, generation, "gpt-5")
+	got, found = store.GetSessionTurnStateForGeneration(groupID, accountID, "scope", generation+1, "gpt-5")
+	require.True(t, found, "a stale post-write cleanup must not delete the replacement generation")
+	require.Equal(t, second, got)
+}
+
+func TestOpenAIWSStateStore_DeleteSessionTurnStateForModelIsExact(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	const accountID int64 = 42
+	store.BindSessionTurnState(9, accountID, "session_hash_exact", "state-a", time.Minute, "gpt-5.6-sol")
+	store.BindSessionTurnState(9, accountID, "session_hash_exact", "state-b", time.Minute, "gpt-6-astra")
+	store.BindSessionTurnState(9, accountID+1, "session_hash_exact", "other-account", time.Minute, "gpt-5.6-sol")
+
+	deleter, ok := store.(openAIWSSessionTurnStateModelDeleter)
+	require.True(t, ok)
+	deleter.DeleteSessionTurnStateForModel(9, accountID, "session_hash_exact", "gpt-5.6-sol")
+
+	_, exists := store.GetSessionTurnState(9, accountID, "session_hash_exact", "gpt-5.6-sol")
+	require.False(t, exists)
+	state, exists := store.GetSessionTurnState(9, accountID, "session_hash_exact", "gpt-6-astra")
+	require.True(t, exists)
+	require.Equal(t, "state-b", state)
+	state, exists = store.GetSessionTurnState(9, accountID+1, "session_hash_exact", "gpt-5.6-sol")
+	require.True(t, exists)
+	require.Equal(t, "other-account", state)
+}
+
 func TestOpenAIWSStateStore_SessionConnTTL(t *testing.T) {
 	store := NewOpenAIWSStateStore(nil)
 	store.BindSessionConn(9, "session_hash_conn_1", "conn_1", 30*time.Millisecond)

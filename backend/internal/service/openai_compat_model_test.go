@@ -834,7 +834,7 @@ func TestForwardAsAnthropic_ReplaysFullToolHistoryWhenPreviousResponseUnavailabl
 		},
 	}
 
-	svc.bindOpenAICompatSessionResponseID(context.Background(), nil, account, "stable-cache-key", "resp_missing")
+	svc.bindOpenAICompatSessionResponseID(context.Background(), nil, account, "stable-cache-key", "resp_missing", "gpt-5.3-codex")
 	secondBody := []byte(`{"model":"claude-sonnet-4-5","max_tokens":16,"messages":[{"role":"user","content":"first"},{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{"q":"first"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"found"},{"type":"text","text":"second"}]}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}],"stream":false}`)
 	upstream.responses = []*http.Response{
 		{
@@ -895,7 +895,7 @@ func TestForwardAsAnthropic_PreviousResponseUnavailableRetryFailureDoesNotLoop(t
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
 	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1, Credentials: map[string]any{"api_key": "sk-test", "base_url": "https://api.openai.com/v1"}}
-	svc.bindOpenAICompatSessionResponseID(context.Background(), nil, account, "stable-cache-key", "resp_missing")
+	svc.bindOpenAICompatSessionResponseID(context.Background(), nil, account, "stable-cache-key", "resp_missing", "gpt-5.3-codex")
 	body := []byte(`{"model":"claude-sonnet-4-5","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -928,7 +928,7 @@ func TestForwardAsAnthropic_DisablesAPIKeyContinuationWhenUpstreamRequiresWebSoc
 		},
 	}
 
-	svc.bindOpenAICompatSessionResponseID(context.Background(), nil, account, "stable-cache-key", "resp_http_unsupported")
+	svc.bindOpenAICompatSessionResponseID(context.Background(), nil, account, "stable-cache-key", "resp_http_unsupported", "gpt-5.5")
 	body := []byte(`{"model":"claude-sonnet-4-5","max_tokens":16,"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"ok"},{"role":"user","content":"second"}],"stream":false}`)
 	upstream.responses = []*http.Response{
 		{
@@ -1069,7 +1069,8 @@ func TestForwardAsAnthropic_ReusesOAuthCodexTurnState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	firstResp := openAICompatSSECompletedResponse("resp_oauth_first", "gpt-5.4")
-	firstResp.Header.Set("x-codex-turn-state", "turn_state_first")
+	firstTurnState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 211)
+	firstResp.Header.Set("x-codex-turn-state", firstTurnState)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		firstResp,
 		openAICompatSSECompletedResponse("resp_oauth_second", "gpt-5.4"),
@@ -1078,11 +1079,15 @@ func TestForwardAsAnthropic_ReusesOAuthCodexTurnState(t *testing.T) {
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
+	svc.initCodexTurnStateCollector()
+	svc.SetCodexTurnStateRuntimeSettings(false, true)
 	account := &Account{
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":       "oauth-token",
@@ -1111,7 +1116,7 @@ func TestForwardAsAnthropic_ReusesOAuthCodexTurnState(t *testing.T) {
 	secondResult, err := svc.ForwardAsAnthropic(context.Background(), secondCtx, account, secondBody, "stable-cache-key", "gpt-5.4")
 	require.NoError(t, err)
 	require.NotNil(t, secondResult)
-	require.Equal(t, "turn_state_first", upstream.requests[1].Header.Get("x-codex-turn-state"))
+	require.Equal(t, firstTurnState, upstream.requests[1].Header.Get("x-codex-turn-state"))
 	require.Equal(t, generateSessionUUID(isolateOpenAIUpstreamSessionID(0, account, "stable-cache-key")), upstream.requests[1].Header.Get("session_id"))
 	require.Empty(t, upstream.requests[1].Header.Get("conversation_id"))
 	requireOpenAIMessagesCodexIdentity(t, upstream.requests[1], codexCLIUserAgent, openai.CodexDefaultOriginator)
@@ -1174,7 +1179,8 @@ func TestForwardAsAnthropic_OAuthDigestFallbackReusesTurnStateWithoutExplicitKey
 	gin.SetMode(gin.TestMode)
 
 	firstResp := openAICompatSSECompletedResponse("resp_oauth_digest_first", "gpt-5.4")
-	firstResp.Header.Set("x-codex-turn-state", "turn_state_digest_first")
+	firstTurnState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 212)
+	firstResp.Header.Set("x-codex-turn-state", firstTurnState)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		firstResp,
 		openAICompatSSECompletedResponse("resp_oauth_digest_second", "gpt-5.4"),
@@ -1183,11 +1189,15 @@ func TestForwardAsAnthropic_OAuthDigestFallbackReusesTurnStateWithoutExplicitKey
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
+	svc.initCodexTurnStateCollector()
+	svc.SetCodexTurnStateRuntimeSettings(false, true)
 	account := &Account{
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":       "oauth-token",
@@ -1220,7 +1230,7 @@ func TestForwardAsAnthropic_OAuthDigestFallbackReusesTurnStateWithoutExplicitKey
 	require.NoError(t, err)
 	require.NotNil(t, secondResult)
 	require.Equal(t, firstSessionID, upstream.requests[1].Header.Get("session_id"))
-	require.Equal(t, "turn_state_digest_first", upstream.requests[1].Header.Get("x-codex-turn-state"))
+	require.Equal(t, firstTurnState, upstream.requests[1].Header.Get("x-codex-turn-state"))
 	require.Empty(t, upstream.requests[1].Header.Get("conversation_id"))
 	requireOpenAIMessagesCodexIdentity(t, upstream.requests[1], codexCLIUserAgent, openai.CodexDefaultOriginator)
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "prompt_cache_key").Exists())
@@ -1228,11 +1238,12 @@ func TestForwardAsAnthropic_OAuthDigestFallbackReusesTurnStateWithoutExplicitKey
 }
 
 func TestForwardAsAnthropic_OAuthMetadataSessionSurvivesDigestPrefixRewrite(t *testing.T) {
-	t.Parallel()
 	gin.SetMode(gin.TestMode)
+	t.Parallel()
 
 	firstResp := openAICompatSSECompletedResponse("resp_oauth_metadata_first", "gpt-5.5")
-	firstResp.Header.Set("x-codex-turn-state", "turn_state_metadata_first")
+	firstTurnState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 213)
+	firstResp.Header.Set("x-codex-turn-state", firstTurnState)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		firstResp,
 		openAICompatSSECompletedResponse("resp_oauth_metadata_second", "gpt-5.5"),
@@ -1241,11 +1252,15 @@ func TestForwardAsAnthropic_OAuthMetadataSessionSurvivesDigestPrefixRewrite(t *t
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
+	svc.initCodexTurnStateCollector()
+	svc.SetCodexTurnStateRuntimeSettings(false, true)
 	account := &Account{
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":       "oauth-token",
@@ -1278,18 +1293,19 @@ func TestForwardAsAnthropic_OAuthMetadataSessionSurvivesDigestPrefixRewrite(t *t
 	require.NoError(t, err)
 	require.NotNil(t, secondResult)
 	require.Equal(t, firstSessionID, upstream.requests[1].Header.Get("session_id"))
-	require.Equal(t, "turn_state_metadata_first", upstream.requests[1].Header.Get("x-codex-turn-state"))
+	require.Equal(t, firstTurnState, upstream.requests[1].Header.Get("x-codex-turn-state"))
 	require.Empty(t, upstream.requests[1].Header.Get("conversation_id"))
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "prompt_cache_key").Exists())
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "previous_response_id").Exists())
 }
 
 func TestForwardAsAnthropic_OAuthMetadataSessionSurvivesChangingCacheControlAnchor(t *testing.T) {
-	t.Parallel()
 	gin.SetMode(gin.TestMode)
+	t.Parallel()
 
 	firstResp := openAICompatSSECompletedResponse("resp_oauth_cache_anchor_first", "gpt-5.5")
-	firstResp.Header.Set("x-codex-turn-state", "turn_state_cache_anchor_first")
+	firstTurnState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 214)
+	firstResp.Header.Set("x-codex-turn-state", firstTurnState)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		firstResp,
 		openAICompatSSECompletedResponse("resp_oauth_cache_anchor_second", "gpt-5.5"),
@@ -1298,11 +1314,15 @@ func TestForwardAsAnthropic_OAuthMetadataSessionSurvivesChangingCacheControlAnch
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
+	svc.initCodexTurnStateCollector()
+	svc.SetCodexTurnStateRuntimeSettings(false, true)
 	account := &Account{
 		ID:          1,
 		Name:        "openai-oauth",
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":       "oauth-token",
@@ -1335,7 +1355,7 @@ func TestForwardAsAnthropic_OAuthMetadataSessionSurvivesChangingCacheControlAnch
 	require.NoError(t, err)
 	require.NotNil(t, secondResult)
 	require.Equal(t, firstSessionID, upstream.requests[1].Header.Get("session_id"))
-	require.Equal(t, "turn_state_cache_anchor_first", upstream.requests[1].Header.Get("x-codex-turn-state"))
+	require.Equal(t, firstTurnState, upstream.requests[1].Header.Get("x-codex-turn-state"))
 	require.Empty(t, upstream.requests[1].Header.Get("conversation_id"))
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "prompt_cache_key").Exists())
 	require.False(t, gjson.GetBytes(upstream.bodies[1], "previous_response_id").Exists())
@@ -2286,7 +2306,7 @@ func TestForwardAsAnthropic_AstraContinuationRestoresHistoryAndDisablesUnsupport
 			}}
 			svc := &OpenAIGatewayService{httpUpstream: upstream, cfg: &config.Config{}}
 			account := rawGPT56ResponsesAPIKeyAccount("gpt-6-astra", "gpt-6-astra")
-			svc.bindOpenAICompatSessionResponseID(context.Background(), nil, account, "astra-session", "resp_old")
+			svc.bindOpenAICompatSessionResponseID(context.Background(), nil, account, "astra-session", "resp_old", "gpt-6-astra")
 			body := []byte(`{"model":"gpt-6-astra","max_tokens":16,"messages":[{"role":"user","content":"first"},{"role":"assistant","content":"ok"},{"role":"user","content":"second"}]}`)
 			for i := 0; i < 2; i++ {
 				c, _ := gin.CreateTestContext(httptest.NewRecorder())

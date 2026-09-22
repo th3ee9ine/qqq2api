@@ -2414,7 +2414,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.codex_turn_state.probe_timeout_seconds", 15)
-	viper.SetDefault("gateway.codex_turn_state.refresh_before_seconds", 1200)
+	// Keep a validated Turn-State for 55 minutes before allowing a refresh.
+	// The one-hour TTL remains the hard local expiry boundary.
+	viper.SetDefault("gateway.codex_turn_state.refresh_before_seconds", 300)
 	viper.SetDefault("gateway.codex_turn_state.cooldown_seconds", 180)
 	viper.SetDefault("gateway.codex_turn_state.ttl_seconds", 3600)
 	viper.SetDefault("gateway.codex_turn_state.expected_blocks", 0)

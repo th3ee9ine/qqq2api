@@ -36,6 +36,33 @@ func (h *OpsHandler) GetReliabilityStatus(c *gin.Context) {
 type UpdateCodexTurnStateRuntimeSettingsRequest struct {
 	ProbeEnabled     *bool `json:"probe_enabled"`
 	InjectionEnabled *bool `json:"injection_enabled"`
+	// A pointer distinguishes an omitted pool (preserve the current pool) from
+	// an explicit empty array (clear the pool).
+	ProxyPoolURLs *[]string `json:"proxy_pool_urls"`
+}
+
+// codexTurnStateRuntimeSettingsResponse is deliberately separate from the
+// internal settings type. ProxyPoolURLs may contain credentials and must
+// never be sent back to an administrator browser or an intermediary. The
+// client treats the proxy pool as write-only and uses these metadata fields
+// to show whether a pool is configured without learning its secrets.
+type codexTurnStateRuntimeSettingsResponse struct {
+	ProbeEnabled        bool `json:"probe_enabled"`
+	InjectionEnabled    bool `json:"injection_enabled"`
+	ProxyPoolConfigured bool `json:"proxy_pool_configured"`
+	ProxyPoolCount      int  `json:"proxy_pool_count"`
+}
+
+func projectCodexTurnStateRuntimeSettings(settings *service.CodexTurnStateRuntimeSettings) codexTurnStateRuntimeSettingsResponse {
+	if settings == nil {
+		return codexTurnStateRuntimeSettingsResponse{}
+	}
+	return codexTurnStateRuntimeSettingsResponse{
+		ProbeEnabled:        settings.ProbeEnabled,
+		InjectionEnabled:    settings.InjectionEnabled,
+		ProxyPoolConfigured: len(settings.ProxyPoolURLs) > 0,
+		ProxyPoolCount:      len(settings.ProxyPoolURLs),
+	}
 }
 
 // GetCodexTurnStateRuntimeSettings returns the persisted controls used by the
@@ -52,7 +79,7 @@ func (h *OpsHandler) GetCodexTurnStateRuntimeSettings(c *gin.Context) {
 		response.Error(c, http.StatusInternalServerError, "Failed to get Codex turn-state settings")
 		return
 	}
-	response.Success(c, settings)
+	response.Success(c, projectCodexTurnStateRuntimeSettings(settings))
 }
 
 // UpdateCodexTurnStateRuntimeSettings persists and immediately publishes both
@@ -70,15 +97,25 @@ func (h *OpsHandler) UpdateCodexTurnStateRuntimeSettings(c *gin.Context) {
 		response.BadRequest(c, "probe_enabled and injection_enabled are required boolean values")
 		return
 	}
+	var proxyPoolURLs []string
+	if req.ProxyPoolURLs != nil {
+		normalized, err := service.NormalizeOpenAICodexTurnStateProxyPool(*req.ProxyPoolURLs)
+		if err != nil {
+			response.BadRequest(c, "proxy_pool_urls contains an invalid proxy URL")
+			return
+		}
+		proxyPoolURLs = normalized
+	}
 	updated, err := h.opsService.UpdateCodexTurnStateRuntimeSettings(c.Request.Context(), service.CodexTurnStateRuntimeSettings{
 		ProbeEnabled:     *req.ProbeEnabled,
 		InjectionEnabled: *req.InjectionEnabled,
+		ProxyPoolURLs:    proxyPoolURLs,
 	})
 	if err != nil {
 		response.Error(c, http.StatusInternalServerError, "Failed to update Codex turn-state settings")
 		return
 	}
-	response.Success(c, updated)
+	response.Success(c, projectCodexTurnStateRuntimeSettings(updated))
 }
 
 func writeReliabilityStatusError(c *gin.Context, err error) {

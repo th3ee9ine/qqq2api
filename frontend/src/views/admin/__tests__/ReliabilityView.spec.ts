@@ -35,7 +35,11 @@ vi.mock('vue-i18n', async () => {
     ...actual,
     useI18n: () => ({
       locale: { value: 'en' },
-      t: (key: string) => key === 'admin.reliability.unavailable' ? 'UNAVAILABLE' : key,
+      t: (key: string, params?: Record<string, unknown>) => {
+        if (key === 'admin.reliability.unavailable') return 'UNAVAILABLE'
+        if (key === 'admin.reliability.turnState.successfulIPTotal') return `${params?.count} egress observations`
+        return key
+      },
     }),
   }
 })
@@ -243,6 +247,27 @@ describe('ReliabilityView', () => {
     expect(mocks.getTurnStateSettings).toHaveBeenCalledTimes(2)
   })
 
+  it('preserves an unsaved proxy pool draft when settings refresh', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const input = wrapper.get('[data-testid="turn-state-proxy-pool-input"]')
+    const draft = 'https://draft-user:draft-password@proxy.example.com:443'
+    await input.setValue(draft)
+    mocks.getTurnStateSettings.mockResolvedValue({
+      probe_enabled: false,
+      injection_enabled: true,
+      proxy_pool_configured: true,
+      proxy_pool_urls: ['https://legacy-user:legacy-password@old.example.com:443'],
+    })
+
+    await wrapper.get('[title="admin.reliability.refresh"]').trigger('click')
+    await flushPromises()
+
+    expect(input.element.value).toBe(draft)
+    expect(wrapper.get('[data-testid="turn-state-probe-toggle"]').attributes('aria-checked')).toBe('false')
+    expect(mocks.updateTurnStateSettings).not.toHaveBeenCalled()
+  })
+
   it('reports a status failure without falling back to removed metric APIs', async () => {
     mocks.getStatus.mockRejectedValueOnce(new Error('status rejected'))
 
@@ -304,6 +329,141 @@ describe('ReliabilityView', () => {
       injection_enabled: false,
     })
     expect(mocks.showSuccess).toHaveBeenCalledTimes(2)
+  })
+
+  it('edits a batch proxy pool and renders collection IP diagnostics', async () => {
+    mocks.getTurnStateSettings.mockResolvedValue({
+      probe_enabled: true,
+      injection_enabled: true,
+      proxy_pool_configured: true,
+      proxy_pool_count: 2,
+    })
+    setTurnStateStatus({
+      collector: {
+        enabled: true,
+        status: 'ready',
+        proxy_pool: [
+          { protocol: 'http', host: 'proxy.example.com', port: 8080 },
+          { protocol: 'socks5', host: '10.0.0.8', port: 1080 },
+        ],
+        successful_ip_regions: [
+          { region: '北美', count: 4 },
+          { region: '欧洲', count: 2 },
+        ],
+        successful_ips: [
+          { ip: '198.51.100.8', region: '北美', successes: 3, last_success_at: '2026-09-21T02:00:00Z' },
+        ],
+        candidate_breakdown: [
+          { reason: 'account_identity_changed', count: 1 },
+          { reason: 'account_unschedulable', count: 5 },
+          { reason: 'response_model_mismatch', count: 2 },
+        ],
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-proxy-pool-input"]').element.value).toBe('')
+    expect(wrapper.get('[data-testid="turn-state-proxy-pool-settings"]').text()).toContain('proxyPoolConfiguredHint')
+    expect(wrapper.get('[data-testid="turn-state-proxy-pool"]').text()).toContain('proxy.example.com')
+    expect(wrapper.get('[data-testid="turn-state-ip-regions"]').text()).toContain('北美')
+    expect(wrapper.get('[data-testid="turn-state-successful-ips"]').text()).toContain('198.51.100.8')
+    expect(wrapper.get('[data-testid="turn-state-successful-ips"] table').classes()).toEqual(
+      expect.arrayContaining(['w-full', 'min-w-[42rem]']),
+    )
+    expect(wrapper.get('[data-testid="turn-state-candidate-breakdown"]').text()).toContain('admin.reliability.turnState.candidateReasons.account_identity_changed')
+    expect(wrapper.get('[data-testid="turn-state-candidate-breakdown"]').text()).toContain('admin.reliability.turnState.candidateReasons.account_unschedulable')
+
+    const input = wrapper.get('[data-testid="turn-state-proxy-pool-input"]')
+    await input.setValue('https://proxy.example.com:443\nhttps://proxy.example.com:443\nsocks5://proxy.example.net:1080')
+    await wrapper.get('[data-testid="turn-state-proxy-pool-save"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateTurnStateSettings).toHaveBeenCalledWith({
+      probe_enabled: true,
+      injection_enabled: true,
+      proxy_pool_urls: ['https://proxy.example.com:443', 'socks5://proxy.example.net:1080'],
+    })
+    expect(input.element.value).toBe('')
+  })
+
+  it('clears saved proxy credentials and still allows clearing the configured pool', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const input = wrapper.get('[data-testid="turn-state-proxy-pool-input"]')
+    await input.setValue('socks5://saved-user:saved-password@proxy.example.com:1080')
+    await wrapper.get('[data-testid="turn-state-proxy-pool-save"]').trigger('click')
+    await flushPromises()
+
+    expect(input.element.value).toBe('')
+    expect(wrapper.get('[data-testid="turn-state-proxy-pool-settings"]').text()).toContain('proxyPoolConfiguredHint')
+
+    await wrapper.get('[data-testid="turn-state-proxy-pool-save"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateTurnStateSettings).toHaveBeenLastCalledWith({
+      probe_enabled: true,
+      injection_enabled: true,
+      proxy_pool_urls: [],
+    })
+    expect(wrapper.get('[data-testid="turn-state-proxy-pool-settings"]').text()).not.toContain('proxyPoolConfiguredHint')
+  })
+
+  it('retains the proxy pool draft when saving fails', async () => {
+    mocks.updateTurnStateSettings.mockRejectedValueOnce(new Error('save rejected'))
+    const wrapper = mountView()
+    await flushPromises()
+    const input = wrapper.get('[data-testid="turn-state-proxy-pool-input"]')
+    const draft = 'https://draft-user:draft-password@proxy.example.com:443'
+    await input.setValue(draft)
+
+    await wrapper.get('[data-testid="turn-state-proxy-pool-save"]').trigger('click')
+    await flushPromises()
+
+    expect(input.element.value).toBe(draft)
+    expect(wrapper.get('[data-testid="turn-state-proxy-pool-error"]').text()).toContain('save rejected')
+  })
+
+  it.each([
+    {
+      name: 'includes IP observations without region metadata without double counting the regional observations',
+      ips: [{ ip: '198.51.100.8', region: 'North America', successes: 3 }, { ip: '198.51.100.9', successes: 5 }],
+      total: 8,
+    },
+    { name: 'falls back to regional observations when individual IPs are absent', ips: [], total: 3 },
+  ])('$name', async ({ ips, total }) => {
+    setTurnStateStatus({
+      collector: {
+        enabled: true,
+        successful_ip_regions: [{ region: 'North America', successes: 3 }],
+        successful_ips: ips,
+      },
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="turn-state-ip-observations-total"]').text()).toBe(`${total} egress observations`)
+    expect(wrapper.get('[data-testid="turn-state-successful-ips"]').text()).toContain('ipObservationsHint')
+  })
+
+  it('blocks malformed proxy pool entries before persistence', async () => {
+    mocks.getTurnStateSettings.mockResolvedValue({
+      probe_enabled: true,
+      injection_enabled: true,
+      proxy_pool_urls: [],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.get('[data-testid="turn-state-proxy-pool-input"]').setValue('ftp://proxy.example.com:21')
+
+    const save = wrapper.get('[data-testid="turn-state-proxy-pool-save"]')
+    expect(save.attributes('disabled')).toBeDefined()
+    await save.trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateTurnStateSettings).not.toHaveBeenCalled()
   })
 
   it('rolls a switch back when persistence fails', async () => {

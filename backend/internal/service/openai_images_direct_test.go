@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -50,6 +51,139 @@ func TestCodexDirectImagesRouting(t *testing.T) {
 			require.Equal(t, "data:image/png;base64,aGVsbG8=", gjson.GetBytes(rec.Body.Bytes(), "data.0.url").String())
 		})
 	}
+}
+
+func TestCodexDirectImagesDoesNotUseResponsesTurnStateProbe(t *testing.T) {
+	body := []byte(`{"model":"gpt-image-2","prompt":"draw"}`)
+	c, _ := newOpenAIImagesTestContext(t, body)
+	bindOpenAICodexTurnStateExecutionScopeValue(c, "images-direct-no-responses-probe")
+	calls := 0
+	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		calls++
+		require.Equal(t, "/backend-api/codex/images/generations", req.URL.Path)
+		return openAIImagesJSONResponse(), nil
+	}}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+
+	result, err := svc.ForwardImages(context.Background(), c, codexTurnStateGatewayTestAccount(3501), body, parsed, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 1, calls, "the direct images endpoint must not trigger a synthetic /responses probe")
+}
+
+func TestCodexImagesResponsesTurnStateUsesDriverModel(t *testing.T) {
+	now := time.Now().UTC()
+	probeState := collectorTestToken(t, now.Add(-2*time.Minute), 2, 221)
+	responseState := collectorTestToken(t, now.Add(-time.Minute), 2, 222)
+	driverModel := openAIImagesResponsesMainModelValue()
+	body := []byte(`{"model":"gpt-image-1","prompt":"draw"}`)
+	c, rec := newOpenAIImagesTestContext(t, body)
+	bindOpenAICodexTurnStateExecutionScopeValue(c, "images-responses-driver-model")
+	calls := 0
+	actualTurnState := ""
+	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		calls++
+		upstreamBody, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
+		require.Equal(t, driverModel, gjson.GetBytes(upstreamBody, "model").String())
+		require.Equal(t, "/backend-api/codex/responses", req.URL.Path)
+		if calls == 1 {
+			require.False(t, gjson.GetBytes(upstreamBody, "tools.0").Exists(), "the first call is the bounded Turn-State probe")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{probeState}},
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					`data: {"type":"response.created","response":{"model":"` + driverModel + `"}}`,
+					"",
+					`data: {"type":"response.completed","response":{"model":"` + driverModel + `"}}`,
+					"",
+				}, "\n"))),
+			}, nil
+		}
+		require.Equal(t, "gpt-image-1", gjson.GetBytes(upstreamBody, "tools.0.model").String())
+		actualTurnState = req.Header.Get(openAICodexTurnStateHeader)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{responseState}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`data: {"type":"response.created","response":{"model":"` + driverModel + `"}}`,
+				"",
+				`data: {"type":"response.completed","response":{"model":"` + driverModel + `","output":[{"type":"image_generation_call","result":"aGVsbG8="}]}}`,
+				"",
+			}, "\n"))),
+		}, nil
+	}}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	account := codexTurnStateGatewayTestAccount(3502)
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 2, calls)
+	require.Equal(t, probeState, actualTurnState, "%+v", svc.CodexTurnStateReliabilitySnapshot(context.Background()))
+	require.Empty(t, result.UpstreamResponseModel, "the Responses driver must not be reported as the billed image model")
+	require.Equal(t, responseState, rec.Header().Get(openAICodexTurnStateHeader))
+	key := svc.codexTurnStateKey(c, account, driverModel)
+	active, usable := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.True(t, usable)
+	require.Equal(t, probeState, active.Token.Value, "a healthy probe state is not replaced before the refresh window")
+	require.False(t, svc.codexTurnStateCollector.Status(key, time.Now()).Ready)
+}
+
+func TestCodexImagesResponsesModelMismatchInvalidatesTurnState(t *testing.T) {
+	now := time.Now().UTC()
+	probeState := collectorTestToken(t, now.Add(-2*time.Minute), 2, 223)
+	responseState := collectorTestToken(t, now.Add(-time.Minute), 2, 224)
+	driverModel := openAIImagesResponsesMainModelValue()
+	body := []byte(`{"model":"gpt-image-1","prompt":"draw"}`)
+	c, rec := newOpenAIImagesTestContext(t, body)
+	bindOpenAICodexTurnStateExecutionScopeValue(c, "images-responses-model-mismatch")
+	calls := 0
+	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{probeState}},
+				Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+					`data: {"type":"response.created","response":{"model":"` + driverModel + `"}}`,
+					"",
+					`data: {"type":"response.completed","response":{"model":"` + driverModel + `"}}`,
+					"",
+				}, "\n"))),
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{http.CanonicalHeaderKey(openAICodexTurnStateHeader): []string{responseState}},
+			Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+				`data: {"type":"response.created","response":{"model":"gpt-6-astra"}}`,
+				"",
+				`data: {"type":"response.completed","response":{"model":"gpt-6-astra","output":[{"type":"image_generation_call","result":"aGVsbG8="}]}}`,
+				"",
+			}, "\n"))),
+		}, nil
+	}}
+	svc := newCodexTurnStateGatewayTestService(upstream)
+	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
+	require.NoError(t, err)
+	account := codexTurnStateGatewayTestAccount(3503)
+
+	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Empty(t, result.UpstreamResponseModel, "Turn-State driver mismatches stay isolated from image billing metadata")
+	require.Empty(t, rec.Header().Get(openAICodexTurnStateHeader))
+	key := svc.codexTurnStateKey(c, account, driverModel)
+	_, usable := svc.codexTurnStateCollector.Acquire(key, time.Now())
+	require.False(t, usable)
 }
 
 func TestCodexDirectImagesMappingBeforeRouting(t *testing.T) {

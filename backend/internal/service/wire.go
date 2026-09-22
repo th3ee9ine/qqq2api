@@ -178,6 +178,7 @@ func ProvideOpenAIQuotaService(
 func ProvideOpenAIGatewayService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
+	proxyProber ProxyExitInfoProber,
 	usageLogRepo UsageLogRepository,
 	usageBillingRepo UsageBillingRepository,
 	userRepo UserRepository,
@@ -225,6 +226,7 @@ func ProvideOpenAIGatewayService(
 		userPlatformQuotaRepo,
 	)
 	svc.proxyRepo = proxyRepo
+	svc.SetProxyExitInfoProber(proxyProber)
 	svc.SetTLSFingerprintProfileService(tlsFPProfileService)
 	return svc
 }

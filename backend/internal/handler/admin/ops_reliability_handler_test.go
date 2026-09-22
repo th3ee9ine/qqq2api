@@ -117,6 +117,35 @@ func TestCodexTurnStateRuntimeSettingsHandlersDefaultAndPersistCompleteSnapshot(
 	require.Equal(t, "true", repo.values[service.SettingKeyCodexTurnStateCacheInjectionEnabled])
 }
 
+func TestCodexTurnStateRuntimeSettingsHandlersNeverEchoProxyCredentials(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := newTestSettingRepo()
+	repo.values[service.SettingKeyCodexTurnStateProxyPool] = `[
+  "http://collector-user:collector-pass@proxy.example.com:8080"
+]`
+	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+	router := gin.New()
+	router.GET("/turn-state-settings", handler.GetCodexTurnStateRuntimeSettings)
+	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
+
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, httptest.NewRequest(http.MethodGet, "/turn-state-settings", nil))
+	require.Equal(t, http.StatusOK, getRecorder.Code)
+	require.NotContains(t, getRecorder.Body.String(), "collector-user")
+	require.NotContains(t, getRecorder.Body.String(), "collector-pass")
+	require.Contains(t, getRecorder.Body.String(), `"proxy_pool_configured":true`)
+	require.Contains(t, getRecorder.Body.String(), `"proxy_pool_count":1`)
+
+	putRecorder := httptest.NewRecorder()
+	putRequest := httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(`{"probe_enabled":true,"injection_enabled":true}`))
+	putRequest.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(putRecorder, putRequest)
+	require.Equal(t, http.StatusOK, putRecorder.Code)
+	require.NotContains(t, putRecorder.Body.String(), "collector-user")
+	require.NotContains(t, putRecorder.Body.String(), "collector-pass")
+	require.Contains(t, putRecorder.Body.String(), `"proxy_pool_configured":true`)
+}
+
 func TestUpdateCodexTurnStateRuntimeSettingsRequiresBothBooleanFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := NewOpsHandler(service.NewOpsService(nil, newTestSettingRepo(), nil, nil, nil, nil, nil, nil, nil, nil, nil))
@@ -134,4 +163,33 @@ func TestUpdateCodexTurnStateRuntimeSettingsRequiresBothBooleanFields(t *testing
 		router.ServeHTTP(recorder, request)
 		require.Equal(t, http.StatusBadRequest, recorder.Code, body)
 	}
+}
+
+func TestUpdateCodexTurnStateRuntimeSettingsProxyPoolValidationAndClear(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := newTestSettingRepo()
+	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+	router := gin.New()
+	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
+
+	request := httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(`{"probe_enabled":true,"injection_enabled":true,"proxy_pool_urls":["HTTP://proxy.example:8080","http://proxy.example:8080","socks5://[::1]:1080"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, `["http://proxy.example:8080","socks5://[::1]:1080"]`, repo.values[service.SettingKeyCodexTurnStateProxyPool])
+
+	request = httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(`{"probe_enabled":true,"injection_enabled":true,"proxy_pool_urls":["ftp://proxy.example:21"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Equal(t, `["http://proxy.example:8080","socks5://[::1]:1080"]`, repo.values[service.SettingKeyCodexTurnStateProxyPool])
+
+	request = httptest.NewRequest(http.MethodPut, "/turn-state-settings", bytes.NewBufferString(`{"probe_enabled":true,"injection_enabled":true,"proxy_pool_urls":[]}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, `[]`, repo.values[service.SettingKeyCodexTurnStateProxyPool])
 }

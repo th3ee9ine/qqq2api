@@ -522,15 +522,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return err
 	}
 	turnStateScope := BindOpenAICodexTurnStateExecutionScope(c, firstPayload.rawForHash)
+	turnStateModel := codexTurnStateModel(gjson.GetBytes(firstPayload.payloadRaw, "model").String())
 
 	useHTTPBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
 	if c != nil && c.Request != nil {
+		clearOpenAICodexTurnStateTrustedInjection(c)
 		// Keep a state echoed by the downstream client only when its known
 		// origin is the account selected for this upstream connection.
-		s.guardOpenAICodexTurnStateEcho(c, account, c.Request.Header)
+		s.guardOpenAICodexTurnStateEcho(c, account, c.Request.Header, turnStateModel)
 	}
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
-	turnStateModel := codexTurnStateModel(gjson.GetBytes(firstPayload.payloadRaw, "model").String())
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
 	apiKeyID := getAPIKeyIDFromContext(c)
@@ -555,8 +556,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return
 		}
 		if turnState == "" && stateStore != nil && s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, turnStateModel) {
-			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, account.ID, turnStateScope, turnStateModel); ok {
-				if s.openAIWSSessionTurnStateUsable(account, savedTurnState) {
+			if savedTurnState, ok := s.getOpenAIWSSessionTurnState(c, stateStore, groupID, account, turnStateScope, turnStateModel); ok {
+				if s.openAIWSSessionTurnStateUsable(account, savedTurnState) &&
+					!s.openAIWSSessionTurnStateNeedsRefresh(account, savedTurnState) &&
+					s.markCurrentOpenAICodexTurnStateTrustedInjection(c, account, turnStateModel, savedTurnState) {
 					turnState = savedTurnState
 				}
 			}
@@ -596,6 +599,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		var bridgeAccountFailoverInput []json.RawMessage
 		bridgeAccountFailoverInputExists := false
 		for turn := 1; ; turn++ {
+			// A Gin context is shared by all bridge turns (and can also be reused
+			// across account failover attempts). The response-model mismatch marker
+			// belongs to the current turn only; clear it before request preparation
+			// so a prior failed turn cannot suppress a later valid observation.
+			clearOpenAIWSTurnStateModelMismatch(c)
 			if turn > 1 && hooks != nil && hooks.BeforeRequest != nil {
 				if err := hooks.BeforeRequest(turn, currentBridgePayload.payloadRaw, currentBridgePayload.originalModel); err != nil {
 					return err
@@ -748,7 +756,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				)
 				bridgeAccountFailoverInputExists = true
 			}
-			if bridgeTurnState := strings.TrimSpace(result.ResponseHeaders.Get(openAIWSTurnStateHeader)); bridgeTurnState != "" {
+			if openAIWSTurnStateModelMismatchMarked(c) {
+				// The bridge helper removes the contradictory response header, but
+				// the local turnState variable may still contain the state sent on
+				// this turn. Do not carry that retired value into the next turn.
+				turnState = ""
+				if c != nil && c.Request != nil {
+					c.Request.Header.Del(openAIWSTurnStateHeader)
+					c.Request.Header.Del(openAICodexTurnStateHeader)
+				}
+			} else if bridgeTurnState := strings.TrimSpace(result.ResponseHeaders.Get(openAIWSTurnStateHeader)); bridgeTurnState != "" {
 				// Follow-up turns on this bridge retain their own upstream state;
 				// publishing it by session hash would leak it to independent bridges.
 				turnState = bridgeTurnState
@@ -803,6 +820,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 	if account.UsesOpenAICodexProtocol() {
 		turnState = s.resolveOpenAIWSCodexTurnState(ctx, c, account, turnStateModel, turnState, true, wsHeaders)
+		clearOpenAICodexTurnStateTrustedInjection(c)
 		if turnState == "" {
 			wsHeaders.Del(openAIWSTurnStateHeader)
 		} else {
@@ -993,6 +1011,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return nil
 	}
 	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
+		clearOpenAIWSTurnStateModelMismatch(c)
 		responseModelObserver := &upstreamResponseModelObserver{}
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
@@ -1062,6 +1081,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
+			if codexTurnStateResponseModelMismatch(mappedModel, responseModelObserver.Model(), responseModelObserver.Conflict()) &&
+				!openAIWSTurnStateModelMismatchMarked(c) {
+				// Ingress can return immediately on error/read failure, so retire a
+				// conflicting state at the first contradictory event.
+				s.observeCodexTurnStateResponseDetails(c, account, mappedModel, lease.HandshakeHeaders(), responseModelObserver.Model(), responseModelObserver.Conflict())
+			}
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}
@@ -1268,11 +1293,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 				terminalEvent := s.handleOpenAIWSTerminalTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				if !clientDisconnected && (eventType == "response.completed" || eventType == "response.done") {
-					if pendingHandshakeTurnState != "" && stateStore != nil &&
+					if !openAIWSTurnStateModelMismatchMarked(c) && pendingHandshakeTurnState != "" && stateStore != nil &&
 						s.canUseOpenAIWSSessionTurnStateStore(account, turnStateScope, mappedModel) &&
-						strings.EqualFold(mappedModel, turnStateModel) && s.canCommitOpenAIWSSessionTurnState(c, account, pendingHandshakeTurnState) {
+						strings.EqualFold(mappedModel, turnStateModel) && s.canCommitOpenAIWSSessionTurnState(ctx, c, account, mappedModel, pendingHandshakeTurnState) {
 						confirmedState := pendingHandshakeTurnState
-						stateStore.BindSessionTurnState(groupID, account.ID, turnStateScope, confirmedState, s.openAIWSSessionStickyTTL(), mappedModel)
+						s.bindOpenAIWSSessionTurnStateIfRefreshNeeded(c, stateStore, groupID, account, turnStateScope, mappedModel, confirmedState)
 						turnState = confirmedState
 						updatedHeaders := cloneHeader(baseAcquireReq.Headers)
 						if updatedHeaders == nil {
@@ -1283,7 +1308,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						confirmedTurnStateBound = true
 					}
 					pendingHandshakeTurnState = ""
-					s.observeCodexTurnStateResponse(c, account, mappedModel, lease.HandshakeHeaders())
+					if !openAIWSTurnStateModelMismatchMarked(c) {
+						s.observeCodexTurnStateResponseDetails(c, account, mappedModel, lease.HandshakeHeaders(), responseModelObserver.Model(), responseModelObserver.Conflict())
+					}
+					if consumeOpenAIWSTurnStateModelMismatch(c) {
+						lease.MarkBroken()
+					}
 				} else {
 					pendingHandshakeTurnState = ""
 				}

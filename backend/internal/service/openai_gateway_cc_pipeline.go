@@ -49,6 +49,16 @@ func (s *OpenAIGatewayService) newUpstreamSSEScanner(r io.Reader) (*bufio.Scanne
 // 上游响应头并写入标准 SSE 头 + 200 状态码，后续调用为 no-op。延迟到首个事件
 // 写出前才提交响应头，使上游早期失败仍可改走 failover 或非流式错误响应。
 func (s *OpenAIGatewayService) newStreamHeaderWriter(c *gin.Context, upstream http.Header) func() {
+	return s.newStreamHeaderWriterBeforeCommit(c, upstream, nil)
+}
+
+// newStreamHeaderWriterBeforeCommit keeps Turn-State out of the generic header
+// copier while allowing a protocol-specific handler to restore a value it has
+// already validated against the first authoritative response-model evidence.
+// The callback runs after the generic Turn-State deletion and immediately
+// before WriteHeader, so a contradictory first SSE event can still fence the
+// state without leaking it to the client.
+func (s *OpenAIGatewayService) newStreamHeaderWriterBeforeCommit(c *gin.Context, upstream http.Header, beforeCommit func()) func() {
 	headersWritten := false
 	return func() {
 		if headersWritten {
@@ -57,6 +67,15 @@ func (s *OpenAIGatewayService) newStreamHeaderWriter(c *gin.Context, upstream ht
 		headersWritten = true
 		if s.responseHeaderFilter != nil {
 			responseheaders.WriteFilteredHeaders(c.Writer.Header(), upstream, s.responseHeaderFilter)
+		}
+		// Turn-State is account/model-bound security state, not an ordinary
+		// configurable response header. Compatibility stream handlers validate and
+		// collect it explicitly after observing the upstream response model; letting
+		// the generic allowlist copy it here could commit a mismatched value before
+		// the first contradictory SSE event is parsed.
+		deleteOpenAIHeaderEqualFold(c.Writer.Header(), openAICodexTurnStateHeader)
+		if beforeCommit != nil {
+			beforeCommit()
 		}
 		c.Writer.Header().Set("Content-Type", "text/event-stream")
 		c.Writer.Header().Set("Cache-Control", "no-cache")

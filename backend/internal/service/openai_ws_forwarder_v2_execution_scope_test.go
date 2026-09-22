@@ -127,14 +127,28 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 
 	completed := func(id string) []byte {
-		return []byte(`{"type":"response.completed","response":{"id":"` + id + `","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
+		// Codex model normalization routes gpt-5.1 to the final upstream
+		// model gpt-5.4.  The response fixture must report that final model;
+		// reporting gpt-5.1 is an intentional Turn-State mismatch and retires
+		// the pooled connection under the production model-isolation rules.
+		return []byte(`{"type":"response.completed","response":{"id":"` + id + `","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}}`)
 	}
-	captureConn := &openAIWSCaptureConn{events: [][]byte{completed("resp_a"), completed("resp_b"), completed("resp_c")}}
 	handshakeState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 102)
 	handshake := http.Header{}
 	handshake.Set(openAIWSTurnStateHeader, handshakeState)
+	// Each execution scope may require a fresh connection. Returning the same
+	// fake from every Dial reuses an object that the pool's reader has already
+	// closed after EOF, unlike a real websocket reconnect.
+	dialer := &openAIWSTurnStateSequenceDialer{
+		conns: []openAIWSClientConn{
+			&openAIWSCaptureConn{events: [][]byte{completed("resp_a")}},
+			&openAIWSCaptureConn{events: [][]byte{completed("resp_b")}},
+			&openAIWSCaptureConn{events: [][]byte{completed("resp_c")}},
+		},
+		handshakes: []http.Header{handshake, handshake, handshake},
+	}
 	pool := newOpenAIWSConnPool(cfg)
-	pool.setClientDialerForTest(&openAIWSCaptureDialer{conn: captureConn, handshake: handshake})
+	pool.setClientDialerForTest(dialer)
 	defer pool.Close()
 
 	stateStore := NewOpenAIWSStateStore(nil)
@@ -194,6 +208,10 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 	require.True(t, boundA, "会话 A 的 turn state 应落在按原始 session_id 算出的作用域")
 	_, boundB := stateStore.GetSessionTurnState(groupID, account.ID, scopeB, finalModel)
 	require.True(t, boundB, "会话 B 的 turn state 应落在按原始 session_id 算出的作用域")
+	_, collectedA := svc.codexTurnStateCollector.Acquire(svc.codexTurnStateKey(cA, account, finalModel), time.Now())
+	_, collectedB := svc.codexTurnStateCollector.Acquire(svc.codexTurnStateKey(cB, account, finalModel), time.Now())
+	require.True(t, collectedA)
+	require.False(t, collectedB, "会话自然响应的续传缓存不应绕过账号/模型的健康状态采集节流")
 
 	injected := resolveCodexFingerprintIDs(account, "", codexFingerprintFull)
 	require.NotNil(t, injected)
@@ -207,4 +225,9 @@ func TestOpenAIGatewayService_Forward_WSv2_ExecutionScopeUsesOriginalIdentity(t 
 	require.Equal(t, "child-thread", threadC)
 	_, boundC := stateStore.GetSessionTurnState(groupID, account.ID, scopeC, finalModel)
 	require.True(t, boundC, "客户端自带线程标识时，键必须与按原始报文算出的一致，不受账号 namespace 改写影响")
+	headers := dialer.Headers()
+	require.Len(t, headers, 3)
+	for _, header := range headers {
+		require.Empty(t, header.Get(openAIWSTurnStateHeader), "新作用域不得借用其他会话的 turn state")
+	}
 }

@@ -106,9 +106,14 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	// 客户端会在同回合的后续请求中回带（openai_codex_turn_state.go）。
 	// OpenAI 首个语义输出前只暂存，溯源在 applyAttemptResponseHeaders 真正提交时记录。
 	if stageFirstOutput {
+		s.sanitizeOpenAICodexTurnStateResponseHeader(account, resp.Header)
+		if state := extractOpenAICodexTurnState(resp.Header); state != "" &&
+			!s.openAICodexTurnStateResponseCommitAllowed(c, account, state, mappedModel) {
+			deleteOpenAIHeaderEqualFold(resp.Header, openAICodexTurnStateHeader)
+		}
 		stageOpenAICodexTurnState(&attemptResponseHeaders, resp.Header)
 	} else {
-		s.relayOpenAICodexTurnState(c, account, resp.Header)
+		s.relayOpenAICodexTurnState(c, account, resp.Header, mappedModel)
 	}
 
 	// Set SSE response headers
@@ -133,7 +138,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		// 暂存头此刻才真正写给客户端：turn-state 溯源在这里记录（见
 		// noteStagedOpenAICodexTurnStateCommitted 的 failover 说明）。
-		s.noteStagedOpenAICodexTurnStateCommitted(c, account, attemptResponseHeaders)
+		s.noteStagedOpenAICodexTurnStateCommitted(c, account, attemptResponseHeaders, mappedModel)
 		// These headers describe this gateway's SSE stream and are stable across
 		// account attempts. Keep them authoritative over upstream values.
 		c.Header("Content-Type", "text/event-stream")
@@ -440,7 +445,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if sawFailedEvent {
 			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 		}
-		if !clientDisconnected && (terminalEventType == "response.completed" || terminalEventType == "response.done") {
+		if !clientDisconnected && (terminalEventType == "response.completed" || terminalEventType == "response.done") &&
+			!openAIWSTurnStateModelMismatchMarked(c) {
 			s.observeCodexTurnStateResponse(c, account, mappedModel, resp.Header)
 		}
 		logOpenAISuccessMissingUsage(ctx, c, account, resp, usage, terminalEventType, clientDisconnected)
@@ -533,6 +539,19 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				suppressCurrentEvent = true
 			}
 			observer.ObserveOpenAI(dataBytes, eventType)
+			if codexTurnStateResponseModelMismatch(mappedModel, observer.Model(), observer.Conflict()) &&
+				!openAIWSTurnStateModelMismatchMarked(c) {
+				// Invalidate as soon as the stream proves a model conflict.  The
+				// event may be followed by response.failed, failover, or a read
+				// error, all of which return before the normal success observer.
+				s.observeCodexTurnStateResponseDetails(c, account, mappedModel, resp.Header, observer.Model(), observer.Conflict())
+				// First-output staging keeps a private header copy; clearing only
+				// the Gin writer header would let applyAttemptResponseHeaders put
+				// the invalid state back on the downstream response.
+				if attemptResponseHeaders != nil {
+					attemptResponseHeaders.Del(openAICodexTurnStateHeader)
+				}
+			}
 			// 初始上游 data 的 type 只解析一次：原始值保持终止事件的精确匹配，规范化值供后续分支复用。
 			if openAIStreamEventIsTerminalWithType(data, eventType) {
 				sawTerminalEvent = true
@@ -1672,6 +1691,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	} else {
 		observer.ObserveOpenAI(body, strings.TrimSpace(gjson.GetBytes(body, "type").String()))
 	}
+	if codexTurnStateResponseModelMismatch(mappedModel, observer.Model(), observer.Conflict()) &&
+		!openAIWSTurnStateModelMismatchMarked(c) {
+		// Non-streaming error/SSE aggregation can return before the normal
+		// post-write observer, so retire a contradictory lineage immediately.
+		s.observeCodexTurnStateResponseDetails(c, account, mappedModel, resp.Header, observer.Model(), observer.Conflict())
+	}
 
 	// Detect SSE responses for ALL account types via Content-Type header.
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
@@ -1737,7 +1762,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Codex 协议要求 /responses/compact JSON 响应携带 x-codex-turn-state
 	// （codex-api/src/endpoint/compact.rs 从响应头捕获）。先只写入待提交响应头，
 	// provenance 与 collector 必须等最终 body 确认写入后才发布。
-	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header)
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header, mappedModel)
 	responseCompleted := openAIJSONResponseCompleted(resp.StatusCode, body)
 
 	contentType := "application/json"
@@ -1784,9 +1809,14 @@ func bodyHasSSEFraming(body []byte) bool {
 }
 
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
-	if observer := upstreamResponseModelObserverFromContext(c); observer == nil {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
 		observeOpenAISSEBody(observer, string(body))
+	}
+	if codexTurnStateResponseModelMismatch(mappedModel, observer.Model(), observer.Conflict()) &&
+		!openAIWSTurnStateModelMismatchMarked(c) {
+		s.observeCodexTurnStateResponseDetails(c, account, mappedModel, resp.Header, observer.Model(), observer.Conflict())
 	}
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
@@ -1854,7 +1884,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	logOpenAISuccessMissingUsage(c.Request.Context(), c, account, resp, usage, terminalType, false)
-	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header)
+	stagedTurnState, turnStateHeaderDeliverable := s.prepareOpenAICodexTurnStateForWrite(c, account, resp.Header, mappedModel)
 	responseCompleted := terminalType == "response.completed" || terminalType == "response.done"
 
 	contentType := "application/json; charset=utf-8"

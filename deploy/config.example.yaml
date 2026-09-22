@@ -295,7 +295,7 @@ gateway:
     # 主动探测与缓存注入由管理端「可靠性与连接」页面控制，默认开启。
     # 缓存冷启动探测会消耗上游额度，并可能增加最长 probe_timeout_seconds 的延迟。
     probe_timeout_seconds: 15
-    refresh_before_seconds: 1200
+    refresh_before_seconds: 300
     cooldown_seconds: 180
     ttl_seconds: 3600
     # 0 disables the encrypted-block-count shape heuristic.

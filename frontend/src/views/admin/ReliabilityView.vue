@@ -87,6 +87,51 @@
               />
             </div>
           </div>
+          <div class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700" data-testid="turn-state-proxy-pool-settings">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0">
+                <label for="turn-state-proxy-pool-input" class="text-sm font-medium text-gray-900 dark:text-gray-100">
+                  {{ t('admin.reliability.turnState.proxyPoolTitle') }}
+                </label>
+                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-dark-400">
+                  {{ t('admin.reliability.turnState.proxyPoolDescription') }}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="btn btn-secondary shrink-0 text-xs"
+                data-testid="turn-state-proxy-pool-save"
+                :disabled="turnStateSettingsBusy || !turnStateSettingsLoaded || proxyPoolParse.invalid > 0"
+                @click="saveTurnStateProxyPool"
+              >
+                <Icon name="check" size="sm" />
+                {{ turnStateProxyPoolSaving ? t('admin.reliability.turnState.settingsSaving') : t('admin.reliability.turnState.proxyPoolSave') }}
+              </button>
+            </div>
+            <textarea
+              v-model="turnStateProxyPoolText"
+              id="turn-state-proxy-pool-input"
+              data-testid="turn-state-proxy-pool-input"
+              class="input mt-3 min-h-28 w-full resize-y font-mono text-xs"
+              rows="5"
+              spellcheck="false"
+              :disabled="turnStateSettingsBusy || !turnStateSettingsLoaded"
+              :placeholder="t('admin.reliability.turnState.proxyPoolPlaceholder')"
+              @input="turnStateProxyPoolError = ''"
+            ></textarea>
+            <p v-if="turnStateSettingsHasProxyPool" class="input-hint mt-2 text-amber-700 dark:text-amber-300">
+              {{ t('admin.reliability.turnState.proxyPoolConfiguredHint') }}
+            </p>
+            <p class="input-hint mt-2">{{ t('admin.reliability.turnState.proxyPoolHint') }}</p>
+            <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs" data-testid="turn-state-proxy-pool-parse">
+              <span class="text-gray-600 dark:text-dark-300">{{ t('admin.reliability.turnState.proxyPoolValid', { count: proxyPoolParse.valid }) }}</span>
+              <span v-if="proxyPoolParse.invalid > 0" class="text-red-700 dark:text-red-300">{{ t('admin.reliability.turnState.proxyPoolInvalid', { count: proxyPoolParse.invalid }) }}</span>
+              <span v-else class="text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.proxyPoolInvalid', { count: 0 }) }}</span>
+            </div>
+            <p v-if="turnStateProxyPoolError" class="mt-2 text-xs text-red-700 dark:text-red-300" data-testid="turn-state-proxy-pool-error" role="alert">
+              {{ turnStateProxyPoolError }}
+            </p>
+          </div>
           <div
             v-if="turnStateSettingsError"
             class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-red-700 dark:text-red-300"
@@ -190,6 +235,129 @@
               <dd class="mt-1 text-sm font-semibold text-amber-700 dark:text-amber-300" data-testid="turn-state-collector-last-error">{{ collectorLastErrorLabel }}</dd>
             </div>
           </dl>
+          <div class="mt-4 grid gap-4 border-t border-gray-100 pt-4 dark:border-dark-700 lg:grid-cols-2">
+            <section data-testid="turn-state-proxy-pool" class="min-w-0">
+              <div class="flex items-center justify-between gap-2">
+                <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-400">
+                  {{ t('admin.reliability.turnState.proxyPoolStatus') }}
+                </h4>
+                <span class="text-xs tabular-nums text-gray-500 dark:text-dark-400">
+                  {{ t('admin.reliability.turnState.proxyPoolCount', { count: proxyPoolEntries.length }) }}
+                </span>
+              </div>
+              <div v-if="proxyPoolEntries.length" class="mt-2 overflow-x-auto rounded-lg border border-gray-100 dark:border-dark-700">
+                <table class="min-w-full divide-y divide-gray-100 text-left text-xs dark:divide-dark-700">
+                  <thead class="bg-gray-50 text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+                    <tr>
+                      <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.proxyProtocol') }}</th>
+                      <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.proxyHost') }}</th>
+                      <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.proxyPort') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                    <tr v-for="(proxy, index) in proxyPoolEntries" :key="`${proxy.protocol}-${proxy.host}-${proxy.port}-${index}`">
+                      <td class="whitespace-nowrap px-3 py-2 font-medium uppercase text-gray-800 dark:text-gray-200">{{ proxy.protocol || t('admin.reliability.turnState.unknownValue') }}</td>
+                      <td class="max-w-48 truncate px-3 py-2 font-mono text-gray-700 dark:text-gray-300">{{ proxy.host || t('admin.reliability.turnState.unknownValue') }}</td>
+                      <td class="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700 dark:text-gray-300">{{ proxy.port || t('admin.reliability.turnState.unknownValue') }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-else class="mt-2 rounded-lg bg-gray-50 px-3 py-3 text-xs text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+                {{ t('admin.reliability.turnState.proxyPoolEmpty') }}
+              </p>
+            </section>
+
+            <section data-testid="turn-state-ip-regions" class="min-w-0">
+              <div class="flex items-center justify-between gap-2">
+                <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-400">
+                  {{ t('admin.reliability.turnState.successfulIPRegions') }}
+                </h4>
+                <span class="text-xs tabular-nums text-gray-500 dark:text-dark-400" data-testid="turn-state-ip-observations-total">{{ successfulIPTotalLabel }}</span>
+              </div>
+              <div v-if="successfulIPRegions.length" class="mt-2 overflow-x-auto rounded-lg border border-gray-100 dark:border-dark-700">
+                <table class="min-w-full divide-y divide-gray-100 text-left text-xs dark:divide-dark-700">
+                  <thead class="bg-gray-50 text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+                    <tr>
+                      <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.region') }}</th>
+                      <th class="px-3 py-2 text-right font-medium">{{ t('admin.reliability.turnState.successCount') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                    <tr v-for="(region, index) in successfulIPRegions" :key="`${region.region}-${index}`">
+                      <td class="px-3 py-2 text-gray-800 dark:text-gray-200">{{ regionLabel(region.region, region.country, region.country_code) }}</td>
+                      <td class="px-3 py-2 text-right font-semibold tabular-nums text-gray-800 dark:text-gray-200">{{ formatCount(region.count ?? region.successes) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-else class="mt-2 rounded-lg bg-gray-50 px-3 py-3 text-xs text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+                {{ t('admin.reliability.turnState.noSuccessfulIPs') }}
+              </p>
+            </section>
+          </div>
+
+          <section class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700" data-testid="turn-state-successful-ips">
+            <div class="flex items-center justify-between gap-2">
+              <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-400">
+                {{ t('admin.reliability.turnState.successfulIPs') }}
+              </h4>
+              <span class="text-xs tabular-nums text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.ipCount', { count: successfulIPs.length }) }}</span>
+            </div>
+            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.ipObservationsHint') }}</p>
+            <div v-if="successfulIPs.length" class="mt-2 overflow-x-auto rounded-lg border border-gray-100 dark:border-dark-700">
+              <table class="w-full min-w-[42rem] divide-y divide-gray-100 text-left text-xs dark:divide-dark-700">
+                <thead class="bg-gray-50 text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+                  <tr>
+                    <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.ipAddress') }}</th>
+                    <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.region') }}</th>
+                    <th class="px-3 py-2 text-right font-medium">{{ t('admin.reliability.turnState.successCount') }}</th>
+                    <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.lastSuccess') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr v-for="(entry, index) in successfulIPs" :key="`${entry.ip || entry.address || entry.ip_address}-${index}`">
+                    <td class="whitespace-nowrap px-3 py-2 font-mono text-gray-800 dark:text-gray-200">{{ entry.ip || entry.address || entry.ip_address || t('admin.reliability.turnState.unknownValue') }}</td>
+                    <td class="whitespace-nowrap px-3 py-2 text-gray-700 dark:text-gray-300">{{ regionLabel(entry.region || entry.area, entry.country, entry.country_code) }}</td>
+                    <td class="px-3 py-2 text-right font-semibold tabular-nums text-gray-800 dark:text-gray-200">{{ formatCount(entry.successes ?? entry.count) }}</td>
+                    <td class="whitespace-nowrap px-3 py-2 text-gray-700 dark:text-gray-300">{{ formatTimestamp(entry.last_success_at) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="mt-2 rounded-lg bg-gray-50 px-3 py-3 text-xs text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+              {{ t('admin.reliability.turnState.noSuccessfulIPs') }}
+            </p>
+          </section>
+
+          <section class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700" data-testid="turn-state-candidate-breakdown">
+            <div class="flex items-center justify-between gap-2">
+              <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-400">
+                {{ t('admin.reliability.turnState.candidateBreakdown') }}
+              </h4>
+              <span class="text-xs tabular-nums text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.candidateTotal', { count: candidateTotal }) }}</span>
+            </div>
+            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-dark-400">{{ t('admin.reliability.turnState.candidateBreakdownHint') }}</p>
+            <div v-if="candidateBreakdown.length" class="mt-2 overflow-x-auto rounded-lg border border-gray-100 dark:border-dark-700">
+              <table class="min-w-full divide-y divide-gray-100 text-left text-xs dark:divide-dark-700">
+                <thead class="bg-gray-50 text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+                  <tr>
+                    <th class="px-3 py-2 font-medium">{{ t('admin.reliability.turnState.candidateReason') }}</th>
+                    <th class="px-3 py-2 text-right font-medium">{{ t('admin.reliability.turnState.candidateCount') }}</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
+                  <tr v-for="(candidate, index) in candidateBreakdown" :key="`${candidate.reason || candidate.code || candidate.cause}-${index}`">
+                    <td class="px-3 py-2 text-gray-800 dark:text-gray-200">{{ candidateReasonLabel(candidate.reason || candidate.code || candidate.cause) }}</td>
+                    <td class="px-3 py-2 text-right font-semibold tabular-nums text-gray-800 dark:text-gray-200">{{ formatCount(candidate.count) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="mt-2 rounded-lg bg-gray-50 px-3 py-3 text-xs text-gray-500 dark:bg-dark-800/70 dark:text-dark-400">
+              {{ t('admin.reliability.turnState.noCandidateBreakdown') }}
+            </p>
+          </section>
         </div>
         <p class="mt-4 flex items-start gap-2 rounded-xl bg-gray-50 px-3 py-2.5 text-xs leading-5 text-gray-600 dark:bg-dark-800/70 dark:text-dark-300">
           <Icon name="shield" size="sm" class="mt-0.5 shrink-0 text-teal-700 dark:text-teal-300" />
@@ -211,6 +379,10 @@ import {
   normalizeReliabilityStatus,
   reliabilityAPI,
   type ReliabilityStatusResponse,
+  type ReliabilityTurnStateCandidateBreakdown,
+  type ReliabilityTurnStateIPRegionSummary,
+  type ReliabilityTurnStateProxyPoolEntry,
+  type ReliabilityTurnStateSuccessfulIP,
   type ReliabilityTurnStateSettings,
 } from '@/api/admin/reliability'
 import { useAppStore } from '@/stores/app'
@@ -226,9 +398,13 @@ const status = ref<ReliabilityStatusResponse | null>(null)
 const turnStateSettingsLoading = ref(false)
 const turnStateSettingsLoaded = ref(false)
 const turnStateSettingsError = ref('')
-const turnStateSettingSaving = ref<'probe' | 'injection' | null>(null)
+const turnStateSettingSaving = ref<'probe' | 'injection' | 'proxy_pool' | null>(null)
 const turnStateProbeEnabled = ref(true)
 const turnStateCacheInjectionEnabled = ref(true)
+const turnStateProxyPoolText = ref('')
+const turnStateProxyPoolError = ref('')
+const turnStateProxyPoolSaving = computed(() => turnStateSettingSaving.value === 'proxy_pool')
+const turnStateSettingsHasProxyPool = ref(false)
 
 const turnStateSettingsBusy = computed(() => turnStateSettingsLoading.value || turnStateSettingSaving.value !== null)
 const pageLoading = computed(() => loading.value || turnStateSettingsLoading.value)
@@ -240,15 +416,155 @@ const turnStateCollector = computed(() => {
   return collector && typeof collector === 'object' ? collector : null
 })
 
+const proxyPoolParse = computed(() => parseProxyPoolText(turnStateProxyPoolText.value))
+
+const proxyPoolEntries = computed<ReliabilityTurnStateProxyPoolEntry[]>(() => {
+  const value: unknown = turnStateCollector.value?.proxy_pool
+  const entries = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object' && Array.isArray((value as { entries?: unknown }).entries)
+      ? (value as { entries: unknown[] }).entries
+      : []
+  return entries.flatMap((entry) => {
+    if (entry && typeof entry === 'object') return [entry as ReliabilityTurnStateProxyPoolEntry]
+    if (typeof entry === 'string') {
+      const parsed = parseProxyPoolDisplay(entry)
+      return parsed ? [parsed] : []
+    }
+    return []
+  })
+})
+
+const successfulIPRegions = computed<ReliabilityTurnStateIPRegionSummary[]>(() => {
+  const collector = turnStateCollector.value as (typeof turnStateCollector.value & Record<string, unknown>) | null
+  const value: unknown = collector?.successful_ip_regions ?? collector?.ip_regions
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      if (typeof entry === 'string') return [{ region: entry }]
+      return entry && typeof entry === 'object' ? [entry as ReliabilityTurnStateIPRegionSummary] : []
+    })
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value).map(([region, count]) => ({ region, count: numeric(count) }))
+  }
+  return []
+})
+
+const successfulIPs = computed<ReliabilityTurnStateSuccessfulIP[]>(() => {
+  const collector = turnStateCollector.value as (typeof turnStateCollector.value & Record<string, unknown>) | null
+  const value: unknown = collector?.successful_ips ?? collector?.successful_ip_addresses
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    if (typeof entry === 'string') return [{ ip: entry }]
+    return entry && typeof entry === 'object' ? [entry as ReliabilityTurnStateSuccessfulIP] : []
+  })
+})
+
+const candidateBreakdown = computed<ReliabilityTurnStateCandidateBreakdown[]>(() => {
+  const collector = turnStateCollector.value as (typeof turnStateCollector.value & Record<string, unknown>) | null
+  const value: unknown = collector?.candidate_breakdown ?? collector?.candidate_reasons
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      if (typeof entry === 'string') return [{ reason: entry, count: 1 }]
+      return entry && typeof entry === 'object' ? [entry as ReliabilityTurnStateCandidateBreakdown] : []
+    })
+  }
+  if (value && typeof value === 'object') {
+    return Object.entries(value).map(([reason, count]) => ({ reason, count: numeric(count) }))
+  }
+  return []
+})
+
+const successfulIPTotal = computed(() => {
+  // IP observations include exits whose region lookup did not succeed. Region
+  // aggregates are only a fallback for gateways that omit the individual IPs.
+  if (successfulIPs.value.length > 0) {
+    return successfulIPs.value.reduce((total, entry) => total + numeric(entry.successes ?? entry.count, 1), 0)
+  }
+  return successfulIPRegions.value.reduce((total, entry) => total + numeric(entry.count ?? entry.successes), 0)
+})
+const successfulIPTotalLabel = computed(() => t('admin.reliability.turnState.successfulIPTotal', { count: formatCount(successfulIPTotal.value) }))
+const candidateTotal = computed(() => candidateBreakdown.value.reduce((total, entry) => total + numeric(entry.count), 0))
+
 function numeric(value: unknown, fallback = 0): number {
   if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) return fallback
   const parsed = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+type ProxyPoolParseResult = {
+  validLines: string[]
+  valid: number
+  invalid: number
+}
+
+// Keep the editor strict enough to reject malformed entries before they reach
+// the collector. Credentials remain opaque strings and are never echoed in
+// the status projection below.
+function parseProxyPoolText(value: string): ProxyPoolParseResult {
+  const lines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const validLines: string[] = []
+  const seen = new Set<string>()
+  let invalid = 0
+  for (const line of lines) {
+    const match = line.match(/^(https?|socks5):\/\/(?:([^:@\s]+):([^@\s]+)@)?(\[[^\]]+\]|[^:/?#\s]+):(\d{1,5})$/i)
+    if (!match) {
+      invalid++
+      continue
+    }
+    const port = Number(match[5])
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      invalid++
+      continue
+    }
+    const protocol = match[1].toLowerCase()
+    const host = match[4].toLowerCase()
+    const key = `${protocol}://${match[2] || ''}:${match[3] || ''}@${host}:${port}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    validLines.push(line)
+  }
+  return { validLines, valid: validLines.length, invalid }
+}
+
+function parseProxyPoolDisplay(value: string): ReliabilityTurnStateProxyPoolEntry | null {
+  const match = value.trim().match(/^(https?|socks5):\/\/(?:[^@\s]+@)?(\[[^\]]+\]|[^:/?#\s]+):(\d{1,5})$/i)
+  if (!match) return null
+  const port = Number(match[3])
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null
+  return { protocol: match[1].toLowerCase(), host: match[2], port }
+}
+
 function optionalBoolean(...values: unknown[]): boolean | null {
   const value = values.find((candidate) => typeof candidate === 'boolean')
   return typeof value === 'boolean' ? value : null
+}
+
+function regionLabel(value: unknown, country?: unknown, countryCode?: unknown): string {
+  const parts = [value, country, countryCode]
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+  return [...new Set(parts)].join(' · ') || t('admin.reliability.turnState.unknownValue')
+}
+
+function candidateReasonLabel(value: unknown): string {
+  const code = String(value ?? '').trim().toLowerCase()
+  const supported = new Set([
+    'account_identity_changed', 'account_unavailable', 'account_unschedulable', 'account_disabled', 'account_expired',
+    'active_healthy_skipped', 'already_ready', 'capacity_full', 'cooldown', 'duplicate',
+    'initial_missing', 'invalid_model', 'invalid_state', 'missing_response_state',
+    'model_mismatch', 'model_not_supported', 'not_eligible', 'probe_disabled',
+    'probe_failed', 'probe_in_progress', 'probe_timeout', 'proxy_failed', 'proxy_stream_quarantined',
+    'proxy_timeout', 'proxy_unavailable', 'quota_auto_pause', 'refresh_due', 'response_model_mismatch',
+    'runtime_blocked', 'scheduling_threshold', 'shadow_parent_unhealthy',
+    'capability_mismatch', 'channel_upstream_restricted', 'group_mismatch',
+    'privacy_not_set', 'same_account_retry_mismatch',
+    'state_time_rejected', 'unreliable_key', 'transport_error', 'upstream_401', 'upstream_403', 'upstream_429',
+    'upstream_5xx', 'model_capacity', 'upstream_rate_limited', 'response_failed',
+    'incomplete_stream', 'cancelled', 'unavailable', 'unknown', 'other',
+  ])
+  if (!supported.has(code)) return t('admin.reliability.turnState.collectorUnknown')
+  return t(`admin.reliability.turnState.candidateReasons.${code}`)
 }
 
 const turnStateSupported = computed(() => optionalBoolean(turnState.value.supported))
@@ -358,6 +674,12 @@ async function loadTurnStateSettings() {
     const settings = await reliabilityAPI.getTurnStateSettings()
     turnStateProbeEnabled.value = enabledSetting(settings?.probe_enabled, true)
     turnStateCacheInjectionEnabled.value = enabledSetting(settings?.injection_enabled, true)
+    turnStateSettingsHasProxyPool.value = settings?.proxy_pool_configured === true
+      || (typeof settings?.proxy_pool_count === 'number' && settings.proxy_pool_count > 0)
+    // Proxy URLs are write-only. Never hydrate the textarea from a response,
+    // including responses from an older gateway that may still contain the
+    // legacy proxy_pool_urls field with credentials. Preserve the local draft
+    // when status/settings are refreshed.
     turnStateSettingsLoaded.value = true
   } catch (error) {
     turnStateSettingsLoaded.value = false
@@ -383,15 +705,19 @@ async function saveTurnStateSetting(kind: 'probe' | 'injection', enabled: boolea
   turnStateSettingSaving.value = kind
   turnStateSettingsError.value = ''
   try {
-    const updated = await reliabilityAPI.updateTurnStateSettings({
+    const payload: ReliabilityTurnStateSettings = {
       probe_enabled: turnStateProbeEnabled.value,
       injection_enabled: turnStateCacheInjectionEnabled.value,
-    })
+    }
+    const updated = await reliabilityAPI.updateTurnStateSettings(payload)
     turnStateProbeEnabled.value = enabledSetting(updated?.probe_enabled, turnStateProbeEnabled.value)
     turnStateCacheInjectionEnabled.value = enabledSetting(
       updated?.injection_enabled,
       turnStateCacheInjectionEnabled.value,
     )
+    if (typeof updated?.proxy_pool_configured === 'boolean') {
+      turnStateSettingsHasProxyPool.value = updated.proxy_pool_configured
+    }
     appStore.showSuccess(t('admin.reliability.turnState.settingsSaved'))
   } catch (error) {
     turnStateProbeEnabled.value = previous.probe_enabled
@@ -401,6 +727,44 @@ async function saveTurnStateSetting(kind: 'probe' | 'injection', enabled: boolea
       t('admin.reliability.turnState.settingsSaveFailed'),
     )
     appStore.showError(turnStateSettingsError.value)
+  } finally {
+    turnStateSettingSaving.value = null
+  }
+}
+
+async function saveTurnStateProxyPool() {
+  if (!turnStateSettingsLoaded.value || turnStateSettingsBusy.value) return
+  if (proxyPoolParse.value.invalid > 0) {
+    turnStateProxyPoolError.value = t('admin.reliability.turnState.proxyPoolValidationFailed')
+    return
+  }
+
+  const previousText = turnStateProxyPoolText.value
+  const proxyPoolURLs = proxyPoolParse.value.validLines
+  turnStateSettingSaving.value = 'proxy_pool'
+  turnStateProxyPoolError.value = ''
+  turnStateSettingsError.value = ''
+  try {
+    const updated = await reliabilityAPI.updateTurnStateSettings({
+      probe_enabled: turnStateProbeEnabled.value,
+      injection_enabled: turnStateCacheInjectionEnabled.value,
+      proxy_pool_urls: proxyPoolURLs,
+    })
+    // Remove saved credentials from both the form and its reactive state.
+    turnStateProxyPoolText.value = ''
+    if (typeof updated?.proxy_pool_configured === 'boolean') {
+      turnStateSettingsHasProxyPool.value = updated.proxy_pool_configured
+    } else {
+      turnStateSettingsHasProxyPool.value = proxyPoolURLs.length > 0
+    }
+    appStore.showSuccess(t('admin.reliability.turnState.settingsSaved'))
+  } catch (error) {
+    turnStateProxyPoolText.value = previousText
+    turnStateProxyPoolError.value = extractApiErrorMessage(
+      error,
+      t('admin.reliability.turnState.settingsSaveFailed'),
+    )
+    appStore.showError(turnStateProxyPoolError.value)
   } finally {
     turnStateSettingSaving.value = null
   }

@@ -58,6 +58,7 @@ type httpBridgeIsolationUpstream struct {
 	mu           sync.Mutex
 	requests     []httpBridgeIsolationRequest
 	firstRelease chan struct{}
+	turnStates   map[string]string
 }
 
 func (u *httpBridgeIsolationUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -119,7 +120,9 @@ func (u *httpBridgeIsolationUpstream) Do(req *http.Request, _ string, _ int64, _
 	}
 	suffix := fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"id\":%q,\"status\":\"completed\",\"output\":%s,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", responseID, output)
 	headers := http.Header{"Content-Type": []string{"text/event-stream"}}
-	headers.Set(openAIWSTurnStateHeader, "turn-"+id)
+	if state := u.turnStates[id]; state != "" {
+		headers.Set(openAIWSTurnStateHeader, state)
+	}
 	responseBody := io.NopCloser(strings.NewReader(prefix + suffix))
 	if turn == 1 {
 		responseBody = &httpBridgeIsolationBody{ctx: u.ctx, prefix: bytes.NewReader([]byte(prefix)), suffix: bytes.NewReader([]byte(suffix)), release: u.firstRelease, closed: make(chan struct{})}
@@ -144,8 +147,13 @@ func TestOpenAIWSHTTPBridgeSessionIsolationAcrossSameSessionHash(t *testing.T) {
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 5
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 5
 	upstream := &httpBridgeIsolationUpstream{ctx: ctx, firstRelease: make(chan struct{})}
+	alphaState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 231)
+	betaState := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 232)
+	upstream.turnStates = map[string]string{"alpha": alphaState, "beta": betaState}
 	stateStore := NewOpenAIWSStateStore(nil)
 	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), openaiWSStateStore: stateStore}
+	svc.initCodexTurnStateCollector()
+	svc.SetCodexTurnStateRuntimeSettings(false, true)
 	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "test-token"},
 		Extra:       map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
@@ -234,11 +242,26 @@ func TestOpenAIWSHTTPBridgeSessionIsolationAcrossSameSessionHash(t *testing.T) {
 	upstream.mu.Lock()
 	requests := append([]httpBridgeIsolationRequest(nil), upstream.requests...)
 	upstream.mu.Unlock()
+	// The first completed scope supplies the account/model's healthy state.
+	// Collection for its sibling is suppressed for 55 minutes, and that sibling
+	// must continue without borrowing the other scope's state. Completion order
+	// is intentionally concurrent, so either alpha or beta may win publication.
+	retainedStates := 0
+	for i := range requests {
+		if requests[i].state != "" {
+			require.Len(t, requests[i].input, 3, "initial requests must not receive a cached state")
+			require.Equal(t, upstream.turnStates[requests[i].input[0]], requests[i].state,
+				"a continuation must never borrow another execution scope's state")
+			retainedStates++
+		}
+		requests[i].state = ""
+	}
+	require.Equal(t, 1, retainedStates, "healthy account/model collection must suppress the second scope")
 	require.ElementsMatch(t, []httpBridgeIsolationRequest{
 		{input: []string{"alpha"}},
 		{input: []string{"beta"}},
-		{input: []string{"alpha", "call_alpha", "alpha-result"}, state: "turn-alpha"},
-		{input: []string{"beta", "call_beta", "beta-result"}, state: "turn-beta"},
+		{input: []string{"alpha", "call_alpha", "alpha-result"}},
+		{input: []string{"beta", "call_beta", "beta-result"}},
 	}, requests)
 	gotState, ok := stateStore.GetSessionTurnState(groupID, account.ID, seedHash)
 	require.True(t, ok)

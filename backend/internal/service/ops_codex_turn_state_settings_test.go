@@ -74,10 +74,53 @@ func TestCodexTurnStateRuntimeSettingsDefaultsMissingAndMalformedValuesToEnabled
 	require.Equal(t, &CodexTurnStateRuntimeSettings{ProbeEnabled: true, InjectionEnabled: true}, settings)
 }
 
+func TestCodexTurnStateRuntimeSettingsMalformedPersistedPoolReturnsError(t *testing.T) {
+	repo := newCodexTurnStateSettingsRepo(map[string]string{
+		SettingKeyCodexTurnStateProbeEnabled:          "true",
+		SettingKeyCodexTurnStateCacheInjectionEnabled: "true",
+		SettingKeyCodexTurnStateProxyPool:             `["http://proxy.example:8080"`,
+	})
+	svc := &OpsService{settingRepo: repo}
+
+	settings, err := svc.GetCodexTurnStateRuntimeSettings(context.Background())
+	require.ErrorIs(t, err, ErrInvalidOpenAICodexTurnStateProxyPool)
+	require.Nil(t, settings)
+}
+
+func TestCodexTurnStateRuntimeSettingsMalformedPoolColdStartDisablesGateway(t *testing.T) {
+	repo := newCodexTurnStateSettingsRepo(map[string]string{
+		SettingKeyCodexTurnStateProbeEnabled:          "true",
+		SettingKeyCodexTurnStateCacheInjectionEnabled: "true",
+		SettingKeyCodexTurnStateProxyPool:             `["http://proxy.example:8080"`,
+	})
+	gateway := &OpenAIGatewayService{}
+	svc := &OpsService{settingRepo: repo, openAIGatewayService: gateway}
+
+	svc.initRuntimeSettings(context.Background())
+	probeEnabled, injectionEnabled := gateway.CodexTurnStateRuntimeSettings()
+	require.False(t, probeEnabled)
+	require.False(t, injectionEnabled)
+	require.Empty(t, gateway.CodexTurnStateProxyPool())
+}
+
+func TestCodexTurnStateRuntimeSettingsColdStartDatabaseErrorKeepsDefaultOn(t *testing.T) {
+	repo := newCodexTurnStateSettingsRepo(nil)
+	repo.readErr = errors.New("database unavailable")
+	gateway := &OpenAIGatewayService{}
+	svc := &OpsService{settingRepo: repo, openAIGatewayService: gateway}
+
+	svc.initRuntimeSettings(context.Background())
+	probeEnabled, injectionEnabled := gateway.CodexTurnStateRuntimeSettings()
+	require.True(t, probeEnabled)
+	require.True(t, injectionEnabled)
+	require.Empty(t, gateway.CodexTurnStateProxyPool())
+}
+
 func TestCodexTurnStateRuntimeSettingsLoadAndUpdateGatewaySnapshot(t *testing.T) {
 	repo := newCodexTurnStateSettingsRepo(map[string]string{
 		SettingKeyCodexTurnStateProbeEnabled:          "false",
 		SettingKeyCodexTurnStateCacheInjectionEnabled: "true",
+		SettingKeyCodexTurnStateProxyPool:             `["http://proxy.example:8080"]`,
 	})
 	gateway := &OpenAIGatewayService{}
 	svc := &OpsService{settingRepo: repo, openAIGatewayService: gateway}
@@ -92,12 +135,39 @@ func TestCodexTurnStateRuntimeSettingsLoadAndUpdateGatewaySnapshot(t *testing.T)
 		InjectionEnabled: false,
 	})
 	require.NoError(t, err)
-	require.Equal(t, &CodexTurnStateRuntimeSettings{ProbeEnabled: true, InjectionEnabled: false}, updated)
+	require.Equal(t, &CodexTurnStateRuntimeSettings{
+		ProbeEnabled:     true,
+		InjectionEnabled: false,
+		ProxyPoolURLs:    []string{"http://proxy.example:8080"},
+	}, updated)
 	require.Equal(t, "true", repo.values[SettingKeyCodexTurnStateProbeEnabled])
 	require.Equal(t, "false", repo.values[SettingKeyCodexTurnStateCacheInjectionEnabled])
+	require.Equal(t, `["http://proxy.example:8080"]`, repo.values[SettingKeyCodexTurnStateProxyPool])
 	probeEnabled, injectionEnabled = gateway.CodexTurnStateRuntimeSettings()
 	require.True(t, probeEnabled)
 	require.False(t, injectionEnabled)
+	require.Equal(t, []string{"http://proxy.example:8080"}, gateway.CodexTurnStateProxyPool())
+}
+
+func TestCodexTurnStateRuntimeSettingsOmittedPoolReadFailureDoesNotClearExistingPool(t *testing.T) {
+	repo := newCodexTurnStateSettingsRepo(map[string]string{
+		SettingKeyCodexTurnStateProbeEnabled:          "false",
+		SettingKeyCodexTurnStateCacheInjectionEnabled: "true",
+		SettingKeyCodexTurnStateProxyPool:             `["http://proxy.example:8080"]`,
+	})
+	gateway := &OpenAIGatewayService{}
+	svc := &OpsService{settingRepo: repo, openAIGatewayService: gateway}
+	svc.initRuntimeSettings(context.Background())
+	repo.readErr = errors.New("read failed")
+	_, err := svc.UpdateCodexTurnStateRuntimeSettings(context.Background(), CodexTurnStateRuntimeSettings{
+		ProbeEnabled:     true,
+		InjectionEnabled: true,
+		// nil means the caller omitted the new field and must preserve it.
+		ProxyPoolURLs: nil,
+	})
+	require.Error(t, err)
+	require.Equal(t, `["http://proxy.example:8080"]`, repo.values[SettingKeyCodexTurnStateProxyPool])
+	require.Equal(t, []string{"http://proxy.example:8080"}, gateway.CodexTurnStateProxyPool())
 }
 
 func TestCodexTurnStateRuntimeSettingsFailedRefreshAndWriteKeepLastSnapshot(t *testing.T) {
@@ -125,4 +195,29 @@ func TestCodexTurnStateRuntimeSettingsFailedRefreshAndWriteKeepLastSnapshot(t *t
 	probeEnabled, injectionEnabled = gateway.CodexTurnStateRuntimeSettings()
 	require.False(t, probeEnabled)
 	require.False(t, injectionEnabled)
+}
+
+func TestCodexTurnStateRuntimeSettingsMalformedPoolRefreshKeepsLastSnapshot(t *testing.T) {
+	repo := newCodexTurnStateSettingsRepo(map[string]string{
+		SettingKeyOpsMonitoringEnabled:                "false",
+		SettingKeyCodexTurnStateProbeEnabled:          "false",
+		SettingKeyCodexTurnStateCacheInjectionEnabled: "false",
+		SettingKeyCodexTurnStateProxyPool:             `["http://proxy.example:8080"]`,
+	})
+	gateway := &OpenAIGatewayService{}
+	svc := &OpsService{settingRepo: repo, openAIGatewayService: gateway}
+	svc.initRuntimeSettings(context.Background())
+
+	// Corrupt the persisted value after a valid snapshot has been published.
+	repo.mu.Lock()
+	repo.values[SettingKeyCodexTurnStateProxyPool] = `["http://proxy.example:8080"`
+	repo.mu.Unlock()
+
+	err := svc.RefreshRuntimeSettings(context.Background())
+	require.ErrorIs(t, err, ErrInvalidOpenAICodexTurnStateProxyPool)
+	probeEnabled, injectionEnabled := gateway.CodexTurnStateRuntimeSettings()
+	require.False(t, probeEnabled)
+	require.False(t, injectionEnabled)
+	require.Equal(t, []string{"http://proxy.example:8080"}, gateway.CodexTurnStateProxyPool())
+	require.False(t, svc.IsMonitoringEnabled(context.Background()))
 }

@@ -21,6 +21,7 @@ import (
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (result *OpenAIForwardResult, err error) {
 	ctx, identityCapture := withUpstreamIdentityCapture(ctx)
 	defer func() { applyCapturedUpstreamIdentityToOpenAIResult(identityCapture, result, c) }()
+	clearOpenAIWSTurnStateModelMismatch(c)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -1042,6 +1043,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	agentTaskRecoveryTried := false
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, body)
 	for {
+		// A compact/field-normalization retry is a new upstream attempt. Do not
+		// let a prior response-model conflict suppress observation or header
+		// publication for the replacement attempt.
+		clearOpenAIWSTurnStateModelMismatch(c)
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 		var headerGuard *openAIFirstOutputHeaderGuard
@@ -1050,7 +1055,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				upstreamCtx, releaseUpstreamCtx, startTime.Add(firstOutputTimeout),
 			)
 		}
-		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, reqStream, promptCacheKey, isCodexCLI, originalModel)
+		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, reqStream, promptCacheKey, isCodexCLI, upstreamModel)
 		if headerGuard == nil {
 			releaseUpstreamCtx()
 		}
@@ -1456,7 +1461,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站——异账号 blob 与本账号的（指纹收敛后）出站身份自相矛盾。
-	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
+	modelForGuard := ""
+	if len(clientModels) > 0 {
+		modelForGuard = clientModels[0]
+	}
+	s.guardOpenAICodexTurnStateEcho(c, account, req.Header, modelForGuard)
 	if account.UsesOpenAICodexProtocol() {
 		compatMessagesBridge := isOpenAICompatMessagesBridgeContext(c) || isOpenAICompatMessagesBridgeBody(body)
 		// 清除客户端透传的 session 头，后续用隔离后的值重新设置，防止跨用户会话碰撞。
@@ -1533,8 +1542,16 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	applyOpenAICodexBetaFeatures(c, account, req.Header)
 	setOpenAICodexRoutingHintFromBody(req.Header, account, body)
 	if account.UsesOpenAICodexProtocol() {
+		// clientModels carries the final account-mapped upstream model from the
+		// dispatch path. Turn-State isolation must use that value rather than the
+		// public alias still present in the request body; otherwise two aliases
+		// targeting different upstream models can share a collector entry.
 		stateModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, true); ok && req.Header.Get(openAICodexTurnStateHeader) == "" {
+		if len(clientModels) > 0 && strings.TrimSpace(clientModels[0]) != "" {
+			stateModel = strings.TrimSpace(clientModels[0])
+		}
+		allowTurnStateProbe := !isOpenAIImagesCodexTurnStateProbeDisabled(ctx)
+		if snapshot, ok := s.prepareCodexTurnState(ctx, c, account, stateModel, req.Header, allowTurnStateProbe); ok && req.Header.Get(openAICodexTurnStateHeader) == "" {
 			req.Header.Set(openAICodexTurnStateHeader, snapshot.Token.Value)
 		}
 	}
