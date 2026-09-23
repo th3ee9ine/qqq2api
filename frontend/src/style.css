@@ -559,6 +559,12 @@
     @apply flex-1 overflow-y-auto px-3 py-4;
   }
 
+  @media (max-width: 1023px) {
+    body.sidebar-open {
+      overflow: hidden;
+    }
+  }
+
   .sidebar-link {
     @apply flex items-center gap-3 rounded-xl py-2.5;
     @apply overflow-hidden;

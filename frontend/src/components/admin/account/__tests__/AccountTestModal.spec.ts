@@ -33,6 +33,9 @@ vi.mock('vue-i18n', async () => {
         if (key === 'admin.accounts.imageReceived' && params?.count) {
           return `received-${params.count}`
         }
+        if (key === 'admin.accounts.audioReceived' && params?.count) {
+          return `received-audio-${params.count}`
+        }
         if (key === 'admin.accounts.imagePreviewAlt' && params?.index) {
           return `test-image-${params.index}`
         }
@@ -280,6 +283,108 @@ describe('AccountTestModal', () => {
     await flushPromises()
     const [, request] = (global.fetch as any).mock.calls[0]
     expect(JSON.parse(request.body)).toMatchObject({ model_id: 'grok-imagine-video-1.5', mode: 'video' })
+  })
+
+  it('renders Grok TTS audio from data and HTTPS URLs with controls and keeps its request and logs', async () => {
+    global.fetch = vi.fn().mockResolvedValue(createStreamResponse([
+      'data: {"type":"status","text":"Synthesizing speech"}\n',
+      'data: {"type":"content","text":"tts ok"}\n',
+      'data: {"type":"audio","audio_url":"data:audio/mpeg;base64,YXVkaW8=","mime_type":"audio/mpeg"}\n',
+      'data: {"type":"audio","audio_url":"https://example.com/voice.wav","mime_type":"audio/wav"}\n',
+      'data: {"type":"test_complete","success":true}\n'
+    ])) as any
+    const wrapper = mountModal({ id: 88, name: 'Grok', platform: 'grok', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    ;(wrapper.vm as any).grokTestMode = 'tts'
+    await flushPromises()
+    ;(wrapper.vm as any).testPrompt = 'Read this test sentence.'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({ model_id: '', mode: 'tts', prompt: 'Read this test sentence.' })
+    const players = wrapper.findAll('audio')
+    expect(players).toHaveLength(2)
+    expect(players[0].attributes()).toMatchObject({ controls: '', preload: 'none', 'aria-label': 'received-audio-1' })
+    expect(players[0].attributes('autoplay')).toBeUndefined()
+    expect(players[0].get('source').attributes()).toMatchObject({ src: 'data:audio/mpeg;base64,YXVkaW8=', type: 'audio/mpeg' })
+    expect(players[1].get('source').attributes('src')).toBe('https://example.com/voice.wav')
+    expect(wrapper.text()).toContain('Synthesizing speech')
+    expect(wrapper.text()).toContain('tts ok')
+    expect(wrapper.text()).toContain('received-audio-2')
+    expect((wrapper.vm as any).status).toBe('success')
+  })
+
+  it('rejects non-audio data URLs and unsafe or malformed audio URLs', async () => {
+    const urls: unknown[] = [
+      'javascript:alert(1)', 'data:text/html;base64,PGgxPmhpPC9oMT4=',
+      'data:image/svg+xml;base64,PHN2Zz4=', 'data:audio/mpeg;base64,invalid!',
+      'file:///tmp/audio.mp3', '//example.com/audio.mp3', 42, ''
+    ]
+    global.fetch = vi.fn().mockResolvedValue(createStreamResponse([
+      ...urls.map(audio_url => `data: ${JSON.stringify({ type: 'audio', audio_url })}\n`),
+      'data: {"type":"test_complete","success":true}\n'
+    ])) as any
+    const wrapper = mountModal({ id: 88, name: 'Grok', platform: 'grok', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+    expect(wrapper.find('audio').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('received-audio-')
+  })
+
+  it('clears previous audio when retrying, closing, and changing accounts', async () => {
+    const audioResponse = () => createStreamResponse([
+      'data: {"type":"audio","audio_url":"data:audio/wav;base64,YXVkaW8=","mime_type":"audio/wav"}\n',
+      'data: {"type":"test_complete","success":true}\n'
+    ])
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce(audioResponse())
+      .mockResolvedValueOnce(createStreamResponse(['data: {"type":"test_complete","success":true}\n']))
+      .mockImplementation(async () => audioResponse()) as any
+    const wrapper = mountModal({ id: 88, name: 'Grok', platform: 'grok', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await (wrapper.vm as any).startTest()
+    expect(wrapper.findAll('audio')).toHaveLength(1)
+    await (wrapper.vm as any).startTest()
+    expect(wrapper.find('audio').exists()).toBe(false)
+    await (wrapper.vm as any).startTest()
+    expect(wrapper.findAll('audio')).toHaveLength(1)
+    await wrapper.findAll('button').find(button => button.text() === 'common.close')!.trigger('click')
+    expect(wrapper.find('audio').exists()).toBe(false)
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    await (wrapper.vm as any).startTest()
+    expect(wrapper.findAll('audio')).toHaveLength(1)
+    await wrapper.setProps({ account: { id: 99, name: 'Other Grok', platform: 'grok', type: 'oauth', status: 'active' } as any })
+    await flushPromises()
+    expect(wrapper.find('audio').exists()).toBe(false)
+  })
+
+  it.each(['close', 'unmount'] as const)('aborts streaming on %s and ignores a late audio event', async (action) => {
+    let resolveRead!: (chunk: { done: boolean; value?: Uint8Array }) => void
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => ({ read: () => new Promise(resolve => { resolveRead = resolve }) }) }
+    }) as any
+    const wrapper = mountModal({ id: 88, name: 'Grok', platform: 'grok', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    const request = (wrapper.vm as any).startTest()
+    await flushPromises()
+    const signal = (global.fetch as any).mock.calls[0][1].signal as AbortSignal
+    if (action === 'close') await wrapper.setProps({ show: false })
+    else wrapper.unmount()
+    expect(signal.aborted).toBe(true)
+    resolveRead({ done: false, value: new TextEncoder().encode('data: {"type":"audio","audio_url":"data:audio/mpeg;base64,YXVkaW8="}\n') })
+    await request
+    await flushPromises()
+    if (action === 'close') expect(wrapper.find('audio').exists()).toBe(false)
   })
 
   it('closes without loading models for a retired platform account', async () => {

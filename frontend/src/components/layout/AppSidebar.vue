@@ -1,13 +1,17 @@
 <template>
   <aside
+    id="app-sidebar"
+    ref="sidebarRef"
     class="sidebar"
+    :aria-hidden="!isDesktop && !mobileOpen ? true : undefined"
+    :inert="!isDesktop && !mobileOpen ? true : undefined"
     :class="[
       sidebarCollapsed ? 'w-[72px]' : 'w-64',
       { '-translate-x-full lg:translate-x-0': !mobileOpen }
     ]"
   >
     <!-- Logo/Brand -->
-    <div class="sidebar-header" :class="{ 'sidebar-header-collapsed': sidebarCollapsed }">
+    <div class="sidebar-header shrink-0" :class="{ 'sidebar-header-collapsed': sidebarCollapsed }">
       <!-- Custom Logo or Default Logo -->
       <router-link
         :to="homePath"
@@ -16,7 +20,7 @@
       >
         <img v-if="settingsLoaded" :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
       </router-link>
-      <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'">
+      <div class="sidebar-brand" :class="{ 'sidebar-brand-collapsed': sidebarCollapsed }" :aria-hidden="sidebarCollapsed ? 'true' : 'false'" :inert="sidebarCollapsed ? true : undefined">
         <router-link
           :to="homePath"
           class="sidebar-brand-title text-lg font-bold text-gray-900 transition-colors hover:text-primary-600 dark:text-white dark:hover:text-primary-400"
@@ -27,10 +31,18 @@
         <!-- Version Badge -->
         <VersionBadge :version="siteVersion" />
       </div>
+      <button
+        type="button"
+        class="btn-ghost btn-icon ml-auto shrink-0 lg:hidden"
+        :aria-label="t('common.close')"
+        @click="closeMobile"
+      >
+        <Icon name="x" size="md" />
+      </button>
     </div>
 
     <!-- Navigation -->
-    <nav ref="sidebarNavRef" class="sidebar-nav scrollbar-hide">
+    <nav ref="sidebarNavRef" class="sidebar-nav min-h-0 scrollbar-hide">
       <!-- Administrator navigation. User/self-service sections were removed. -->
       <div v-if="isPanelOperator" class="sidebar-section">
         <template v-for="item in adminNavItems" :key="item.path">
@@ -44,6 +56,9 @@
                 'sidebar-link-collapsed': sidebarCollapsed
               }"
               :title="sidebarCollapsed ? item.label : undefined"
+              :aria-label="item.label"
+              :aria-expanded="!sidebarCollapsed && isGroupExpanded(item)"
+              :aria-controls="`sidebar-group-${item.path.split('/').pop()}`"
               @click="handleGroupClick(item)"
             >
               <Icon :name="item.icon" size="md" class="flex-shrink-0" />
@@ -62,7 +77,7 @@
               </span>
             </button>
             <!-- Children -->
-            <div v-if="!sidebarCollapsed && isGroupExpanded(item)" class="mb-1 ml-4 border-l border-gray-200 pl-2 dark:border-dark-600">
+            <div v-if="!sidebarCollapsed && isGroupExpanded(item)" :id="`sidebar-group-${item.path.split('/').pop()}`" class="mb-1 ml-4 border-l border-gray-200 pl-2 dark:border-dark-600">
               <router-link
                 v-for="child in item.children"
                 :key="child.path"
@@ -94,13 +109,14 @@
     </nav>
 
     <!-- Bottom Section -->
-    <div class="mt-auto border-t border-gray-100 p-3 dark:border-dark-800">
+    <div class="mt-auto shrink-0 border-t border-gray-100 p-3 dark:border-dark-800">
       <!-- Theme Toggle -->
       <button
         @click="toggleTheme"
         class="sidebar-link mb-2 w-full"
         :class="{ 'sidebar-link-collapsed': sidebarCollapsed }"
         :title="sidebarCollapsed ? (isDark ? t('nav.lightMode') : t('nav.darkMode')) : undefined"
+        :aria-label="isDark ? t('nav.lightMode') : t('nav.darkMode')"
       >
         <Icon v-if="isDark" name="sun" size="md" class="flex-shrink-0 text-amber-500" />
         <Icon v-else name="moon" size="md" class="flex-shrink-0" />
@@ -112,9 +128,12 @@
       <!-- Collapse Button -->
       <button
         @click="toggleSidebar"
-        class="sidebar-link w-full"
+        class="sidebar-link hidden w-full lg:flex"
         :class="{ 'sidebar-link-collapsed': sidebarCollapsed }"
         :title="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
+        :aria-label="sidebarCollapsed ? t('nav.expand') : t('nav.collapse')"
+        :aria-expanded="!sidebarCollapsed"
+        aria-controls="app-sidebar"
       >
         <Icon v-if="!sidebarCollapsed" name="chevronDoubleLeft" size="md" class="flex-shrink-0" />
         <Icon v-else name="chevronDoubleRight" size="md" class="flex-shrink-0" />
@@ -127,7 +146,7 @@
   <transition name="fade">
     <div
       v-if="mobileOpen"
-      class="fixed inset-0 z-30 bg-black/50 lg:hidden"
+      class="fixed inset-0 z-[35] bg-black/50 lg:hidden"
       @click="closeMobile"
     ></div>
   </transition>
@@ -135,6 +154,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAdminSettingsStore, useAppStore, useAuthStore } from '@/stores'
@@ -164,8 +184,11 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const adminSettingsStore = useAdminSettingsStore()
 
-const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
+const isDesktop = useMediaQuery('(min-width: 1024px)')
+const sidebarCollapsed = computed(() => appStore.sidebarCollapsed && isDesktop.value)
 const mobileOpen = computed(() => appStore.mobileOpen)
+const sidebarRef = ref<HTMLElement | null>(null)
+let previousFocus: HTMLElement | null = null
 const isAdmin = computed(() => authStore.isAdmin)
 const isPanelOperator = computed(() => authStore.isPanelOperator)
 const sidebarNavRef = ref<HTMLElement | null>(null)
@@ -225,7 +248,7 @@ function toggleTheme() {
 }
 function closeMobile() { appStore.setMobileOpen(false) }
 function handleMenuItemClick() {
-  if (mobileOpen.value) setTimeout(() => appStore.setMobileOpen(false), 150)
+  if (mobileOpen.value) closeMobile()
 }
 function isActive(path: string) { return route.path === path || route.path.startsWith(`${path}/`) }
 function isGroupActive(item: NavItem) { return !!item.children?.some((child) => route.path === child.path) }
@@ -234,7 +257,11 @@ function isGroupExpanded(item: NavItem) {
   return override === undefined ? isGroupActive(item) : override
 }
 function handleGroupClick(item: NavItem) {
-  if (sidebarCollapsed.value) return
+  if (sidebarCollapsed.value) {
+    appStore.setSidebarCollapsed(false)
+    groupExpandOverrides.value.set(item.path, true)
+    return
+  }
   if (item.expandOnly) {
     groupExpandOverrides.value.set(item.path, !isGroupExpanded(item))
     return
@@ -242,6 +269,44 @@ function handleGroupClick(item: NavItem) {
   if (route.path !== item.path) void router.push(item.path)
   groupExpandOverrides.value.set(item.path, true)
 }
+
+function handleSidebarKeydown(event: KeyboardEvent) {
+  if (isDesktop.value || !mobileOpen.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeMobile()
+    return
+  }
+  if (event.key !== 'Tab') return
+  const focusable = Array.from(sidebarRef.value?.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), [tabindex="0"]'
+  ) || []).filter((element) => element.getClientRects().length > 0)
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault()
+    last?.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first?.focus()
+  }
+}
+
+watch(isDesktop, () => closeMobile())
+watch(() => route.fullPath, () => closeMobile())
+watch(mobileOpen, async (open) => {
+  document.body.classList.toggle('sidebar-open', open && !isDesktop.value)
+  if (open && !isDesktop.value) {
+    previousFocus = document.activeElement as HTMLElement | null
+    await nextTick()
+    if (mobileOpen.value) sidebarRef.value?.querySelector<HTMLElement>('a[href], button')?.focus()
+  } else {
+    const focusTarget = previousFocus
+    previousFocus = null
+    await nextTick()
+    if (focusTarget?.isConnected) focusTarget.focus()
+  }
+}, { immediate: true })
 
 const savedTheme = localStorage.getItem('theme')
 if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
@@ -251,6 +316,7 @@ if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-s
 
 watch(isAdmin, (value) => { if (value) void adminSettingsStore.fetch() }, { immediate: true })
 onMounted(() => {
+  document.addEventListener('keydown', handleSidebarKeydown)
   if (isAdmin.value) void adminSettingsStore.fetch()
   void nextTick(() => {
     if (sidebarNavRef.value && appStore.sidebarScrollTop > 0) {
@@ -258,7 +324,11 @@ onMounted(() => {
     }
   })
 })
-onBeforeUnmount(() => { if (sidebarNavRef.value) appStore.sidebarScrollTop = sidebarNavRef.value.scrollTop })
+onBeforeUnmount(() => {
+  if (sidebarNavRef.value) appStore.sidebarScrollTop = sidebarNavRef.value.scrollTop
+  document.removeEventListener('keydown', handleSidebarKeydown)
+  document.body.classList.remove('sidebar-open')
+})
 </script>
 
 <style scoped>

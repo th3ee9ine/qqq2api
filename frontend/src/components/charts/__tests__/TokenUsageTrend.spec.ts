@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 
 import TokenUsageTrend from '../TokenUsageTrend.vue'
 
@@ -20,12 +20,67 @@ vi.mock('vue-i18n', async () => {
 
 vi.mock('vue-chartjs', () => ({
   Line: {
+    name: 'Line',
     props: ['data', 'options'],
     template: '<div class="chart-data">{{ JSON.stringify(data) }}</div>',
   },
 }))
 
+const initialDocumentClass = document.documentElement.className
+enableAutoUnmount(afterEach)
+afterEach(() => {
+  document.documentElement.className = initialDocumentClass
+  vi.restoreAllMocks()
+})
+
+const sampleTrend = [{
+  date: '2026-05-08',
+  requests: 1,
+  input_tokens: 500,
+  output_tokens: 100,
+  cache_creation_tokens: 0,
+  cache_read_tokens: 1500,
+  cost: 0.01,
+  actual_cost: 0.005,
+}]
+
 describe('TokenUsageTrend', () => {
+  it.each([false, true])('updates legend, axis and grid colors when the theme changes (initial dark: %s)', async (initialDark) => {
+    document.documentElement.classList.toggle('dark', initialDark)
+    const wrapper = mount(TokenUsageTrend, { props: { trendData: sampleTrend } })
+    const chart = wrapper.findComponent({ name: 'Line' })
+    const initialData = chart.props('data')
+    const expectThemeColors = (dark: boolean) => {
+      const options = chart.props('options')
+      const textColor = dark ? '#e5e7eb' : '#374151'
+      const gridColor = dark ? '#374151' : '#e5e7eb'
+      expect(options.plugins.legend.labels.color).toBe(textColor)
+      expect(options.scales.x.ticks.color).toBe(textColor)
+      expect(options.scales.y.ticks.color).toBe(textColor)
+      expect(options.scales.x.grid.color).toBe(gridColor)
+      expect(options.scales.y.grid.color).toBe(gridColor)
+    }
+
+    expectThemeColors(initialDark)
+    document.documentElement.classList.toggle('dark', !initialDark)
+    await flushPromises()
+    expectThemeColors(!initialDark)
+
+    document.documentElement.classList.toggle('dark', initialDark)
+    await flushPromises()
+    expectThemeColors(initialDark)
+    expect(chart.props('data')).toEqual(initialData)
+  })
+
+  it('disconnects the theme observer when the chart is unmounted', () => {
+    const disconnect = vi.spyOn(MutationObserver.prototype, 'disconnect')
+    const wrapper = mount(TokenUsageTrend, { props: { trendData: sampleTrend } })
+
+    wrapper.unmount()
+
+    expect(disconnect).toHaveBeenCalledTimes(1)
+  })
+
   it('calculates cache hit rate against all prompt tokens', () => {
     const wrapper = mount(TokenUsageTrend, {
       props: {

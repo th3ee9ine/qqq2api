@@ -1,21 +1,55 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
+      <section class="card p-4" aria-labelledby="dashboard-quick-actions">
+        <h2 id="dashboard-quick-actions" class="mb-3 text-sm font-semibold text-gray-900 dark:text-white">
+          {{ t('admin.dashboard.quickActions') }}
+        </h2>
+        <div class="grid grid-cols-1 gap-3 lg:grid-cols-3">
+          <RouterLink
+            v-for="action in quickActions"
+            :key="action.to"
+            :to="action.to"
+            class="group flex min-w-0 items-center gap-3 rounded-lg border border-transparent bg-gray-50 p-3 transition-colors hover:border-primary-200 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:bg-dark-800/50 dark:hover:border-primary-800 dark:hover:bg-primary-900/20"
+          >
+            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg" :class="action.iconClass">
+              <Icon :name="action.icon" size="md" :stroke-width="2" />
+            </span>
+            <span class="min-w-0 flex-1">
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t(action.titleKey) }}</span>
+              <span class="mt-0.5 block text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ t(action.descriptionKey) }}</span>
+            </span>
+            <Icon name="chevronRight" size="sm" class="shrink-0 text-gray-400 group-hover:text-primary-500" />
+          </RouterLink>
+        </div>
+      </section>
+
       <!-- Loading State -->
       <div v-if="loading" class="flex items-center justify-center py-12">
         <LoadingSpinner />
       </div>
 
+      <div v-else-if="loadFailed && !stats" role="alert" class="card flex flex-col items-center gap-4 px-4 py-10 text-center">
+        <span class="rounded-full bg-red-50 p-3 text-red-500 dark:bg-red-900/20 dark:text-red-400">
+          <Icon name="exclamationCircle" size="lg" />
+        </span>
+        <p class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.dashboard.failedToLoad') }}</p>
+        <button type="button" class="btn btn-primary" @click="loadDashboardStats">
+          <Icon name="refresh" size="sm" />
+          {{ t('common.retry') }}
+        </button>
+      </div>
+
       <template v-else-if="stats">
         <!-- Row 1: Core Stats -->
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-3">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <!-- Total API Keys -->
-          <div class="card p-4">
+          <div class="card min-w-0 p-4">
             <div class="flex items-center gap-3">
-              <div class="rounded-lg bg-blue-100 p-2 dark:bg-blue-900/30">
+              <div class="shrink-0 rounded-lg bg-blue-100 p-2 dark:bg-blue-900/30">
                 <Icon name="key" size="md" class="text-blue-600 dark:text-blue-400" :stroke-width="2" />
               </div>
-              <div>
+              <div class="min-w-0 break-words">
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {{ t('admin.dashboard.apiKeys') }}
                 </p>
@@ -30,19 +64,19 @@
           </div>
 
           <!-- Service Accounts -->
-          <div class="card p-4">
+          <div class="card min-w-0 p-4">
             <div class="flex items-center gap-3">
-              <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30">
+              <div class="shrink-0 rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30">
                 <Icon name="server" size="md" class="text-purple-600 dark:text-purple-400" :stroke-width="2" />
               </div>
-              <div>
+              <div class="min-w-0 break-words">
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {{ t('admin.dashboard.accounts') }}
                 </p>
                 <p class="text-xl font-bold text-gray-900 dark:text-white">
                   {{ stats.total_accounts }}
                 </p>
-                <p class="text-xs">
+                <p class="flex flex-wrap items-center gap-x-1 text-xs">
                   <span class="text-green-600 dark:text-green-400"
                     >{{ stats.normal_accounts }} {{ t('common.active') }}</span
                   >
@@ -55,12 +89,12 @@
           </div>
 
           <!-- Today Requests -->
-          <div class="card p-4">
+          <div class="card min-w-0 p-4">
             <div class="flex items-center gap-3">
-              <div class="rounded-lg bg-green-100 p-2 dark:bg-green-900/30">
+              <div class="shrink-0 rounded-lg bg-green-100 p-2 dark:bg-green-900/30">
                 <Icon name="chart" size="md" class="text-green-600 dark:text-green-400" :stroke-width="2" />
               </div>
-              <div>
+              <div class="min-w-0 break-words">
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {{ t('admin.dashboard.todayRequests') }}
                 </p>
@@ -76,21 +110,21 @@
         </div>
 
         <!-- Row 2: Token Stats -->
-        <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <!-- Today Tokens -->
-          <div class="card p-4">
+          <div class="card min-w-0 p-4">
             <div class="flex items-center gap-3">
-              <div class="rounded-lg bg-amber-100 p-2 dark:bg-amber-900/30">
+              <div class="shrink-0 rounded-lg bg-amber-100 p-2 dark:bg-amber-900/30">
                 <Icon name="cube" size="md" class="text-amber-600 dark:text-amber-400" :stroke-width="2" />
               </div>
-              <div>
+              <div class="min-w-0 break-words">
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {{ t('admin.dashboard.todayTokens') }}
                 </p>
                 <p class="text-xl font-bold text-gray-900 dark:text-white">
                   {{ formatTokens(stats.today_tokens) }}
                 </p>
-                <p class="text-xs">
+                <p class="flex flex-wrap items-center gap-x-1 text-xs">
                   <span
                     class="text-green-600 dark:text-green-400"
                     :title="t('admin.dashboard.actual')"
@@ -114,19 +148,19 @@
           </div>
 
           <!-- Total Tokens -->
-          <div class="card p-4">
+          <div class="card min-w-0 p-4">
             <div class="flex items-center gap-3">
-              <div class="rounded-lg bg-indigo-100 p-2 dark:bg-indigo-900/30">
+              <div class="shrink-0 rounded-lg bg-indigo-100 p-2 dark:bg-indigo-900/30">
                 <Icon name="database" size="md" class="text-indigo-600 dark:text-indigo-400" :stroke-width="2" />
               </div>
-              <div>
+              <div class="min-w-0 break-words">
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {{ t('admin.dashboard.totalTokens') }}
                 </p>
                 <p class="text-xl font-bold text-gray-900 dark:text-white">
                   {{ formatTokens(stats.total_tokens) }}
                 </p>
-                <p class="text-xs">
+                <p class="flex flex-wrap items-center gap-x-1 text-xs">
                   <span
                     class="text-green-600 dark:text-green-400"
                     :title="t('admin.dashboard.actual')"
@@ -150,12 +184,12 @@
           </div>
 
           <!-- Performance (RPM/TPM) -->
-          <div class="card p-4">
+          <div class="card min-w-0 p-4">
             <div class="flex items-center gap-3">
-              <div class="rounded-lg bg-violet-100 p-2 dark:bg-violet-900/30">
+              <div class="shrink-0 rounded-lg bg-violet-100 p-2 dark:bg-violet-900/30">
                 <Icon name="bolt" size="md" class="text-violet-600 dark:text-violet-400" :stroke-width="2" />
               </div>
-              <div class="flex-1">
+              <div class="min-w-0 flex-1 break-words">
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {{ t('admin.dashboard.performance') }}
                 </p>
@@ -176,12 +210,12 @@
           </div>
 
           <!-- Avg Response Time -->
-          <div class="card p-4">
+          <div class="card min-w-0 p-4">
             <div class="flex items-center gap-3">
-              <div class="rounded-lg bg-rose-100 p-2 dark:bg-rose-900/30">
+              <div class="shrink-0 rounded-lg bg-rose-100 p-2 dark:bg-rose-900/30">
                 <Icon name="clock" size="md" class="text-rose-600 dark:text-rose-400" :stroke-width="2" />
               </div>
-              <div>
+              <div class="min-w-0 break-words">
                 <p class="text-xs font-medium text-gray-500 dark:text-gray-400">
                   {{ t('admin.dashboard.avgResponse') }}
                 </p>
@@ -198,7 +232,7 @@
           <!-- Date Range Filter -->
           <div class="card p-4">
             <div class="flex flex-wrap items-center gap-4">
-              <div class="flex items-center gap-2">
+              <div class="flex min-w-0 flex-wrap items-center gap-2">
                 <span class="text-sm font-medium text-gray-700 dark:text-gray-300"
                   >{{ t('admin.dashboard.timeRange') }}:</span
                 >
@@ -243,6 +277,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { RouterLink } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
@@ -264,6 +299,31 @@ const appStore = useAppStore()
 const stats = ref<DashboardStats | null>(null)
 const loading = ref(false)
 const chartsLoading = ref(false)
+const loadFailed = ref(false)
+
+const quickActions = [
+  {
+    to: '/admin/groups',
+    icon: 'grid',
+    titleKey: 'admin.dashboard.groupPricing',
+    descriptionKey: 'admin.groups.description',
+    iconClass: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400'
+  },
+  {
+    to: '/admin/accounts',
+    icon: 'server',
+    titleKey: 'nav.accounts',
+    descriptionKey: 'admin.accounts.description',
+    iconClass: 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400'
+  },
+  {
+    to: '/keys',
+    icon: 'key',
+    titleKey: 'nav.apiKeys',
+    descriptionKey: 'keys.description',
+    iconClass: 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+  }
+] as const
 
 // Chart data
 const trendData = ref<TrendDataPoint[]>([])
@@ -361,6 +421,7 @@ const onDateRangeChange = (range: {
 // Load data
 const loadDashboardSnapshot = async (includeStats: boolean) => {
   const currentSeq = ++chartLoadSeq
+  loadFailed.value = false
   if (includeStats && !stats.value) {
     loading.value = true
   }
@@ -383,6 +444,7 @@ const loadDashboardSnapshot = async (includeStats: boolean) => {
     modelStats.value = response.models || []
   } catch (error) {
     if (currentSeq !== chartLoadSeq) return
+    loadFailed.value = true
     appStore.showError(t('admin.dashboard.failedToLoad'))
     console.error('Error loading dashboard snapshot:', error)
   } finally {

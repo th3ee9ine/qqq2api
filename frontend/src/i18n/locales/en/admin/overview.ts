@@ -3,6 +3,8 @@ export default {
     dashboard: {
       title: 'Admin Dashboard',
       description: 'System overview and real-time statistics',
+      quickActions: 'Quick Actions',
+      groupPricing: 'Groups & Pricing',
       apiKeys: 'API Keys',
       totalApiKeys: 'Total API Keys',
       activeApiKeys: 'Active Keys',

@@ -1,12 +1,12 @@
 <template>
-  <div class="card p-4">
+  <div class="card min-w-0 p-4">
     <h3 class="mb-4 text-sm font-semibold text-gray-900 dark:text-white">
       {{ t('admin.dashboard.tokenUsageTrend') }}
     </h3>
     <div v-if="loading" class="flex h-48 items-center justify-center">
       <LoadingSpinner />
     </div>
-    <div v-else-if="trendData.length > 0 && chartData" class="h-48">
+    <div v-else-if="trendData.length > 0 && chartData" class="relative h-48 min-w-0">
       <Line :data="chartData" :options="lineOptions" />
     </div>
     <div
@@ -19,7 +19,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { useMutationObserver } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
   Chart as ChartJS,
@@ -54,9 +55,11 @@ const props = defineProps<{
   loading?: boolean
 }>()
 
-const isDarkMode = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
+const documentElement = document.documentElement
+const isDarkMode = ref(documentElement.classList.contains('dark'))
+useMutationObserver(documentElement, () => {
+  isDarkMode.value = documentElement.classList.contains('dark')
+}, { attributes: true, attributeFilter: ['class'] })
 
 const chartColors = computed(() => ({
   text: isDarkMode.value ? '#e5e7eb' : '#374151',

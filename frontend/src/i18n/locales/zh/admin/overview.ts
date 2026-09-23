@@ -3,6 +3,8 @@ export default {
     dashboard: {
       title: '管理控制台',
       description: '系统概览与统计数据',
+      quickActions: '快捷操作',
+      groupPricing: '分组与定价',
       apiKeys: 'API 密钥',
       totalApiKeys: 'API 密钥总数',
       activeApiKeys: '活跃密钥',

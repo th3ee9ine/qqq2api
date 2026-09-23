@@ -1,39 +1,48 @@
 <template>
   <header class="glass sticky top-0 z-30 border-b border-gray-200/50 dark:border-dark-700/50">
     <div class="flex h-16 items-center justify-between gap-2 px-2 sm:px-4 md:px-6">
-      <div class="flex shrink-0 items-center gap-2 sm:gap-4">
+      <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-4">
         <button
+          type="button"
           class="btn-ghost btn-icon lg:hidden"
           :aria-label="t('common.toggleMenu')"
+          :aria-expanded="appStore.mobileOpen"
+          aria-controls="app-sidebar"
           @click="appStore.toggleMobileSidebar()"
         >
           <Icon name="menu" size="md" />
         </button>
-        <div class="hidden lg:block">
-          <h1 class="text-lg font-semibold text-gray-900 dark:text-white">{{ pageTitle }}</h1>
-          <p v-if="pageDescription" class="text-xs text-gray-500 dark:text-dark-400">
+        <div class="min-w-0">
+          <h1 class="truncate text-sm font-semibold text-gray-900 dark:text-white sm:text-lg" :title="pageTitle">{{ pageTitle }}</h1>
+          <p v-if="pageDescription" class="hidden truncate text-xs text-gray-500 dark:text-dark-400 sm:block" :title="pageDescription">
             {{ pageDescription }}
           </p>
         </div>
       </div>
 
-      <div class="flex min-w-0 items-center gap-1 sm:gap-3">
+      <div class="flex shrink-0 items-center gap-1 sm:gap-3">
         <a
           v-if="docUrl"
           :href="docUrl"
           target="_blank"
           rel="noopener noreferrer"
-          class="hidden items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white sm:flex"
+          :aria-label="t('nav.docs')"
+          :title="t('nav.docs')"
+          class="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white sm:px-2.5"
         >
           <Icon name="book" size="sm" />
-          <span>{{ t('nav.docs') }}</span>
+          <span class="hidden sm:inline">{{ t('nav.docs') }}</span>
         </a>
         <LocaleSwitcher />
 
         <div v-if="user" ref="dropdownRef" class="relative">
           <button
+            ref="dropdownButtonRef"
+            type="button"
             class="flex items-center gap-2 rounded-xl p-1.5 transition-colors hover:bg-gray-100 dark:hover:bg-dark-800"
             :aria-label="t('common.userMenu')"
+            :aria-expanded="dropdownOpen"
+            aria-controls="header-user-menu"
             @click="dropdownOpen = !dropdownOpen"
           >
             <div class="flex h-8 w-8 items-center justify-center overflow-hidden rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 text-sm font-medium text-white shadow-sm">
@@ -41,7 +50,7 @@
               <span v-else>{{ userInitials }}</span>
             </div>
             <div class="hidden text-left md:block">
-              <div class="text-sm font-medium text-gray-900 dark:text-white">{{ displayName }}</div>
+              <div class="max-w-32 truncate text-sm font-medium text-gray-900 dark:text-white" :title="displayName">{{ displayName }}</div>
               <div class="text-xs text-gray-500 dark:text-dark-400">
                 {{ t('admin.users.roles.' + user.role) }}
               </div>
@@ -50,10 +59,10 @@
           </button>
 
           <transition name="dropdown">
-            <div v-if="dropdownOpen" class="dropdown right-0 mt-2 w-56">
+            <div v-if="dropdownOpen" id="header-user-menu" class="dropdown right-0 mt-2 w-56 max-w-[calc(100vw-1rem)]">
               <div class="border-b border-gray-100 px-4 py-3 dark:border-dark-700">
-                <div class="text-sm font-medium text-gray-900 dark:text-white">{{ displayName }}</div>
-                <div class="text-xs text-gray-500 dark:text-dark-400">{{ user.email }}</div>
+                <div class="break-words text-sm font-medium text-gray-900 dark:text-white">{{ displayName }}</div>
+                <div class="break-all text-xs text-gray-500 dark:text-dark-400">{{ user.email }}</div>
               </div>
               <div class="py-1">
                 <router-link v-if="authStore.isAdmin" to="/keys" class="dropdown-item" @click="closeDropdown">
@@ -83,7 +92,7 @@
                 v-if="contactInfo"
                 class="border-t border-gray-100 px-4 py-2.5 dark:border-dark-700"
               >
-                <div class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <div class="flex flex-wrap items-center gap-2 break-all text-xs text-gray-500 dark:text-gray-400">
                   <svg
                     class="h-3.5 w-3.5 flex-shrink-0"
                     fill="none"
@@ -133,7 +142,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore, useAuthStore } from '@/stores'
@@ -150,6 +159,7 @@ const authStore = useAuthStore()
 const user = computed(() => authStore.user)
 const dropdownOpen = ref(false)
 const dropdownRef = ref<HTMLElement | null>(null)
+const dropdownButtonRef = ref<HTMLButtonElement | null>(null)
 const contactInfo = computed(() => appStore.contactInfo)
 const docUrl = computed(() => sanitizeUrl(appStore.docUrl))
 const avatarUrl = computed(() => user.value?.avatar_url?.trim() || '')
@@ -184,8 +194,22 @@ function handleClickOutside(event: MouseEvent) {
   if (dropdownRef.value && !dropdownRef.value.contains(event.target as Node)) closeDropdown()
 }
 
-onMounted(() => document.addEventListener('click', handleClickOutside))
-onBeforeUnmount(() => document.removeEventListener('click', handleClickOutside))
+function handleEscape(event: KeyboardEvent) {
+  if (event.key === 'Escape' && dropdownOpen.value) {
+    closeDropdown()
+    dropdownButtonRef.value?.focus()
+  }
+}
+
+watch(() => route.fullPath, closeDropdown)
+onMounted(() => {
+  document.addEventListener('click', handleClickOutside)
+  document.addEventListener('keydown', handleEscape)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('click', handleClickOutside)
+  document.removeEventListener('keydown', handleEscape)
+})
 </script>
 
 <style scoped>

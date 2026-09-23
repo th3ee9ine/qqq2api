@@ -34,4 +34,23 @@ describe('BaseDialog', () => {
     expect(document.body.querySelector<HTMLElement>('.modal-body')?.scrollTop).toBe(0)
     wrapper.unmount()
   })
+
+  it('honors the close button visibility during non-dismissible operations', async () => {
+    const wrapper = mount(BaseDialog, {
+      attachTo: document.body,
+      props: { show: true, title: 'Saving', closeOnEscape: false, showCloseButton: false },
+      global: { stubs: { Icon: true } }
+    })
+
+    expect(document.body.querySelector('[aria-label="Close modal"]')).toBeNull()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    await wrapper.setProps({ showCloseButton: true })
+    const closeButton = document.body.querySelector<HTMLButtonElement>('[aria-label="Close modal"]')
+    expect(closeButton).not.toBeNull()
+    closeButton!.click()
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
 })

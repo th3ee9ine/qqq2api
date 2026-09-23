@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 import type { DashboardStats } from '@/types'
@@ -20,12 +20,6 @@ vi.mock('@/api/admin', () => ({
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError: vi.fn()
-  })
-}))
-
-vi.mock('vue-router', () => ({
-  useRouter: () => ({
-    push: vi.fn()
   })
 }))
 
@@ -82,6 +76,23 @@ const createDashboardStats = (): DashboardStats => ({
   tpm: 0
 })
 
+const mountDashboard = () => mount(DashboardView, {
+  global: {
+    stubs: {
+      AppLayout: { template: '<div><slot /></div>' },
+      RouterLink: RouterLinkStub,
+      LoadingSpinner: true,
+      Icon: true,
+      DateRangePicker: true,
+      Select: true,
+      ModelDistributionChart: {
+        template: '<div data-test="model-chart" />'
+      },
+      TokenUsageTrend: true
+    }
+  }
+})
+
 describe('admin DashboardView', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -95,20 +106,12 @@ describe('admin DashboardView', () => {
     })
   })
 
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('uses last 24 hours as default dashboard range', async () => {
-    mount(DashboardView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          LoadingSpinner: true,
-          Icon: true,
-          DateRangePicker: true,
-          Select: true,
-          ModelDistributionChart: true,
-          TokenUsageTrend: true
-        }
-      }
-    })
+    mountDashboard()
 
     await flushPromises()
 
@@ -124,21 +127,7 @@ describe('admin DashboardView', () => {
   })
 
   it('does not render or request user-specific dashboard data', async () => {
-    const wrapper = mount(DashboardView, {
-      global: {
-        stubs: {
-          AppLayout: { template: '<div><slot /></div>' },
-          LoadingSpinner: true,
-          Icon: true,
-          DateRangePicker: true,
-          Select: true,
-          ModelDistributionChart: {
-            template: '<div data-test="model-chart" />'
-          },
-          TokenUsageTrend: true
-        }
-      }
-    })
+    const wrapper = mountDashboard()
 
     await flushPromises()
 
@@ -150,5 +139,56 @@ describe('admin DashboardView', () => {
     const snapshotParams = getSnapshotV2.mock.calls[0][0]
     expect(snapshotParams).not.toHaveProperty('user_id')
     expect(snapshotParams).not.toHaveProperty('include_users_trend')
+  })
+
+  it('offers only supported management shortcuts without extra data requests', async () => {
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const shortcuts = wrapper.findAllComponents(RouterLinkStub)
+    expect(shortcuts.map(shortcut => shortcut.props('to'))).toEqual([
+      '/admin/groups', '/admin/accounts', '/keys'
+    ])
+    expect(shortcuts.map(shortcut => shortcut.text())).toEqual([
+      expect.stringContaining('admin.dashboard.groupPricing'),
+      expect.stringContaining('nav.accounts'),
+      expect.stringContaining('nav.apiKeys')
+    ])
+    expect(getSnapshotV2).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a retry action after the initial snapshot fails and recovers on retry', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    getSnapshotV2.mockRejectedValueOnce(new Error('Network unavailable'))
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const errorState = wrapper.get('[role="alert"]')
+    expect(errorState.text()).toContain('admin.dashboard.failedToLoad')
+    expect(wrapper.findAllComponents(RouterLinkStub)).toHaveLength(3)
+    expect(wrapper.find('[data-test="model-chart"]').exists()).toBe(false)
+
+    await errorState.get('button').trigger('click')
+    await flushPromises()
+
+    expect(getSnapshotV2).toHaveBeenCalledTimes(2)
+    expect(getSnapshotV2.mock.calls[1][0]).toEqual(getSnapshotV2.mock.calls[0][0])
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="model-chart"]').exists()).toBe(true)
+  })
+
+  it('keeps the last successful statistics visible when refresh fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const wrapper = mountDashboard()
+    await flushPromises()
+    getSnapshotV2.mockRejectedValueOnce(new Error('Refresh unavailable'))
+
+    await wrapper.findAll('button').find(button => button.text().includes('common.refresh'))!.trigger('click')
+    await flushPromises()
+
+    expect(getSnapshotV2).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('admin.dashboard.todayRequests')
+    expect(wrapper.find('[data-test="model-chart"]').exists()).toBe(true)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
   })
 })

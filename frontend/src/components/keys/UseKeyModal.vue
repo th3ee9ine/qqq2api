@@ -172,6 +172,64 @@
           </div>
         </div>
 
+        <section
+          v-if="showCodexModelCatalog"
+          data-testid="codex-model-catalog"
+          class="overflow-hidden rounded-lg border border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-800/50"
+          aria-live="polite"
+        >
+          <div class="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <h3 class="text-sm font-medium text-gray-900 dark:text-white">
+                {{ t('keys.useKeyModal.codexModelCatalog.title') }}
+              </h3>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('keys.useKeyModal.codexModelCatalog.description') }}
+              </p>
+              <p class="mt-1 break-all font-mono text-xs text-gray-700 dark:text-gray-300">
+                {{ codexModelCatalogPath }}
+              </p>
+            </div>
+            <button
+              v-if="codexModelManifestState === 'ready'"
+              type="button"
+              data-testid="codex-model-catalog-download"
+              class="btn btn-primary min-h-9 flex-shrink-0 px-3 text-xs"
+              @click="downloadCodexModelManifest"
+            >
+              <Icon name="download" size="sm" class="mr-1.5" />
+              {{ t('keys.useKeyModal.codexModelCatalog.download') }}
+            </button>
+            <button
+              v-else
+              type="button"
+              data-testid="codex-model-catalog-fetch"
+              class="btn btn-primary min-h-9 flex-shrink-0 px-3 text-xs"
+              :disabled="codexModelManifestState === 'loading' || !apiKey"
+              @click="loadCodexModelManifest"
+            >
+              <Icon name="refresh" size="sm" class="mr-1.5" :class="{ 'animate-spin': codexModelManifestState === 'loading' }" />
+              {{ codexModelManifestState === 'loading'
+                ? t('common.loading')
+                : codexModelManifestState === 'error'
+                  ? t('keys.useKeyModal.codexModelCatalog.retry')
+                  : t('keys.useKeyModal.codexModelCatalog.fetch') }}
+            </button>
+          </div>
+          <p
+            v-if="codexModelManifestState === 'ready'"
+            class="border-t border-gray-200 px-4 py-2 text-xs text-emerald-700 dark:border-dark-700 dark:text-emerald-300"
+          >
+            {{ t('keys.useKeyModal.codexModelCatalog.modelsCount', { count: codexModelManifestModelCount }) }}
+          </p>
+          <p
+            v-else-if="codexModelManifestState === 'error'"
+            class="border-t border-red-200 px-4 py-2 text-xs text-red-700 dark:border-red-900 dark:text-red-300"
+          >
+            {{ t('keys.useKeyModal.codexModelCatalog.errorDescription') }}
+          </p>
+        </section>
+
         <!-- Usage Note -->
         <div v-if="showPlatformNote" class="flex items-start gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
           <Icon name="infoCircle" size="md" class="text-blue-500 flex-shrink-0 mt-0.5" />
@@ -196,12 +254,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, h, watch, type Component } from 'vue'
+import { ref, computed, h, watch, onBeforeUnmount, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { saveAs } from 'file-saver'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import type { GroupPlatform } from '@/types'
+import { fetchCodexModelsManifest } from '@/api/codex'
+import {
+  findCodexCatalogModel,
+  formatCodexReasoningEffortTomlLine,
+  parseCodexCatalogModels,
+  selectCodexConfigReasoningEffort
+} from '@/utils/codexCatalogConfig'
 
 interface Props {
   show: boolean
@@ -239,6 +305,19 @@ const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
 type CodexAuthMode = 'legacy' | 'api-key'
 const codexAuthMode = ref<CodexAuthMode>('legacy')
+const codexModelManifestState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
+const codexModelManifestContent = ref('')
+const codexModelManifestModelCount = ref(0)
+let codexModelManifestController: AbortController | null = null
+let codexModelManifestRequestID = 0
+const showCodexModelCatalog = computed(() =>
+  props.show && (props.platform === 'openai' || props.platform === 'grok') &&
+  (activeClientTab.value === 'codex' || activeClientTab.value === 'codex-ws')
+)
+const codexModelCatalogPath = computed(() => activeTab.value === 'windows'
+  ? '%userprofile%\\.codex\\codex-models.json'
+  : '~/.codex/codex-models.json'
+)
 const isSupportedPlatform = computed(() =>
   props.platform === 'anthropic' ||
   props.platform === 'openai' ||
@@ -260,6 +339,14 @@ watch(() => props.show, (show) => {
     codexAuthMode.value = 'legacy'
   }
 })
+
+// A catalog belongs to the selected key and endpoint. Abort stale requests
+// when the dialog closes or the user switches its context.
+watch(
+  () => [props.show, props.platform, props.apiKey, props.baseUrl, showCodexModelCatalog.value],
+  resetCodexModelManifest
+)
+onBeforeUnmount(resetCodexModelManifest)
 
 // Reset shell tab when client changes
 watch(activeClientTab, () => {
@@ -404,6 +491,61 @@ const platformNote = computed(() => {
 
 const showPlatformNote = computed(() => activeClientTab.value !== 'opencode')
 
+function resetCodexModelManifest() {
+  codexModelManifestController?.abort()
+  codexModelManifestController = null
+  codexModelManifestRequestID += 1
+  codexModelManifestState.value = 'idle'
+  codexModelManifestContent.value = ''
+  codexModelManifestModelCount.value = 0
+}
+
+async function loadCodexModelManifest() {
+  if (!showCodexModelCatalog.value || !props.apiKey || codexModelManifestState.value === 'loading') return
+  const controller = new AbortController()
+  const requestID = ++codexModelManifestRequestID
+  codexModelManifestController = controller
+  codexModelManifestState.value = 'loading'
+  try {
+    const result = await fetchCodexModelsManifest(props.baseUrl, props.apiKey, controller.signal)
+    if (requestID !== codexModelManifestRequestID) return
+    codexModelManifestContent.value = result.content
+    codexModelManifestModelCount.value = result.modelCount
+    codexModelManifestState.value = 'ready'
+  } catch {
+    if (requestID === codexModelManifestRequestID) codexModelManifestState.value = 'error'
+  } finally {
+    if (requestID === codexModelManifestRequestID) codexModelManifestController = null
+  }
+}
+
+function downloadCodexModelManifest() {
+  if (codexModelManifestState.value !== 'ready') return
+  saveAs(new Blob([codexModelManifestContent.value], { type: 'application/json;charset=utf-8' }), 'codex-models.json')
+}
+
+function escapeTomlBasicString(value: string): string {
+  return JSON.stringify(value).slice(1, -1)
+}
+
+function selectCodexCatalogModel(preferred: string): string {
+  const models = parseCodexCatalogModels(codexModelManifestContent.value)
+  return models.find(model => model.slug === preferred)?.slug || models[0]?.slug || preferred
+}
+
+function codexReasoningEffortTomlLine(model: string, fallback: string | null): string {
+  const effort = codexModelManifestState.value === 'ready'
+    ? selectCodexConfigReasoningEffort(findCodexCatalogModel(codexModelManifestContent.value, model))
+    : fallback
+  return formatCodexReasoningEffortTomlLine(effort)
+}
+
+// Keep the existing setup usable until a catalog has actually been obtained.
+const codexModelCatalogTomlLine = computed(() => codexModelManifestState.value === 'ready'
+  ? `model_catalog_json = "${escapeTomlBasicString(codexModelCatalogPath.value)}"\n`
+  : ''
+)
+
 // Syntax highlighting helpers
 // Generate file configs based on platform and active tab
 const currentFiles = computed((): FileConfig[] => {
@@ -486,10 +628,12 @@ image_edit_model_override = "grok-imagine-edit"`
 }
 
 function generateGrokCodexFiles(baseUrl: string, apiKey: string): FileConfig[] {
+  const model = selectCodexCatalogModel('grok-4.7')
   return [grokEnvironment(apiKey), {
     path: activeTab.value === 'unix' ? '~/.codex/config.toml' : '%USERPROFILE%\\.codex\\config.toml',
     content: `model_provider = "qqq2api_grok"
-model = "grok-4.7"
+model = "${escapeTomlBasicString(model)}"
+${codexReasoningEffortTomlLine(model, null)}${codexModelCatalogTomlLine.value}
 
 [model_providers.qqq2api_grok]
 name = "QQQ2API Grok"
@@ -615,14 +759,14 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
 function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
+  const model = selectCodexCatalogModel('gpt-5.5')
 
   // config.toml content
   const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
+model = "${escapeTomlBasicString(model)}"
+review_model = "${escapeTomlBasicString(model)}"
+${codexReasoningEffortTomlLine(model, 'xhigh')}disable_response_storage = true
+${codexModelCatalogTomlLine.value}network_access = "enabled"
 windows_wsl_setup_acknowledged = true
 
 [model_providers.OpenAI]
@@ -664,14 +808,14 @@ http_headers = { "x-openai-actor-authorization" = "local-image-extension" }`
 function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
+  const model = selectCodexCatalogModel('gpt-5.5')
 
   // config.toml content with WebSocket v2
   const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
-model_reasoning_effort = "xhigh"
-disable_response_storage = true
-network_access = "enabled"
+model = "${escapeTomlBasicString(model)}"
+review_model = "${escapeTomlBasicString(model)}"
+${codexReasoningEffortTomlLine(model, 'xhigh')}disable_response_storage = true
+${codexModelCatalogTomlLine.value}network_access = "enabled"
 windows_wsl_setup_acknowledged = true
 
 [model_providers.OpenAI]

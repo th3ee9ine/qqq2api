@@ -141,6 +141,27 @@
         </div>
       </div>
 
+      <div v-if="generatedAudios.length > 0" class="space-y-2" data-testid="test-audio-preview">
+        <div class="text-xs font-medium text-gray-600 dark:text-gray-300">
+          {{ t('admin.accounts.audioPreview') }}
+        </div>
+        <div
+          v-for="(audio, index) in generatedAudios"
+          :key="`${audio.url}-${index}`"
+          class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-500 dark:bg-dark-700"
+        >
+          <audio
+            controls
+            preload="none"
+            class="w-full"
+            :aria-label="t('admin.accounts.audioReceived', { count: index + 1 })"
+          >
+            <source :src="audio.url" :type="audio.mimeType" />
+          </audio>
+          <div class="mt-1 text-xs text-gray-500 dark:text-gray-300">{{ audio.mimeType || 'audio/*' }}</div>
+        </div>
+      </div>
+
       <video v-for="url in generatedVideos" :key="url" :src="url" controls class="max-h-96 w-full rounded-lg" />
       <Teleport to="body">
         <Transition name="fade">
@@ -219,12 +240,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import { buildApiUrl } from '@/api/client'
 import { ADMIN_UI_REQUEST_HEADER } from '@/api/adminUIRequest'
 import { useClipboard } from '@/composables/useClipboard'
+import { sanitizeUrl } from '@/utils/url'
 import type { Account, ClaudeModel } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -245,6 +267,7 @@ interface TestEvent {
   model?: string
   video_url?: string
   image_url?: string
+  audio_url?: string
   mime_type?: string
 }
 
@@ -289,6 +312,7 @@ watch(grokTestMode, mode => {
   testPrompt.value = mode === 'search' ? 'xAI Grok' : mode === 'tts' ? 'Hello from API connectivity test.' : ['image', 'video'].includes(mode) ? t('admin.accounts.imagePromptDefault') : ''
 })
 const generatedImages = ref<PreviewMedia[]>([])
+const generatedAudios = ref<PreviewMedia[]>([])
 const previewImageUrl = ref('')
 const loadingModels = ref(false)
 let abortController: AbortController | null = null
@@ -317,8 +341,9 @@ const testModeSummary = computed(() =>
 watch(
   () => [props.show, props.account] as const,
   async ([visible]) => {
+    abortStream()
+    generatedAudios.value = []
     if (!visible) {
-      abortStream()
       return
     }
     if (!supported.value) {
@@ -332,6 +357,7 @@ watch(
     await loadAvailableModels()
   }
 )
+onBeforeUnmount(abortStream)
 
 async function loadAvailableModels() {
   if (!props.account || !supported.value) return
@@ -390,6 +416,7 @@ function resetState() {
   streamingContent.value = ''
   errorMessage.value = ''
   generatedImages.value = []
+  generatedAudios.value = []
   generatedVideos.value = []
   previewImageUrl.value = ''
 }
@@ -401,6 +428,7 @@ function abortStream() {
 
 function handleClose() {
   abortStream()
+  generatedAudios.value = []
   emit('close')
 }
 
@@ -456,6 +484,19 @@ function handleEvent(event: TestEvent) {
     )
     return
   }
+  if (event.type === 'audio' && typeof event.audio_url === 'string') {
+    const value = event.audio_url.trim()
+    const url = /^data:audio\/[a-z0-9.+-]+;base64,[a-z0-9+/]+={0,2}$/i.test(value)
+      ? value
+      : sanitizeUrl(value)
+    if (!url) return
+    generatedAudios.value.push({
+      url,
+      mimeType: /^audio\/[a-z0-9.+-]+$/i.test(event.mime_type || '') ? event.mime_type : undefined
+    })
+    void addLine(t('admin.accounts.audioReceived', { count: generatedAudios.value.length }), 'text-purple-300')
+    return
+  }
   if (event.type === 'status' && event.text) {
     void addLine(event.text, 'text-cyan-300')
     return
@@ -474,6 +515,9 @@ function handleEvent(event: TestEvent) {
 
 async function startTest() {
   if (!props.account || !canStartTest.value) return
+  abortStream()
+  const controller = new AbortController()
+  abortController = controller
   resetState()
   status.value = 'connecting'
   await addLine(
@@ -485,8 +529,7 @@ async function startTest() {
     'text-gray-400'
   )
   await addLine('', 'text-gray-300')
-  abortStream()
-  abortController = new AbortController()
+  if (controller.signal.aborted) return
   try {
     const body: { model_id: string; prompt: string; mode?: string } = {
       model_id: selectedModelId.value,
@@ -505,8 +548,9 @@ async function startTest() {
         [ADMIN_UI_REQUEST_HEADER]: '1'
       },
       body: JSON.stringify(body),
-      signal: abortController.signal
+      signal: controller.signal
     })
+    if (controller.signal.aborted) return
     if (!response.ok) throw new Error('HTTP error! status: ' + response.status)
     const reader = response.body?.getReader()
     if (!reader) throw new Error(t('admin.accounts.testFailed'))
@@ -514,6 +558,7 @@ async function startTest() {
     let buffer = ''
     while (true) {
       const { done, value } = await reader.read()
+      if (controller.signal.aborted) return
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
@@ -531,6 +576,7 @@ async function startTest() {
     }
     if (status.value === 'connecting') status.value = 'success'
   } catch (error: unknown) {
+    if (controller.signal.aborted) return
     if (error instanceof DOMException && error.name === 'AbortError') {
       status.value = 'idle'
       return
@@ -540,7 +586,7 @@ async function startTest() {
     errorMessage.value = message
     await addLine(t('admin.accounts.errorPrefix', { message }), 'text-red-400')
   } finally {
-    abortController = null
+    if (abortController === controller) abortController = null
   }
 }
 </script>
