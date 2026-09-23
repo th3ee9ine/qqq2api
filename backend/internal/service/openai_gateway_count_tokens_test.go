@@ -62,6 +62,10 @@ func TestBuildInputTokensUpstreamRequestOAuthUsesCanonicalAuthIdentity(t *testin
 }
 
 func TestBuildInputTokensUpstreamRequestOAuthPrefersAccountLocalIdentity(t *testing.T) {
+	previousLocalIdentityEnabled := codexAccountLocalDeviceIdentityEnabled.Load()
+	SetCodexAccountLocalDeviceIdentityEnabled(true)
+	t.Cleanup(func() { SetCodexAccountLocalDeviceIdentityEnabled(previousLocalIdentityEnabled) })
+
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/input_tokens", nil)

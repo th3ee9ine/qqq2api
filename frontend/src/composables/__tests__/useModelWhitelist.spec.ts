@@ -13,6 +13,8 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('gpt-5.6')
     expect(models).toContain('gpt-6')
     expect(models).toContain('gpt-6-astra')
+    expect(models).toContain('gpt-6-sol')
+    expect(models).toContain('gpt-6-luna')
   })
 
   it('openai 预设映射包含 GPT-6 别名和 Astra', () => {
@@ -28,6 +30,7 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('claude-fable-5')
     expect(models).toContain('claude-fable-5-1')
     expect(models).toContain('claude-opus-4-8')
+    expect(models).toContain('claude-opus-5-5')
   })
 
   it('returns no models for unsupported platforms', () => {

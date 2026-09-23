@@ -3514,6 +3514,13 @@ func TestReplaceModelInResponseBody(t *testing.T) {
 			to:       "alias",
 			expected: `{"model":"alias","usage":{"prompt_tokens":10,"completion_tokens":20},"choices":[{"message":{"role":"assistant","content":"hello"}}]}`,
 		},
+		{
+			name:     "保留 GPT-6 Sol effort 后缀模型身份",
+			body:     `{"id":"resp-123","model":"gpt-6-sol-high","output":[]}`,
+			from:     "gpt-6-sol-high",
+			to:       "gpt-6-sol",
+			expected: `{"id":"resp-123","model":"gpt-6-sol-high","output":[]}`,
+		},
 	}
 
 	for _, tt := range tests {

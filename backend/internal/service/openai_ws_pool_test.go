@@ -350,9 +350,12 @@ func TestOpenAIWSConnPool_AcquireQueueWaitMetrics(t *testing.T) {
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 4
 
 	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	pool.setClientDialerForTest(&openAIWSAlwaysFailDialer{})
 	accountID := int64(99)
 	account := &Account{ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	conn := newOpenAIWSConn("busy", accountID, &openAIWSFakeConn{}, nil)
+	conn.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(openAIWSAcquireRequest{Account: account})
 	require.True(t, conn.tryAcquire()) // 占用连接，触发后续排队
 
 	ap := pool.ensureAccountPoolLocked(accountID)
@@ -369,7 +372,9 @@ func TestOpenAIWSConnPool_AcquireQueueWaitMetrics(t *testing.T) {
 		conn.release()
 	}()
 
-	lease, err := pool.Acquire(context.Background(), openAIWSAcquireRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	lease, err := pool.Acquire(ctx, openAIWSAcquireRequest{
 		Account: account,
 		WSURL:   "wss://example.com/v1/responses",
 	})
@@ -392,11 +397,15 @@ func TestOpenAIWSConnPool_AcquireAtCapacityWakesWhenAnotherConnReleases(t *testi
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 4
 
 	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	pool.setClientDialerForTest(&openAIWSAlwaysFailDialer{})
 	accountID := int64(993)
 	account := &Account{ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	req := openAIWSAcquireRequest{Account: account, WSURL: "wss://example.com/v1/responses"}
 	target := newOpenAIWSConn("target", accountID, &openAIWSFakeConn{}, nil)
 	other := newOpenAIWSConn("other", accountID, &openAIWSFakeConn{}, nil)
+	target.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(req)
+	other.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(req)
 	require.True(t, target.tryAcquire())
 	require.True(t, other.tryAcquire())
 	// other 上已有一个等待者，新来的等待者会挂到 target 上。
@@ -450,6 +459,7 @@ func TestOpenAIWSConnPool_AcquireAtCapacityWakesWhenCapacityFreedByEviction(t *t
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 4
 
 	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
 	dialer := &openAIWSCountingDialer{}
 	pool.setClientDialerForTest(dialer)
 	accountID := int64(994)
@@ -457,6 +467,8 @@ func TestOpenAIWSConnPool_AcquireAtCapacityWakesWhenCapacityFreedByEviction(t *t
 	req := openAIWSAcquireRequest{Account: account, WSURL: "wss://example.com/v1/responses"}
 	target := newOpenAIWSConn("target", accountID, &openAIWSFakeConn{}, nil)
 	other := newOpenAIWSConn("other", accountID, &openAIWSFakeConn{}, nil)
+	target.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(req)
+	other.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(req)
 	require.True(t, target.tryAcquire())
 	require.True(t, other.tryAcquire())
 	other.waiters.Add(1)
@@ -513,8 +525,12 @@ func TestOpenAIWSConnPool_AcquireAtCapacityCanceledWaiterDoesNotTakeReleasedConn
 	account := &Account{ID: accountID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	req := openAIWSAcquireRequest{Account: account, WSURL: "wss://example.com/v1/responses"}
 	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	pool.setClientDialerForTest(&openAIWSAlwaysFailDialer{})
 	target := newOpenAIWSConn("target", accountID, &openAIWSFakeConn{}, nil)
 	other := newOpenAIWSConn("other", accountID, &openAIWSFakeConn{}, nil)
+	target.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(req)
+	other.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(req)
 	require.True(t, target.tryAcquire())
 	require.True(t, other.tryAcquire())
 	other.waiters.Add(1)
@@ -1713,10 +1729,15 @@ func TestOpenAIWSConnPool_AcquireForcePreferredConnQueuesOnPreferredOnly(t *test
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 4
 
 	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	pool.setClientDialerForTest(&openAIWSAlwaysFailDialer{})
 	account := &Account{ID: 125, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	ap := pool.getOrCreateAccountPool(account.ID)
 	preferredConn := newOpenAIWSConn("preferred_conn", account.ID, &openAIWSFakeConn{}, nil)
 	otherConn := newOpenAIWSConn("other_conn_idle", account.ID, &openAIWSFakeConn{}, nil)
+	compatibility := normalizeOpenAIWSAcquireCompatibility(openAIWSAcquireRequest{Account: account})
+	preferredConn.handshakeCompatibility = compatibility
+	otherConn.handshakeCompatibility = compatibility
 	require.True(t, preferredConn.tryAcquire(), "先占用 preferred 连接，触发排队获取")
 	ap.mu.Lock()
 	ap.conns[preferredConn.id] = preferredConn
@@ -1754,10 +1775,15 @@ func TestOpenAIWSConnPool_AcquireForcePreferredConnDirectAndQueueFull(t *testing
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 1
 
 	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	pool.setClientDialerForTest(&openAIWSAlwaysFailDialer{})
 	account := &Account{ID: 127, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	ap := pool.getOrCreateAccountPool(account.ID)
 	preferredConn := newOpenAIWSConn("preferred_conn_direct", account.ID, &openAIWSFakeConn{}, nil)
 	otherConn := newOpenAIWSConn("other_conn_direct", account.ID, &openAIWSFakeConn{}, nil)
+	compatibility := normalizeOpenAIWSAcquireCompatibility(openAIWSAcquireRequest{Account: account})
+	preferredConn.handshakeCompatibility = compatibility
+	otherConn.handshakeCompatibility = compatibility
 	ap.mu.Lock()
 	ap.conns[preferredConn.id] = preferredConn
 	ap.conns[otherConn.id] = otherConn
@@ -3003,6 +3029,8 @@ func TestOpenAIWSConnPool_TargetConnCountAndPrewarmBranches(t *testing.T) {
 }
 
 func TestOpenAIWSConnPool_Acquire_ErrorBranches(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	var nilPool *openAIWSConnPool
 	_, err := nilPool.Acquire(context.Background(), openAIWSAcquireRequest{})
 	require.Error(t, err)
@@ -3020,13 +3048,15 @@ func TestOpenAIWSConnPool_Acquire_ErrorBranches(t *testing.T) {
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
 	cfg.Gateway.OpenAIWS.QueueLimitPerConn = 1
 	fullPool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(fullPool.Close)
+	fullPool.setClientDialerForTest(&openAIWSAlwaysFailDialer{})
 	account := &Account{ID: 2001, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	ap := fullPool.getOrCreateAccountPool(account.ID)
 	ap.mu.Lock()
 	ap.conns["nil"] = nil
 	ap.lastCleanupAt = time.Now()
 	ap.mu.Unlock()
-	_, err = fullPool.Acquire(context.Background(), openAIWSAcquireRequest{
+	_, err = fullPool.Acquire(ctx, openAIWSAcquireRequest{
 		Account: account,
 		WSURL:   "wss://example.com/v1/responses",
 	})
@@ -3036,13 +3066,14 @@ func TestOpenAIWSConnPool_Acquire_ErrorBranches(t *testing.T) {
 	account2 := &Account{ID: 2002, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	ap2 := fullPool.getOrCreateAccountPool(account2.ID)
 	conn := newOpenAIWSConn("queue_full", account2.ID, &openAIWSFakeConn{}, nil)
+	conn.handshakeCompatibility = normalizeOpenAIWSAcquireCompatibility(openAIWSAcquireRequest{Account: account2})
 	require.True(t, conn.tryAcquire())
 	conn.waiters.Store(1)
 	ap2.mu.Lock()
 	ap2.conns[conn.id] = conn
 	ap2.lastCleanupAt = time.Now()
 	ap2.mu.Unlock()
-	_, err = fullPool.Acquire(context.Background(), openAIWSAcquireRequest{
+	_, err = fullPool.Acquire(ctx, openAIWSAcquireRequest{
 		Account: account2,
 		WSURL:   "wss://example.com/v1/responses",
 	})

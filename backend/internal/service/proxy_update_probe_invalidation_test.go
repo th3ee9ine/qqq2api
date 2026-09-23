@@ -61,11 +61,12 @@ func TestBothProxyUpdateServicesUseRepositoryUpdateBoundary(t *testing.T) {
 		}
 		svc := &adminServiceImpl{proxyRepo: repo}
 		maxAccounts := 30
+		warnDays := 7
 
 		_, err := svc.UpdateProxy(context.Background(), 9, &UpdateProxyInput{
 			Host:           "new.example",
 			FallbackMode:   FallbackModeNone,
-			ExpiryWarnDays: 7,
+			ExpiryWarnDays: &warnDays,
 			MaxAccounts:    &maxAccounts,
 		})
 
@@ -96,9 +97,10 @@ func TestProxyServicesRejectNegativeMaxAccountsBeforeRepositoryWrite(t *testing.
 	require.Equal(t, "PROXY_MAX_ACCOUNTS_INVALID", infraerrors.Reason(err))
 	require.Zero(t, repo.updateCalls)
 
+	warnDays := 7
 	_, err = (&adminServiceImpl{proxyRepo: repo}).UpdateProxy(context.Background(), 9, &UpdateProxyInput{
 		FallbackMode:   FallbackModeNone,
-		ExpiryWarnDays: 7,
+		ExpiryWarnDays: &warnDays,
 		MaxAccounts:    &negative,
 	})
 	require.Error(t, err)

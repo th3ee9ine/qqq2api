@@ -200,6 +200,11 @@ func TestEnforceCodexIdentityHeadersWithAccountOverrideUA(t *testing.T) {
 }
 
 func TestResolveCodexOutboundIdentityForAccount(t *testing.T) {
+	// Other settings tests publish this process-wide switch. Establish and
+	// restore our own state so the local-identity cases do not depend on order.
+	previousLocalIdentityEnabled := codexAccountLocalDeviceIdentityEnabled.Load()
+	SetCodexAccountLocalDeviceIdentityEnabled(true)
+	t.Cleanup(func() { SetCodexAccountLocalDeviceIdentityEnabled(previousLocalIdentityEnabled) })
 	canonical := resolveCodexOutboundIdentity("")
 	t.Run("prefers local device session identity", func(t *testing.T) {
 		account := &Account{
@@ -300,8 +305,9 @@ func TestResolveCodexOutboundIdentityForAccount(t *testing.T) {
 	})
 
 	t.Run("disabled switch uses the global identity", func(t *testing.T) {
+		previousEnabled := codexAccountLocalDeviceIdentityEnabled.Load()
 		SetCodexAccountLocalDeviceIdentityEnabled(false)
-		t.Cleanup(func() { SetCodexAccountLocalDeviceIdentityEnabled(true) })
+		t.Cleanup(func() { SetCodexAccountLocalDeviceIdentityEnabled(previousEnabled) })
 		account := &Account{
 			Platform: PlatformOpenAI,
 			Type:     AccountTypeOAuth,

@@ -52,16 +52,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 	}
 
-	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq)
-	if err != nil {
-		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
-	}
-
-	// 3. Force upstream streaming
-	anthropicReq.Stream = true
-	reqStream := true
-
-	// 4. Model mapping
+	// 3. Model mapping (resolve before protocol conversion).
 	mappedModel := originalModel
 	if account.Type == AccountTypeAPIKey || account.Type == AccountTypeServiceAccount {
 		mappedModel = account.GetMappedModel(originalModel)
@@ -77,6 +68,21 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			mappedModel = normalized
 		}
 	}
+	if err := validateClaudeOpus55Request(body, mappedModel); err != nil {
+		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
+	responsesReq.Model = mappedModel
+	anthropicReq, err := apicompat.ResponsesToAnthropicRequest(responsesReq)
+	if err != nil {
+		if claude.IsOpus55(mappedModel) {
+			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
+		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
+	}
+	// 4. Force upstream streaming
+	anthropicReq.Stream = true
+	reqStream := true
 	anthropicReq.Model = mappedModel
 
 	logger.L().Debug("gateway forward_as_chat_completions: model mapping applied",
@@ -286,6 +292,8 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 					finalResp.Content[idx].Text += event.Delta.Text
 				case "thinking_delta":
 					finalResp.Content[idx].Thinking += event.Delta.Thinking
+				case "signature_delta":
+					finalResp.Content[idx].Signature += event.Delta.Signature
 				case "input_json_delta":
 					finalResp.Content[idx].Input = appendRawJSON(finalResp.Content[idx].Input, event.Delta.PartialJSON)
 				}
@@ -318,6 +326,9 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	// Chain: Anthropic → Responses → Chat Completions
+	if claude.IsOpus55(mappedModel) {
+		finalResp.Model = mappedModel
+	}
 	responsesResp := apicompat.AnthropicToResponsesResponse(finalResp)
 	ccResp := apicompat.ResponsesToChatCompletions(responsesResp, originalModel)
 
@@ -376,6 +387,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	// Use Anthropic→Responses state machine, then convert Responses→CC
 	anthState := apicompat.NewAnthropicEventToResponsesState()
 	anthState.Model = originalModel
+	anthState.PreserveThinkingSignatures = claude.IsOpus55(mappedModel)
 	ccState := apicompat.NewResponsesEventToChatState()
 	ccState.Model = originalModel
 	ccState.IncludeUsage = includeUsage

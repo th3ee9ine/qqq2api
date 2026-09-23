@@ -826,7 +826,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			inboundEndpoint := GetInboundEndpoint(c)
 			upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, res)
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
-			sessionID := service.ExtractClientSessionID(c)
+			sessionID := service.ExtractOpenAIClientSessionID(c, sessionHashBody)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -1416,7 +1416,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			inboundEndpoint := GetInboundEndpoint(c)
 			upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, res)
 			quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
-			sessionID := service.ExtractClientSessionID(c)
+			sessionID := service.ExtractOpenAIClientSessionID(c, body)
 			cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 			h.submitOpenAIUsageRecordTask(c.Request.Context(), res, func(ctx context.Context) {
 				if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -2516,7 +2516,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 
 	// The first response.create frame is available here, so explicit IDs are
-	// checked directly and body-derived sessions use the coarse scope gate.
+	// resolved together with request-body identities before exact block lookup.
 	if cyberBlockKey := findBlockedCyberSessionKey(c.Request.Context(), h.gatewayService, apiKey.ID, c, firstMessage); cyberBlockKey != "" {
 		writeCyberSessionBlockedWSError(c.Request.Context(), wsConn)
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "session blocked by cyber-security policy")
@@ -3071,7 +3071,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)
 				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
-				sessionID := service.ExtractClientSessionID(c)
+				sessionID := service.ExtractOpenAIClientSessionID(c, cyberBlockBody)
 				turnRecordPricingAt := turnPricing.currentOr(turnStart)
 				cyberBlocked := service.GetOpsCyberPolicy(c) != nil
 				h.submitOpenAIUsageRecordTask(ctx, result, func(taskCtx context.Context) {
@@ -4188,23 +4188,13 @@ func (h *OpenAIGatewayHandler) rejectIfCyberSessionBlocked(c *gin.Context, apiKe
 }
 
 type cyberSessionBlockWritePlan struct {
-	scopeKey string
-	keys     []string
+	keys []string
 }
 
 func buildCyberSessionBlockWritePlan(apiKeyID int64, c *gin.Context, body []byte) cyberSessionBlockWritePlan {
 	plan := cyberSessionBlockWritePlan{}
 	if key := service.CyberSessionExplicitBlockKey(apiKeyID, c, body); key != "" {
 		plan.keys = append(plan.keys, key)
-	}
-	transcriptKeys := service.CyberSessionTranscriptBlockKeys(apiKeyID, body)
-	for _, key := range transcriptKeys {
-		if len(plan.keys) == 0 || key != plan.keys[0] {
-			plan.keys = append(plan.keys, key)
-		}
-	}
-	if len(transcriptKeys) > 0 {
-		plan.scopeKey = cyberSessionScopeKey(apiKeyID, c)
 	}
 	return plan
 }
@@ -4219,13 +4209,6 @@ func findBlockedCyberSessionKey(ctx context.Context, gatewayService *service.Ope
 		userAgent = c.GetHeader("User-Agent")
 	}
 	return gatewayService.FindCyberSessionBlockedForRequest(ctx, apiKeyID, c, body, clientIP, userAgent)
-}
-
-func cyberSessionScopeKey(apiKeyID int64, c *gin.Context) string {
-	if c == nil {
-		return ""
-	}
-	return service.CyberSessionScopeKey(apiKeyID, strings.TrimSpace(ip.GetClientIP(c)), c.GetHeader("User-Agent"))
 }
 
 // enqueueCyberSessionBlockedOpsEntry captures request meta and enqueues the
@@ -4341,7 +4324,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		clientIPStr = strings.TrimSpace(ip.GetClientIP(c))
 	}
 	// 提前拍成标量，避免在下方 goroutine 内访问 gin.Context。
-	sessionID := service.ExtractClientSessionID(c)
+	sessionID := service.ExtractOpenAIClientSessionID(c, cyberBlockBody)
 	nativeCompactionV2 := service.IsOpenAINativeCompactionV2(c)
 	apiKeyPrefix := ""
 	if apiKey != nil {
@@ -4383,7 +4366,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 		plan := buildCyberSessionBlockWritePlan(apiKey.ID, c, cyberBlockBody)
 		if len(plan.keys) > 0 {
 			blockCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			gwSvc.MarkCyberSessionBlocked(blockCtx, plan.scopeKey, plan.keys)
+			gwSvc.MarkCyberSessionBlocked(blockCtx, "", plan.keys)
 			cancel()
 		}
 	}

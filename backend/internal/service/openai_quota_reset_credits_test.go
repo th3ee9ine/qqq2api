@@ -30,6 +30,10 @@ func TestBuildCodexCommonHeadersUsesCanonicalAuthIdentity(t *testing.T) {
 }
 
 func TestBuildCodexCommonHeadersForAccountPrefersLocalDeviceIdentity(t *testing.T) {
+	previousLocalIdentityEnabled := codexAccountLocalDeviceIdentityEnabled.Load()
+	SetCodexAccountLocalDeviceIdentityEnabled(true)
+	t.Cleanup(func() { SetCodexAccountLocalDeviceIdentityEnabled(previousLocalIdentityEnabled) })
+
 	account := &Account{
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,

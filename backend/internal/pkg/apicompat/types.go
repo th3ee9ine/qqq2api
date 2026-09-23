@@ -66,6 +66,7 @@ type AnthropicContentBlock struct {
 	// Signature carries provider encrypted reasoning (e.g. xAI encrypted_content)
 	// so multi-turn Claude clients can round-trip it back on subsequent turns.
 	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"` // redacted_thinking
 
 	// type=image
 	Source *AnthropicImageSource `json:"source,omitempty"`
@@ -214,6 +215,7 @@ type AnthropicDelta struct {
 
 	// signature_delta
 	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"` // redacted_thinking
 
 	// message_delta fields
 	StopReason   string  `json:"stop_reason,omitempty"`
@@ -226,6 +228,7 @@ type AnthropicDelta struct {
 
 // ResponsesRequest is the request body for POST /v1/responses.
 type ResponsesRequest struct {
+	PromptCacheOptions json.RawMessage     `json:"prompt_cache_options,omitempty"`
 	Model              string              `json:"model"`
 	Instructions       string              `json:"instructions,omitempty"`
 	Input              json.RawMessage     `json:"input"` // string or []ResponsesInputItem
@@ -309,9 +312,10 @@ func (i *ResponsesInputItem) UnmarshalJSON(data []byte) error {
 
 // ResponsesContentPart is a typed content part in a Responses message.
 type ResponsesContentPart struct {
-	Type     string `json:"type"` // "input_text" | "output_text" | "input_image" | "input_file"
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"` // data URI for input_image
+	PromptCacheBreakpoint json.RawMessage `json:"prompt_cache_breakpoint,omitempty"`
+	Type                  string          `json:"type"` // "input_text" | "output_text" | "input_image" | "input_file"
+	Text                  string          `json:"text,omitempty"`
+	ImageURL              string          `json:"image_url,omitempty"` // data URI for input_image
 
 	// input_file fields.
 	Filename string `json:"filename,omitempty"`
@@ -423,6 +427,16 @@ type ResponsesOutput struct {
 // 序列化，输出逐字节不变。
 func (o ResponsesOutput) MarshalJSON() ([]byte, error) {
 	type responsesOutputAlias ResponsesOutput
+	if o.Type == "reasoning" {
+		summary := o.Summary
+		if summary == nil {
+			summary = []ResponsesSummary{}
+		}
+		return json.Marshal(struct {
+			responsesOutputAlias
+			Summary []ResponsesSummary `json:"summary"`
+		}{responsesOutputAlias: responsesOutputAlias(o), Summary: summary})
+	}
 	if o.Type != "tool_search_call" {
 		return json.Marshal(responsesOutputAlias(o))
 	}
@@ -655,6 +669,7 @@ type ResponsesStreamEvent struct {
 
 // ChatCompletionsRequest is the request body for POST /v1/chat/completions.
 type ChatCompletionsRequest struct {
+	PromptCacheOptions  json.RawMessage    `json:"prompt_cache_options,omitempty"`
 	Model               string             `json:"model"`
 	Messages            []ChatMessage      `json:"messages"`
 	Instructions        string             `json:"instructions,omitempty"` // OpenAI Responses API compat
@@ -698,10 +713,11 @@ type ChatMessage struct {
 
 // ChatContentPart is a typed content part in a multi-modal message.
 type ChatContentPart struct {
-	Type     string        `json:"type"` // "text" | "image_url" | "file"
-	Text     string        `json:"text,omitempty"`
-	ImageURL *ChatImageURL `json:"image_url,omitempty"`
-	File     *ChatFile     `json:"file,omitempty"`
+	PromptCacheBreakpoint json.RawMessage `json:"prompt_cache_breakpoint,omitempty"`
+	Type                  string          `json:"type"` // "text" | "image_url" | "file"
+	Text                  string          `json:"text,omitempty"`
+	ImageURL              *ChatImageURL   `json:"image_url,omitempty"`
+	File                  *ChatFile       `json:"file,omitempty"`
 }
 
 // ChatImageURL contains the URL for an image content part.

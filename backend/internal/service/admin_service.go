@@ -558,7 +558,8 @@ type UpdateProxyInput struct {
 	ClearExpiresAt bool
 	FallbackMode   string
 	BackupProxyID  *int64
-	ExpiryWarnDays int
+	ClearBackupID  bool
+	ExpiryWarnDays *int
 	MaxAccounts    *int
 }
 

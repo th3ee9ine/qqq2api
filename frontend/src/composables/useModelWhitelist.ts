@@ -1,6 +1,6 @@
 const openaiModels = [
   'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-  'gpt-6', 'gpt-6-astra',
+  'gpt-6', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
   'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-2026-03-05',
   'gpt-5.3-codex-spark', 'codex-auto-review',
   'gpt-5.2', 'gpt-5.2-2025-12-11', 'gpt-5.2-chat-latest',
@@ -17,7 +17,7 @@ export const claudeModels = [
   'claude-opus-4-1-20250805', 'claude-sonnet-4-5-20250929',
   'claude-haiku-4-5-20251001', 'claude-opus-4-5-20251101',
   'claude-opus-4-6', 'claude-opus-4-7', 'claude-opus-4-8',
-  'claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-fable-5'
+  'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-fable-5'
 ]
 
 const xaiModels = [
@@ -59,6 +59,7 @@ const anthropicPresetMappings = [
   { label: 'Sonnet 4.6', from: 'claude-sonnet-4-6', to: 'claude-sonnet-4-6', color: 'bg-blue-100 text-blue-700' },
   { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'claude-opus-4-6', color: 'bg-purple-100 text-purple-700' },
   { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4-8', color: 'bg-purple-100 text-purple-700' },
+  { label: 'Opus 5.5', from: 'claude-opus-5-5', to: 'claude-opus-5-5', color: 'bg-purple-100 text-purple-700' },
   { label: 'Opus 5', from: 'claude-opus-5', to: 'claude-opus-5', color: 'bg-purple-100 text-purple-700' }
 ]
 
@@ -66,6 +67,8 @@ const openaiPresetMappings = [
   { label: 'GPT-5.6', from: 'gpt-5.6', to: 'gpt-5.6', color: 'bg-amber-100 text-amber-700' },
   { label: 'GPT-6', from: 'gpt-6', to: 'gpt-6', color: 'bg-violet-100 text-violet-700' },
   { label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra', color: 'bg-indigo-100 text-indigo-700' },
+  { label: 'GPT-6 Sol', from: 'gpt-6-sol', to: 'gpt-6-sol', color: 'bg-indigo-100 text-indigo-700' },
+  { label: 'GPT-6 Luna', from: 'gpt-6-luna', to: 'gpt-6-luna', color: 'bg-indigo-100 text-indigo-700' },
   { label: 'GPT-5.4', from: 'gpt-5.4', to: 'gpt-5.4', color: 'bg-rose-100 text-rose-700' },
   { label: 'GPT-5.2', from: 'gpt-5.2', to: 'gpt-5.2', color: 'bg-red-100 text-red-700' },
   { label: 'GPT-4o', from: 'gpt-4o', to: 'gpt-4o', color: 'bg-green-100 text-green-700' },

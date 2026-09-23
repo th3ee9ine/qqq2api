@@ -199,6 +199,7 @@ func TestGatewayServiceRecordUsage_GeminiFlashThinkingTierUsesCatalogPrice(t *te
 		t.Run(baseModel, func(t *testing.T) {
 			usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 			userRepo := &openAIRecordUsageUserRepoStub{}
+			quotaSvc := &openAIRecordUsageAPIKeyQuotaStub{}
 			svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
 			svc.billingService = NewBillingService(svc.cfg, &PricingService{pricingData: map[string]*LiteLLMModelPricing{
 				baseModel: {InputCostPerToken: 0.75e-6, OutputCostPerToken: 3.75e-6, CacheReadInputTokenCost: 0.075e-6},
@@ -215,9 +216,10 @@ func TestGatewayServiceRecordUsage_GeminiFlashThinkingTierUsesCatalogPrice(t *te
 					Usage:         ClaudeUsage{InputTokens: 8498, OutputTokens: 469, CacheReadInputTokens: 159248},
 					Duration:      time.Second,
 				},
-				APIKey:  &APIKey{ID: 501, GroupID: &group.ID, Group: group},
-				User:    &User{ID: 601},
-				Account: &Account{ID: 701, Platform: PlatformGemini, Type: AccountTypeAPIKey},
+				APIKey:        &APIKey{ID: 501, Quota: 100, GroupID: &group.ID, Group: group},
+				User:          &User{ID: 601},
+				Account:       &Account{ID: 701, Platform: PlatformGemini, Type: AccountTypeAPIKey},
+				APIKeyService: quotaSvc,
 			})
 
 			require.NoError(t, err)
@@ -225,7 +227,9 @@ func TestGatewayServiceRecordUsage_GeminiFlashThinkingTierUsesCatalogPrice(t *te
 			require.Equal(t, model, usageRepo.lastLog.Model)
 			require.InDelta(t, 0.02007585, usageRepo.lastLog.TotalCost, 1e-12)
 			require.InDelta(t, 0.0030113775, usageRepo.lastLog.ActualCost, 1e-12)
-			require.InDelta(t, 0.0030113775, userRepo.lastAmount, 1e-12)
+			require.Equal(t, 1, quotaSvc.quotaCalls)
+			require.InDelta(t, 0.0030113775, quotaSvc.lastAmount, 1e-12)
+			require.Zero(t, userRepo.deductCalls, "global API keys must not charge a user wallet")
 		})
 	}
 }

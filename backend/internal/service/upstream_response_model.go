@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 	"github.com/tidwall/gjson"
 )
 
@@ -11,7 +12,7 @@ import (
 // compact fallback maps the outbound request to another model.
 func preserveOpenAIResponseModel(models ...string) bool {
 	for _, model := range models {
-		if isOpenAIGPT6AstraModel(model) || isCodexAutoReviewFamilyModel(model) {
+		if isOpenAIGPT6AstraModel(model) || openai.IsGPT6SolOrLunaModelSpelling(model) || isCodexAutoReviewFamilyModel(model) {
 			return true
 		}
 	}

@@ -2095,7 +2095,7 @@ func TestIsPlatformPricingMatch(t *testing.T) {
 		{"composite matches openai pricing", PlatformComposite, PlatformOpenAI, true},
 		{"composite rejects gemini pricing", PlatformComposite, PlatformGemini, false},
 		{"composite rejects antigravity pricing", PlatformComposite, PlatformAntigravity, false},
-		{"composite rejects grok pricing", PlatformComposite, PlatformGrok, false},
+		{"composite matches grok pricing", PlatformComposite, PlatformGrok, true},
 		{"composite rejects kimi pricing", PlatformComposite, PlatformKimi, false},
 		{"composite rejects zhipu pricing", PlatformComposite, PlatformZhipu, false},
 		{"empty string matches nothing", "", PlatformAnthropic, false},

@@ -105,18 +105,6 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if input.BackupProxyID != nil && *input.BackupProxyID == id {
 		return nil, infraerrors.BadRequest("PROXY_BACKUP_SELF", "backup proxy cannot be itself")
 	}
-	// 规范化 fallback_mode
-	mode := input.FallbackMode
-	if mode == "" {
-		mode = FallbackModeNone
-	}
-	// 校验：mode=proxy 必须有 backup
-	if mode == FallbackModeProxy && input.BackupProxyID == nil {
-		return nil, infraerrors.BadRequest("PROXY_BACKUP_REQUIRED", "backup proxy required when fallback_mode=proxy")
-	}
-	if input.ExpiryWarnDays < 0 {
-		return nil, infraerrors.BadRequest("PROXY_WARN_DAYS_INVALID", "expiry_warn_days must be >= 0")
-	}
 	if input.MaxAccounts != nil && *input.MaxAccounts < 0 {
 		return nil, infraerrors.BadRequest("PROXY_MAX_ACCOUNTS_INVALID", "max_accounts must be >= 0")
 	}
@@ -125,20 +113,26 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
-	proxyRuntimeIdentityBefore := snapshotOpenAIProxyRuntimeIdentity(proxy)
 
-	// Merge only supplied fields, then validate the resulting fallback configuration.
-	mode = proxy.FallbackMode
+	// Merge only supplied fields, then validate the resulting fallback
+	// configuration. An omitted fallback/backup value must preserve the
+	// existing proxy; explicit clear flags remove nullable values.
+	mode := proxy.FallbackMode
 	if input.FallbackMode != "" {
 		mode = input.FallbackMode
 	}
 	backupID := proxy.BackupProxyID
-	if input.BackupProxyID != nil {
+	if input.BackupProxyID != nil || input.ClearBackupID {
 		backupID = input.BackupProxyID
 	}
 	if mode == FallbackModeProxy && backupID == nil {
 		return nil, infraerrors.BadRequest("PROXY_BACKUP_REQUIRED", "backup proxy required when fallback_mode=proxy")
 	}
+	if input.ExpiryWarnDays != nil && *input.ExpiryWarnDays < 0 {
+		return nil, infraerrors.BadRequest("PROXY_WARN_DAYS_INVALID", "expiry_warn_days must be >= 0")
+	}
+
+	proxyRuntimeIdentityBefore := snapshotOpenAIProxyRuntimeIdentity(proxy)
 
 	if input.Name != "" {
 		proxy.Name = input.Name
@@ -165,10 +159,10 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 		proxy.ExpiresAt = input.ExpiresAt
 	}
 	proxy.FallbackMode = mode
-	if input.BackupProxyID != nil {
-		proxy.BackupProxyID = input.BackupProxyID
+	proxy.BackupProxyID = backupID
+	if input.ExpiryWarnDays != nil {
+		proxy.ExpiryWarnDays = *input.ExpiryWarnDays
 	}
-	proxy.ExpiryWarnDays = input.ExpiryWarnDays
 	if input.MaxAccounts != nil {
 		proxy.MaxAccounts = *input.MaxAccounts
 	}

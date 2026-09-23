@@ -58,7 +58,7 @@ func TestGetUserGroupVisibilityIncludesActiveSubscriptions(t *testing.T) {
 			svc := &APIKeyService{
 				userRepo:    &visibilityUserRepo{user: &User{ID: 1, AllowedGroups: []int64{7}, RestrictPublicGroups: restricted}},
 				userSubRepo: subs,
-				groupRepo:   &visibilityGroupRepo{groups: []Group{{ID: 42, IsExclusive: true, SubscriptionType: "subscription"}}},
+				groupRepo:   &visibilityGroupRepo{groups: []Group{{ID: 42, Platform: PlatformAnthropic, Status: StatusActive, IsExclusive: true, SubscriptionType: "subscription"}}},
 			}
 			available, err := svc.GetAvailableGroups(context.Background(), 1)
 			require.NoError(t, err)
