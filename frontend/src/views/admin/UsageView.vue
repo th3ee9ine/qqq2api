@@ -314,14 +314,40 @@ const buildUsageListParams = (
 }
 
 const loadLogs = async () => {
-  abortController?.abort(); const c = new AbortController(); abortController = c; loading.value = true
+  abortController?.abort()
+  const c = new AbortController()
+  abortController = c
+  loading.value = true
   try {
-    const res = await adminAPI.usage.list(
-      buildUsageListParams(pagination.page, pagination.page_size, false),
-      { signal: c.signal }
-    )
-    if(!c.signal.aborted) { usageLogs.value = res.items; pagination.total = res.total }
-  } catch (error: any) { if(error?.name !== 'AbortError') console.error('Failed to load usage logs:', error) } finally { if(abortController === c) loading.value = false }
+    while (!c.signal.aborted) {
+      const requestedPage = pagination.page
+      // Numbered pagination needs an exact total; the fast-query total only
+      // indicates whether another page exists and grows on every page.
+      const res = await adminAPI.usage.list(
+        buildUsageListParams(requestedPage, pagination.page_size, true),
+        { signal: c.signal }
+      )
+      if (c.signal.aborted) return
+
+      if (Number.isInteger(res.page_size) && res.page_size > 0) {
+        pagination.page_size = res.page_size
+      }
+      pagination.total = res.total
+      const lastPage = Math.max(1, Math.ceil(res.total / pagination.page_size))
+      if (requestedPage > lastPage) {
+        pagination.page = lastPage
+        // Cleanup can remove the current page. Fetch the last valid page
+        // with the same cancellation signal, unless the result is empty.
+        if (res.total > 0) continue
+      }
+      usageLogs.value = res.items
+      return
+    }
+  } catch (error) {
+    if (!c.signal.aborted) console.error('Failed to load usage logs:', error)
+  } finally {
+    if (abortController === c) loading.value = false
+  }
 }
 const loadStats = async (force = false) => {
   const seq = ++statsReqSeq
