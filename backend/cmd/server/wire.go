@@ -118,6 +118,7 @@ func provideCleanup(
 	pluginManager *service.PluginManager,
 ) func() {
 	return provideCleanupWithSessionCleanup(
+		nil,
 		entClient,
 		rdb,
 		opsMetricsCollector,
@@ -156,6 +157,7 @@ func provideCleanup(
 }
 
 func provideCleanupWithSessionCleanup(
+	grokOAuth *service.GrokOAuthService,
 	entClient *ent.Client,
 	rdb *redis.Client,
 	opsMetricsCollector *service.OpsMetricsCollector,
@@ -202,6 +204,12 @@ func provideCleanupWithSessionCleanup(
 
 		// 应用层清理步骤可并行执行，基础设施资源（Redis/Ent）最后按顺序关闭。
 		parallelSteps := []cleanupStep{
+			{"GrokOAuthService", func() error {
+				if grokOAuth != nil {
+					grokOAuth.Stop()
+				}
+				return nil
+			}},
 			{"PluginManager", func() error {
 				if pluginManager != nil {
 					pluginManager.Stop()

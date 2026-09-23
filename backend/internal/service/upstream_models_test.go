@@ -820,7 +820,7 @@ func TestFetchUpstreamSupportedModelsUsesConfiguredBodyLimit(t *testing.T) {
 	require.Contains(t, err.Error(), "response exceeds 8 bytes")
 }
 
-func TestFetchUpstreamSupportedModelsRejectsRetiredGrokAPIKey(t *testing.T) {
+func TestFetchUpstreamSupportedModelsSupportsGrokAPIKey(t *testing.T) {
 	t.Parallel()
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -842,12 +842,12 @@ func TestFetchUpstreamSupportedModelsRejectsRetiredGrokAPIKey(t *testing.T) {
 			"base_url": "https://xai.example.com/v1",
 		},
 	})
-	require.Nil(t, models)
-	require.Error(t, err)
-	require.Nil(t, upstream.lastReq)
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-4.5", "grok-imagine"}, models)
+	require.NotNil(t, upstream.lastReq)
 }
 
-func TestFetchUpstreamSupportedModelsRejectsRetiredGrokOAuth(t *testing.T) {
+func TestFetchUpstreamSupportedModelsSupportsGrokOAuth(t *testing.T) {
 	t.Parallel()
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -862,9 +862,9 @@ func TestFetchUpstreamSupportedModelsRejectsRetiredGrokOAuth(t *testing.T) {
 	}
 
 	models, err := svc.FetchUpstreamSupportedModels(context.Background(), grokOAuthModelSyncTestAccount(""))
-	require.Nil(t, models)
-	require.Error(t, err)
-	require.Nil(t, upstream.lastReq)
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-4.5", "grok-build-0.1"}, models)
+	require.NotNil(t, upstream.lastReq)
 }
 
 func TestBuildUpstreamModelsRequestGrokOAuthDoesNotSendIdentityToCustomBase(t *testing.T) {

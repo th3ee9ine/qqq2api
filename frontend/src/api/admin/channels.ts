@@ -60,7 +60,7 @@ export interface ChannelModelPricing {
   time_pricing: ChannelTimePricing | null
 }
 
-export type ModelDefaultPricingPlatform = 'anthropic' | 'openai'
+export type ModelDefaultPricingPlatform = 'anthropic' | 'openai' | 'grok'
 
 export interface ModelDefaultPricing {
   found: boolean

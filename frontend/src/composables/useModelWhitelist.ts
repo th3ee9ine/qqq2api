@@ -20,7 +20,35 @@ export const claudeModels = [
   'claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5', 'claude-fable-5-1', 'claude-fable-5'
 ]
 
-export const allModels = [...openaiModels, ...claudeModels]
+const xaiModels = [
+  'grok-4.7',
+  'grok-4.6',
+  'grok-4.5',
+  'grok-4.3',
+  'grok-build-0.1',
+  'grok-composer-2.5-fast',
+  'grok-4.20-0309-reasoning',
+  'grok-4.20-0309-non-reasoning',
+  'grok-4.20-multi-agent-0309',
+  'grok-4.20-multi-agent',
+  'grok-4.20-multi-agent-latest',
+  'grok-4.3-latest',
+  'grok-latest',
+  'grok-4.6-latest',
+  'grok-4.5-latest',
+  'grok-build-latest',
+  'composer-2.5',
+  'grok-4.20-reasoning',
+  'grok-4.20-non-reasoning',
+  'grok-imagine',
+  'grok-imagine-image-quality',
+  'grok-imagine-image',
+  'grok-imagine-image-2.0',
+  'grok-imagine-video',
+  'grok-imagine-video-1.5'
+]
+
+export const allModels = [...openaiModels, ...claudeModels, ...xaiModels]
   .filter((model, index, models) => models.indexOf(model) === index)
   .map(model => ({ value: model, label: model }))
 
@@ -65,12 +93,14 @@ export const commonErrorCodes = [
 ]
 
 export function getModelsByPlatform(platform: string): string[] {
+  if (platform === 'grok' || platform === 'xai') return xaiModels
   if (platform === 'openai') return openaiModels
   if (platform === 'anthropic' || platform === 'claude' || platform === 'bedrock') return claudeModels
   return []
 }
 
 export function getPresetMappingsByPlatform(platform: string) {
+  if (platform === 'grok' || platform === 'xai') return xaiModels.slice(0, 6).map(model => ({ label: model, from: model, to: model, color: 'bg-zinc-100 text-zinc-700' }))
   if (platform === 'openai') return openaiPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
   if (platform === 'anthropic' || platform === 'claude') return anthropicPresetMappings

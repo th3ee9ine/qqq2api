@@ -24,7 +24,7 @@ export interface HeaderOverrideRow {
 
 /** 请求头覆写资格（与后端 IsHeaderOverrideEligible 保持一致） */
 export function isHeaderOverrideCapable(platform: string, type: string): boolean {
-  return (platform === 'anthropic' || platform === 'openai') && type === 'apikey'
+  return (platform === 'anthropic' || platform === 'openai' || platform === 'grok') && type === 'apikey'
 }
 
 /** 禁止覆写的请求头（与后端 headerOverrideBlockedNames 保持一致） */
@@ -271,3 +271,23 @@ export function applyPlanType(
   }
   return credentials
 }
+
+export interface GrokBaseUrlPreset {
+  /** i18n 子键：admin.accounts.grokCustomBaseUrl.presets.<labelKey> */
+  labelKey?: 'cli' | 'official'
+  /** 字面标签（如区域标识 us-east-1），专有名词不参与 i18n */
+  label?: string
+  url: string
+}
+
+/**
+ * Grok 快捷端点（仅供快速填充，输入框仍可自由填写任意转发地址）。
+ * 官方端点偶发不可用时，运营方靠这组预设在端点间手动切换。
+ */
+export const GROK_BASE_URL_PRESETS: GrokBaseUrlPreset[] = [
+  { labelKey: 'cli', url: 'https://cli-chat-proxy.grok.com/v1' },
+  { labelKey: 'official', url: 'https://api.x.ai/v1' },
+  { label: 'us-east-1', url: 'https://us-east-1.api.x.ai/v1' },
+  { label: 'us-west-2', url: 'https://us-west-2.api.x.ai/v1' },
+  { label: 'eu-west-1', url: 'https://eu-west-1.api.x.ai/v1' }
+]

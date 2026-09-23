@@ -877,6 +877,7 @@
         </div>
 
         <!-- Claude Code 客户端限制（仅 anthropic 平台） -->
+        <GrokMediaPricingFields v-if="createForm.platform === 'grok'" v-model="createGrokMedia" />
         <div v-if="createForm.platform === 'anthropic'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -2220,6 +2221,7 @@
         </div>
 
         <!-- Claude Code 客户端限制（仅 anthropic 平台） -->
+        <GrokMediaPricingFields v-if="editForm.platform === 'grok'" v-model="editGrokMedia" />
         <div v-if="editForm.platform === 'anthropic'" class="border-t pt-4">
           <div class="mb-1.5 flex items-center gap-1">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -3497,6 +3499,8 @@
 </template>
 
 <script setup lang="ts">
+import GrokMediaPricingFields from "@/components/admin/group/GrokMediaPricingFields.vue";
+import { grokMediaPricingFromGroup, grokMediaPricingToAPI } from "./groupsGrokMedia";
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "@/stores/app";
@@ -3942,7 +3946,7 @@ const canCopyAccountsFromGroup = (targetPlatform: GroupPlatform, sourcePlatform:
   targetPlatform === "composite" || sourcePlatform === targetPlatform;
 
 const isSupportedConcretePlatform = (platform: string) =>
-  platform === "anthropic" || platform === "openai";
+  platform === "anthropic" || platform === "openai" || platform === "grok";
 
 const isSupportedGroupPlatform = (platform: string) =>
   isSupportedConcretePlatform(platform) || platform === "composite";
@@ -4174,6 +4178,9 @@ const submitEditAllowlistCustomEntry = () => {
     editAllowlistCustomErrorKey.value = `admin.groups.modelAllowlist.errors.${error}`;
   }
 };
+
+const createGrokMedia = ref(grokMediaPricingFromGroup());
+const editGrokMedia = ref(grokMediaPricingFromGroup());
 
 const createForm = reactive({
   name: "",
@@ -4831,6 +4838,7 @@ const closeCreateModal = () => {
     accountSearchRunner.clearKey(getCreateRuleSearchKey(rule));
   });
   clearAllAccountSearchState();
+  createGrokMedia.value = grokMediaPricingFromGroup();
   createForm.name = "";
   createForm.description = "";
   createForm.platform = "anthropic";
@@ -4919,6 +4927,7 @@ const handleCreateGroup = async () => {
     // 构建请求数据，包含模型路由配置
     const requestData = {
       ...createGroupForm,
+      ...grokMediaPricingToAPI(createForm.platform, createGrokMedia.value),
       force_openai_fast: normalizeGroupOpenAIFast(
         createForm.platform,
         createForm.force_openai_fast,
@@ -5007,6 +5016,7 @@ const handleEdit = async (group: AdminGroup) => {
   if (!isSupportedGroup(group)) return;
   editingGroup.value = group;
   editForm.name = group.name;
+  editGrokMedia.value = grokMediaPricingFromGroup(group);
   editForm.description = group.description || "";
   editForm.platform = group.platform;
   editForm.rate_multiplier = group.rate_multiplier;
@@ -5164,6 +5174,7 @@ const handleUpdateGroup = async () => {
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,
+      ...grokMediaPricingToAPI(editForm.platform, editGrokMedia.value),
       force_openai_fast: normalizeGroupOpenAIFast(
         editForm.platform,
         editForm.force_openai_fast,

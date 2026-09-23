@@ -27,6 +27,8 @@ func ProvideOpenAIOAuthHandler(
 // ProvideDebugAccountHandler adds the full gateway debugger without changing the
 // existing admin account constructor used by integrations and focused tests.
 func ProvideDebugAccountHandler(
+	grokOAuthService *service.GrokOAuthService,
+	grokQuotaService *service.GrokQuotaService,
 	cfg *config.Config,
 	adminService service.AdminService,
 	oauthService *service.OAuthService,
@@ -41,7 +43,7 @@ func ProvideDebugAccountHandler(
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	gateway *service.OpenAIGatewayService,
 ) *admin.AccountHandler {
-	h := admin.ProvideAccountHandler(cfg, adminService, oauthService, openaiOAuthService,
+	h := admin.ProvideAccountHandler(grokOAuthService, grokQuotaService, cfg, adminService, oauthService, openaiOAuthService,
 		rateLimitService, accountUsageService, accountTestService, concurrencyService,
 		crsSyncService, sessionLimitCache, rpmCache, tokenCacheInvalidator)
 	h.SetDebugWorkbenchService(service.NewDebugWorkbenchService(gateway, adminService))
@@ -114,6 +116,7 @@ func ProvideAdminHandlers(
 // Wire.  Keep it separate from the compatibility wrapper above because Wire
 // does not infer optional variadic dependencies.
 func ProvideAdminHandlersWithSessionCleanup(
+	grokOAuthHandler *admin.GrokOAuthHandler,
 	dashboardHandler *admin.DashboardHandler,
 	groupHandler *admin.GroupHandler,
 	modelPricingHandler *admin.ModelPricingHandler,
@@ -139,7 +142,7 @@ func ProvideAdminHandlersWithSessionCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	openAISessionCleanup *service.OpenAISessionCleanupService,
 ) *AdminHandlers {
-	return provideAdminHandlersWithSessionCleanup(
+	h := provideAdminHandlersWithSessionCleanup(
 		dashboardHandler,
 		groupHandler,
 		modelPricingHandler,
@@ -165,6 +168,8 @@ func ProvideAdminHandlersWithSessionCleanup(
 		ollamaCloudUsage,
 		openAISessionCleanup,
 	)
+	h.GrokOAuth = grokOAuthHandler
+	return h
 }
 
 func provideAdminHandlersWithSessionCleanup(
@@ -253,6 +258,7 @@ func ProvideGatewayHandler(
 }
 
 func ProvideOpenAIGatewayHandler(
+	grokQuotaService *service.GrokQuotaService,
 	gatewayService *service.OpenAIGatewayService,
 	pluginManager *service.PluginManager,
 	concurrencyService *service.ConcurrencyService,
@@ -274,6 +280,7 @@ func ProvideOpenAIGatewayHandler(
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
 	h.securityAuditCoordinator = coordinator
+	h.grokMediaEligibilityProber = grokQuotaService
 	return h
 }
 
@@ -342,6 +349,7 @@ func ProvideHandlers(
 
 // ProviderSet is the Wire provider set for all handlers
 var ProviderSet = wire.NewSet(
+	admin.NewGrokOAuthHandler,
 	// Top-level handlers
 	ProvideAuthHandler,
 	NewAPIKeyHandler,

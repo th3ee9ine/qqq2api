@@ -6,6 +6,7 @@
 import dashboardAPI from './dashboard'
 import groupsAPI from './groups'
 import accountsAPI from './accounts'
+import grokAPI from './grok'
 import proxiesAPI from './proxies'
 import settingsAPI from './settings'
 import systemAPI from './system'
@@ -31,6 +32,7 @@ export const adminAPI = {
   dashboard: dashboardAPI,
   groups: groupsAPI,
   accounts: accountsAPI,
+  grok: grokAPI,
   proxies: proxiesAPI,
   settings: settingsAPI,
   system: systemAPI,
@@ -54,6 +56,7 @@ export {
   dashboardAPI,
   groupsAPI,
   accountsAPI,
+  grokAPI,
   proxiesAPI,
   settingsAPI,
   systemAPI,

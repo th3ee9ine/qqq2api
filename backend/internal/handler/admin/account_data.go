@@ -785,6 +785,8 @@ func isSupportedDataAccountType(platform, accountType string) bool {
 			service.AccountTypeServiceAccount:
 			return true
 		}
+	case service.PlatformGrok:
+		return accountType == service.AccountTypeOAuth || accountType == service.AccountTypeAPIKey
 	case service.PlatformOpenAI:
 		switch accountType {
 		case service.AccountTypeOAuth,

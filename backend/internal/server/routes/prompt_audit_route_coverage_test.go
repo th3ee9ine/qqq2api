@@ -36,13 +36,22 @@ func TestEveryGatewayPOSTRouteIsClassifiedForPromptAuditCoverage(t *testing.T) {
 		"/alpha/search":             {"openai_alpha_search.go"},
 		"/live":                     {"openai_live.go"},
 		"/realtime/calls":           {"openai_live.go"},
-		"/images/generations":       {"openai_images.go"},
-		"/images/edits":             {"openai_images.go"},
+		"/images/generations":       {"openai_images.go", "grok_media.go"},
+		"/images/edits":             {"openai_images.go", "grok_media.go"},
 		"/images/generations/async": {"image_task_handler.go"},
 		"/images/edits/async":       {"image_task_handler.go"},
+		"/videos":                   {"grok_media.go"},
+		"/videos/generations":       {"grok_media.go"},
+		"/videos/edits":             {"grok_media.go"},
+		"/videos/extensions":        {"grok_media.go"},
+		"/tts":                      {"grok_audio.go"},
+		"/web_search":               {"gateway_web_search.go"},
+		"/x_search":                 {"gateway_web_search.go"},
 	}
 	excluded := map[string]string{
 		"/messages/count_tokens": "tokenization only; it does not execute a model request",
+		"/stt":                   "audio transcription; no text prompt is available before upstream transcription",
+		"/custom-voices":         "voice profile management with audio samples, not a text generation prompt",
 	}
 
 	unclassified := make([]string, 0)

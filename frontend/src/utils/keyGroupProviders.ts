@@ -9,6 +9,7 @@ export const KEY_GROUP_PROVIDERS = ['anthropic', 'openai', 'other'] as const
 const PROVIDER_BY_PLATFORM: Partial<Record<GroupPlatform, KeyGroupProvider>> = {
   anthropic: 'anthropic',
   openai: 'openai',
+  grok: 'other',
   composite: 'other'
 }
 
@@ -19,5 +20,5 @@ export function getKeyGroupProvider(platform: GroupPlatform): KeyGroupProvider |
 export const KEY_GROUP_PROVIDER_ICONS: Record<KeyGroupProvider, GroupPlatform[]> = {
   anthropic: ['anthropic'],
   openai: ['openai'],
-  other: ['anthropic', 'openai']
+  other: ['anthropic', 'openai', 'grok']
 }

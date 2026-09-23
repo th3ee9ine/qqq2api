@@ -66,16 +66,23 @@ func TestUpdateSettingsSMTPFromAliasIsWritable(t *testing.T) {
 	require.Equal(t, "new@example.com", repo.values[service.SettingKeySMTPFrom])
 }
 
-func TestUpdateSettingsGrokDefaultBaseURLModeIsIgnored(t *testing.T) {
+func TestUpdateSettingsGrokPolicyIsWritable(t *testing.T) {
 	h, repo := newStepUpSwitchTestHandler(t, map[string]string{
 		service.SettingKeyGrokDefaultBaseURLMode: service.GrokDefaultBaseURLModeCLI,
 	})
 
 	rec := doUpdateSettings(t, h, map[string]any{
-		"grok_default_base_url_mode": service.GrokDefaultBaseURLModeEUWest1,
+		"grok_default_base_url_mode":          service.GrokDefaultBaseURLModeEUWest1,
+		"grok_default_text_model":             "grok-4.7",
+		"grok_cross_client_model_map_enabled": false,
 	}, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.Equal(t, service.GrokDefaultBaseURLModeCLI, repo.values[service.SettingKeyGrokDefaultBaseURLMode])
+	require.Equal(t, service.GrokDefaultBaseURLModeEUWest1, repo.values[service.SettingKeyGrokDefaultBaseURLMode])
+	require.Equal(t, "grok-4.7", repo.values[service.SettingKeyGrokDefaultTextModel])
+	require.Equal(t, "false", repo.values[service.SettingKeyGrokCrossClientModelMapEnabled])
+	require.Contains(t, rec.Body.String(), `"grok_default_text_model":"grok-4.7"`)
+	require.Contains(t, rec.Body.String(), `"grok_cross_client_model_map_enabled":false`)
+	require.Contains(t, rec.Body.String(), `"grok_default_base_url_mode":"eu-west-1"`)
 }
 
 func TestUpdateSettingsRejectsTwoCaptchaProviders(t *testing.T) {

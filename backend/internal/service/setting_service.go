@@ -55,6 +55,34 @@ func GrokBaseURLForMode(mode string) string {
 	}
 }
 
+// LoadGrokModelMappingSettings primes account model mappings before the first
+// gateway request, without requiring an administrator to open the settings page.
+func (s *SettingService) LoadGrokModelMappingSettings(ctx context.Context) error {
+	if s == nil || s.settingRepo == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), codexRestrictionPolicyDBTimeout)
+	defer cancel()
+	values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+		SettingKeyGrokDefaultTextModel, SettingKeyGrokCrossClientModelMapEnabled,
+	})
+	if err != nil {
+		return fmt.Errorf("load grok model mapping settings: %w", err)
+	}
+	model := strings.TrimSpace(values[SettingKeyGrokDefaultTextModel])
+	if model == "" {
+		model = xai.DefaultTextModel
+	}
+	xai.SetRuntimeModelMappingOptions(xai.ModelMappingOptions{
+		DefaultText:          model,
+		EnableCrossClientMap: !isFalseSettingValue(values[SettingKeyGrokCrossClientModelMapEnabled]),
+	})
+	return nil
+}
+
 func (s *SettingService) GetGrokDefaultBaseURLMode(ctx context.Context) string {
 	if s == nil || s.settingRepo == nil {
 		return GrokDefaultBaseURLModeCLI

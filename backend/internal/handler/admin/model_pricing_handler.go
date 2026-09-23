@@ -22,7 +22,7 @@ func NewModelPricingHandler(billingService *service.BillingService) *ModelPricin
 }
 
 // GetDefaultPricing returns catalog prices in per-token units for the retained
-// Claude/OpenAI group platforms.
+// Claude/OpenAI/Grok group platforms.
 // GET /api/v1/admin/channels/model-pricing?platform=anthropic&model=claude-sonnet-4
 func (h *ModelPricingHandler) GetDefaultPricing(c *gin.Context) {
 	platform := strings.ToLower(strings.TrimSpace(c.Query("platform")))
@@ -31,7 +31,7 @@ func (h *ModelPricingHandler) GetDefaultPricing(c *gin.Context) {
 			WithMetadata(map[string]string{"param": "platform"}))
 		return
 	}
-	if platform != service.PlatformAnthropic && platform != service.PlatformOpenAI {
+	if !service.IsActiveAccountPlatform(platform) {
 		response.ErrorFrom(c, infraerrors.BadRequest("UNSUPPORTED_PLATFORM",
 			fmt.Sprintf("unsupported platform: %s", platform)).
 			WithMetadata(map[string]string{"param": "platform"}))

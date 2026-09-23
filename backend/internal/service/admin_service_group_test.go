@@ -483,6 +483,22 @@ func TestAdminService_ListGroups_PassesSortParams(t *testing.T) {
 	}, repo.listWithFiltersParams)
 }
 
+func TestAdminService_CreateGroup_EnablesGrokMediaGeneration(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name: "grok-media", Platform: PlatformGrok, RateMultiplier: 1,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, repo.created)
+	require.True(t, group.AllowImageGeneration)
+	require.True(t, repo.created.AllowImageGeneration)
+	candidates, err := svc.GetGroupModelsListCandidates(context.Background(), 0, PlatformGrok)
+	require.NoError(t, err)
+	require.Contains(t, candidates, "grok-4.7")
+	require.Contains(t, candidates, "grok-imagine-image")
+}
+
 func TestAdminService_CreateGroup_PreservesNonGrokImageGenerationDisabled(t *testing.T) {
 	repo := &groupRepoStubForAdmin{}
 	svc := &adminServiceImpl{groupRepo: repo}

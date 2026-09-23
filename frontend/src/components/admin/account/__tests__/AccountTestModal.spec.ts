@@ -253,11 +253,40 @@ describe('AccountTestModal', () => {
     expect(JSON.parse(request.body).prompt).toBe('')
   })
 
+  it('sends Grok search through its explicit standalone mode without a text model', async () => {
+    const wrapper = mountModal({ id: 88, name: 'Grok', platform: 'grok', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    ;(wrapper.vm as any).grokTestMode = 'search'
+    await flushPromises()
+    ;(wrapper.vm as any).testPrompt = 'xAI Grok latest'
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toEqual({ model_id: '', mode: 'search', prompt: 'xAI Grok latest' })
+  })
+
+  it('switches Grok video tests to an Imagine model', async () => {
+    getAvailableModels.mockResolvedValue([
+      { id: 'grok-4.7', display_name: 'Grok 4.7' },
+      { id: 'grok-imagine-video-1.5', display_name: 'Imagine Video 1.5' }
+    ])
+    const wrapper = mountModal({ id: 88, name: 'Grok', platform: 'grok', type: 'oauth', status: 'active' })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    ;(wrapper.vm as any).grokTestMode = 'video'
+    await flushPromises()
+    await (wrapper.vm as any).startTest()
+    await flushPromises()
+    const [, request] = (global.fetch as any).mock.calls[0]
+    expect(JSON.parse(request.body)).toMatchObject({ model_id: 'grok-imagine-video-1.5', mode: 'video' })
+  })
+
   it('closes without loading models for a retired platform account', async () => {
     const wrapper = mountModal({
       id: 88,
       name: 'Retired',
-      platform: 'grok',
+      platform: 'gemini',
       type: 'oauth',
       status: 'active'
     })

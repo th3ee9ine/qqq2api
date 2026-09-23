@@ -21,6 +21,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	pkghttputil "github.com/th3ee9ine/qqq2api/internal/pkg/httputil"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 	"github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 	"github.com/tidwall/gjson"
@@ -710,13 +711,16 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(nil, &service.APIKey{Group: &service.Group{}}, "gpt-5.4"))
 	})
 
-	t.Run("retired_grok_group_fails_closed", func(t *testing.T) {
+	t.Run("grok_group_maps_cross_client_models", func(t *testing.T) {
+		original := xai.RuntimeModelMappingOptions()
+		t.Cleanup(func() { xai.SetRuntimeModelMappingOptions(original) })
+		xai.SetRuntimeModelMappingOptions(xai.ModelMappingOptions{EnableCrossClientMap: true})
 		apiKey := &service.APIKey{
 			Group: &service.Group{
 				Platform: service.PlatformGrok,
 			},
 		}
-		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "claude-sonnet-4-5"))
+		require.Equal(t, xai.DefaultTextModel, resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "claude-sonnet-4-5"))
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(nil, apiKey, "grok"))
 	})
 
@@ -732,7 +736,7 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	})
 }
 
-func TestOpenAIGatewayMessagesDispatchGateRejectsRetiredGrokGroups(t *testing.T) {
+func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	t.Run("openai_group_without_dispatch_flag_is_rejected", func(t *testing.T) {
@@ -760,7 +764,7 @@ func TestOpenAIGatewayMessagesDispatchGateRejectsRetiredGrokGroups(t *testing.T)
 		require.Contains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
 	})
 
-	t.Run("grok_group_is_rejected_before_gateway_dependencies", func(t *testing.T) {
+	t.Run("grok_group_without_dispatch_flag_reaches_gateway_dependencies", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`))
@@ -780,9 +784,9 @@ func TestOpenAIGatewayMessagesDispatchGateRejectsRetiredGrokGroups(t *testing.T)
 		h := &OpenAIGatewayHandler{}
 		h.Messages(c)
 
-		require.Equal(t, http.StatusForbidden, rec.Code)
-		require.Equal(t, "permission_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
-		require.Contains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
+		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		require.Equal(t, "api_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+		require.NotContains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
 	})
 }
 

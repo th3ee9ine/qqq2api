@@ -113,7 +113,6 @@ func TestConfigKeysAreEnvReachable(t *testing.T) {
 
 func isRetiredProviderConfigKey(key string) bool {
 	if strings.HasPrefix(key, "gemini.") ||
-		strings.HasPrefix(key, "gateway.grok.") ||
 		strings.HasPrefix(key, "gateway.cn_providers.") {
 		return true
 	}
@@ -121,7 +120,6 @@ func isRetiredProviderConfigKey(key string) bool {
 	switch key {
 	case "gateway.antigravity_fallback_cooldown_minutes",
 		"gateway.gemini_debug_response_headers",
-		"gateway.grok_response_header_timeout",
 		"gateway.max_account_switches_gemini":
 		return true
 	default:

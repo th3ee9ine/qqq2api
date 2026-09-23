@@ -189,7 +189,7 @@ func TestUpdateAccountPreservesManagedUpstreamBillingProbeStateForUnrelatedEdit(
 	require.Equal(t, "value", updated.Extra["custom"])
 }
 
-func TestUpdateAccountRejectsRetiredGrokAccount(t *testing.T) {
+func TestUpdateAccountPreservesGrokBillingSnapshotForUnrelatedEdit(t *testing.T) {
 	accountID := int64(112)
 	billing := &xai.BillingSummary{
 		StatusCode:       http.StatusForbidden,
@@ -205,11 +205,16 @@ func TestUpdateAccountRejectsRetiredGrokAccount(t *testing.T) {
 		},
 	}}
 
-	_, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
+	updated, err := (&adminServiceImpl{accountRepo: repo}).UpdateAccount(context.Background(), accountID, &UpdateAccountInput{
 		Extra: map[string]any{"custom": "value"},
 	})
 
-	require.ErrorIs(t, err, ErrPlatformRetired)
+	require.NoError(t, err)
+	require.Equal(t, billing, updated.Extra[grokBillingExtraKey])
+	require.Equal(t, "value", updated.Extra["custom"])
+	eligible, reason := updated.GrokMediaGenerationEligibility()
+	require.False(t, eligible)
+	require.Equal(t, "billing_forbidden", reason)
 }
 
 func TestUpdateAccountPreservesProbeSnapshotWhenIdentityValuesAreUnchanged(t *testing.T) {

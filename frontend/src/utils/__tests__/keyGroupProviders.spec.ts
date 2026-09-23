@@ -5,12 +5,13 @@ describe('custom API key provider filters', () => {
   it('classifies retained groups by platform rather than their display name', () => {
     expect(getKeyGroupProvider('anthropic')).toBe('anthropic')
     expect(getKeyGroupProvider('openai')).toBe('openai')
+    expect(getKeyGroupProvider('grok')).toBe('other')
     expect(getKeyGroupProvider('composite')).toBe('other')
     expect(KEY_GROUP_PROVIDERS).toEqual(['anthropic', 'openai', 'other'])
-    expect(KEY_GROUP_PROVIDER_ICONS.other).toEqual(['anthropic', 'openai'])
+    expect(KEY_GROUP_PROVIDER_ICONS.other).toEqual(['anthropic', 'openai', 'grok'])
   })
 
-  it.each(['gemini', 'antigravity', 'grok', 'kimi', 'zhipu', 'minimax', 'opencode_go'] as const)(
+  it.each(['gemini', 'antigravity', 'kimi', 'zhipu', 'minimax', 'opencode_go'] as const)(
     'keeps legacy %s groups out of the provider selector',
     (platform) => expect(getKeyGroupProvider(platform)).toBeNull()
   )

@@ -157,6 +157,12 @@
         <OpenAIQuotaResetCell :account="account" class="mt-1" @account-updated="handleQuotaResetAccountUpdated" />
       </div>
     </template>
+    <template v-else-if="account.platform === 'grok'">
+      <p v-if="effectiveLoading" class="text-xs text-gray-400">{{ t('common.loading') }}</p>
+      <p v-else-if="effectiveError" class="text-xs text-red-600">{{ effectiveError }}</p>
+      <GrokUsageSummary :usage="effectiveUsage" />
+      <GrokQuotaProbeCell :account="account" compact @probed="loadUsage(true)" />
+    </template>
   </div>
 
   <!-- Non-OAuth/Setup-Token accounts -->
@@ -209,6 +215,8 @@ import { formatCompactNumber } from '@/utils/format'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import UsageProgressBar from './UsageProgressBar.vue'
+import GrokUsageSummary from './GrokUsageSummary.vue'
+import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 
@@ -266,7 +274,7 @@ let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = nul
 let visibilityObserver: IntersectionObserver | null = null
 
 const isSupportedPlatform = computed(() =>
-  props.account.platform === 'anthropic' || props.account.platform === 'openai'
+  props.account.platform === 'anthropic' || props.account.platform === 'openai' || props.account.platform === 'grok'
 )
 const isAnthropicWindowAccount = computed(() =>
   props.account.platform === 'anthropic' &&
@@ -276,7 +284,7 @@ const isOpenAIOAuth = computed(() =>
   props.account.platform === 'openai' && props.account.type === 'oauth'
 )
 const usesUpstreamUsageWindows = computed(() =>
-  isAnthropicWindowAccount.value || isOpenAIOAuth.value
+  isAnthropicWindowAccount.value || isOpenAIOAuth.value || (props.account.platform === 'grok' && props.account.type === 'oauth')
 )
 const showUsageWindows = computed(() => usesUpstreamUsageWindows.value)
 const isBatchManaged = computed(() => typeof props.requestBatchedUsage === 'function')

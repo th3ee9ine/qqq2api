@@ -203,6 +203,37 @@ async function openCodexImportStep(toggleClicks = 0) {
 }
 
 describe('CreateAccountModal OpenAI long-context billing', () => {
+  it('creates a Grok API key with the xAI endpoint and selected group', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="create-platform-grok"]').trigger('click')
+    await wrapper.get('[data-testid="grok-account-type-api-key"]').trigger('click')
+    await wrapper.get('form input[type="text"]').setValue('Grok API')
+    await wrapper.get('form input[type="password"]').setValue('xai-test-key')
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
+      platform: 'grok', type: 'apikey', credentials: expect.objectContaining({ api_key: 'xai-test-key', base_url: 'https://api.x.ai' })
+    }))
+  })
+
+  it('creates Grok OAuth without pinning its default upstream or persisting SSO secrets', async () => {
+    const wrapper = mountModal()
+    await wrapper.get('[data-testid="create-platform-grok"]').trigger('click')
+    await wrapper.get('form input[type="text"]').setValue('Grok OAuth')
+    await wrapper.get('form').trigger('submit.prevent')
+    const panel = wrapper.findComponent({ name: 'GrokAuthorizationPanel' })
+    expect(panel.exists()).toBe(true)
+    panel.vm.$emit('authorized', { access_token: 'grok-access', refresh_token: 'grok-refresh', team_id: 'team-1', sso_token: 'do-not-store', password: 'do-not-store' })
+    await flushPromises()
+    const payload = createAccountMock.mock.calls[0][0]
+    expect(payload.platform).toBe('grok')
+    expect(payload.type).toBe('oauth')
+    expect(payload.credentials).toMatchObject({ access_token: 'grok-access', refresh_token: 'grok-refresh', team_id: 'team-1' })
+    expect(payload.credentials).not.toHaveProperty('base_url')
+    expect(payload.credentials).not.toHaveProperty('sso_token')
+    expect(payload.credentials).not.toHaveProperty('password')
+  })
+
   beforeEach(() => {
     authIsSimpleMode.value = true
     authIsAdmin.value = true
@@ -227,9 +258,10 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const wrapper = mountModal()
     const platformSelector = wrapper.get('[data-testid="account-form-platform"]')
     expect(platformSelector.classes()).toContain('flex-wrap')
-    expect(platformSelector.findAll('button')).toHaveLength(2)
+    expect(platformSelector.findAll('button')).toHaveLength(3)
     expect(platformSelector.text()).toContain('Anthropic')
     expect(platformSelector.text()).toContain('OpenAI')
+    expect(platformSelector.text()).toContain('Grok')
 
     const anthropicTypes = wrapper.get('[data-testid="account-form-type"]')
     expect(anthropicTypes.classes()).toContain('sm:grid-cols-4')

@@ -2123,10 +2123,10 @@ func TestMatchingPlatforms(t *testing.T) {
 		{"openai returns itself", PlatformOpenAI, []string{PlatformOpenAI}},
 		{"retired antigravity returns none", PlatformAntigravity, nil},
 		{"retired gemini returns none", PlatformGemini, nil},
-		{"retired grok returns none", PlatformGrok, nil},
+		{"grok returns itself", PlatformGrok, []string{PlatformGrok}},
 		{"retired kimi returns none", PlatformKimi, nil},
 		{"retired zhipu returns none", PlatformZhipu, nil},
-		{"composite returns active concrete platforms", PlatformComposite, []string{PlatformAnthropic, PlatformOpenAI}},
+		{"composite returns active concrete platforms", PlatformComposite, []string{PlatformAnthropic, PlatformOpenAI, PlatformGrok}},
 	}
 
 	for _, tt := range tests {

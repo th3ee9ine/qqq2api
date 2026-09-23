@@ -15,6 +15,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 )
 
 // Group management implementations
@@ -292,6 +293,8 @@ func defaultModelsListCandidateIDs(platform string) []string {
 	switch platform {
 	case PlatformOpenAI:
 		return openai.DefaultModelIDs()
+	case PlatformGrok:
+		return xai.DefaultModelIDs()
 	case PlatformComposite:
 		return compositeDefaultModelsListCandidateIDs()
 	case PlatformAnthropic:
@@ -306,13 +309,14 @@ func defaultModelsListCandidateIDs(platform string) []string {
 }
 
 func defaultAllowImageGenerationForPlatform(platform string) bool {
-	return false
+	// Grok image and video generation share the legacy image-generation gate.
+	return platform == PlatformGrok
 }
 
 func compositeDefaultModelsListCandidateIDs() []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
-	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI} {
+	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI, PlatformGrok} {
 		for _, id := range defaultModelsListCandidateIDs(platform) {
 			if _, ok := seen[id]; ok {
 				continue
@@ -334,6 +338,7 @@ func canCopyAccountsFromGroupPlatform(targetPlatform, sourcePlatform string) boo
 func groupSupportsOAuthOnlyFilter(platform string) bool {
 	return platform == PlatformOpenAI ||
 		platform == PlatformAnthropic ||
+		platform == PlatformGrok ||
 		platform == PlatformComposite
 }
 

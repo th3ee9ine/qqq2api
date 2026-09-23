@@ -720,8 +720,8 @@ export default {
         modelRestrictionDisabledByPassthrough: 'Automatic passthrough is enabled: model whitelist/mapping will not take effect.',
       },
       grok: {
-        baseUrlHint: 'Grok OAuth accounts forward to the official xAI API base URL.',
-        apiKeyHint: 'Grok subscription support uses OAuth refresh tokens; API keys are out of scope for this account type.',
+        baseUrlHint: 'Use the official xAI API or a compatible custom upstream URL.',
+        apiKeyHint: 'Use an API Key from the xAI console; choose Grok OAuth for subscription accounts.',
         // Account connectivity test modal
         testMode: 'Test mode',
         testModeHint:

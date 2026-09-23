@@ -65,11 +65,11 @@ func TestDefaultModelIDsForCompositeIncludesOnlyActivePlatformDefaults(t *testin
 	compositeIDs := defaultModelIDsForPlatform(service.PlatformComposite)
 	require.Contains(t, compositeIDs, "claude-sonnet-4-6")
 	require.Contains(t, compositeIDs, "gpt-5.5")
+	require.Contains(t, compositeIDs, "grok-4.7")
 
 	for _, platform := range []string{
 		service.PlatformGemini,
 		service.PlatformAntigravity,
-		service.PlatformGrok,
 		service.PlatformKimi,
 		service.PlatformZhipu,
 		service.PlatformKimi,
@@ -85,7 +85,6 @@ func TestGatewayModels_RetiredPlatformGroupsAreNotExposed(t *testing.T) {
 	for _, platform := range []string{
 		service.PlatformGemini,
 		service.PlatformAntigravity,
-		service.PlatformGrok,
 		service.PlatformKimi,
 		service.PlatformZhipu,
 		service.PlatformKimi,
@@ -291,7 +290,7 @@ func TestGatewayModels_CompositeCustomModelsListFiltersOutRetiredPlatforms(t *te
 	require.Equal(t, []string{"gpt-5.5"}, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_CompositeUnmappedRetiredAccountsContributeNoDefaults(t *testing.T) {
+func TestGatewayModels_CompositeUnmappedAccountsIncludeGrokDefaults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(34)
@@ -322,7 +321,7 @@ func TestGatewayModels_CompositeUnmappedRetiredAccountsContributeNoDefaults(t *t
 
 	ids := modelIDsForTest(got.Data)
 	require.Contains(t, ids, "gpt-5.5")
-	require.NotContains(t, ids, "grok-4.3")
+	require.Contains(t, ids, "grok-4.3")
 	require.NotContains(t, ids, "claude-sonnet-4-6")
 	require.NotContains(t, ids, "gemini-2.5-flash")
 }
@@ -688,4 +687,75 @@ func modelIDsForTest(models []gatewayModelItemForTest) []string {
 		ids = append(ids, model.ID)
 	}
 	return ids
+}
+
+func TestGatewayModels_Grok45AdvertisesReasoningEffortForGrokBuild(t *testing.T) {
+	assertGrokGatewayReasoningEfforts(t, 4409, "grok-4.5", []gatewayReasoningEffortOptionForTest{
+		{Value: "low", Label: "Low"},
+		{Value: "medium", Label: "Medium"},
+		{Value: "high", Label: "High", Default: true},
+	})
+}
+
+func TestGatewayModels_Grok46AdvertisesXHighReasoningEffortForGrokBuild(t *testing.T) {
+	xhighEfforts := []gatewayReasoningEffortOptionForTest{
+		{Value: "low", Label: "Low"},
+		{Value: "medium", Label: "Medium"},
+		{Value: "high", Label: "High", Default: true},
+		{Value: "xhigh", Label: "xHigh"},
+	}
+	tests := []struct {
+		groupID int64
+		model   string
+	}{
+		{groupID: 4410, model: "grok-4.6"},
+		{groupID: 4411, model: "grok-4.6-latest"},
+		{groupID: 4412, model: "grok-4.7"},
+		{groupID: 4413, model: "grok-4.7-latest"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			assertGrokGatewayReasoningEfforts(t, tt.groupID, tt.model, xhighEfforts)
+		})
+	}
+}
+
+func assertGrokGatewayReasoningEfforts(t *testing.T, groupID int64, modelID string, want []gatewayReasoningEffortOptionForTest) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformGrok,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{modelID: modelID},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{ID: groupID, Platform: service.PlatformGrok},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Len(t, got.Data, 1)
+	model := got.Data[0]
+	require.Equal(t, modelID, model.ID)
+	require.True(t, model.SupportsReasoningEffort)
+	require.Equal(t, "high", model.ReasoningEffort)
+	require.Equal(t, want, model.ReasoningEfforts)
 }

@@ -82,7 +82,7 @@ describe('PlatformTypeBadge ChatGPT plan tiers', () => {
     for (const platform of ['antigravity', 'grok'] as AccountPlatform[]) {
       const wrapper = mountPlan(platform, 'pro')
 
-      expect(wrapper.text()).toContain('admin.accounts.upstreamBilling.unsupportedOAuth')
+      expect(wrapper.text()).toContain(platform === 'grok' ? 'Pro' : 'admin.accounts.upstreamBilling.unsupportedOAuth')
       expect(wrapper.text()).not.toContain('Pro 20x')
     }
 

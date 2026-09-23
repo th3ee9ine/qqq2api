@@ -84,7 +84,7 @@ func TestGetDefaultPlatformQuotas_ReturnsAllowedPlatforms(t *testing.T) {
 	if v := got["openai"].MonthlyLimitUSD; v == nil || *v != zero {
 		t.Errorf("openai monthly want 0 (explicit disable), got %v", v)
 	}
-	if len(got) != 2 {
+	if len(got) != len(AllowedQuotaPlatforms) {
 		t.Errorf("only active platforms should be returned, got %v", got)
 	}
 }

@@ -344,7 +344,7 @@ func TestCompositeRouteResolverExplicitRoutesIgnoreRetiredProviders(t *testing.T
 		{"all/gpt-5", CompositeRouteEndpointResponses, true, PlatformOpenAI, "gpt-5"},
 		{"all/claude-sonnet", CompositeRouteEndpointMessages, true, PlatformAnthropic, "claude-sonnet-4-6"},
 		{"all/gemini-pro", CompositeRouteEndpointGemini, false, "", ""},
-		{"all/grok", CompositeRouteEndpointResponses, false, "", ""},
+		{"all/grok", CompositeRouteEndpointResponses, true, PlatformGrok, "grok-4.3"},
 	}
 
 	for _, tt := range tests {

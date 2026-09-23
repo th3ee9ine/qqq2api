@@ -340,9 +340,9 @@ type UpdateSettingsRequest struct {
 	ChannelMonitorHideUserRanking        *bool   `json:"channel_monitor_hide_user_ranking"`
 
 	// Grok model mapping policy
-	GrokDefaultTextModel           *string `json:"-"`
-	GrokCrossClientModelMapEnabled *bool   `json:"-"`
-	GrokDefaultBaseURLMode         *string `json:"-"`
+	GrokDefaultTextModel           *string `json:"grok_default_text_model"`
+	GrokCrossClientModelMapEnabled *bool   `json:"grok_cross_client_model_map_enabled"`
+	GrokDefaultBaseURLMode         *string `json:"grok_default_base_url_mode"`
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`

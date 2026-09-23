@@ -1,6 +1,7 @@
 export const imagePricingPlatforms = new Set([
   "composite",
   "openai",
+  "grok",
 ]);
 
 export const supportsImagePricingPlatform = (platform: string): boolean =>
@@ -15,6 +16,7 @@ const defaultImagePricePlaceholders: Record<
   string,
   Record<ImagePricingTierKey, string>
 > = {
+  grok: { image_price_1k: "0.02", image_price_2k: "0.02", image_price_4k: "0.02" },
   default: {
     image_price_1k: "0.134",
     image_price_2k: "0.201",

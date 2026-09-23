@@ -12,10 +12,12 @@ import (
 func TestAllowOpenAICompatibleMessagesDispatch_RetiredProvidersRejected(t *testing.T) {
 	require.True(t, allowOpenAICompatibleMessagesDispatch(nil, nil), "无 key 保持放行")
 
-	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformMiniMax, service.PlatformOpenCodeGo, service.PlatformGrok} {
+	for _, platform := range []string{service.PlatformKimi, service.PlatformZhipu, service.PlatformMiniMax, service.PlatformOpenCodeGo} {
 		apiKey := &service.APIKey{Group: &service.Group{Platform: platform, AllowMessagesDispatch: false}}
 		require.False(t, allowOpenAICompatibleMessagesDispatch(nil, apiKey), "platform=%s", platform)
 	}
+	require.True(t, allowOpenAICompatibleMessagesDispatch(nil,
+		&service.APIKey{Group: &service.Group{Platform: service.PlatformGrok}}))
 
 	// 非回归：openai 分组仍受开关控制。
 	openaiOff := &service.APIKey{Group: &service.Group{Platform: service.PlatformOpenAI, AllowMessagesDispatch: false}}
@@ -36,12 +38,14 @@ func TestAllowOpenAICompatibleMessagesDispatch_CompositeResolvedTargets(t *testi
 	}
 
 	// 退役目标不再解析，且必须 fail-closed。
-	for _, model := range []string{"grok-4.3", "kimi-k2-thinking", "glm-5.2", "glm-v3.2"} {
+	for _, model := range []string{"kimi-k2-thinking", "glm-5.2", "glm-v3.2"} {
 		c, apiKey := newCompositeCtx(model, false)
 		_, resolved := service.ResolvedTargetPlatformFromContext(c.Request.Context())
 		require.False(t, resolved, "model=%s", model)
 		require.False(t, allowOpenAICompatibleMessagesDispatch(c, apiKey), "model=%s", model)
 	}
+	grokContext, grokKey := newCompositeCtx("grok-4.7", false)
+	require.True(t, allowOpenAICompatibleMessagesDispatch(grokContext, grokKey))
 
 	// 解析到 openai 目标：受 composite 分组自身开关控制。
 	c, apiKey := newCompositeCtx("gpt-5.5", false)
@@ -59,7 +63,7 @@ func TestAllowOpenAICompatibleMessagesDispatch_CompositeResolvedTargets(t *testi
 func TestResolveOpenAIMessagesDispatchMappedModel_CompositeRetiredTargetsFailClosed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	for _, model := range []string{"kimi-k2-thinking", "glm-5.2", "glm-v3.2", "grok-4.3"} {
+	for _, model := range []string{"kimi-k2-thinking", "glm-5.2", "glm-v3.2"} {
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
 		apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformComposite}}

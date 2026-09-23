@@ -22,6 +22,11 @@ func TestAccountAdminScope_AccountAdminRequestMatrix(t *testing.T) {
 		wantCode   string
 	}{
 		// Account and proxy/IP maintenance surfaces.
+		{name: "grok auth", method: http.MethodPost, path: "/api/v1/admin/grok/oauth/auth-url", wantStatus: http.StatusNoContent},
+		{name: "grok import", method: http.MethodPost, path: "/api/v1/admin/grok/sso-to-oauth", wantStatus: http.StatusNoContent},
+		{name: "grok quota", method: http.MethodGet, path: "/api/v1/admin/grok/accounts/42/quota", wantStatus: http.StatusNoContent},
+		{name: "grok global reconcile", method: http.MethodPost, path: "/api/v1/admin/grok/oauth/reconcile", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
+		{name: "grok runtime diagnostics", method: http.MethodGet, path: "/api/v1/admin/grok/runtime-sanity", wantStatus: http.StatusForbidden, wantCode: "ACCOUNT_ADMIN_SCOPE"},
 		{name: "list accounts", method: http.MethodGet, path: "/api/v1/admin/accounts", wantStatus: http.StatusNoContent},
 		{name: "update account", method: http.MethodPut, path: "/api/v1/admin/accounts/42", wantStatus: http.StatusNoContent},
 		{name: "account child action", method: http.MethodPost, path: "/api/v1/admin/accounts/42/test", wantStatus: http.StatusNoContent},

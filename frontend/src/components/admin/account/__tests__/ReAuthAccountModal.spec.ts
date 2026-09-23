@@ -342,11 +342,24 @@ describe('ReAuthAccountModal', () => {
     })
   })
 
+  it('reauthorizes a Grok OAuth account through the guarded credentials endpoint', async () => {
+    const wrapper = mountModal({ id: 98, name: 'Grok', platform: 'grok', type: 'oauth', proxy_id: 3 })
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+    const panel = wrapper.findComponent({ name: 'GrokAuthorizationPanel' })
+    expect(panel.props('proxyId')).toBe(3)
+    panel.vm.$emit('authorized', { access_token: 'grok-access', refresh_token: 'grok-refresh', team_id: 'team-2', subscription_tier: 'pro' })
+    await flushPromises()
+    expect(applyOAuthCredentialsMock).toHaveBeenCalledWith(98, {
+      type: 'oauth', credentials: { access_token: 'grok-access', refresh_token: 'grok-refresh', team_id: 'team-2', subscription_tier: 'pro' }, extra: { subscription_tier: 'pro' }
+    })
+  })
+
   it('closes immediately for a retired platform account', async () => {
     const wrapper = mountModal({
       id: 99,
       name: 'Retired',
-      platform: 'grok',
+      platform: 'gemini',
       type: 'oauth',
       proxy_id: null
     })

@@ -1590,7 +1590,7 @@ const targetSelectedPlatforms = computed(() => props.target?.selectedPlatforms ?
 const targetSelectedTypes = computed(() => props.target?.selectedTypes ?? props.selectedTypes)
 const isMixedPlatform = computed(() => targetSelectedPlatforms.value.length > 1)
 const hasRetiredTargetPlatform = computed(() =>
-  targetSelectedPlatforms.value.some(platform => platform !== 'anthropic' && platform !== 'openai')
+  targetSelectedPlatforms.value.some(platform => platform !== 'anthropic' && platform !== 'openai' && platform !== 'grok')
 )
 
 const allOpenAIPassthroughCapable = computed(() => {

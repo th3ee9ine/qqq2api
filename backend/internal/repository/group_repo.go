@@ -467,7 +467,7 @@ func (r *groupRepository) ListBindableWithFilters(ctx context.Context, params pa
 	// upstream account.  Composite and retired-provider groups can remain in
 	// the database for migration compatibility, but must be excluded before
 	// counting/pagination so totals and pages do not leak them.
-	q := r.client.Group.Query().Where(group.PlatformIn(service.PlatformAnthropic, service.PlatformOpenAI))
+	q := r.client.Group.Query().Where(group.PlatformIn(service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGrok))
 	return r.listWithFiltersQuery(ctx, q, params, platform, status, search, isExclusive)
 }
 

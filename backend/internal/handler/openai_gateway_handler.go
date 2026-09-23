@@ -208,7 +208,7 @@ func resolveOpenAIMessagesDispatchMappedModel(c *gin.Context, apiKey *service.AP
 		if !ok || platform != service.PlatformOpenAI {
 			return ""
 		}
-	} else if apiKey.Group.Platform != service.PlatformOpenAI {
+	} else if apiKey.Group.Platform != service.PlatformOpenAI && apiKey.Group.Platform != service.PlatformGrok {
 		return ""
 	}
 	return strings.TrimSpace(apiKey.Group.ResolveMessagesDispatchModel(requestedModel))
@@ -302,6 +302,9 @@ func allowOpenAICompatibleMessagesDispatch(c *gin.Context, apiKey *service.APIKe
 	if apiKey == nil || apiKey.Group == nil {
 		return true
 	}
+	if apiKey.Group.Platform == service.PlatformGrok {
+		return true
+	}
 	if !service.IsActiveGroupPlatform(apiKey.Group.Platform) {
 		return false
 	}
@@ -310,13 +313,13 @@ func allowOpenAICompatibleMessagesDispatch(c *gin.Context, apiKey *service.APIKe
 			return false
 		}
 		platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
-		return ok && platform == service.PlatformOpenAI && apiKey.Group.AllowMessagesDispatch
+		return ok && (platform == service.PlatformGrok || platform == service.PlatformOpenAI && apiKey.Group.AllowMessagesDispatch)
 	}
 	return apiKey.Group.Platform == service.PlatformOpenAI && apiKey.Group.AllowMessagesDispatch
 }
 
 func openAICompatibleTextTargetAllowed(c *gin.Context, apiKey *service.APIKey, model string) bool {
-	return compositeTargetPlatformAllowed(c, apiKey, model, service.PlatformOpenAI)
+	return compositeTargetPlatformAllowed(c, apiKey, model, service.PlatformOpenAI, service.PlatformGrok)
 }
 
 // isResponsesWebSocketCompositePlatform 限定 composite 分组在 Responses WebSocket
@@ -324,7 +327,7 @@ func openAICompatibleTextTargetAllowed(c *gin.Context, apiKey *service.APIKey, m
 // WSv2 ingress 的 transport 过滤，且 WS HTTP 桥没有面向 CN 的 Responses 转换，
 // 放行只会把明确的策略拒绝变成误导性的 "no available account"。
 func isResponsesWebSocketCompositePlatform(platform string) bool {
-	return platform == service.PlatformOpenAI
+	return platform == service.PlatformOpenAI || platform == service.PlatformGrok
 }
 
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler

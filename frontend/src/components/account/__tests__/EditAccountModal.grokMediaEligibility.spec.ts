@@ -90,6 +90,20 @@ describe('EditAccountModal Grok media eligibility', () => {
     expect(mountModal(account('openai', 'oauth')).find('[data-testid="grok-media-eligibility-card"]').exists()).toBe(false)
   })
 
+  it('saves a selected OAuth upstream and clears it without touching protected token fields', async () => {
+    const wrapper = mountModal()
+    await vi.waitFor(() => expect(getEligibilityMock).toHaveBeenCalled())
+    await wrapper.get('[data-testid="grok-custom-base-url-input"]').setValue('https://us-east-1.api.x.ai/v1')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await vi.waitFor(() => expect(updateAccountMock).toHaveBeenCalled())
+    expect(updateAccountMock.mock.calls[0][1].credentials.base_url).toBe('https://us-east-1.api.x.ai/v1')
+    expect(updateAccountMock.mock.calls[0][1].credentials).not.toHaveProperty('access_token')
+    await wrapper.get('[data-testid="grok-custom-base-url-input"]').setValue('')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await vi.waitFor(() => expect(updateAccountMock).toHaveBeenCalledTimes(2))
+    expect(updateAccountMock.mock.calls[1][1].credentials).not.toHaveProperty('base_url')
+  })
+
   it('updates the dedicated endpoint only when the mode changes', async () => {
     const wrapper = mountModal()
     await vi.waitFor(() => expect(getEligibilityMock).toHaveBeenCalled())

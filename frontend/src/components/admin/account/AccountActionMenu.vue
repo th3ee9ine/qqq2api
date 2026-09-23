@@ -127,7 +127,7 @@ const updatePosition = () => {
 watch([menuRef, () => props.anchorRect, viewportWidth, viewportHeight], updatePosition, { flush: 'post' })
 useResizeObserver(menuRef, updatePosition)
 const isSupportedPlatform = computed(() =>
-  props.account?.platform === 'anthropic' || props.account?.platform === 'openai'
+  props.account?.platform === 'anthropic' || props.account?.platform === 'openai' || props.account?.platform === 'grok'
 )
 const canDuplicate = computed(() => {
   if (!props.account || props.account.parent_account_id != null) return false

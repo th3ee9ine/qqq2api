@@ -242,11 +242,12 @@ const codexAuthMode = ref<CodexAuthMode>('legacy')
 const isSupportedPlatform = computed(() =>
   props.platform === 'anthropic' ||
   props.platform === 'openai' ||
+  props.platform === 'grok' ||
   props.platform === 'composite'
 )
 
 // Reset tabs when platform changes
-const defaultClientTab = computed(() => props.platform === 'openai' ? 'codex' : 'claude')
+const defaultClientTab = computed(() => props.platform === 'grok' ? 'grok' : props.platform === 'openai' ? 'codex' : 'claude')
 
 watch(() => props.platform, () => {
   activeTab.value = 'unix'
@@ -323,6 +324,13 @@ const clientTabs = computed((): TabConfig[] => {
       tabs.push({ id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon })
       return tabs
     }
+    case 'grok':
+      return [
+        { id: 'grok', label: 'Grok CLI', icon: TerminalIcon },
+        { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
+        { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+      ]
     case 'anthropic':
       return [
         { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
@@ -367,6 +375,7 @@ const currentTabs = computed(() => {
 })
 
 const platformDescription = computed(() => {
+  if (props.platform === 'grok') return t('keys.useKeyModal.grok.description')
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -379,6 +388,7 @@ const platformDescription = computed(() => {
 })
 
 const platformNote = computed(() => {
+  if (props.platform === 'grok') return t('keys.useKeyModal.grok.note')
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -406,7 +416,12 @@ const currentFiles = computed((): FileConfig[] => {
   if (activeClientTab.value === 'opencode') {
     // The original composite-group OpenCode guide uses the OpenAI provider,
     // while Anthropic groups use the Anthropic provider.
-    return [generateOpenCodeConfig(props.platform === 'anthropic' ? 'anthropic' : 'openai', apiBase, apiKey)]
+    return [generateOpenCodeConfig(props.platform === 'grok' ? 'xai' : props.platform === 'anthropic' ? 'anthropic' : 'openai', apiBase, apiKey)]
+  }
+  if (props.platform === 'grok') {
+    if (activeClientTab.value === 'grok') return generateGrokFiles(apiBase, apiKey)
+    if (activeClientTab.value === 'codex') return generateGrokCodexFiles(apiBase, apiKey)
+    return generateGrokClaudeFiles(baseRoot, apiKey)
   }
   if (props.platform === 'openai') {
     if (activeClientTab.value === 'claude') {
@@ -419,6 +434,128 @@ const currentFiles = computed((): FileConfig[] => {
   }
   return generateAnthropicFiles(baseUrl, apiKey)
 })
+
+function grokEnvironment(apiKey: string, baseUrl?: string): FileConfig {
+  const values = { XAI_API_KEY: apiKey, ...(baseUrl ? { GROK_MODELS_BASE_URL: baseUrl } : {}) }
+  const content = Object.entries(values).map(([key, value]) => activeTab.value === 'cmd'
+    ? `set ${key}=${value}` : activeTab.value === 'powershell' || activeTab.value === 'windows'
+      ? `$env:${key}="${value}"` : `export ${key}="${value}"`).join('\n')
+  return { path: activeTab.value === 'cmd' ? 'Command Prompt' : ['powershell', 'windows'].includes(activeTab.value) ? 'PowerShell' : 'Terminal', content }
+}
+
+function generateGrokFiles(baseUrl: string, apiKey: string): FileConfig[] {
+  const content = `[endpoints]
+models_base_url = "${baseUrl}"
+models_list_url = "${baseUrl}/models"
+xai_api_base_url = "${baseUrl}"
+cli_chat_proxy_base_url = "${baseUrl}"
+
+[auth]
+preferred_method = "api_key"
+
+[model."grok-4.7"]
+model = "grok-4.7"
+name = "Grok 4.7"
+env_key = "XAI_API_KEY"
+api_backend = "responses"
+supports_backend_search = true
+
+[model."grok-build-0.1"]
+model = "grok-build-0.1"
+name = "Grok Build"
+env_key = "XAI_API_KEY"
+api_backend = "responses"
+
+[models]
+default = "grok-4.7"
+web_search = "grok-4.7"
+image_description = "grok-4.7"
+
+[session]
+auto_compact_threshold_percent = 80
+
+[features]
+image_gen = true
+video_gen = true
+image_gen_model_override = "grok-imagine-image"
+image_edit_model_override = "grok-imagine-edit"`
+  return [grokEnvironment(apiKey, baseUrl), {
+    path: activeTab.value === 'unix' ? '~/.grok/config.toml' : '%USERPROFILE%\\.grok\\config.toml',
+    content, hint: t('keys.useKeyModal.grok.configTomlHint')
+  }]
+}
+
+function generateGrokCodexFiles(baseUrl: string, apiKey: string): FileConfig[] {
+  return [grokEnvironment(apiKey), {
+    path: activeTab.value === 'unix' ? '~/.codex/config.toml' : '%USERPROFILE%\\.codex\\config.toml',
+    content: `model_provider = "qqq2api_grok"
+model = "grok-4.7"
+
+[model_providers.qqq2api_grok]
+name = "QQQ2API Grok"
+base_url = "${baseUrl}"
+env_key = "XAI_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false`
+  }]
+}
+
+function generateGrokClaudeFiles(baseUrl: string, apiKey: string): FileConfig[] {
+  const environment = {
+    ANTHROPIC_BASE_URL: baseUrl,
+    ANTHROPIC_AUTH_TOKEN: apiKey,
+    ANTHROPIC_MODEL: 'grok-4.7',
+    ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.7',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.7',
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'grok-4.7',
+    ANTHROPIC_DEFAULT_FABLE_MODEL: 'grok-4.7',
+    CLAUDE_CODE_SUBAGENT_MODEL: 'grok-4.7',
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+  }
+  let path: string
+  let content: string
+
+  switch (activeTab.value) {
+    case 'unix':
+      path = 'Terminal'
+      content = Object.entries(environment)
+        .map(([name, value]) => `export ${name}="${value}"`)
+        .join('\n')
+      break
+    case 'cmd':
+      path = 'Command Prompt'
+      content = Object.entries(environment)
+        .map(([name, value]) => `set ${name}=${value}`)
+        .join('\n')
+      break
+    case 'powershell':
+      path = 'PowerShell'
+      content = Object.entries(environment)
+        .map(([name, value]) => `$env:${name}="${value}"`)
+        .join('\n')
+      break
+    default:
+      path = 'Terminal'
+      content = ''
+  }
+
+  const settingsPath = activeTab.value === 'unix'
+    ? '~/.claude/settings.json'
+    : '%USERPROFILE%\\.claude\\settings.json'
+
+  return [
+    { path, content },
+    {
+      path: settingsPath,
+      content: JSON.stringify({
+        $schema: 'https://json.schemastore.org/claude-code-settings.json',
+        env: environment
+      }, null, 2),
+      hint: t('keys.useKeyModal.claudeSettingsHint')
+    }
+  ]
+}
 
 function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
   let path: string
@@ -776,6 +913,9 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
   }
   if (platform === 'anthropic') {
     provider[platform].npm = '@ai-sdk/anthropic'
+  } else if (platform === 'xai') {
+    provider[platform].npm = '@ai-sdk/xai'
+    provider[platform].models = { 'grok-4.7': { name: 'Grok 4.7' }, 'grok-build-0.1': { name: 'Grok Build' } }
   } else if (platform === 'openai') {
     provider[platform].models = openaiModels
   }

@@ -22,7 +22,7 @@ func TestCompositeTargetPlatformAllowedResolvesKnownAllowedModel(t *testing.T) {
 	require.Equal(t, service.PlatformOpenAI, platform)
 }
 
-func TestOpenAICompatibleTextTargetAllowsOnlyActiveOpenAI(t *testing.T) {
+func TestOpenAICompatibleTextTargetAllowsOpenAIAndGrok(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	for _, path := range []string{"/v1/messages", "/v1/chat/completions", "/v1/responses", "/v1/responses/input_tokens", "/v1/messages/count_tokens"} {
@@ -35,7 +35,14 @@ func TestOpenAICompatibleTextTargetAllowsOnlyActiveOpenAI(t *testing.T) {
 		require.True(t, ok, "path=%s", path)
 		require.Equal(t, service.PlatformOpenAI, platform, "path=%s", path)
 
-		for _, model := range []string{"grok-4.3", "kimi-k2-thinking", "glm-5.2", "glm-v3.2", "gemini-2.5-flash"} {
+		grokCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		grokCtx.Request = httptest.NewRequest("POST", path, nil)
+		require.True(t, openAICompatibleTextTargetAllowed(grokCtx, apiKey, "grok-4.7"), "path=%s", path)
+		grokPlatform, resolved := service.ResolvedTargetPlatformFromContext(grokCtx.Request.Context())
+		require.True(t, resolved)
+		require.Equal(t, service.PlatformGrok, grokPlatform)
+
+		for _, model := range []string{"kimi-k2-thinking", "glm-5.2", "glm-v3.2", "gemini-2.5-flash"} {
 			retiredCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
 			retiredCtx.Request = httptest.NewRequest("POST", path, nil)
 			require.False(t, openAICompatibleTextTargetAllowed(retiredCtx, apiKey, model), "path=%s model=%s", path, model)
@@ -43,14 +50,39 @@ func TestOpenAICompatibleTextTargetAllowsOnlyActiveOpenAI(t *testing.T) {
 	}
 }
 
-func TestResponsesWebSocketCompositePlatformGuardKeepsOnlyOpenAI(t *testing.T) {
+func TestResponsesWebSocketCompositePlatformGuardAllowsOpenAIAndGrok(t *testing.T) {
 	require.True(t, isResponsesWebSocketCompositePlatform(service.PlatformOpenAI))
+	require.True(t, isResponsesWebSocketCompositePlatform(service.PlatformGrok))
 	for _, platform := range []string{
-		service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu,
+		service.PlatformKimi, service.PlatformZhipu,
 		service.PlatformAnthropic, service.PlatformGemini,
 	} {
 		require.False(t, isResponsesWebSocketCompositePlatform(platform), "platform=%s", platform)
 	}
+}
+
+func TestCompositeGrokMessagesDispatchPreservesAccountModelMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), service.PlatformGrok))
+	key := &service.APIKey{Group: &service.Group{
+		Platform:              service.PlatformComposite,
+		AllowMessagesDispatch: false,
+		MessagesDispatchModelConfig: service.OpenAIMessagesDispatchModelConfig{
+			SonnetMappedModel: "gpt-5.4",
+		},
+	}}
+
+	require.True(t, allowOpenAICompatibleMessagesDispatch(c, key))
+	require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(c, key, "claude-sonnet-4-6"),
+		"Grok targets must use their account mapping without inheriting OpenAI group defaults")
+
+	c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), service.PlatformOpenAI))
+	require.False(t, allowOpenAICompatibleMessagesDispatch(c, key))
+	key.Group.AllowMessagesDispatch = true
+	require.True(t, allowOpenAICompatibleMessagesDispatch(c, key))
+	require.Equal(t, "gpt-5.4", resolveOpenAIMessagesDispatchMappedModel(c, key, "claude-sonnet-4-6"))
 }
 
 func TestCompositeTargetPlatformAllowedRejectsWrongOrUnknownModel(t *testing.T) {

@@ -44,7 +44,7 @@ const (
 // presence as an active-provider registry.
 func IsRetiredPlatform(platform string) bool {
 	switch platform {
-	case PlatformGemini, PlatformAntigravity, PlatformGrok,
+	case PlatformGemini, PlatformAntigravity,
 		PlatformKimi, PlatformZhipu, "deepseek", "glm":
 		return true
 	default:
@@ -55,7 +55,7 @@ func IsRetiredPlatform(platform string) bool {
 // IsActiveAccountPlatform is the single allowlist for newly configured and
 // schedulable upstream accounts.
 func IsActiveAccountPlatform(platform string) bool {
-	return platform == PlatformAnthropic || platform == PlatformOpenAI
+	return platform == PlatformAnthropic || platform == PlatformOpenAI || platform == PlatformGrok
 }
 
 // IsActiveGroupPlatform extends the account allowlist with the local composite

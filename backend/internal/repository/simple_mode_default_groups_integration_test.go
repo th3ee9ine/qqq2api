@@ -16,12 +16,12 @@ import (
 var retainedSimpleModePlatforms = []string{
 	service.PlatformAnthropic,
 	service.PlatformOpenAI,
+	service.PlatformGrok,
 }
 
 var retiredSimpleModePlatforms = []string{
 	service.PlatformGemini,
 	service.PlatformAntigravity,
-	service.PlatformGrok,
 }
 
 func TestEnsureSimpleModeDefaultGroups_CreatesMissingRetainedDefaults(t *testing.T) {
@@ -42,6 +42,7 @@ func TestEnsureSimpleModeDefaultGroups_CreatesMissingRetainedDefaults(t *testing
 		require.Equal(t, platform+"-default", groups[0].Name)
 		require.NotNil(t, groups[0].Description)
 		require.Equal(t, simpleModeDefaultGroupDescription, *groups[0].Description)
+		require.Equal(t, platform == service.PlatformGrok, groups[0].AllowImageGeneration)
 	}
 }
 
@@ -97,6 +98,28 @@ func TestEnsureSimpleModeDefaultGroups_DoesNotCreateRetiredPlatformGroups(t *tes
 		require.NoError(t, err)
 		require.Zero(t, count)
 	}
+}
+
+func TestEnsureSimpleModeDefaultGroups_PreservesDisabledGrokMediaGate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := testEntTx(t).Client()
+	softDeleteSimpleModeGroups(t, ctx, client, service.PlatformGrok)
+	existing, err := client.Group.Create().
+		SetName(service.PlatformGrok + "-default").
+		SetDescription(simpleModeDefaultGroupDescription).
+		SetPlatform(service.PlatformGrok).
+		SetStatus(service.StatusActive).
+		SetSubscriptionType(service.SubscriptionTypeStandard).
+		SetRateMultiplier(1).
+		SetIsExclusive(false).
+		SetAllowImageGeneration(false).
+		Save(ctx)
+	require.NoError(t, err)
+	require.NoError(t, ensureSimpleModeDefaultGroups(ctx, client))
+	got, err := client.Group.Get(ctx, existing.ID)
+	require.NoError(t, err)
+	require.False(t, got.AllowImageGeneration, "startup must preserve an existing group's media setting")
 }
 
 func softDeleteSimpleModeGroups(t *testing.T, ctx context.Context, client *dbent.Client, platforms ...string) {

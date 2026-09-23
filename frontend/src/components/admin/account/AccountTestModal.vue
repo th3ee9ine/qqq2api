@@ -41,7 +41,7 @@
         </label>
         <Select
           v-model="selectedModelId"
-          :options="availableModels"
+          :options="visibleModels"
           :disabled="loadingModels || status === 'connecting'"
           value-key="id"
           label-key="display_name"
@@ -60,10 +60,15 @@
         />
       </div>
 
+      <div v-if="isGrok" class="space-y-1.5">
+        <label class="input-label">{{ t('admin.accounts.grok.testMode') }}</label>
+        <Select v-model="grokTestMode" :options="grokTestModeOptions" :disabled="status === 'connecting'" />
+        <p class="input-hint">{{ t('admin.accounts.grok.testModeHint') }}</p>
+      </div>
       <div v-if="supportsPromptInput" class="space-y-1.5">
         <TextArea
           v-model="testPrompt"
-          :label="t('admin.accounts.imagePromptLabel')"
+          :label="isGrok ? t('admin.accounts.testPrompt') : t('admin.accounts.imagePromptLabel')"
           :placeholder="t('admin.accounts.imagePromptPlaceholder')"
           :hint="t('admin.accounts.imageTestHint')"
           :disabled="status === 'connecting'"
@@ -136,6 +141,7 @@
         </div>
       </div>
 
+      <video v-for="url in generatedVideos" :key="url" :src="url" controls class="max-h-96 w-full rounded-lg" />
       <Teleport to="body">
         <Transition name="fade">
           <div
@@ -237,6 +243,7 @@ interface TestEvent {
   error?: string
   success?: boolean
   model?: string
+  video_url?: string
   image_url?: string
   mime_type?: string
 }
@@ -259,25 +266,47 @@ const availableModels = ref<ClaudeModel[]>([])
 const selectedModelId = ref('')
 const testPrompt = ref('')
 const testMode = ref<'default' | 'compact'>('default')
+const grokTestMode = ref<'text' | 'image' | 'video' | 'search' | 'tts' | 'stt' | 'realtime'>('text')
+const grokTestModeOptions = computed(() => [
+  { value: 'text', label: t('admin.accounts.grok.testModeText') },
+  { value: 'image', label: t('admin.accounts.grok.testModeImage') },
+  { value: 'video', label: t('admin.accounts.grok.testModeVideo') },
+  { value: 'search', label: t('admin.accounts.grok.testModeSearch') },
+  { value: 'tts', label: t('admin.accounts.grok.testModeTTS') },
+  { value: 'stt', label: t('admin.accounts.grok.testModeSTT') },
+  { value: 'realtime', label: t('admin.accounts.grok.testModeRealtime') }
+])
+const generatedVideos = ref<string[]>([])
+const isGrok = computed(() => props.account?.platform === 'grok')
+const grokStandaloneMode = computed(() => isGrok.value && ['search', 'tts', 'stt', 'realtime'].includes(grokTestMode.value))
+const visibleModels = computed(() => !isGrok.value ? availableModels.value : availableModels.value.filter(model => {
+  if (grokTestMode.value === 'image') return model.id.includes('image') && !model.id.includes('video')
+  if (grokTestMode.value === 'video') return model.id.includes('video')
+  return !model.id.includes('imagine')
+}))
+watch(grokTestMode, mode => {
+  selectedModelId.value = visibleModels.value[0]?.id || (mode === 'image' ? 'grok-imagine-image' : mode === 'video' ? 'grok-imagine-video' : '')
+  testPrompt.value = mode === 'search' ? 'xAI Grok' : mode === 'tts' ? 'Hello from API connectivity test.' : ['image', 'video'].includes(mode) ? t('admin.accounts.imagePromptDefault') : ''
+})
 const generatedImages = ref<PreviewMedia[]>([])
 const previewImageUrl = ref('')
 const loadingModels = ref(false)
 let abortController: AbortController | null = null
 
 const supported = computed(() =>
-  props.account?.platform === 'anthropic' || props.account?.platform === 'openai'
+  props.account?.platform === 'anthropic' || props.account?.platform === 'openai' || props.account?.platform === 'grok'
 )
 const isOpenAI = computed(() => props.account?.platform === 'openai')
 const supportsOpenAIImageTest = computed(() =>
   isOpenAI.value && selectedModelId.value.toLowerCase().startsWith('gpt-image-')
 )
-const supportsPromptInput = computed(() => supportsOpenAIImageTest.value)
+const supportsPromptInput = computed(() => supportsOpenAIImageTest.value || (isGrok.value && ['image', 'video', 'search', 'tts'].includes(grokTestMode.value)))
 const openAITestModeOptions = computed(() => [
   { value: 'default', label: t('admin.accounts.openai.testModeDefault') },
   { value: 'compact', label: t('admin.accounts.openai.testModeCompact') }
 ])
 const canStartTest = computed(() =>
-  supported.value && status.value !== 'connecting' && Boolean(selectedModelId.value)
+  supported.value && status.value !== 'connecting' && (Boolean(selectedModelId.value) || grokStandaloneMode.value)
 )
 const testModeSummary = computed(() =>
   supportsOpenAIImageTest.value
@@ -298,6 +327,7 @@ watch(
     }
     resetState()
     testMode.value = 'default'
+    grokTestMode.value = 'text'
     testPrompt.value = ''
     await loadAvailableModels()
   }
@@ -360,6 +390,7 @@ function resetState() {
   streamingContent.value = ''
   errorMessage.value = ''
   generatedImages.value = []
+  generatedVideos.value = []
   previewImageUrl.value = ''
 }
 
@@ -413,6 +444,10 @@ function handleEvent(event: TestEvent) {
     }
     return
   }
+  if (event.type === 'video' && event.video_url) {
+    generatedVideos.value.push(event.video_url)
+    return
+  }
   if (event.type === 'image' && event.image_url) {
     generatedImages.value.push({ url: event.image_url, mimeType: event.mime_type })
     void addLine(
@@ -458,6 +493,10 @@ async function startTest() {
       prompt: supportsPromptInput.value ? testPrompt.value.trim() : ''
     }
     if (isOpenAI.value) body.mode = testMode.value
+    if (isGrok.value) {
+      body.mode = grokTestMode.value
+      if (grokStandaloneMode.value) body.model_id = ''
+    }
     const response = await fetch(buildApiUrl('/admin/accounts/' + props.account.id + '/test'), {
       method: 'POST',
       headers: {

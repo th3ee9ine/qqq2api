@@ -321,10 +321,12 @@ func TestExportDataExcludesRetiredPlatformsAndTheirProxies(t *testing.T) {
 	vertexProxyID := int64(12)
 	ollamaProxyID := int64(13)
 	retiredProxyID := int64(14)
+	grokProxyID := int64(15)
 	adminSvc.proxies = []service.Proxy{
 		{ID: bedrockProxyID, Name: "bedrock-proxy", Protocol: "http", Host: "127.0.0.11", Port: 8011, Status: service.StatusActive},
 		{ID: vertexProxyID, Name: "vertex-proxy", Protocol: "http", Host: "127.0.0.12", Port: 8012, Status: service.StatusActive},
 		{ID: ollamaProxyID, Name: "ollama-proxy", Protocol: "http", Host: "127.0.0.13", Port: 8013, Status: service.StatusActive},
+		{ID: grokProxyID, Name: "grok-proxy", Protocol: "http", Host: "127.0.0.15", Port: 8015, Status: service.StatusActive},
 		{ID: retiredProxyID, Name: "retired-proxy", Protocol: "http", Host: "127.0.0.14", Port: 8014, Status: service.StatusActive},
 	}
 	adminSvc.accounts = []service.Account{
@@ -333,7 +335,7 @@ func TestExportDataExcludesRetiredPlatformsAndTheirProxies(t *testing.T) {
 		{ID: 23, Name: "ollama", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"base_url": "http://localhost:11434/v1"}, ProxyID: &ollamaProxyID},
 		{ID: 24, Name: "gemini", Platform: service.PlatformGemini, Type: service.AccountTypeOAuth, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
 		{ID: 25, Name: "antigravity", Platform: service.PlatformAntigravity, Type: service.AccountTypeUpstream, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
-		{ID: 26, Name: "grok", Platform: service.PlatformGrok, Type: service.AccountTypeOAuth, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
+		{ID: 26, Name: "grok", Platform: service.PlatformGrok, Type: service.AccountTypeOAuth, Credentials: map[string]any{"access_token": "grok-token"}, ProxyID: &grokProxyID},
 		{ID: 27, Name: "kimi", Platform: service.PlatformKimi, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
 		{ID: 28, Name: "glm", Platform: service.PlatformZhipu, Type: service.AccountTypeAPIKey, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
 		{ID: 29, Name: "deepseek", Platform: "deepseek", Type: service.AccountTypeAPIKey, Credentials: map[string]any{"token": "legacy"}, ProxyID: &retiredProxyID},
@@ -348,17 +350,19 @@ func TestExportDataExcludesRetiredPlatformsAndTheirProxies(t *testing.T) {
 	var resp dataResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Len(t, resp.Data.Accounts, 3)
-	require.Equal(t, []string{"bedrock", "vertex", "ollama"}, []string{
+	require.Len(t, resp.Data.Accounts, 4)
+	require.Equal(t, []string{"bedrock", "vertex", "ollama", "grok"}, []string{
 		resp.Data.Accounts[0].Name,
 		resp.Data.Accounts[1].Name,
 		resp.Data.Accounts[2].Name,
+		resp.Data.Accounts[3].Name,
 	})
-	require.Len(t, resp.Data.Proxies, 3)
-	require.Equal(t, []string{"bedrock-proxy", "vertex-proxy", "ollama-proxy"}, []string{
+	require.Len(t, resp.Data.Proxies, 4)
+	require.Equal(t, []string{"bedrock-proxy", "vertex-proxy", "ollama-proxy", "grok-proxy"}, []string{
 		resp.Data.Proxies[0].Name,
 		resp.Data.Proxies[1].Name,
 		resp.Data.Proxies[2].Name,
+		resp.Data.Proxies[3].Name,
 	})
 }
 
@@ -491,7 +495,6 @@ func TestValidateDataAccountAllowsOnlyCurrentPlatformTypePairs(t *testing.T) {
 		{service.PlatformOpenAI, service.AccountTypeServiceAccount},
 		{service.PlatformGemini, service.AccountTypeOAuth},
 		{service.PlatformAntigravity, service.AccountTypeUpstream},
-		{service.PlatformGrok, service.AccountTypeOAuth},
 		{service.PlatformKimi, service.AccountTypeAPIKey},
 		{service.PlatformZhipu, service.AccountTypeAPIKey},
 		{"deepseek", service.AccountTypeAPIKey},
@@ -543,12 +546,13 @@ func TestImportDataPreservesBedrockVertexAndOllamaButRejectsRetiredPlatforms(t *
 	var resp dataImportResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Equal(t, 3, resp.Data.AccountCreated)
-	require.Equal(t, 6, resp.Data.AccountFailed)
-	require.Len(t, resp.Data.Errors, 6)
-	require.Len(t, adminSvc.createdAccounts, 3)
+	require.Equal(t, 4, resp.Data.AccountCreated)
+	require.Equal(t, 5, resp.Data.AccountFailed)
+	require.Len(t, resp.Data.Errors, 5)
+	require.Len(t, adminSvc.createdAccounts, 4)
 	require.Equal(t, service.AccountTypeBedrock, adminSvc.createdAccounts[0].Type)
 	require.Equal(t, service.AccountTypeServiceAccount, adminSvc.createdAccounts[1].Type)
 	require.Equal(t, service.PlatformOpenAI, adminSvc.createdAccounts[2].Platform)
 	require.Equal(t, service.AccountTypeAPIKey, adminSvc.createdAccounts[2].Type)
+	require.Equal(t, service.PlatformGrok, adminSvc.createdAccounts[3].Platform)
 }

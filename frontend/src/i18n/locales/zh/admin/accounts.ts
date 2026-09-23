@@ -800,8 +800,8 @@ export default {
         modelRestrictionDisabledByPassthrough: '已开启自动透传：模型白名单/映射不会生效。',
       },
       grok: {
-        baseUrlHint: 'Grok OAuth 账号会转发到官方 xAI API Base URL。',
-        apiKeyHint: 'Grok 订阅支持使用 OAuth refresh token；API Key 账号不在本次范围内。',
+        baseUrlHint: '使用官方 xAI API 地址，或填写兼容的自定义上游地址。',
+        apiKeyHint: '使用 xAI 控制台创建的 API Key；订阅账号请选择 Grok OAuth。',
         // 账号连通性测试弹窗
         testMode: '测试模式',
         testModeHint:

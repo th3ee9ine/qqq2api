@@ -30,6 +30,22 @@ func TestAdminRoutesRetiredPlatformEndpointsAreNotRegistered(t *testing.T) {
 	}
 
 	for _, route := range []string{
+		"GET /api/v1/admin/grok/oauth/capabilities",
+		"POST /api/v1/admin/grok/oauth/auth-url",
+		"POST /api/v1/admin/grok/oauth/exchange-code",
+		"POST /api/v1/admin/grok/oauth/refresh-token",
+		"POST /api/v1/admin/grok/oauth/sso-token",
+		"POST /api/v1/admin/grok/oauth/password",
+		"POST /api/v1/admin/grok/oauth/create-from-oauth",
+		"POST /api/v1/admin/grok/sso-to-oauth",
+		"POST /api/v1/admin/grok/accounts/:id/refresh",
+		"GET /api/v1/admin/grok/accounts/:id/quota",
+		"POST /api/v1/admin/grok/oauth/reconcile",
+	} {
+		require.True(t, registered[route], route)
+	}
+
+	for _, route := range []string{
 		"GET /api/v1/admin/users",
 		"GET /api/v1/admin/users/:id",
 		"POST /api/v1/admin/users",
@@ -60,9 +76,6 @@ func TestAdminRoutesRetiredPlatformEndpointsAreNotRegistered(t *testing.T) {
 		"POST /api/v1/admin/gemini/oauth/exchange-code",
 		"POST /api/v1/admin/antigravity/oauth/auth-url",
 		"POST /api/v1/admin/antigravity/oauth/exchange-code",
-		"POST /api/v1/admin/grok/oauth/auth-url",
-		"POST /api/v1/admin/grok/oauth/exchange-code",
-		"GET /api/v1/admin/grok/accounts/:id/quota",
 		"GET /api/v1/admin/cn-providers/accounts/:id/quota",
 		"GET /api/v1/admin/cn-providers/accounts/:id/balance",
 		"GET /api/v1/admin/backups/s3-config",

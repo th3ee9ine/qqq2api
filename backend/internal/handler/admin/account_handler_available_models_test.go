@@ -78,7 +78,7 @@ func setupSyncUpstreamModelsRouter(adminSvc service.AdminService, upstream servi
 	return router
 }
 
-func TestAccountHandlerGetAvailableModels_GrokIsRetired(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_GrokUsesModelMapping(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -100,11 +100,11 @@ func TestAccountHandlerGetAvailableModels_GrokIsRetired(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/44/models", nil)
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-	require.Contains(t, rec.Body.String(), `"reason":"PLATFORM_RETIRED"`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"id":"grok-4.3"`)
 }
 
-func TestAccountHandlerGetAvailableModels_GrokWithoutMappingIsRetired(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_GrokWithoutMappingUsesDefaults(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -121,8 +121,8 @@ func TestAccountHandlerGetAvailableModels_GrokWithoutMappingIsRetired(t *testing
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/45/models", nil)
 	router.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusBadRequest, rec.Code)
-	require.Contains(t, rec.Body.String(), `"reason":"PLATFORM_RETIRED"`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), `"id":"grok-4.7"`)
 }
 
 func TestAccountHandlerGetAvailableModels_OpenAIOAuthUsesExplicitModelMapping(t *testing.T) {

@@ -44,7 +44,7 @@
             data-1p-ignore
             data-lpignore="true"
             data-bwignore="true"
-            :placeholder="account.platform === 'openai' ? 'sk-proj-...' : 'sk-ant-...'"
+            :placeholder="account.platform === 'grok' ? 'xai-...' : account.platform === 'openai' ? 'sk-proj-...' : 'sk-ant-...'"
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
         </div>
@@ -396,6 +396,14 @@
             </div>
           </div>
         </div>
+      </div>
+      <div v-if="isGrokOAuthAccount" class="space-y-3 rounded-lg border p-4">
+        <label class="input-label">{{ t('admin.accounts.grokCustomBaseUrl.title') }}</label>
+        <input v-model="baseUrl" type="url" class="input" :placeholder="t('admin.accounts.grokCustomBaseUrl.placeholder')" data-testid="grok-custom-base-url-input" />
+        <GrokBaseUrlPresets @select="baseUrl = $event" />
+        <label class="flex items-center gap-2 text-sm"><input v-model="grokClientToolCacheEnabled" type="checkbox" />{{ t('admin.accounts.grokClientToolCache.title') }}</label>
+        <p class="input-hint">{{ t('admin.accounts.grokClientToolCache.hint') }}</p>
+        <p class="input-hint">{{ t('admin.accounts.grokCustomBaseUrl.hint') }}</p>
       </div>
       <!-- Grok OAuth media generation eligibility override -->
       <div
@@ -2646,6 +2654,7 @@ import {
 } from '@/utils/openaiWsMode'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
+import GrokBaseUrlPresets from './GrokBaseUrlPresets.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
 import ProxyAdBanner from '@/components/common/ProxyAdBanner.vue'
@@ -2758,6 +2767,7 @@ const modelMappings = ref<ModelMapping[]>([])
 const openAICompactModelMappings = ref<ModelMapping[]>([])
 const headerOverrideEnabled = ref(false)
 const headerOverrideRows = ref<HeaderOverrideRow[]>([])
+const grokClientToolCacheEnabled = ref(true)
 const grokMediaEligibilityMode = ref<GrokMediaEligibilityMode>('auto')
 const grokMediaEligibilityInitialMode = ref<GrokMediaEligibilityMode>('auto')
 const grokMediaEligibilityState = ref<GrokMediaEligibilityState | null>(null)
@@ -2887,10 +2897,10 @@ const loadGrokMediaEligibility = async (accountID: number): Promise<GrokMediaEli
 }
 
 const baseUrlPlaceholder = computed(() =>
-  isOpenAI.value ? 'https://api.openai.com' : 'https://api.anthropic.com'
+  props.account?.platform === 'grok' ? 'https://api.x.ai' : isOpenAI.value ? 'https://api.openai.com' : 'https://api.anthropic.com'
 )
 const baseUrlHint = computed(() =>
-  isOpenAI.value
+  props.account?.platform === 'grok' ? t('admin.accounts.grok.baseUrlHint') : isOpenAI.value
     ? t('admin.accounts.openai.baseUrlHint')
     : t('admin.accounts.baseUrlHint')
 )
@@ -3247,7 +3257,7 @@ function hydrate() {
   newApiKey.value = ''
   baseUrl.value = typeof credentials.base_url === 'string'
     ? credentials.base_url
-    : account.platform === 'openai'
+    : account.platform === 'grok' ? (account.type === 'oauth' ? '' : 'https://api.x.ai') : account.platform === 'openai'
       ? 'https://api.openai.com'
       : 'https://api.anthropic.com'
   if (isBedrock.value) {
@@ -3455,6 +3465,7 @@ function hydrate() {
 
   // Grok media eligibility is maintained by its dedicated endpoint because
   // the evaluated state can change independently of the account edit payload.
+  grokClientToolCacheEnabled.value = extra.grok_client_tool_cache_enabled !== false
   grokMediaEligibilityMode.value = modeFromGrokMediaExtra(extra)
   grokMediaEligibilityInitialMode.value = grokMediaEligibilityMode.value
   grokMediaEligibilityState.value = null
@@ -3850,6 +3861,10 @@ async function handleSubmit() {
       else delete credentials.model_mapping
     }
 
+    if (isGrokOAuthAccount.value) {
+      if (baseUrl.value.trim()) credentials.base_url = baseUrl.value.trim()
+      else delete credentials.base_url
+    }
     if (isApiKey.value) {
       const existingKey = typeof currentCredentials.api_key === 'string' &&
         currentCredentials.api_key.trim().length > 0
@@ -3860,7 +3875,7 @@ async function handleSubmit() {
       }
       if (newApiKey.value.trim()) credentials.api_key = newApiKey.value.trim()
       credentials.base_url = baseUrl.value.trim() || (
-        account.platform === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'
+        account.platform === 'grok' ? 'https://api.x.ai' : account.platform === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'
       )
       if (headerOverrideEnabled.value) {
         const headerError = validateHeaderOverrideRows(headerOverrideRows.value)
@@ -3989,6 +4004,7 @@ async function handleSubmit() {
   }
 
   const extra = { ...asRecord(account.extra) }
+  if (isGrokOAuthAccount.value) extra.grok_client_tool_cache_enabled = grokClientToolCacheEnabled.value
   const nextUpstreamRequestIdHeader = upstreamRequestIdHeader.value.trim()
   if (nextUpstreamRequestIdHeader !== readUpstreamRequestIdHeader(account.extra)) {
     if (nextUpstreamRequestIdHeader) {

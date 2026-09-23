@@ -821,7 +821,7 @@ const accountSupportsBatchUsage = (account: Account) => {
   if (account.platform === 'anthropic') {
     return account.type === 'oauth' || account.type === 'setup-token'
   }
-  if (account.platform === 'openai') return account.type === 'oauth'
+  if (account.platform === 'openai' || account.platform === 'grok') return account.type === 'oauth'
   return false
 }
 
@@ -1271,7 +1271,7 @@ const clearSelection = () => {
   clearSelectedIds()
 }
 
-const RETAINED_ACCOUNT_PLATFORMS = ['anthropic', 'openai'] as const
+const RETAINED_ACCOUNT_PLATFORMS = ['anthropic', 'openai', 'grok'] as const
 type RetainedAccountPlatform = (typeof RETAINED_ACCOUNT_PLATFORMS)[number]
 
 const isSupportedAccountPlatform = (platform: unknown): platform is RetainedAccountPlatform =>
@@ -1761,6 +1761,7 @@ function firstNonBlankString(...values: unknown[]): string | undefined {
 
 function getAccountPlanType(row: any): string | undefined {
   if (!row) return undefined
+  if (row.platform === 'grok') return firstNonBlankString(row.extra?.subscription_tier, row.credentials?.subscription_tier)
   return firstNonBlankString(row.credentials?.plan_type, row.parent_plan_type)
 }
 

@@ -94,3 +94,11 @@ func TestBareGrokAliasesFollowGrok46Default(t *testing.T) {
 	require.Equal(t, "grok-4.6", ResolveGrokTextResponsesModelID("grok-latest"))
 	require.Equal(t, "grok-build-0.1", ResolveGrokTextResponsesModelID("grok-build-latest"))
 }
+
+func TestDefaultModelsIncludesGrok47(t *testing.T) {
+	t.Parallel()
+	require.Contains(t, DefaultModelIDs(), "grok-4.7")
+	for _, model := range []string{"grok-4.7", "grok-4.7-latest", "xai/grok-4.7-latest"} {
+		require.Equal(t, "grok-4.7", ResolveGrokTextResponsesModelID(model))
+	}
+}

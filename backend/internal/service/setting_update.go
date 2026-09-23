@@ -13,6 +13,7 @@ import (
 
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 )
 
 // OmittedSettingKeys marks setting keys the caller's payload never carried.
@@ -440,6 +441,15 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyChannelMonitorShowQuota] = strconv.FormatBool(settings.ChannelMonitorShowQuota)
 	updates[SettingKeyChannelMonitorHideUserRanking] = strconv.FormatBool(settings.ChannelMonitorHideUserRanking)
 
+	// Grok model mapping and upstream endpoint defaults.
+	if model := strings.TrimSpace(settings.GrokDefaultTextModel); model != "" {
+		updates[SettingKeyGrokDefaultTextModel] = model
+	} else {
+		updates[SettingKeyGrokDefaultTextModel] = xai.DefaultTextModel
+	}
+	updates[SettingKeyGrokCrossClientModelMapEnabled] = strconv.FormatBool(settings.GrokCrossClientModelMapEnabled)
+	updates[SettingKeyGrokDefaultBaseURLMode] = normalizeGrokDefaultBaseURLMode(settings.GrokDefaultBaseURLMode)
+
 	// Available channels feature switch
 	updates[SettingKeyAvailableChannelsEnabled] = strconv.FormatBool(settings.AvailableChannelsEnabled)
 
@@ -587,6 +597,7 @@ func defaultAccountSchedulingThresholds() map[string]int {
 	return map[string]int{
 		PlatformOpenAI:    100,
 		PlatformAnthropic: 100,
+		PlatformGrok:      100,
 	}
 }
 
@@ -722,6 +733,11 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	if settings == nil {
 		return
 	}
+
+	xai.SetRuntimeModelMappingOptions(xai.ModelMappingOptions{
+		DefaultText:          strings.TrimSpace(settings.GrokDefaultTextModel),
+		EnableCrossClientMap: settings.GrokCrossClientModelMapEnabled,
+	})
 
 	// 先使 inflight singleflight 失效，再刷新缓存，缩小旧值覆盖新值的竞态窗口
 	versionBoundsSF.Forget("version_bounds")

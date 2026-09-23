@@ -183,7 +183,6 @@ func TestGatewayRoutesGroupModelAllowlistCoversRootAliasRoutes(t *testing.T) {
 func TestGatewayRoutesGroupModelAllowlistDoesNotRestoreRetiredRoutes(t *testing.T) {
 	router := newGatewayRoutesTestRouterWithGroup(allowlistGroup(service.PlatformOpenAI, true, "gpt-5.4"))
 	for _, path := range []string{
-		"/videos/generations", "/v1/videos/generations", "/tts", "/stt",
 		"/antigravity/v1/messages", "/antigravity/v1beta/models/gemini-2.5-pro:generateContent",
 		"/v1beta/models/gemini-2.5-pro:generateContent",
 	} {
@@ -199,7 +198,7 @@ func TestGatewayRoutesGroupModelAllowlistDoesNotRestoreRetiredRoutes(t *testing.
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/realtime?model=gpt-4.1", nil))
 	require.Equal(t, http.StatusNotFound, w.Code)
-	require.NotContains(t, w.Body.String(), "not available for this group")
+	require.Contains(t, w.Body.String(), "not available for this group")
 }
 
 func TestGatewayRoutesGroupModelAllowlistSkipsWebSocketUpgrade(t *testing.T) {

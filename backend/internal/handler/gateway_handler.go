@@ -1180,6 +1180,11 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
+	if platform == service.PlatformGrok {
+		writeGrokModelsList(c, xai.DefaultModelIDs())
+		return
+	}
+
 	writeModelsListResponse(c, claude.DefaultModels)
 }
 
@@ -1263,7 +1268,7 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
 	schedulablePlatforms := h.gatewayService.GetSchedulablePlatforms(ctx, groupID)
-	for _, platform := range []string{service.PlatformAnthropic, service.PlatformOpenAI} {
+	for _, platform := range []string{service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGrok} {
 		platformModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
 		if len(platformModels) == 0 {
 			if _, ok := schedulablePlatforms[platform]; ok {
@@ -1367,7 +1372,7 @@ func writeGrokModelsList(c *gin.Context, modelIDs []string) {
 
 func grokModelSupportsConfigurableReasoning(modelID string) bool {
 	switch strings.ToLower(strings.TrimSpace(modelID)) {
-	case "grok-4.6", "grok-4.6-latest", "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
+	case "grok-4.7", "grok-4.7-latest", "grok-4.6", "grok-4.6-latest", "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
 		return true
 	default:
 		return false
@@ -1421,10 +1426,12 @@ func defaultModelIDsForPlatform(platform string) []string {
 		return openai.DefaultModelIDs()
 	case service.PlatformAnthropic:
 		return claude.DefaultModelIDs()
+	case service.PlatformGrok:
+		return xai.DefaultModelIDs()
 	case service.PlatformComposite:
 		ids := make([]string, 0)
 		seen := make(map[string]struct{})
-		for _, concretePlatform := range []string{service.PlatformAnthropic, service.PlatformOpenAI} {
+		for _, concretePlatform := range []string{service.PlatformAnthropic, service.PlatformOpenAI, service.PlatformGrok} {
 			for _, id := range defaultModelIDsForPlatform(concretePlatform) {
 				if _, ok := seen[id]; ok {
 					continue

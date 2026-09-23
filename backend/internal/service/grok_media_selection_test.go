@@ -9,7 +9,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
-func TestSelectGrokMediaVideoRequestAccountRejectsRetiredPlatform(t *testing.T) {
+func TestSelectGrokMediaVideoRequestAccountPreservesOwner(t *testing.T) {
 	for _, state := range []string{"available", "full", "unavailable", "wrong group", "missing", "invalid id"} {
 		t.Run(state, func(t *testing.T) {
 			groupID := int64(24)
@@ -50,24 +50,41 @@ func TestSelectGrokMediaVideoRequestAccountRejectsRetiredPlatform(t *testing.T) 
 			sessionHash := GrokMediaVideoRequestSessionHash("task", 10, 20)
 			for range 20 {
 				selection, decision, err := svc.SelectGrokMediaVideoRequestAccount(ctx, &groupID, sessionHash, ownerID, "")
-				require.ErrorIs(t, err, ErrNoAvailableAccounts)
-				require.Nil(t, selection)
-				require.False(t, decision.StickySessionHit)
+				switch state {
+				case "available":
+					require.NoError(t, err)
+					require.Equal(t, int64(1), selection.Account.ID)
+					require.True(t, selection.Acquired)
+					require.True(t, decision.StickySessionHit)
+					selection.ReleaseFunc()
+				case "full":
+					require.NoError(t, err)
+					require.Equal(t, int64(1), selection.Account.ID)
+					require.False(t, selection.Acquired)
+					require.Nil(t, selection.ReleaseFunc)
+					require.Equal(t, int64(1), selection.WaitPlan.AccountID)
+				default:
+					require.ErrorIs(t, err, ErrNoAvailableAccounts)
+					require.Nil(t, selection)
+				}
 				bound, err := svc.ResolveGrokMediaVideoRequestAccount(ctx, &groupID, "task", 10, 20)
 				require.NoError(t, err)
 				require.Equal(t, int64(1), bound)
 			}
 			require.NotContains(t, acquired, int64(2))
 			require.Empty(t, cache.deletedSessions)
-			require.Empty(t, acquired)
-			require.Empty(t, released)
+			if state == "available" {
+				require.Len(t, released, 20)
+			} else {
+				require.Empty(t, released)
+			}
 		})
 	}
 }
 
-func TestOpenAITaskOwnerStickySelectionIgnoresHealthEscape(t *testing.T) {
+func TestGrokVideoStickySelectionIgnoresHealthEscape(t *testing.T) {
 	groupID := int64(24)
-	account := Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+	account := Account{ID: 1, Platform: PlatformGrok, Type: AccountTypeAPIKey,
 		Status: StatusActive, Schedulable: true, Concurrency: 50, GroupIDs: []int64{groupID}}
 	svc := &OpenAIGatewayService{
 		accountRepo: schedulerTestOpenAIAccountRepo{accounts: []Account{account}},
@@ -78,7 +95,7 @@ func TestOpenAITaskOwnerStickySelectionIgnoresHealthEscape(t *testing.T) {
 		stats.report(1, false, nil)
 	}
 	scheduler := &defaultOpenAIAccountScheduler{service: svc, stats: stats}
-	req := OpenAIAccountScheduleRequest{GroupID: &groupID, Platform: PlatformOpenAI,
+	req := OpenAIAccountScheduleRequest{GroupID: &groupID, Platform: PlatformGrok,
 		SessionHash: "task", StickyAccountID: 1, PreserveStickyBinding: true}
 	selection, escaped, err := scheduler.selectBySessionHash(context.Background(), req)
 	require.NoError(t, err)

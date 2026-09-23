@@ -831,9 +831,6 @@ func TestLoadDefaultSecurityToggles(t *testing.T) {
 	}
 
 	retiredHosts := []string{
-		"api.x.ai",
-		"accounts.x.ai",
-		"cli-chat-proxy.grok.com",
 		"api.kimi.com",
 		"api.moonshot.ai",
 		"api.moonshot.cn",
@@ -845,6 +842,9 @@ func TestLoadDefaultSecurityToggles(t *testing.T) {
 	hostSet := make(map[string]struct{}, len(cfg.Security.URLAllowlist.UpstreamHosts))
 	for _, h := range cfg.Security.URLAllowlist.UpstreamHosts {
 		hostSet[h] = struct{}{}
+	}
+	for _, active := range []string{"api.x.ai", "us-east-1.api.x.ai", "us-west-2.api.x.ai", "eu-west-1.api.x.ai", "accounts.x.ai", "cli-chat-proxy.grok.com"} {
+		require.Contains(t, hostSet, active)
 	}
 	for _, retired := range retiredHosts {
 		if _, ok := hostSet[retired]; ok {

@@ -373,7 +373,7 @@ async function onModelsUpdate(newModels: string[]) {
   // Default-price lookup is retained only for the supported Claude/OpenAI
   // group platforms. Composite and retired provider entries stay manual.
   const platform = props.platform
-  if (platform !== 'anthropic' && platform !== 'openai') return
+  if (platform !== 'anthropic' && platform !== 'openai' && platform !== 'grok') return
 
   // Only fill when a model was added and the entry has no existing token price.
   const addedModels = newModels.filter(model => !oldModels.includes(model))

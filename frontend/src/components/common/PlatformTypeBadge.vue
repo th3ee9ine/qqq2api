@@ -75,13 +75,14 @@ interface Props {
 const props = defineProps<Props>()
 
 const isSupportedPlatform = computed(() =>
-  props.platform === 'anthropic' || props.platform === 'openai'
+  props.platform === 'anthropic' || props.platform === 'openai' || props.platform === 'grok'
 )
 const badgePlatform = computed(() => isSupportedPlatform.value ? props.platform : undefined)
 
 const platformLabel = computed(() => {
   if (props.platform === 'anthropic') return 'Anthropic'
   if (props.platform === 'openai') return 'OpenAI'
+  if (props.platform === 'grok') return 'Grok'
   return t('admin.accounts.upstreamBilling.unsupported')
 })
 

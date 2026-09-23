@@ -89,6 +89,8 @@ func accountAdminRequestAllowed(method, path string) bool {
 		"/admin/accounts/sync/crs",
 		"/admin/accounts/upstream-billing-rates",
 		"/admin/scheduled-test-plans",
+		"/admin/grok/oauth/reconcile",
+		"/admin/grok/runtime-sanity",
 	} {
 		if path == restrictedPrefix || strings.HasPrefix(path, restrictedPrefix+"/") {
 			return false
@@ -122,6 +124,7 @@ func accountAdminRequestAllowed(method, path string) bool {
 	for _, prefix := range []string{
 		"/admin/accounts",
 		"/admin/openai",
+		"/admin/grok",
 		"/admin/proxies",
 	} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {

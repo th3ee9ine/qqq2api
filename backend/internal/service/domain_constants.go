@@ -125,14 +125,15 @@ func IsMultiProtocolAPIKeyProvider(platform string) bool {
 var AllowedQuotaPlatforms = []string{
 	PlatformAnthropic,
 	PlatformOpenAI,
+	PlatformGrok,
 }
 
 // AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。
-// openai/anthropic/grok 有原生用量窗口；kimi/zhipu/minimax 的 Coding Plan 同样暴露
-// 5h/weekly 滚动窗口，纳入阈值评估。
+// OpenAI、Anthropic 与 Grok 的原生用量窗口参与阈值评估。
 var AllowedSchedulingThresholdPlatforms = []string{
 	PlatformOpenAI,
 	PlatformAnthropic,
+	PlatformGrok,
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。

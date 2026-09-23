@@ -19,7 +19,7 @@
           <div>
             <span class="block font-semibold text-gray-900 dark:text-white">{{ account.name }}</span>
             <span class="text-sm text-gray-500 dark:text-gray-400">
-              {{ isOpenAI ? t('admin.accounts.openaiAccount') : t('admin.accounts.claudeCodeAccount') }}
+              {{ isGrok ? 'Grok OAuth' : isOpenAI ? t('admin.accounts.openaiAccount') : t('admin.accounts.claudeCodeAccount') }}
             </span>
           </div>
         </div>
@@ -39,7 +39,9 @@
         </div>
       </fieldset>
 
+      <GrokAuthorizationPanel v-if="isGrok" :proxy-id="account.proxy_id" :busy="grokSaving" @authorized="handleGrokAuthorized" />
       <OAuthAuthorizationFlow
+        v-else
         ref="oauthFlowRef"
         :add-method="addMethod"
         :auth-url="currentAuthUrl"
@@ -104,6 +106,9 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { useAccountOAuth, type AddMethod, type AuthInputMethod } from '@/composables/useAccountOAuth'
+import GrokAuthorizationPanel from '@/components/account/GrokAuthorizationPanel.vue'
+import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import type { GrokTokenInfo } from '@/api/admin/grok'
 import { useOpenAIOAuth, type OpenAITokenInfo } from '@/composables/useOpenAIOAuth'
 import type { Account } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -124,12 +129,15 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const claudeOAuth = useAccountOAuth()
 const openaiOAuth = useOpenAIOAuth()
+const grokOAuth = useGrokOAuth()
+const grokSaving = ref(false)
+const isGrok = computed(() => props.account?.platform === 'grok')
 const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
 const addMethod = ref<AddMethod>('oauth')
 
 const isOpenAI = computed(() => props.account?.platform === 'openai')
 const isAnthropic = computed(() => props.account?.platform === 'anthropic')
-const supported = computed(() => isOpenAI.value || isAnthropic.value)
+const supported = computed(() => isOpenAI.value || isAnthropic.value || isGrok.value)
 const currentAuthUrl = computed(() => isOpenAI.value ? openaiOAuth.authUrl.value : claudeOAuth.authUrl.value)
 const currentSessionId = computed(() => isOpenAI.value ? openaiOAuth.sessionId.value : claudeOAuth.sessionId.value)
 const currentLoading = computed(() => isOpenAI.value ? openaiOAuth.loading.value : claudeOAuth.loading.value)
@@ -161,6 +169,21 @@ async function handleGenerateUrl() {
   if (!props.account || !supported.value) return
   if (isOpenAI.value) await openaiOAuth.generateAuthUrl(props.account.proxy_id)
   else await claudeOAuth.generateAuthUrl(addMethod.value, props.account.proxy_id)
+}
+
+async function handleGrokAuthorized(tokenInfo: GrokTokenInfo) {
+  if (!props.account || !isGrok.value || grokSaving.value) return
+  grokSaving.value = true
+  try {
+    const updated = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
+      type: 'oauth', credentials: grokOAuth.buildCredentials(tokenInfo), extra: grokOAuth.buildExtraInfo(tokenInfo)
+    })
+    appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
+    emit('reauthorized', updated)
+    handleClose()
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.accounts.oauth.authFailed'))
+  } finally { grokSaving.value = false }
 }
 
 async function applyOpenAITokens(tokenInfo: OpenAITokenInfo) {

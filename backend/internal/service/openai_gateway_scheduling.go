@@ -297,6 +297,8 @@ func NormalizeOpenAICompatiblePlatform(platform string) string {
 	switch strings.ToLower(strings.TrimSpace(platform)) {
 	case PlatformOpenAI:
 		return PlatformOpenAI
+	case PlatformGrok:
+		return PlatformGrok
 	default:
 		return ""
 	}

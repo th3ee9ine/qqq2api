@@ -1585,7 +1585,7 @@ const loadApiKeys = async () => {
 const loadGroups = async () => {
   try {
     groups.value = (await groupsAPI.getAvailable()).filter((group) =>
-      ['anthropic', 'openai', 'composite'].includes(group.platform)
+      ['anthropic', 'openai', 'grok', 'composite'].includes(group.platform)
     )
   } catch (error) {
     console.error('Failed to load groups:', error)
@@ -1602,7 +1602,7 @@ const loadPublicSettings = async () => {
 }
 
 const isRetainedKeyPlatform = (platform?: GroupPlatform | null) =>
-  !platform || ['anthropic', 'openai', 'composite'].includes(platform)
+  !platform || ['anthropic', 'openai', 'grok', 'composite'].includes(platform)
 
 const openUseKeyModal = (key: ApiKey) => {
   if (!isRetainedKeyPlatform(key.group?.platform)) return

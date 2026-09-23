@@ -94,6 +94,7 @@ func NewTokenRefreshService(
 	schedulerCache SchedulerCache,
 	cfg *config.Config,
 	tempUnschedCache TempUnschedCache,
+	grokOAuthServices ...*GrokOAuthService,
 ) *TokenRefreshService {
 	refreshCfg := &config.TokenRefreshConfig{}
 	if cfg != nil {
@@ -125,6 +126,12 @@ func NewTokenRefreshService(
 	s.registrations = []tokenRefreshRegistration{
 		{platform: PlatformAnthropic, refresher: claudeRefresher, executor: claudeRefresher},
 		{platform: PlatformOpenAI, refresher: openAIRefresher, executor: openAIRefresher},
+	}
+	if len(grokOAuthServices) > 0 && grokOAuthServices[0] != nil {
+		grokRefresher := NewGrokTokenRefresher(grokOAuthServices[0])
+		s.registrations = append(s.registrations, tokenRefreshRegistration{
+			platform: PlatformGrok, refresher: grokRefresher, executor: grokRefresher,
+		})
 	}
 	return s
 }

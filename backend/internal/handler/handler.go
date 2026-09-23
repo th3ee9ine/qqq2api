@@ -7,6 +7,7 @@ import (
 
 // AdminHandlers contains all admin-related HTTP handlers
 type AdminHandlers struct {
+	GrokOAuth             *admin.GrokOAuthHandler
 	Dashboard             *admin.DashboardHandler
 	Group                 *admin.GroupHandler
 	ModelPricing          *admin.ModelPricingHandler

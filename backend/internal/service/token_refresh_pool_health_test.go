@@ -380,6 +380,17 @@ func TestTokenRefreshService_RegistrationsAreCandidateEligibilitySource(t *testi
 	}
 }
 
+func TestTokenRefreshService_RegistersConfiguredGrokForBackgroundRefresh(t *testing.T) {
+	svc := NewTokenRefreshService(nil, nil, nil, nil, nil, &config.Config{}, nil, &GrokOAuthService{})
+	t.Cleanup(svc.runCancel)
+	require.Equal(t, []string{PlatformAnthropic, PlatformOpenAI, PlatformGrok}, svc.eligiblePlatforms())
+	require.Len(t, svc.registrations, 3)
+	registration := svc.registrations[2]
+	require.True(t, registration.refresher.CanRefresh(&Account{Platform: PlatformGrok, Type: AccountTypeOAuth, Credentials: map[string]any{"refresh_token": "grok-refresh"}}))
+	require.False(t, registration.refresher.CanRefresh(&Account{Platform: PlatformGrok, Type: AccountTypeAPIKey}))
+	require.Same(t, registration.refresher, registration.executor)
+}
+
 func TestTokenRefreshService_ProcessRefreshPagesByStableCursor(t *testing.T) {
 	repo := &poolHealthAccountRepo{pages: map[int64][]Account{
 		0: {grokPoolAccount(1), grokPoolAccount(2)},

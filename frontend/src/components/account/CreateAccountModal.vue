@@ -110,6 +110,23 @@
             </svg>
             OpenAI
           </button>
+          <button type="button" data-testid="create-platform-grok" @click="selectPlatform('grok')" :class="['flex flex-1 items-center justify-center rounded-md px-4 py-2.5 text-sm font-medium', form.platform === 'grok' ? 'bg-white text-zinc-900 shadow-sm dark:bg-dark-600 dark:text-white' : 'text-gray-600 dark:text-gray-400']">Grok</button>
+        </div>
+      </div>
+
+      <div v-if="form.platform === 'grok'" class="space-y-3">
+        <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
+        <div class="flex gap-3">
+          <button type="button" class="btn" :class="accountCategory === 'oauth' ? 'btn-primary' : 'btn-secondary'" @click="accountCategory = 'oauth'">Grok OAuth</button>
+          <button type="button" class="btn" data-testid="grok-account-type-api-key" :class="accountCategory === 'apikey' ? 'btn-primary' : 'btn-secondary'" @click="accountCategory = 'apikey'">API Key</button>
+        </div>
+        <div v-if="isOAuthFlow">
+          <label class="input-label">{{ t('admin.accounts.grokCustomBaseUrl.title') }}</label>
+          <input v-model="grokOAuthBaseUrl" type="url" class="input" :placeholder="t('admin.accounts.grokCustomBaseUrl.placeholder')" />
+          <GrokBaseUrlPresets @select="grokOAuthBaseUrl = $event" />
+          <label class="mt-3 flex items-center gap-2 text-sm"><input v-model="grokClientToolCacheEnabled" type="checkbox" />{{ t('admin.accounts.grokClientToolCache.title') }}</label>
+          <p class="input-hint">{{ t('admin.accounts.grokClientToolCache.hint') }}</p>
+          <p class="input-hint">{{ t('admin.accounts.grokCustomBaseUrl.hint') }}</p>
         </div>
       </div>
 
@@ -2586,7 +2603,9 @@
 
     <!-- Step 2: OAuth Authorization -->
     <div v-else class="space-y-5">
+      <GrokAuthorizationPanel v-if="form.platform === 'grok'" :proxy-id="effectiveProxyId" :busy="submitting" @authorized="handleGrokAuthorized" />
       <OAuthAuthorizationFlow
+        v-else
         ref="oauthFlowRef"
         :add-method="addMethod"
         :auth-url="currentAuthUrl"
@@ -2707,6 +2726,10 @@ import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
 import { useAccountOAuth, type AddMethod, type AuthInputMethod } from '@/composables/useAccountOAuth'
+import GrokAuthorizationPanel from './GrokAuthorizationPanel.vue'
+import GrokBaseUrlPresets from './GrokBaseUrlPresets.vue'
+import { useGrokOAuth } from '@/composables/useGrokOAuth'
+import type { GrokTokenInfo } from '@/api/admin/grok'
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import {
   buildModelMappingObject,
@@ -2755,7 +2778,7 @@ import ModelWhitelistSelector from './ModelWhitelistSelector.vue'
 import OAuthAuthorizationFlow from './OAuthAuthorizationFlow.vue'
 import QuotaLimitCard from './QuotaLimitCard.vue'
 
-type SupportedPlatform = 'anthropic' | 'openai'
+type SupportedPlatform = 'anthropic' | 'openai' | 'grok'
 type AccountCategory = 'oauth' | 'setup-token' | 'apikey' | 'bedrock' | 'service_account'
 type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
@@ -2791,6 +2814,9 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const anthropicOAuth = useAccountOAuth()
 const openaiOAuth = useOpenAIOAuth()
+const grokOAuth = useGrokOAuth()
+const grokOAuthBaseUrl = ref('')
+const grokClientToolCacheEnabled = ref(true)
 const oauthFlowRef = ref<OAuthFlowExposed | null>(null)
 const step = ref<1 | 2>(1)
 const submitting = ref(false)
@@ -2971,7 +2997,7 @@ const isOAuthFlow = computed(() =>
   accountCategory.value === 'oauth' || accountCategory.value === 'setup-token'
 )
 const oauthStepTitle = computed(() =>
-  form.platform === 'openai'
+  form.platform === 'grok' ? t('admin.accounts.oauth.grok.title') : form.platform === 'openai'
     ? t('admin.accounts.oauth.openai.title')
     : t('admin.accounts.oauth.title')
 )
@@ -2980,20 +3006,20 @@ const addMethod = computed<AddMethod>({
   set: method => { accountCategory.value = method }
 })
 const baseUrlHint = computed(() =>
-  form.platform === 'openai'
+  form.platform === 'grok' ? t('admin.accounts.grok.baseUrlHint') : form.platform === 'openai'
     ? t('admin.accounts.openai.baseUrlHint')
     : t('admin.accounts.baseUrlHint')
 )
 const apiKeyHint = computed(() =>
-  form.platform === 'openai'
+  form.platform === 'grok' ? t('admin.accounts.grok.apiKeyHint') : form.platform === 'openai'
     ? t('admin.accounts.openai.apiKeyHint')
     : t('admin.accounts.apiKeyHint')
 )
 const apiKeyBaseUrlPlaceholder = computed(() =>
-  form.platform === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'
+  form.platform === 'grok' ? 'https://api.x.ai' : form.platform === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'
 )
 const apiKeyValuePlaceholder = computed(() =>
-  form.platform === 'openai' ? 'sk-proj-...' : 'sk-ant-...'
+  form.platform === 'grok' ? 'xai-...' : form.platform === 'openai' ? 'sk-proj-...' : 'sk-ant-...'
 )
 const currentAuthUrl = computed(() =>
   form.platform === 'openai' ? openaiOAuth.authUrl.value : anthropicOAuth.authUrl.value
@@ -3166,7 +3192,7 @@ watch(() => props.show, visible => {
   }
 }, { immediate: true })
 watch(accountCategory, category => {
-  if (form.platform === 'openai' && !['oauth', 'apikey'].includes(category)) {
+  if (form.platform !== 'anthropic' && !['oauth', 'apikey'].includes(category)) {
     accountCategory.value = 'oauth'
   }
 })
@@ -3330,10 +3356,12 @@ function buildTempUnschedRules() {
 
 function selectPlatform(platform: SupportedPlatform) {
   form.platform = platform
-  if (platform === 'openai' && !['oauth', 'apikey'].includes(accountCategory.value)) {
+  if (platform !== 'anthropic' && !['oauth', 'apikey'].includes(accountCategory.value)) {
     accountCategory.value = 'oauth'
   }
-  apiKeyBaseUrl.value = platform === 'openai'
+  grokOAuthBaseUrl.value = ''
+  grokClientToolCacheEnabled.value = true
+  apiKeyBaseUrl.value = platform === 'grok' ? 'https://api.x.ai' : platform === 'openai'
     ? 'https://api.openai.com'
     : 'https://api.anthropic.com'
   allowedModels.value = []
@@ -3602,6 +3630,12 @@ async function createAndFinish(payload: CreateAccountRequest) {
   }
 }
 
+async function handleGrokAuthorized(tokenInfo: GrokTokenInfo) {
+  const credentials = buildCommonCredentials(grokOAuth.buildCredentials(tokenInfo))
+  if (grokOAuthBaseUrl.value.trim()) credentials.base_url = grokOAuthBaseUrl.value.trim()
+  await createAndFinish(buildBasePayload('grok', 'oauth', credentials, { ...grokOAuth.buildExtraInfo(tokenInfo), grok_client_tool_cache_enabled: grokClientToolCacheEnabled.value }))
+}
+
 async function handleSubmit() {
   if (!form.name.trim()) {
     appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
@@ -3624,7 +3658,7 @@ async function handleSubmit() {
     const credentials: Record<string, unknown> = {
       api_key: apiKeyValue.value.trim(),
       base_url: apiKeyBaseUrl.value.trim() || (
-        form.platform === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'
+        form.platform === 'grok' ? 'https://api.x.ai' : form.platform === 'openai' ? 'https://api.openai.com' : 'https://api.anthropic.com'
       )
     }
     const mapping = buildModelMappingObject('whitelist', allowedModels.value, [])
@@ -4028,6 +4062,8 @@ function resetForm() {
   form.group_ids = []
   accountCategory.value = 'oauth'
   apiKeyValue.value = ''
+  grokOAuthBaseUrl.value = ''
+  grokClientToolCacheEnabled.value = true
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   allowedModels.value = []
   upstreamRequestIdHeader.value = ''

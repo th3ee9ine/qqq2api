@@ -12,7 +12,8 @@ export interface PlatformOption<T extends string = string> {
  */
 export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'anthropic', label: 'Anthropic' },
-  { value: 'openai', label: 'OpenAI' }
+  { value: 'openai', label: 'OpenAI' },
+  { value: 'grok', label: 'Grok' }
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
 
 /** Platforms that can own a group. */

@@ -14,12 +14,12 @@ import (
 // 探测资格只覆盖仍在生产启用的平台；历史平台即使保留 API-key
 // 凭据也必须 fail closed。OAuth/Bedrock 无静态 Key，同样不合格。
 func TestUpstreamBillingProbeIdentityCoversActiveAPIKeyPlatformsOnly(t *testing.T) {
-	for _, platform := range []string{PlatformOpenAI, PlatformAnthropic} {
+	for _, platform := range []string{PlatformOpenAI, PlatformAnthropic, PlatformGrok} {
 		require.True(t, IsUpstreamBillingProbeIdentity(platform, AccountTypeAPIKey), platform)
 		require.True(t, isUpstreamBillingProbeAccount(&Account{Platform: platform, Type: AccountTypeAPIKey}), platform)
 	}
 	for _, platform := range []string{
-		PlatformGrok, PlatformGemini, PlatformAntigravity, PlatformKimi, PlatformZhipu,
+		PlatformGemini, PlatformAntigravity, PlatformKimi, PlatformZhipu,
 	} {
 		require.False(t, IsUpstreamBillingProbeIdentity(platform, AccountTypeAPIKey), platform)
 		require.False(t, isUpstreamBillingProbeAccount(&Account{Platform: platform, Type: AccountTypeAPIKey}), platform)
@@ -245,7 +245,7 @@ func TestUpstreamBillingProbeOpenAIDefaultBaseURLIsUnsupportedWithoutRequest(t *
 	require.Nil(t, upstream.lastReq)
 }
 
-func TestUpstreamBillingProbeSetAccountEnabledRejectsRetiredGrokAccounts(t *testing.T) {
+func TestUpstreamBillingProbeSetAccountEnabledSupportsGrokAPIKeyOnly(t *testing.T) {
 	grokAPIKey := &Account{
 		ID:          151,
 		Platform:    PlatformGrok,
@@ -261,8 +261,8 @@ func TestUpstreamBillingProbeSetAccountEnabledRejectsRetiredGrokAccounts(t *test
 	svc := newUpstreamBillingProbeTestService(repo, &upstreamBillingProbeHTTPStub{}, &upstreamBillingProbeSettingRepo{})
 
 	err := svc.SetAccountEnabled(context.Background(), grokAPIKey.ID, true)
-	require.ErrorIs(t, err, ErrUpstreamBillingProbeAccountInvalid)
-	require.NotContains(t, repo.accounts[grokAPIKey.ID].Extra, UpstreamBillingProbeEnabledExtraKey)
+	require.NoError(t, err)
+	require.Equal(t, true, repo.accounts[grokAPIKey.ID].Extra[UpstreamBillingProbeEnabledExtraKey])
 
 	err = svc.SetAccountEnabled(context.Background(), grokOAuth.ID, true)
 	require.ErrorIs(t, err, ErrUpstreamBillingProbeAccountInvalid)

@@ -21,6 +21,23 @@ vi.mock('@/composables/useClipboard', () => ({
 import UseKeyModal from '../UseKeyModal.vue'
 
 describe('UseKeyModal', () => {
+  it('renders Grok CLI and Codex configs using Grok model IDs and normalized endpoints', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: { show: true, apiKey: 'test-key', baseUrl: 'https://example.com/v1/', platform: 'grok' },
+      global: { stubs: { BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }, Icon: true } }
+    })
+    let configs = wrapper.findAll('pre code').map(node => node.text()).join('\n')
+    expect(configs).toContain('models_base_url = "https://example.com/v1"')
+    expect(configs).toContain('api_backend = "responses"')
+    expect(configs).toContain('model = "grok-4.7"')
+    const codex = wrapper.findAll('button').find(button => button.text() === 'keys.useKeyModal.cliTabs.codexCli')!
+    await codex.trigger('click')
+    configs = wrapper.findAll('pre code').map(node => node.text()).join('\n')
+    expect(configs).toContain('wire_api = "responses"')
+    expect(configs).toContain('requires_openai_auth = false')
+    expect(configs).toContain('supports_websockets = false')
+  })
+
   it('keeps legacy OpenAI Codex config as the default', () => {
     const wrapper = mount(UseKeyModal, {
       props: {

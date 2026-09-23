@@ -12,6 +12,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/th3ee9ine/qqq2api/internal/payment"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 	"go.uber.org/zap"
 )
 
@@ -105,6 +106,7 @@ func ProvideOpenAIOAuthService(
 
 // ProvideTokenRefreshService creates and starts TokenRefreshService
 func ProvideTokenRefreshService(
+	grokOAuthService *GrokOAuthService,
 	accountRepo AccountRepository,
 	oauthService *OAuthService,
 	openaiOAuthService *OpenAIOAuthService,
@@ -117,7 +119,7 @@ func ProvideTokenRefreshService(
 	refreshAPI *OAuthRefreshAPI,
 	runtimeBlocker AccountRuntimeBlocker,
 ) *TokenRefreshService {
-	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache)
+	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
 	// 注入 OpenAI privacy opt-out 依赖
 	svc.SetPrivacyDeps(privacyClientFactory, proxyRepo)
 	// 注入统一 OAuth 刷新 API（消除 TokenRefreshService 与 TokenProvider 之间的竞争条件）
@@ -172,10 +174,9 @@ func ProvideOpenAIQuotaService(
 	return service
 }
 
-// ProvideOpenAIGatewayService wires only the active OpenAI provider. The
-// historical constructor still accepts a Grok token provider for source and
-// data compatibility, but production deliberately injects nil.
+// ProvideOpenAIGatewayService wires OpenAI and Grok with the shared gateway runtime.
 func ProvideOpenAIGatewayService(
+	grokTokenProvider *GrokTokenProvider,
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
 	proxyProber ProxyExitInfoProber,
@@ -218,7 +219,7 @@ func ProvideOpenAIGatewayService(
 		httpUpstream,
 		deferredService,
 		openAITokenProvider,
-		nil,
+		grokTokenProvider,
 		resolver,
 		channelService,
 		balanceNotifyService,
@@ -288,6 +289,8 @@ func ProvideOpenAISessionCleanupService(
 }
 
 func ProvideAccountUsageService(
+	grokQuotaFetcher *GrokQuotaFetcher,
+	grokQuotaService *GrokQuotaService,
 	accountRepo AccountRepository,
 	usageLogRepo UsageLogRepository,
 	usageFetcher ClaudeUsageFetcher,
@@ -303,8 +306,8 @@ func ProvideAccountUsageService(
 		usageFetcher,
 		nil,
 		nil,
-		nil,
-		nil,
+		grokQuotaFetcher,
+		grokQuotaService,
 		openAIQuotaService,
 		cache,
 		identityCache,
@@ -315,6 +318,7 @@ func ProvideAccountUsageService(
 }
 
 func ProvideAccountTestService(
+	grokTokenProvider *GrokTokenProvider,
 	accountRepo AccountRepository,
 	claudeTokenProvider *ClaudeTokenProvider,
 	httpUpstream HTTPUpstream,
@@ -328,7 +332,7 @@ func ProvideAccountTestService(
 		accountRepo,
 		nil,
 		claudeTokenProvider,
-		nil,
+		grokTokenProvider,
 		nil,
 		httpUpstream,
 		cfg,
@@ -716,6 +720,12 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	svc := NewSettingService(settingRepo, cfg)
 	svc.SetDefaultSubscriptionGroupReader(groupRepo)
 	svc.SetProxyRepository(proxyRepo)
+	if err := svc.MigrateGrokDefaultTextModel(context.Background()); err != nil {
+		logger.LegacyPrintf("service.setting", "Warning: migrate Grok default model failed: %v", err)
+	}
+	if err := svc.LoadGrokModelMappingSettings(context.Background()); err != nil {
+		logger.LegacyPrintf("service.setting", "Warning: load Grok model mapping settings failed: %v", err)
+	}
 	if err := svc.LoadForwardedClientIPSettings(context.Background()); err != nil {
 		logger.LegacyPrintf("service.setting", "Warning: load forwarded client IP settings failed: %v", err)
 	}
@@ -828,6 +838,11 @@ func ProvideAdminService(
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
+	ProvideGrokOAuthService,
+	ProvideGrokTokenProvider,
+	ProvideGrokQuotaService,
+	NewGrokQuotaFetcher,
+	wire.Bind(new(GrokOAuthReconciler), new(*TokenRefreshService)),
 	// Core services
 	ProvideAuthService,
 	NewUserService,
@@ -1023,4 +1038,42 @@ func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.
 	}
 	aggregator.Start()
 	return aggregator
+}
+
+func ProvideGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthClient, cfg *config.Config, redisClient *redis.Client) *GrokOAuthService {
+	svc := NewGrokOAuthService(proxyRepo, oauthClient, cfg)
+	// wire.go is depguard-exempt for redis; construct the Redis session store here.
+	if redisClient != nil {
+		svc = svc.WithSessionStore(xai.NewRedisSessionStore(redisClient))
+	}
+	return svc
+}
+
+func ProvideGrokTokenProvider(
+	accountRepo AccountRepository,
+	tokenCache GeminiTokenCache,
+	grokOAuthService *GrokOAuthService,
+	refreshAPI *OAuthRefreshAPI,
+	tempUnschedCache TempUnschedCache,
+) *GrokTokenProvider {
+	p := NewGrokTokenProvider(accountRepo, tokenCache)
+	executor := NewGrokTokenRefresher(grokOAuthService)
+	p.SetRefreshAPI(refreshAPI, executor)
+	p.SetRefreshPolicy(GrokProviderRefreshPolicy())
+	p.SetTempUnschedCache(tempUnschedCache)
+	return p
+}
+
+func ProvideGrokQuotaService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	tokenProvider *GrokTokenProvider,
+	httpUpstream HTTPUpstream,
+	cfg *config.Config,
+	usageLogRepo UsageLogRepository,
+	settingService *SettingService,
+) *GrokQuotaService {
+	service := NewGrokQuotaService(accountRepo, proxyRepo, tokenProvider, httpUpstream, cfg, usageLogRepo)
+	service.SetSettingService(settingService)
+	return service
 }

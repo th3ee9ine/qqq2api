@@ -22,7 +22,7 @@ export interface DefaultSubscriptionSetting {
 }
 
 // ── 平台限额类型 ──────────────────────────────────────────────────
-export type PlatformType = "anthropic" | "openai"
+export type PlatformType = "anthropic" | "openai" | "grok"
 export type QuotaWindowType = "daily" | "weekly" | "monthly"
 
 /** 单平台三档限额；null = 不限制，undefined = 未填（等价 null） */
@@ -35,17 +35,19 @@ export interface PlatformQuotaLimits {
 /** 全平台默认限额 map（key = PlatformType） */
 export type DefaultPlatformQuotasMap = Partial<Record<PlatformType, PlatformQuotaLimits>>
 
-const PLATFORMS: PlatformType[] = ["anthropic", "openai"]
+const PLATFORMS: PlatformType[] = ["anthropic", "openai", "grok"]
 
 export type SchedulingThresholdPlatformType =
   | "openai"
   | "anthropic"
+  | "grok"
 
 export type AccountSchedulingThresholdsMap = Record<SchedulingThresholdPlatformType, number>
 
 export const SCHEDULING_THRESHOLD_PLATFORMS: SchedulingThresholdPlatformType[] = [
   "openai",
   "anthropic",
+  "grok",
 ]
 
 export function normalizeAccountSchedulingThresholdsMap(
@@ -590,6 +592,9 @@ export interface SystemSettings {
   enable_model_fallback: boolean;
   fallback_model_anthropic: string;
   fallback_model_openai: string;
+  grok_default_text_model: string;
+  grok_cross_client_model_map_enabled: boolean;
+  grok_default_base_url_mode: string;
   // Per-platform account auto-pause thresholds (100 = disabled)
   account_scheduling_thresholds: AccountSchedulingThresholdsMap;
 
@@ -918,6 +923,9 @@ export interface UpdateSettingsRequest {
   enable_model_fallback?: boolean;
   fallback_model_anthropic?: string;
   fallback_model_openai?: string;
+  grok_default_text_model?: string;
+  grok_cross_client_model_map_enabled?: boolean;
+  grok_default_base_url_mode?: string;
   account_scheduling_thresholds?: AccountSchedulingThresholdsMap;
   ops_monitoring_enabled?: boolean;
   ops_realtime_monitoring_enabled?: boolean;

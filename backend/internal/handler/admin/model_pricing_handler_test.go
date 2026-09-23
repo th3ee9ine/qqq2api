@@ -27,6 +27,7 @@ func TestModelPricingHandlerReturnsRetainedPlatformDefaults(t *testing.T) {
 	for _, query := range []string{
 		"platform=anthropic&model=claude-sonnet-4",
 		"platform=openai&model=gpt-5.4",
+		"platform=grok&model=grok-4.7",
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/channels/model-pricing?"+query, nil)
 		w := httptest.NewRecorder()
@@ -60,7 +61,7 @@ func TestModelPricingHandlerReturnsNotFoundWithoutBlockingEditor(t *testing.T) {
 
 func TestModelPricingHandlerRejectsMissingOrRetiredPlatforms(t *testing.T) {
 	router := setupModelPricingRouter()
-	for _, platform := range []string{"", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek"} {
+	for _, platform := range []string{"", "gemini", "antigravity", "kimi", "zhipu", "deepseek"} {
 		path := "/channels/model-pricing?model=claude-sonnet-4"
 		if platform != "" {
 			path += "&platform=" + platform

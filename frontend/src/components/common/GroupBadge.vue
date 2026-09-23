@@ -67,7 +67,7 @@ const { t } = useI18n()
 
 const isSubscription = computed(() => props.subscriptionType === 'subscription')
 const badgePlatform = computed(() => (
-  props.platform === 'anthropic' || props.platform === 'openai' || props.platform === 'composite'
+  props.platform === 'anthropic' || props.platform === 'openai' || props.platform === 'grok' || props.platform === 'composite'
     ? props.platform
     : undefined
 ))

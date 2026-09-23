@@ -145,6 +145,7 @@ docs/*
 !docs/CODEX_TURN_STATE_LIVE_TEST_20260918.txt
 !docs/PLUGIN_DEVELOPMENT.md
 !docs/channel-monitor-v2-safe-defaults.md
+!docs/grok-support.md
 !docs/screenshots/
 docs/screenshots/*
 !docs/screenshots/mobile-account-actions-menu.png

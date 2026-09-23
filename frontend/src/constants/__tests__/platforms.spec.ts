@@ -3,7 +3,8 @@ import { CONCRETE_PLATFORM_OPTIONS, GROUP_PLATFORM_OPTIONS } from '@/constants/p
 
 const concretePlatforms = [
   'anthropic',
-  'openai'
+  'openai',
+  'grok'
 ]
 
 describe('platform option catalogs', () => {

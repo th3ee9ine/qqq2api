@@ -18,6 +18,10 @@ func TestGeneratedWireIncludesStandaloneImageStorageHandler(t *testing.T) {
 
 	for _, retained := range []string{
 		"admin.NewModelPricingHandler(billingService)",
+		"admin.NewGrokOAuthHandler(grokOAuthService, adminService, grokQuotaService, tokenRefreshService)",
+		"service.ProvideGrokOAuthService(",
+		"service.ProvideGrokTokenProvider(",
+		"service.ProvideGrokQuotaService(",
 		"admin.NewAccountAdminHandler(adminService)",
 		"admin.NewImageStorageHandler(imageStorageSettingService)",
 		"accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler",
@@ -44,7 +48,6 @@ func TestGeneratedWireIncludesStandaloneImageStorageHandler(t *testing.T) {
 		"admin.NewComplianceHandler",
 		"admin.NewGeminiOAuthHandler",
 		"admin.NewAntigravityOAuthHandler",
-		"admin.NewGrokOAuthHandler",
 		"admin.NewCNProviderHandler",
 		"handler.NewModelPlazaHandler",
 		"service.NewSubscriptionService",
@@ -53,7 +56,6 @@ func TestGeneratedWireIncludesStandaloneImageStorageHandler(t *testing.T) {
 		"service.NewModelPlazaService",
 		"service.NewGeminiOAuthService",
 		"service.NewAntigravityOAuthService",
-		"service.NewGrokOAuthService",
 		"service.ProvideUserPlatformQuotaUsageFlusher",
 	} {
 		require.NotContains(t, generated, retired)
@@ -96,6 +98,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	opsSystemLogSinkSvc := service.NewOpsSystemLogSink(nil)
 
 	cleanup := provideCleanupWithSessionCleanup(
+		nil, // grokOAuth
 		nil, // entClient
 		nil, // redis
 		&service.OpsMetricsCollector{},
