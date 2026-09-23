@@ -1,5 +1,5 @@
 # =============================================================================
-# Sub2API Docker Compose Configuration
+# QQQ2API Docker Compose Configuration
 # =============================================================================
 # Quick Start:
 #   1. Copy .env.example to .env and configure
@@ -13,7 +13,7 @@
 
 services:
   # ===========================================================================
-  # Sub2API Application
+  # QQQ2API Application
   # ===========================================================================
   sub2api:
     image: qqqrouter1/qqq2api:latest
@@ -145,7 +145,7 @@ services:
       # Gateway Upstream, Scheduling & Image Configuration
       # =======================================================================
       # Gateway values come from Compose .env or the shell.
-      # Fallbacks mirror Sub2API backend defaults so omitted values preserve behavior.
+      # Fallbacks mirror QQQ2API backend defaults so omitted values preserve behavior.
       - GATEWAY_FORCE_CODEX_CLI=${GATEWAY_FORCE_CODEX_CLI:-false}
       - GATEWAY_DISABLE_CODEX_IDENTITY_ENFORCEMENT=${GATEWAY_DISABLE_CODEX_IDENTITY_ENFORCEMENT:-false}
       - GATEWAY_OPENAI_COMPACT_MODEL=${GATEWAY_OPENAI_COMPACT_MODEL:-gpt-5.5}

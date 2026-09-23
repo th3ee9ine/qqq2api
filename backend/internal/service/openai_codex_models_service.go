@@ -331,7 +331,7 @@ func openAIConfiguredCodexModelIDsForGroup(accounts []Account, group *Group) []s
 
 const (
 	configuredCodexModelPriority       = 50
-	configuredCodexCustomDescription   = "Custom model routed through Sub2API."
+	configuredCodexCustomDescription   = "Custom model routed through QQQ2API."
 	configuredCodexFallbackContext     = 272_000
 	configuredCodexGrokContext         = 500_000
 	configuredCodexGrokBuildContext    = 256_000
@@ -455,7 +455,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 
 	if isGrokCodexModel(modelID) {
 		descriptor.DisplayName = grokCodexDisplayName(modelID)
-		descriptor.Description = "Grok coding and reasoning model routed through Sub2API."
+		descriptor.Description = "Grok coding and reasoning model routed through QQQ2API."
 		descriptor.SupportsParallelToolCalls = true
 		descriptor.ContextWindow = grokCodexContextWindow(modelID)
 		descriptor.MaxContextWindow = descriptor.ContextWindow
@@ -468,7 +468,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 
 	if isClaudeCodexModel(modelID) {
 		descriptor.DisplayName = claudeCodexDisplayName(modelID)
-		descriptor.Description = "Claude coding and reasoning model routed through Sub2API."
+		descriptor.Description = "Claude coding and reasoning model routed through QQQ2API."
 		descriptor.SupportsParallelToolCalls = true
 		if levels := configuredCodexClaudeReasoningLevels(modelID); len(levels) > 0 {
 			defaultReasoningLevel := claudeCodexDefaultReasoningLevel(levels)
@@ -479,7 +479,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 
 	if isOpenAICodexGPTModel(modelID) {
 		descriptor.DisplayName = openaiCodexDisplayName(modelID)
-		descriptor.Description = "OpenAI GPT coding model routed through Sub2API."
+		descriptor.Description = "OpenAI GPT coding model routed through QQQ2API."
 		descriptor.SupportsParallelToolCalls = true
 		descriptor.ServiceTiers = configuredCodexServiceTiersForModel(modelID)
 		if isOpenAICodexReasoningGPTModel(modelID) {

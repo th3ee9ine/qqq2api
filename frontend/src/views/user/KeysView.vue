@@ -1982,7 +1982,7 @@ const executeCcsImport = (row: ApiKey) => {
       };
     }
   })`
-  const providerName = (publicSettings.value?.site_name || 'sub2api').trim() || 'sub2api'
+  const providerName = (publicSettings.value?.site_name || 'QQQ2API').trim() || 'QQQ2API'
   const deeplink = buildCcSwitchImportDeeplink({
     baseUrl,
     platform,

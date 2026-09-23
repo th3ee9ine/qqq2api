@@ -99,11 +99,11 @@ func TestLiveAttestationErrorIsExplicit(t *testing.T) {
 	context, _ := gin.CreateTestContext(recorder)
 
 	(&OpenAIGatewayHandler{}).writeLiveCreateError(context, &service.LiveAttestationUnavailableError{
-		Reason: "Live attestation is only supported when Sub2API runs on macOS",
+		Reason: "Live attestation is only supported when QQQ2API runs on macOS",
 	})
 
 	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	require.Contains(t, recorder.Body.String(), "Sub2API runs on macOS")
+	require.Contains(t, recorder.Body.String(), "QQQ2API runs on macOS")
 }
 
 func TestLiveAdmissionErrorReturnsRetryAfter(t *testing.T) {

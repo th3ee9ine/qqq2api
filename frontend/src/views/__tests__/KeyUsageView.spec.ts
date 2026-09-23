@@ -84,7 +84,7 @@ vi.mock('vue-i18n', async () => {
 vi.mock('@/stores', () => ({
   useAppStore: () => ({
     cachedPublicSettings: null,
-    siteName: 'Sub2API',
+    siteName: 'QQQ2API',
     siteLogo: '',
     docUrl: '',
     publicSettingsLoaded: true,

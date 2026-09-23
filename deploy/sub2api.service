@@ -1,5 +1,5 @@
 [Unit]
-Description=Sub2API - AI API Gateway Platform
+Description=QQQ2API - AI API Gateway Platform
 Documentation=https://github.com/th3ee9ine/qqq2api
 After=network.target postgresql.service redis.service
 Wants=postgresql.service redis.service

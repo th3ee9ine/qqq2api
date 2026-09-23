@@ -1,32 +1,129 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
-  <title id="title">Sub2API</title>
-  <desc id="desc">An interlocking S symbol representing subscription routing into APIs.</desc>
+<svg width="2400" height="2400" viewBox="0 0 2400 2400" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">QQQ2API</title>
+  <desc id="desc">QQQ2API LLM API aggregation logo</desc>
   <defs>
-    <linearGradient id="s2a-bg" x1="72" y1="44" x2="442" y2="478" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#142B56"/>
-      <stop offset=".52" stop-color="#0A1A39"/>
-      <stop offset="1" stop-color="#061127"/>
-    </linearGradient>
-    <radialGradient id="s2a-ambient" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(168 92) rotate(51) scale(342 382)">
-      <stop stop-color="#3E68B0" stop-opacity=".28"/>
-      <stop offset="1" stop-color="#3E68B0" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="s2a-brand" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#79F4BD"/>
-      <stop offset=".48" stop-color="#39D9E7"/>
-      <stop offset="1" stop-color="#3875F6"/>
-    </linearGradient>
-    <filter id="s2a-shadow" x="-25%" y="-25%" width="150%" height="165%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy=".55" stdDeviation=".65" flood-color="#020817" flood-opacity=".34"/>
+    <!-- Glow for Q's - matching PDF alpha blending -->
+    <filter id="qGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="20" result="blur1"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.3"/>
+      <feComposite in2="blur1" operator="in" result="glow1"/>
+
+      <feGaussianBlur in="SourceAlpha" stdDeviation="13" result="blur2"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.2"/>
+      <feComposite in2="blur2" operator="in" result="glow2"/>
+
+      <feGaussianBlur in="SourceAlpha" stdDeviation="7" result="blur3"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.3"/>
+      <feComposite in2="blur3" operator="in" result="glow3"/>
+
+      <feMerge>
+        <feMergeNode in="glow1"/>
+        <feMergeNode in="glow2"/>
+        <feMergeNode in="glow3"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Convergence glow - matching PDF layering -->
+    <filter id="centerGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="33" result="blur1"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.2"/>
+      <feComposite in2="blur1" operator="in" result="glow1"/>
+
+      <feGaussianBlur in="SourceAlpha" stdDeviation="27" result="blur2"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.3"/>
+      <feComposite in2="blur2" operator="in" result="glow2"/>
+
+      <feGaussianBlur in="SourceAlpha" stdDeviation="20" result="blur3"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.4"/>
+      <feComposite in2="blur3" operator="in" result="glow3"/>
+
+      <feGaussianBlur in="SourceAlpha" stdDeviation="13" result="blur4"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.6"/>
+      <feComposite in2="blur4" operator="in" result="glow4"/>
+
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8" result="blur5"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.8"/>
+      <feComposite in2="blur5" operator="in" result="glow5"/>
+
+      <feMerge>
+        <feMergeNode in="glow1"/>
+        <feMergeNode in="glow2"/>
+        <feMergeNode in="glow3"/>
+        <feMergeNode in="glow4"/>
+        <feMergeNode in="glow5"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Line glow - matching PDF -->
+    <filter id="lineGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="12" result="blur1"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.3"/>
+      <feComposite in2="blur1" operator="in" result="glow1"/>
+
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="blur2"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.6"/>
+      <feComposite in2="blur2" operator="in" result="glow2"/>
+
+      <feMerge>
+        <feMergeNode in="glow1"/>
+        <feMergeNode in="glow2"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Text glow -->
+    <filter id="textGlow">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
+      <feFlood flood-color="#FFD700" flood-opacity="0.3"/>
+      <feComposite in2="blur" operator="in" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
     </filter>
   </defs>
 
-  <rect x="16" y="16" width="480" height="480" rx="120" fill="url(#s2a-bg)"/>
-  <rect x="16" y="16" width="480" height="480" rx="120" fill="url(#s2a-ambient)"/>
-  <rect x="16.75" y="16.75" width="478.5" height="478.5" rx="119.25" fill="none" stroke="#A5BFFF" stroke-opacity=".16" stroke-width="1.5"/>
+  <!-- Dark background -->
+  <rect width="2400" height="2400" fill="#0A0A0F"/>
 
-  <g transform="translate(52 52) scale(17)" fill="none" stroke="url(#s2a-brand)" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.7" filter="url(#s2a-shadow)">
-    <path d="m19.25 7.65-2.55-3.2a1.33 1.33 0 0 0-1.03-.5H8.58c-.34 0-.67.13-.91.37L4.15 7.65c-.93.88-.6 1.52.65 2.3l9.55 5.97"/>
-    <path d="m4.75 16.35 2.55 3.2c.25.31.63.5 1.03.5h7.09c.34 0 .67-.13.91-.37l3.52-3.33c.93-.88.6-1.52-.65-2.3L9.65 8.08"/>
+  <!-- Connection lines -->
+  <g filter="url(#lineGlow)">
+    <line x1="1200" y1="920" x2="1200" y2="1200" stroke="#FFA500" stroke-width="3.5" stroke-linecap="round"/>
+    <line x1="956" y1="1340" x2="1200" y2="1200" stroke="#FFA500" stroke-width="3.5" stroke-linecap="round"/>
+    <line x1="1444" y1="1340" x2="1200" y2="1200" stroke="#FFA500" stroke-width="3.5" stroke-linecap="round"/>
   </g>
+
+  <!-- Top Q -->
+  <g filter="url(#qGlow)">
+    <circle cx="1200" cy="780" r="200" fill="none" stroke="#FFD700" stroke-width="28"/>
+    <line x1="1200" y1="880" x2="1200" y2="980" stroke="#FFD700" stroke-width="28" stroke-linecap="round"/>
+  </g>
+
+  <!-- Bottom-left Q -->
+  <g filter="url(#qGlow)">
+    <circle cx="836" cy="1410" r="200" fill="none" stroke="#FFD700" stroke-width="28"/>
+    <line x1="923" y1="1360" x2="1010" y2="1310" stroke="#FFD700" stroke-width="28" stroke-linecap="round"/>
+  </g>
+
+  <!-- Bottom-right Q -->
+  <g filter="url(#qGlow)">
+    <circle cx="1564" cy="1410" r="200" fill="none" stroke="#FFD700" stroke-width="28"/>
+    <line x1="1477" y1="1360" x2="1390" y2="1310" stroke="#FFD700" stroke-width="28" stroke-linecap="round"/>
+  </g>
+
+  <!-- Central convergence -->
+  <g filter="url(#centerGlow)">
+    <circle cx="1200" cy="1200" r="99" fill="#FFD700" opacity="0.2"/>
+    <circle cx="1200" cy="1200" r="81" fill="#FFD700" opacity="0.3"/>
+    <circle cx="1200" cy="1200" r="60" fill="#FFD700" opacity="0.4"/>
+    <circle cx="1200" cy="1200" r="39" fill="#FFD700" opacity="0.6"/>
+    <circle cx="1200" cy="1200" r="24" fill="#FFD700" opacity="0.8"/>
+    <circle cx="1200" cy="1200" r="18" fill="#FFFFFF"/>
+  </g>
+
+  <!-- Text -->
+  <text x="1200" y="1820" font-family="Helvetica, Arial, sans-serif" font-size="72" font-weight="bold" fill="#FFFFFF" text-anchor="middle" filter="url(#textGlow)">QQQ2API</text>
+  <text x="1200" y="1920" font-family="Helvetica, Arial, sans-serif" font-size="24" fill="#FFA500" text-anchor="middle" letter-spacing="4">LLM API AGGREGATION</text>
 </svg>
