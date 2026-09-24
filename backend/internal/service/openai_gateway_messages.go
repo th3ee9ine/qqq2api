@@ -35,7 +35,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 ) (result *OpenAIForwardResult, err error) {
 	ctx, identityCapture := withUpstreamIdentityCapture(ctx)
 	defer func() { applyCapturedUpstreamIdentityToOpenAIResult(identityCapture, result, c) }()
-	rememberOpenCodeInboundBody(c, body)
 	// Messages failover retries reuse the same Gin context. Do not let a model
 	// conflict found by an earlier attempt suppress observation/commit decisions
 	// for the next account attempt.

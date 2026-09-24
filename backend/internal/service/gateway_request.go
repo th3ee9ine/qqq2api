@@ -570,11 +570,8 @@ func StripEmptyTextBlocks(body []byte) []byte {
 // Returns filtered body or original body if filtering fails (fail-safe)
 // This prevents 400 errors from invalid thinking block signatures.
 //
-// mappedModel 是「实际发给上游的模型 ID」(after account model mapping)，用于按
-// 协议族分流。仅 anthropic-strict 走原过滤逻辑；passback-required 与 unknown
-// 一律保留全部 thinking block，避免误伤第三方兼容上游
-// (Kimi `/coding`、GLM、Moonshot 等)，详见
-// .pensieve/short-term/knowledge/thinking-block-filter-third-party-upstream-inversion/。
+// mappedModel 是实际发给上游的模型 ID（after account model mapping），用于
+// 区分 Anthropic 官方的签名协议与未知上游。未知协议一律保留 thinking block。
 //
 // 策略 (anthropic-strict only)：
 //   - 当 thinking.type 不是 "enabled"/"adaptive"：移除所有 thinking 相关块
@@ -622,9 +619,7 @@ func validateClaudeOpus55Request(body []byte, model string) error {
 //   - Ensure no message ends up with empty content.
 //
 // mappedModel 用于按协议族分流：仅 anthropic-strict 执行上述变形；
-// passback-required (Kimi/GLM 等) 与 unknown 一律返回原 body，
-// 因为这类上游的契约就是「thinking block 原样回传」（或我们不了解），
-// retry 任何变形都不会修好 400，反而破坏契约。详见 thinking_protocol.go。
+// unknown 一律返回原 body，因为我们不了解其协议契约。
 func FilterThinkingBlocksForRetry(body []byte, mappedModel string) []byte {
 	// 仅 anthropic-strict 走整流；passback-required 与 unknown 都返回原 body。
 	if !ShouldApplyRetryFilters(mappedModel) {
@@ -1152,7 +1147,7 @@ func anthropicMessageContentHasBody(content gjson.Result) bool {
 // risk of prompt injection (tool output becomes plain conversation text).
 //
 // mappedModel 同 FilterThinkingBlocksForRetry：仅 anthropic-strict 执行变形；
-// passback-required 与 unknown 都返回原 body，避免在不熟悉的上游上盲目变形。
+// unknown 都返回原 body，避免在不熟悉的上游上盲目变形。
 func FilterSignatureSensitiveBlocksForRetry(body []byte, mappedModel string) []byte {
 	if !ShouldApplyRetryFilters(mappedModel) {
 		return body
@@ -1452,25 +1447,9 @@ func NormalizeClaudeOutputEffort(raw string) *string {
 	}
 }
 
-// DefaultEffortForThinkingEnabled 给"开启了 thinking 但协议层没有 effort 档位概念"
-// 的国产模型族返回一个默认 effort 字符串（"high"），用于 usage_log.reasoning_effort
-// 字段，避免该字段长期为 NULL 导致用量分析无法区分 thinking 开/关。
-//
-// 适用范围（按 ResolveThinkingProtocol 的 PassbackRequired 集合做白名单过滤）：
-//   - Kimi (kimi-* / moonshot-*)
-//   - GLM (glm-*)
-//   - MiniMax (minimax-m*)
-//   - Qwen thinking 变体 (qwen[1-4]?-*-thinking)
-//
-// 适用场景由调用方守卫：仅当 (1) ResolveThinkingProtocol == PassbackRequired
-// (2) 已确认 thinking 启用（Anthropic: parsed.ThinkingEnabled；OpenAI: 见
-// OpenAIBodyHasThinkingEnabled) (3) 已有 effort 解析返回 nil 三者同时成立时调用。
-//
-// 返回值固定指向 "high"。理由：Kimi/GLM/MiniMax 启用 thinking 都是"深度推理模式"，
-// 等同 Claude/OpenAI 的 high 档位语义；用 high 比 medium/normal 更贴近实际行为，
-//
-// 未来兼容性：如果这些厂商后续加入真实 effort 档位（如 reasoning_effort: high/max），客户端开始显式发 effort 值时，调用方的守卫条件 (3)
-// 会因 extractor 返回非 nil 而不触发本函数，自动让出。
+// DefaultEffortForThinkingEnabled supplies a usage-log effort for the remaining
+// supported passback models (Qwen thinking variants). Retired vendors resolve
+// to Unknown and do not receive an inferred effort.
 func DefaultEffortForThinkingEnabled(mappedModel string) *string {
 	if ResolveThinkingProtocol(mappedModel) != ThinkingProtocolPassbackRequired {
 		return nil
@@ -1479,24 +1458,11 @@ func DefaultEffortForThinkingEnabled(mappedModel string) *string {
 	return &effort
 }
 
-// OpenAIBodyHasThinkingEnabled 检测 OpenAI 协议的请求体里是否启用了 thinking。
-//
-// 国产 OpenAI-兼容上游（GLM via thinkingFormat=zai / Kimi 等）在请求体里用
-// `thinking: {type: "enabled"}` 或 `thinking: {type: "adaptive"}` 表达启用。
-// 仅 "enabled" / "adaptive" 视为开启；"disabled" 或缺省 → 视为关闭。
-//
-// 配合 DefaultEffortForThinkingEnabled 使用：OpenAI 路径上 reasoning_effort 解析为空
-// 但本函数返回 true 时，给 usage_log 填默认 effort。
 func OpenAIBodyHasThinkingEnabled(body []byte) bool {
-	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
-	return thinkingType == "enabled" || thinkingType == "adaptive"
+	typeValue := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+	return typeValue == "enabled" || typeValue == "adaptive"
 }
 
-// ApplyThinkingEnabledFallback 补丁已解析出的 effort，仅在 effort 为 nil 且
-// 检测到 body 里 thinking 启用 + mappedModel 属于国产 passback-required 上游时，
-// 返回 DefaultEffortForThinkingEnabled 的默认值（"high"）。不覆盖已解析出的值。
-//
-// 适用于 OpenAI 网关的多条路径调用方（避免重复的 if-nil 表达式）。
 func ApplyThinkingEnabledFallback(effort *string, body []byte, mappedModel string) *string {
 	if effort != nil {
 		return effort
@@ -1505,100 +1471,6 @@ func ApplyThinkingEnabledFallback(effort *string, body []byte, mappedModel strin
 		return nil
 	}
 	return DefaultEffortForThinkingEnabled(mappedModel)
-}
-
-// NormalizeGLMOpenAIReasoningEffort rewrites OpenAI Chat Completions
-// reasoning_effort values to the GLM native scale used by z.ai: high/max.
-// It only applies to glm-* mapped models and leaves all other providers untouched.
-func NormalizeGLMOpenAIReasoningEffort(body []byte, mappedModel string) ([]byte, bool) {
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(mappedModel)), "glm-") {
-		return body, false
-	}
-
-	path := "reasoning.effort"
-	raw := strings.TrimSpace(gjson.GetBytes(body, path).String())
-	if raw == "" {
-		path = "reasoning_effort"
-		raw = strings.TrimSpace(gjson.GetBytes(body, path).String())
-	}
-	if raw == "" {
-		return body, false
-	}
-
-	mapped := normalizeGLMOpenAIReasoningEffort(raw)
-	if isGLM53Model(mappedModel) && mapped == "high" && normalizeEffortToken(raw) == "low" {
-		mapped = "low"
-	}
-	if mapped == "" || mapped == raw {
-		return body, false
-	}
-
-	modified, err := sjson.SetBytes(body, path, mapped)
-	if err != nil {
-		return body, false
-	}
-	return modified, true
-}
-
-func normalizeEffortToken(raw string) string {
-	value := strings.ToLower(strings.TrimSpace(raw))
-	return strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
-}
-
-func isGLM53Model(model string) bool {
-	return strings.EqualFold(strings.TrimSpace(model), "glm-5.3")
-}
-
-func normalizeGLMOpenAIReasoningEffort(raw string) string {
-	value := normalizeEffortToken(raw)
-	if value == "" {
-		return ""
-	}
-
-	switch value {
-	case "low", "medium", "high":
-		return "high"
-	case "xhigh", "extrahigh", "max", "ultracode":
-		return "max"
-	default:
-		return ""
-	}
-}
-
-// NormalizeGLM53AnthropicThinking maps explicit client thinking effort onto the
-// GLM-5.3 Anthropic-compatible scale. Requests without an effort or thinking
-// preference are left unchanged so the upstream default remains in effect.
-func NormalizeGLM53AnthropicThinking(body []byte, mappedModel string) ([]byte, bool) {
-	if !isGLM53Model(mappedModel) {
-		return body, false
-	}
-
-	raw := gjson.GetBytes(body, "output_config.effort").String()
-	if strings.TrimSpace(raw) == "" {
-		raw = gjson.GetBytes(body, "thinking.type").String()
-	}
-
-	var effort string
-	switch normalizeEffortToken(raw) {
-	case "disabled", "off", "none", "minimal", "low":
-		effort = "low"
-	case "enabled", "adaptive", "medium", "high":
-		effort = "high"
-	case "xhigh", "max", "ultra":
-		effort = "max"
-	default:
-		return body, false
-	}
-
-	modified, err := sjson.SetBytes(body, "thinking.type", "enabled")
-	if err != nil {
-		return body, false
-	}
-	modified, err = sjson.SetBytes(modified, "output_config.effort", effort)
-	if err != nil {
-		return body, false
-	}
-	return modified, true
 }
 
 // =========================
@@ -1686,36 +1558,4 @@ func RectifyThinkingBudget(body []byte) ([]byte, bool) {
 	}
 
 	return modified, changed
-}
-
-// NormalizeChineseLLMThinking rewrites the top-level `thinking` object for Chinese
-// LLM providers that use Anthropic-compatible endpoints but have different accepted
-// values for `thinking.type`. Currently scoped to:
-//   - MiniMax M-series (`MiniMax-m*`, covering M2.x / M3 / M3.x): official docs accept
-//     only `thinking.type` of "adaptive" or "disabled"; "enabled" is not a valid value
-//     and may be rejected/ignored. Pi-ai and other Anthropic-SDK clients default to
-//     "enabled" (Anthropic-original) and never auto-rewrite for non-Anthropic models.
-//
-// Non-MiniMax models (Kimi/GLM) currently accept "enabled" as-is, so this
-// function is intentionally a no-op for them. New Chinese LLM quirks should be
-// added here as separate case branches.
-//
-// Returns (modified body, true) if a rewrite was applied, or (original body, false)
-// if no rewrite was needed. Caller should be on the Anthropic forward path AFTER
-// FilterThinkingBlocks and BEFORE building the upstream request, only for
-// passback-required models (ResolveThinkingProtocol == PassbackRequired).
-func NormalizeChineseLLMThinking(body []byte, mappedModel string) ([]byte, bool) {
-	modelLower := strings.ToLower(mappedModel)
-	if !strings.HasPrefix(modelLower, "minimax-m") {
-		return body, false
-	}
-	thinkingType := gjson.GetBytes(body, "thinking.type").String()
-	if thinkingType != "enabled" {
-		return body, false
-	}
-	modified, err := sjson.SetBytes(body, "thinking.type", "adaptive")
-	if err != nil {
-		return body, false
-	}
-	return modified, true
 }

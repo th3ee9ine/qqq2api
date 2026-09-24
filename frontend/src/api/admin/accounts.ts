@@ -25,12 +25,8 @@ import type {
   UpstreamBillingProbeResult,
   UpstreamBillingProbeSettings,
   UpstreamBillingRatesResponse,
-  OllamaCloudUsageSettings,
-  OllamaCloudUsageState,
   GrokMediaEligibilityMode,
   GrokMediaEligibilityState,
-  OpenCodeGoUsageSettings,
-  OpenCodeGoUsageState,
   OpenAIAccountSessionList,
   OpenAIAccountSessionBatchRevokeResult,
   OpenAISessionCleanupSettings,
@@ -1140,82 +1136,6 @@ export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<U
   return data.results
 }
 
-export async function getOllamaCloudUsageSettings(): Promise<OllamaCloudUsageSettings> {
-  const { data } = await apiClient.get<OllamaCloudUsageSettings>('/admin/accounts/ollama-cloud-usage/settings')
-  return data
-}
-
-export async function updateOllamaCloudUsageSettings(
-  settings: OllamaCloudUsageSettings
-): Promise<OllamaCloudUsageSettings> {
-  const { data } = await apiClient.put<OllamaCloudUsageSettings>(
-    '/admin/accounts/ollama-cloud-usage/settings',
-    settings
-  )
-  return data
-}
-
-export async function getOllamaCloudUsage(id: number): Promise<OllamaCloudUsageState> {
-  const { data } = await apiClient.get<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage`)
-  return data
-}
-
-export async function saveOllamaCloudUsageSession(id: number, session: string): Promise<OllamaCloudUsageState> {
-  const { data } = await apiClient.put<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/session`, {
-    session
-  })
-  return data
-}
-
-export async function deleteOllamaCloudUsageSession(id: number): Promise<OllamaCloudUsageState> {
-  const { data } = await apiClient.delete<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/session`)
-  return data
-}
-
-export async function setOllamaCloudUsageAutoRefresh(id: number, enabled: boolean): Promise<OllamaCloudUsageState> {
-  const { data } = await apiClient.put<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/auto-refresh`, {
-    enabled
-  })
-  return data
-}
-
-export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUsageState> {
-  const { data } = await apiClient.post<OllamaCloudUsageState>(`/admin/accounts/${id}/ollama-cloud-usage/refresh`)
-  return data
-}
-
-export async function getOpenCodeGoUsageSettings(): Promise<OpenCodeGoUsageSettings> {
-  const { data } = await apiClient.get<OpenCodeGoUsageSettings>('/admin/accounts/opencode-go-usage/settings')
-  return data
-}
-
-export async function updateOpenCodeGoUsageSettings(
-  settings: OpenCodeGoUsageSettings
-): Promise<OpenCodeGoUsageSettings> {
-  const { data } = await apiClient.put<OpenCodeGoUsageSettings>(
-    '/admin/accounts/opencode-go-usage/settings',
-    settings
-  )
-  return data
-}
-
-export async function getOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsageState> {
-  const { data } = await apiClient.get<OpenCodeGoUsageState>(`/admin/accounts/${id}/opencode-go-usage`)
-  return data
-}
-
-export async function setOpenCodeGoUsageAutoRefresh(id: number, enabled: boolean): Promise<OpenCodeGoUsageState> {
-  const { data } = await apiClient.put<OpenCodeGoUsageState>(`/admin/accounts/${id}/opencode-go-usage/auto-refresh`, {
-    enabled
-  })
-  return data
-}
-
-export async function refreshOpenCodeGoUsage(id: number): Promise<OpenCodeGoUsageState> {
-  const { data } = await apiClient.post<OpenCodeGoUsageState>(`/admin/accounts/${id}/opencode-go-usage/refresh`)
-  return data
-}
-
 export const accountsAPI = {
   list,
   listWithEtag,
@@ -1282,18 +1202,6 @@ export const accountsAPI = {
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
   probeUpstreamBillingBatch,
-  getOllamaCloudUsageSettings,
-  updateOllamaCloudUsageSettings,
-  getOllamaCloudUsage,
-  saveOllamaCloudUsageSession,
-  deleteOllamaCloudUsageSession,
-  setOllamaCloudUsageAutoRefresh,
-  refreshOllamaCloudUsage,
-  getOpenCodeGoUsageSettings,
-  updateOpenCodeGoUsageSettings,
-  getOpenCodeGoUsage,
-  setOpenCodeGoUsageAutoRefresh,
-  refreshOpenCodeGoUsage
 }
 
 export default accountsAPI

@@ -111,8 +111,6 @@ func provideCleanup(
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
-	ollamaCloudUsage *service.OllamaCloudUsageService,
-	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	promptAudit *securityaudit.PromptService,
@@ -148,8 +146,6 @@ func provideCleanup(
 		openAIGateway,
 		scheduledTestRunner,
 		upstreamBillingProbe,
-		ollamaCloudUsage,
-		opencodeGoUsage,
 		auditLog,
 		openAIAutoReset,
 		nil,
@@ -188,8 +184,6 @@ func provideCleanupWithSessionCleanup(
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
-	ollamaCloudUsage *service.OllamaCloudUsageService,
-	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	openAISessionCleanup *service.OpenAISessionCleanupService,
@@ -378,18 +372,6 @@ func provideCleanupWithSessionCleanup(
 			{"UpstreamBillingProbeService", func() error {
 				if upstreamBillingProbe != nil {
 					upstreamBillingProbe.Stop()
-				}
-				return nil
-			}},
-			{"OllamaCloudUsageService", func() error {
-				if ollamaCloudUsage != nil {
-					ollamaCloudUsage.Stop()
-				}
-				return nil
-			}},
-			{"OpenCodeGoUsageService", func() error {
-				if opencodeGoUsage != nil {
-					opencodeGoUsage.Stop()
 				}
 				return nil
 			}},

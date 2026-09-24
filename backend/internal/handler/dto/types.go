@@ -221,24 +221,22 @@ type Account struct {
 	// SubscriptionExpiresAt is the provider-reported ChatGPT subscription
 	// expiry (active_until), distinct from the locally configured account
 	// scheduling expiry in ExpiresAt.
-	SubscriptionExpiresAt   string                         `json:"subscription_expires_at,omitempty"`
-	Extra                   map[string]any                 `json:"extra"`
-	OllamaCloudUsage        *service.OllamaCloudUsageState `json:"ollama_cloud_usage,omitempty"`
-	OpenCodeGoUsage         *service.OpenCodeGoUsageState  `json:"opencode_go_usage,omitempty"`
-	ProxyID                 *int64                         `json:"proxy_id"`
-	ProxyFallbackOriginID   *int64                         `json:"proxy_fallback_origin_id"`
-	ProxyFallbackOriginName *string                        `json:"proxy_fallback_origin_name,omitempty"`
-	Concurrency             int                            `json:"concurrency"`
-	LoadFactor              *int                           `json:"load_factor,omitempty"`
-	Priority                int                            `json:"priority"`
-	RateMultiplier          float64                        `json:"rate_multiplier"`
-	Status                  string                         `json:"status"`
-	ErrorMessage            string                         `json:"error_message"`
-	LastUsedAt              *time.Time                     `json:"last_used_at"`
-	ExpiresAt               *int64                         `json:"expires_at"`
-	AutoPauseOnExpired      bool                           `json:"auto_pause_on_expired"`
-	CreatedAt               time.Time                      `json:"created_at"`
-	UpdatedAt               time.Time                      `json:"updated_at"`
+	SubscriptionExpiresAt   string         `json:"subscription_expires_at,omitempty"`
+	Extra                   map[string]any `json:"extra"`
+	ProxyID                 *int64         `json:"proxy_id"`
+	ProxyFallbackOriginID   *int64         `json:"proxy_fallback_origin_id"`
+	ProxyFallbackOriginName *string        `json:"proxy_fallback_origin_name,omitempty"`
+	Concurrency             int            `json:"concurrency"`
+	LoadFactor              *int           `json:"load_factor,omitempty"`
+	Priority                int            `json:"priority"`
+	RateMultiplier          float64        `json:"rate_multiplier"`
+	Status                  string         `json:"status"`
+	ErrorMessage            string         `json:"error_message"`
+	LastUsedAt              *time.Time     `json:"last_used_at"`
+	ExpiresAt               *int64         `json:"expires_at"`
+	AutoPauseOnExpired      bool           `json:"auto_pause_on_expired"`
+	CreatedAt               time.Time      `json:"created_at"`
+	UpdatedAt               time.Time      `json:"updated_at"`
 
 	Schedulable bool `json:"schedulable"`
 
@@ -345,11 +343,9 @@ type AccountListItem struct {
 	Platform string  `json:"platform"`
 	Type     string  `json:"type"`
 
-	Credentials       map[string]any                 `json:"credentials,omitempty"`
-	CredentialsStatus map[string]bool                `json:"credentials_status,omitempty"`
-	Extra             map[string]any                 `json:"extra,omitempty"`
-	OllamaCloudUsage  *service.OllamaCloudUsageState `json:"ollama_cloud_usage,omitempty"`
-	OpenCodeGoUsage   *service.OpenCodeGoUsageState  `json:"opencode_go_usage,omitempty"`
+	Credentials       map[string]any  `json:"credentials,omitempty"`
+	CredentialsStatus map[string]bool `json:"credentials_status,omitempty"`
+	Extra             map[string]any  `json:"extra,omitempty"`
 
 	ProxyID                 *int64     `json:"proxy_id"`
 	ProxyFallbackOriginID   *int64     `json:"proxy_fallback_origin_id"`

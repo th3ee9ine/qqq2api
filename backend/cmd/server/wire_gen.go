@@ -103,12 +103,10 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	openAI403CounterCache := repository.NewOpenAI403CounterCache(redisClient)
 	geminiTokenCache := repository.NewGeminiTokenCache(redisClient)
 	compositeTokenCacheInvalidator := service.NewCompositeTokenCacheInvalidator(geminiTokenCache)
-	httpUpstream := repository.NewHTTPUpstream(configConfig)
-	leaderLockCache := repository.NewLeaderLockCache(redisClient)
-	ollamaCloudUsageService := service.ProvideOllamaCloudUsageService(accountRepository, httpUpstream, settingService, secretEncryptor, configConfig, leaderLockCache, db)
-	rateLimitService := service.ProvideRateLimitService(accountRepository, usageLogRepository, configConfig, tempUnschedCache, timeoutCounterCache, openAI403CounterCache, settingService, compositeTokenCacheInvalidator, ollamaCloudUsageService)
+	rateLimitService := service.ProvideRateLimitService(accountRepository, usageLogRepository, configConfig, tempUnschedCache, timeoutCounterCache, openAI403CounterCache, settingService, compositeTokenCacheInvalidator)
 	identityCache := repository.NewIdentityCache(redisClient)
 	identityService := service.NewIdentityService(identityCache)
+	httpUpstream := repository.NewHTTPUpstream(configConfig)
 	timingWheelService, err := service.ProvideTimingWheelService()
 	if err != nil {
 		return nil, err
@@ -157,6 +155,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	dashboardAggregationRepository := repository.NewDashboardAggregationRepository(db)
 	dashboardStatsCache := repository.NewDashboardCache(redisClient, configConfig)
 	dashboardService := service.NewDashboardService(usageLogRepository, dashboardAggregationRepository, dashboardStatsCache, configConfig)
+	leaderLockCache := repository.NewLeaderLockCache(redisClient)
 	dashboardAggregationService := service.ProvideDashboardAggregationService(dashboardAggregationRepository, timingWheelService, leaderLockCache, db, configConfig)
 	dashboardHandler := admin.NewDashboardHandler(dashboardService, dashboardAggregationService)
 	groupCapacityService := service.NewGroupCapacityService(accountRepository, groupRepository, concurrencyService, sessionLimitCache, rpmCache)
@@ -220,9 +219,8 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogService := service.ProvideAuditLogService(auditLogRepository, settingService)
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
-	openCodeGoUsageService := service.ProvideOpenCodeGoUsageService(accountRepository, httpUpstream, settingService, leaderLockCache, db)
 	openAISessionCleanupService := service.ProvideOpenAISessionCleanupService(accountRepository, openAIQuotaService, leaderLockCache, settingService)
-	adminHandlers := handler.ProvideAdminHandlersWithSessionCleanup(grokOAuthHandler, dashboardHandler, groupHandler, modelPricingHandler, accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler, openAIOAuthHandler, proxyHandler, settingHandler, opsHandler, systemHandler, adminUsageHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, contentModerationHandler, promptAdminHandler, auditLogHandler, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService, openAISessionCleanupService)
+	adminHandlers := handler.ProvideAdminHandlersWithSessionCleanup(grokOAuthHandler, dashboardHandler, groupHandler, modelPricingHandler, accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler, openAIOAuthHandler, proxyHandler, settingHandler, opsHandler, systemHandler, adminUsageHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, contentModerationHandler, promptAdminHandler, auditLogHandler, upstreamBillingProbeService, openAISessionCleanupService)
 	usageRecordWorkerPool := service.NewUsageRecordWorkerPool(configConfig)
 	userMsgQueueCache := repository.NewUserMsgQueueCache(redisClient)
 	userMessageQueueService := service.ProvideUserMessageQueueService(userMsgQueueCache, rpmCache, configConfig)
@@ -258,7 +256,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	accountExpiryService := service.ProvideAccountExpiryService(accountRepository)
 	proxyExpiryService := service.ProvideProxyExpiryService(proxyRepository, openAIGatewayService)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig)
-	v := provideCleanupWithSessionCleanup(grokOAuthService, client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, openAICodexVersionSyncService, proxyExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, oAuthService, openAIOAuthService, openAIGatewayService, scheduledTestRunnerService, upstreamBillingProbeService, ollamaCloudUsageService, openCodeGoUsageService, auditLogService, openAIQuotaAutoResetService, openAISessionCleanupService, promptService, pluginManager)
+	v := provideCleanupWithSessionCleanup(grokOAuthService, client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, openAICodexVersionSyncService, proxyExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, oAuthService, openAIOAuthService, openAIGatewayService, scheduledTestRunnerService, upstreamBillingProbeService, auditLogService, openAIQuotaAutoResetService, openAISessionCleanupService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -327,8 +325,6 @@ func provideCleanup(
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
-	ollamaCloudUsage *service.OllamaCloudUsageService,
-	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	promptAudit *securityaudit.PromptService,
@@ -364,8 +360,6 @@ func provideCleanup(
 		openAIGateway,
 		scheduledTestRunner,
 		upstreamBillingProbe,
-		ollamaCloudUsage,
-		opencodeGoUsage,
 		auditLog,
 		openAIAutoReset,
 		nil,
@@ -404,8 +398,6 @@ func provideCleanupWithSessionCleanup(
 	openAIGateway *service.OpenAIGatewayService,
 	scheduledTestRunner *service.ScheduledTestRunnerService,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
-	ollamaCloudUsage *service.OllamaCloudUsageService,
-	opencodeGoUsage *service.OpenCodeGoUsageService,
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	openAISessionCleanup *service.OpenAISessionCleanupService,
@@ -593,18 +585,6 @@ func provideCleanupWithSessionCleanup(
 			{"UpstreamBillingProbeService", func() error {
 				if upstreamBillingProbe != nil {
 					upstreamBillingProbe.Stop()
-				}
-				return nil
-			}},
-			{"OllamaCloudUsageService", func() error {
-				if ollamaCloudUsage != nil {
-					ollamaCloudUsage.Stop()
-				}
-				return nil
-			}},
-			{"OpenCodeGoUsageService", func() error {
-				if opencodeGoUsage != nil {
-					opencodeGoUsage.Stop()
 				}
 				return nil
 			}},

@@ -184,9 +184,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 
 	// 13. Extract reasoning effort from CC request body
 	reasoningEffort := extractCCReasoningEffortFromBody(body, mappedModel, originalModel)
-	// 国产模型默认 effort 补充：本路径是客户端 CC 请求 → Anthropic 上游，
-	// 如果上游是 passback-required 国产模型 (Kimi-anthropic / GLM-anthropic / MiniMax)
-	// 且客户端在 body 里传了 thinking.type=enabled，补中默认 effort。
+	// 支持的 Qwen thinking 模型在开启 thinking 时补充默认 effort。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 
 	// 14. Handle normal response

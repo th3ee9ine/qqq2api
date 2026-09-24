@@ -170,11 +170,6 @@ type providerAdapter struct {
 var providerAdapters = map[string]providerAdapter{
 	MonitorProviderOpenAI: providerOpenAIChatAdapter,
 	MonitorProviderGrok:   providerGrokChatAdapter,
-	// 国产 3 家（配额模式引入）：均为 OpenAI 兼容 Chat Completions，
-	// 仅智谱路径前缀不同（/api/paas/v4/chat/completions）。
-	MonitorProviderKimi:    providerKimiChatAdapter,
-	MonitorProviderZhipu:   providerZhipuChatAdapter,
-	MonitorProviderMiniMax: providerMiniMaxChatAdapter,
 	MonitorProviderAnthropic: {
 		buildPath: func(string) string { return providerAnthropicPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
@@ -456,10 +451,6 @@ var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderGrok:      {"model": true, "messages": true, "stream": true},
 	MonitorProviderAnthropic: {"model": true, "messages": true},
 	MonitorProviderGemini:    {"contents": true},
-	// 国产 3 家与 OpenAI Chat Completions 同构。
-	MonitorProviderKimi:    {"model": true, "messages": true, "stream": true},
-	MonitorProviderZhipu:   {"model": true, "messages": true, "stream": true},
-	MonitorProviderMiniMax: {"model": true, "messages": true, "stream": true},
 }
 
 func checkAPIMode(opts *CheckOptions) string {
@@ -480,8 +471,7 @@ func bodyMergeDenyKey(provider, apiMode string) string {
 // Completions 同构（replace 模式的 body 校验按 messages 必填处理）。
 func isOpenAICompatibleChatProvider(provider string) bool {
 	switch provider {
-	case MonitorProviderOpenAI, MonitorProviderGrok,
-		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderMiniMax:
+	case MonitorProviderOpenAI, MonitorProviderGrok:
 		return true
 	default:
 		return false

@@ -66,26 +66,12 @@ type AccountHandler struct {
 	tokenCacheInvalidator   service.TokenCacheInvalidator
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
-	ollamaCloudUsage        *service.OllamaCloudUsageService
-	opencodeGoUsage         *service.OpenCodeGoUsageService
 	cfg                     *config.Config
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
 func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamBillingProbeService) {
 	h.upstreamBillingProbe = probe
-}
-
-func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
-	h.ollamaCloudUsage = usage
-}
-
-// SetOpenCodeGoUsageService attaches the optional OpenCode Go usage-window
-// service. Keeping this setter preserves the compatibility constructor used by
-// focused admin tests while the production graph injects the service through
-// Wire.
-func (h *AccountHandler) SetOpenCodeGoUsageService(usage *service.OpenCodeGoUsageService) {
-	h.opencodeGoUsage = usage
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -351,26 +337,14 @@ type AccountSchedulerGroupScore struct {
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
 func (h *AccountHandler) accountResponseFromService(ctx context.Context, account *service.Account) *dto.Account {
-	if h != nil && h.opencodeGoUsage != nil && account != nil {
-		_ = h.opencodeGoUsage.ResolveOpenCodeGoUsageAccounts(ctx, []*service.Account{account})
-	}
 	out := dto.AccountFromService(account)
-	if h != nil && h.ollamaCloudUsage != nil && out != nil {
-		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
-	}
 	return accountAdminAccountResponse(ctx, out)
 }
 
 func (h *AccountHandler) accountListResponseFromService(ctx context.Context, account *service.Account) *dto.Account {
-	if h != nil && h.opencodeGoUsage != nil && account != nil {
-		_ = h.opencodeGoUsage.ResolveOpenCodeGoUsageAccounts(ctx, []*service.Account{account})
-	}
 	out := dto.AccountFromServiceShallow(account)
 	if out != nil && account != nil {
 		out.Proxy = dto.ProxyFromService(account.Proxy)
-	}
-	if h != nil && h.ollamaCloudUsage != nil && out != nil {
-		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
 	}
 	return accountAdminAccountResponse(ctx, out)
 }
@@ -695,27 +669,6 @@ func (h *AccountHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if h.ollamaCloudUsage != nil && len(accounts) > 0 {
-		accountPointers := make([]*service.Account, len(accounts))
-		for index := range accounts {
-			accountPointers[index] = &accounts[index]
-		}
-		if err := h.ollamaCloudUsage.ResolveAccounts(c.Request.Context(), accountPointers); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-	}
-	if h.opencodeGoUsage != nil && len(accounts) > 0 {
-		accountPointers := make([]*service.Account, len(accounts))
-		for index := range accounts {
-			accountPointers[index] = &accounts[index]
-		}
-		if err := h.opencodeGoUsage.ResolveOpenCodeGoUsageAccounts(c.Request.Context(), accountPointers); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-	}
-
 	// Get current concurrency counts for all accounts
 	accountIDs := make([]int64, len(accounts))
 	for i, acc := range accounts {
@@ -967,19 +920,6 @@ func (h *AccountHandler) GetByID(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	if h.ollamaCloudUsage != nil {
-		if err := h.ollamaCloudUsage.ResolveAccounts(c.Request.Context(), []*service.Account{account}); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-	}
-	if h.opencodeGoUsage != nil {
-		if err := h.opencodeGoUsage.ResolveOpenCodeGoUsageAccounts(c.Request.Context(), []*service.Account{account}); err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-	}
-
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
 }
 
@@ -1254,8 +1194,7 @@ func (h *AccountHandler) Update(c *gin.Context) {
 // 当前请求。探测错误仅记录日志，不向上下文传播：探测失败时标记保持缺失，
 // 网关会按"现状即证据"默认走 Responses。
 func (h *AccountHandler) scheduleOpenAIResponsesProbe(account *service.Account) {
-	if account == nil || account.Type != service.AccountTypeAPIKey ||
-		(account.Platform != service.PlatformOpenAI && !service.IsCNProvider(account.Platform)) {
+	if account == nil || account.Type != service.AccountTypeAPIKey || account.Platform != service.PlatformOpenAI {
 		return
 	}
 	if h.accountTestService == nil {
@@ -1388,6 +1327,10 @@ func (h *AccountHandler) GetOpenAITestDefaults(c *gin.Context) {
 			response.ErrorFrom(c, err)
 			return
 		}
+		if account == nil || !service.IsActiveAccountPlatform(account.Platform) {
+			response.ErrorFrom(c, service.ErrPlatformRetired)
+			return
+		}
 	}
 	defaults, err := h.accountTestService.BuildOpenAITestDefaultsForAccount(c.Request.Context(), account, endpoint, c.Query("prompt"))
 	if err != nil {
@@ -1443,6 +1386,20 @@ func (h *AccountHandler) RecoverState(c *gin.Context) {
 		return
 	}
 
+	if h.adminService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account service unavailable")
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if account == nil || !service.IsActiveAccountPlatform(account.Platform) {
+		response.ErrorFrom(c, service.ErrPlatformRetired)
+		return
+	}
+
 	if h.rateLimitService == nil {
 		response.Error(c, http.StatusServiceUnavailable, "Rate limit service unavailable")
 		return
@@ -1455,7 +1412,7 @@ func (h *AccountHandler) RecoverState(c *gin.Context) {
 		return
 	}
 
-	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	account, err = h.adminService.GetAccount(c.Request.Context(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -2712,6 +2669,23 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 		response.BadRequest(c, "Invalid account ID")
 		return
 	}
+	if h.adminService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account service unavailable")
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if account == nil || !service.IsActiveAccountPlatform(account.Platform) {
+		response.ErrorFrom(c, service.ErrPlatformRetired)
+		return
+	}
+	if h.rateLimitService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Rate limit service unavailable")
+		return
+	}
 
 	err = h.rateLimitService.ClearRateLimit(c.Request.Context(), accountID)
 	if err != nil {
@@ -2719,7 +2693,7 @@ func (h *AccountHandler) ClearRateLimit(c *gin.Context) {
 		return
 	}
 
-	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	account, err = h.adminService.GetAccount(c.Request.Context(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -2783,6 +2757,23 @@ func (h *AccountHandler) ClearTempUnschedulable(c *gin.Context) {
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h.adminService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account service unavailable")
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if account == nil || !service.IsActiveAccountPlatform(account.Platform) {
+		response.ErrorFrom(c, service.ErrPlatformRetired)
+		return
+	}
+	if h.rateLimitService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Rate limit service unavailable")
 		return
 	}
 

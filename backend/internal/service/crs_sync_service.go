@@ -952,9 +952,6 @@ func reconcileCRSUpstreamBillingProbeExtra(
 		UpstreamBillingProbeEnabledExtraKey,
 		UpstreamBillingRateSyncEnabledExtraKey,
 		UpstreamBillingProbeExtraKey,
-		OllamaCloudUsageSessionExtraKey,
-		OllamaCloudUsageAutoRefreshExtraKey,
-		OllamaCloudUsageSnapshotExtraKey,
 	} {
 		delete(extra, key)
 	}
@@ -975,18 +972,6 @@ func reconcileCRSUpstreamBillingProbeExtra(
 			if snapshot, ok := existing.Extra[UpstreamBillingProbeExtraKey]; ok {
 				extra[UpstreamBillingProbeExtraKey] = snapshot
 			}
-		}
-	}
-	if IsOllamaCloudUsageAccount(existing) && IsOllamaCloudUsageAccount(target) &&
-		reflect.DeepEqual(ollamaCloudUsageIdentity(existing), ollamaCloudUsageIdentity(target)) {
-		if session, ok := existing.Extra[OllamaCloudUsageSessionExtraKey]; ok {
-			extra[OllamaCloudUsageSessionExtraKey] = session
-		}
-		if enabled, ok := existing.Extra[OllamaCloudUsageAutoRefreshExtraKey]; ok {
-			extra[OllamaCloudUsageAutoRefreshExtraKey] = enabled
-		}
-		if snapshot, ok := existing.Extra[OllamaCloudUsageSnapshotExtraKey]; ok {
-			extra[OllamaCloudUsageSnapshotExtraKey] = snapshot
 		}
 	}
 }

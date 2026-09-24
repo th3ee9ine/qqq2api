@@ -77,7 +77,6 @@ func ProvideAdminHandlers(
 	promptAuditHandler *securityaudit.PromptAdminHandler,
 	auditLogHandler *admin.AuditLogHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
-	ollamaCloudUsage *service.OllamaCloudUsageService,
 	optionalSessionCleanup ...*service.OpenAISessionCleanupService,
 ) *AdminHandlers {
 	var openAISessionCleanup *service.OpenAISessionCleanupService
@@ -107,8 +106,6 @@ func ProvideAdminHandlers(
 		promptAuditHandler,
 		auditLogHandler,
 		upstreamBillingProbe,
-		ollamaCloudUsage,
-		nil,
 		openAISessionCleanup,
 	)
 }
@@ -140,8 +137,6 @@ func ProvideAdminHandlersWithSessionCleanup(
 	promptAuditHandler *securityaudit.PromptAdminHandler,
 	auditLogHandler *admin.AuditLogHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
-	ollamaCloudUsage *service.OllamaCloudUsageService,
-	opencodeGoUsage *service.OpenCodeGoUsageService,
 	openAISessionCleanup *service.OpenAISessionCleanupService,
 ) *AdminHandlers {
 	h := provideAdminHandlersWithSessionCleanup(
@@ -167,8 +162,6 @@ func ProvideAdminHandlersWithSessionCleanup(
 		promptAuditHandler,
 		auditLogHandler,
 		upstreamBillingProbe,
-		ollamaCloudUsage,
-		opencodeGoUsage,
 		openAISessionCleanup,
 	)
 	h.GrokOAuth = grokOAuthHandler
@@ -198,18 +191,12 @@ func provideAdminHandlersWithSessionCleanup(
 	promptAuditHandler *securityaudit.PromptAdminHandler,
 	auditLogHandler *admin.AuditLogHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
-	ollamaCloudUsage *service.OllamaCloudUsageService,
-	opencodeGoUsage *service.OpenCodeGoUsageService,
 	openAISessionCleanup *service.OpenAISessionCleanupService,
 ) *AdminHandlers {
 	// Keep the provider usable in reduced test/development graphs where one of
-	// the optional handlers is deliberately omitted.  The generated production
-	// graph supplies all three values, while these guards avoid a nil-pointer
-	// panic for compatibility callers that only need the remaining handlers.
+	// the optional handlers is deliberately omitted.
 	if accountHandler != nil {
 		accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
-		accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
-		accountHandler.SetOpenCodeGoUsageService(opencodeGoUsage)
 	}
 	if openaiOAuthHandler != nil {
 		openaiOAuthHandler.SetSessionCleanupService(openAISessionCleanup)

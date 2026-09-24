@@ -31,11 +31,6 @@ type RateLimitService struct {
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
 	runtimeBlocker        AccountRuntimeBlocker
-	// ollamaCloudUsageProbe is the optional Ollama Cloud usage probe scheduler
-	// injected via SetOllamaCloudUsageProbeScheduler. See
-	// ratelimit_service_ollama_429.go for how real-Ollama 429s schedule an async
-	// probe to learn the true usage-window reset.
-	ollamaCloudUsageProbe ollamaCloudUsageProbeScheduler
 	usageCacheMu          sync.RWMutex
 	usageCache            map[int64]*geminiUsageCacheEntry
 
@@ -85,10 +80,6 @@ const (
 )
 
 var openAIImageTryAgainPattern = regexp.MustCompile(`(?i)try again in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|s|sec|secs|second|seconds|m|min|mins|minute|minutes)`)
-
-var openCodeGoUsageLimitResetPattern = regexp.MustCompile(`(?i)\bresets\s+in\s+`)
-
-var openCodeGoUsageLimitDurationPartPattern = regexp.MustCompile(`(?i)^([0-9]+(?:\.[0-9]+)?)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days|w|week|weeks)\b`)
 
 const (
 	openAI403CooldownMinutesDefault = 10
@@ -1173,21 +1164,6 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		}
 		return
 	}
-	// 真实 Ollama Cloud 用量账号（credentials base_url 指向 ollama.com）的 429 由
-	// ollama.com 的用量窗口驱动。其响应头不得被当作 OpenAI codex / Anthropic /
-	// CN 限流来解析，故在国产供应商分支之前单独处理：先设置永不缩短的临时冷却，
-	// 再调度异步 probe 学习真实重置点（详见 ratelimit_service_ollama_429.go）。
-	if account != nil && IsOllamaCloudUsageAccount(account) {
-		s.handleOllamaCloudUsage429(ctx, account, headers)
-		return
-	}
-	// 国产供应商（kimi/zhipu）的 429 走专用可恢复路径：余额不足 → 临时停调，
-	// Coding Plan 窗口耗尽 → 冷却到快照重置点。未命中则继续默认 429 逻辑。
-	if account.IsCNProvider() || account.IsOpenCodeGo() {
-		if s.applyCNProviderReactive429(ctx, account, headers, responseBody) {
-			return
-		}
-	}
 	// 1. OpenAI 平台：优先尝试解析 x-codex-* 响应头（用于 rate_limit_exceeded）
 	if account.Platform == PlatformOpenAI {
 		persistOpenAI429PlanType(ctx, s.accountRepo, account, responseBody)
@@ -1836,74 +1812,7 @@ func parseOpenAIRateLimitResetTime(body []byte) *int64 {
 		}
 	}
 
-	// OpenCode Go subscriptions expose the reset only in a human-readable message,
-	// for example: "Weekly usage limit reached. Resets in 2 days."
-	if errType == "GoUsageLimitError" {
-		message, _ := errObj["message"].(string)
-		if resetAfter := parseOpenCodeGoUsageLimitResetDuration(message); resetAfter > 0 {
-			ts := time.Now().Add(resetAfter).Unix()
-			return &ts
-		}
-	}
-
 	return nil
-}
-
-func parseOpenCodeGoUsageLimitResetDuration(message string) time.Duration {
-	resetPrefix := openCodeGoUsageLimitResetPattern.FindStringIndex(message)
-	if resetPrefix == nil {
-		return 0
-	}
-
-	remainder := message[resetPrefix[1]:]
-	var total time.Duration
-	for {
-		remainder = strings.TrimSpace(remainder)
-		matches := openCodeGoUsageLimitDurationPartPattern.FindStringSubmatchIndex(remainder)
-		if matches == nil {
-			break
-		}
-
-		value, err := strconv.ParseFloat(remainder[matches[2]:matches[3]], 64)
-		if err != nil || value <= 0 {
-			return 0
-		}
-
-		unit := openCodeGoUsageLimitDurationUnit(remainder[matches[4]:matches[5]])
-		if unit <= 0 {
-			return 0
-		}
-
-		const maxDuration = time.Duration(1<<63 - 1)
-		if value >= float64(maxDuration)/float64(unit) {
-			return 0
-		}
-		part := time.Duration(value * float64(unit))
-		if part <= 0 || total > maxDuration-part {
-			return 0
-		}
-		total += part
-		remainder = remainder[matches[1]:]
-	}
-
-	return total
-}
-
-func openCodeGoUsageLimitDurationUnit(raw string) time.Duration {
-	switch strings.ToLower(raw) {
-	case "s", "sec", "secs", "second", "seconds":
-		return time.Second
-	case "m", "min", "mins", "minute", "minutes":
-		return time.Minute
-	case "h", "hr", "hrs", "hour", "hours":
-		return time.Hour
-	case "d", "day", "days":
-		return 24 * time.Hour
-	case "w", "week", "weeks":
-		return 7 * 24 * time.Hour
-	default:
-		return 0
-	}
 }
 
 func parseOpenAIRateLimitPlanType(body []byte) string {

@@ -24,7 +24,6 @@ func TestAccountAdminAccountResponseOmitsPricingGraphsAndProbeSnapshot(t *testin
 			service.UpstreamBillingRateSyncEnabledExtraKey: true,
 			"grok_billing_snapshot":                        map[string]any{"used_cents": 1000},
 			"grok_usage_snapshot":                          map[string]any{"monthly_used": 100},
-			service.OllamaCloudUsageSnapshotExtraKey:       map[string]any{"used": 50},
 		},
 		Groups: []*dto.Group{{ID: 3, RateMultiplier: 8.5}},
 		AccountGroups: []dto.AccountGroup{{
@@ -46,7 +45,6 @@ func TestAccountAdminAccountResponseOmitsPricingGraphsAndProbeSnapshot(t *testin
 	require.NotContains(t, string(payload), "upstream_billing")
 	require.NotContains(t, string(payload), "grok_billing_snapshot")
 	require.NotContains(t, string(payload), "grok_usage_snapshot")
-	require.NotContains(t, string(payload), service.OllamaCloudUsageSnapshotExtraKey)
 	require.NotContains(t, string(payload), `"groups"`)
 	require.NotContains(t, string(payload), `"group"`)
 	// The restricted projection must not mutate the source snapshot. A later
@@ -55,7 +53,6 @@ func TestAccountAdminAccountResponseOmitsPricingGraphsAndProbeSnapshot(t *testin
 	require.Contains(t, account.Extra, service.UpstreamBillingProbeEnabledExtraKey)
 	require.Contains(t, account.Extra, service.UpstreamBillingRateSyncEnabledExtraKey)
 	require.Contains(t, account.Extra, "grok_billing_snapshot")
-	require.Contains(t, account.Extra, service.OllamaCloudUsageSnapshotExtraKey)
 }
 
 func TestSuperAdminAccountResponseRemainsUnchanged(t *testing.T) {

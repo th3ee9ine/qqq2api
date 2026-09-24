@@ -71,6 +71,46 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"auto_revoke_non_current_sessions_",
 }
 
+// Legacy usage metadata is kept out of account payloads while the removed
+// Ollama Cloud/OpenCode Go features are retired. These string constants stay
+// local to the repository so old rows cannot be round-tripped back to clients
+// or accidentally reintroduced by generic account updates.
+const (
+	legacyOllamaCloudUsageSessionKey     = "ollama_cloud_usage_session"
+	legacyOllamaCloudUsageAutoRefreshKey = "ollama_cloud_usage_auto_refresh"
+	legacyOllamaCloudUsageSnapshotKey    = "ollama_cloud_usage_snapshot"
+	legacyOpenCodeGoUsageAutoRefreshKey  = "opencode_go_usage_auto_refresh"
+	legacyOpenCodeGoUsageSnapshotKey     = "opencode_go_usage_snapshot"
+)
+
+var legacyUsageExtraKeys = [...]string{
+	legacyOllamaCloudUsageSessionKey,
+	legacyOllamaCloudUsageAutoRefreshKey,
+	legacyOllamaCloudUsageSnapshotKey,
+	legacyOpenCodeGoUsageAutoRefreshKey,
+	legacyOpenCodeGoUsageSnapshotKey,
+}
+
+func stripLegacyUsageExtra(extra map[string]any) map[string]any {
+	if extra == nil {
+		return nil
+	}
+	clean := make(map[string]any, len(extra))
+	for key, value := range extra {
+		legacy := false
+		for _, removed := range legacyUsageExtraKeys {
+			if key == removed {
+				legacy = true
+				break
+			}
+		}
+		if !legacy {
+			clean[key] = value
+		}
+	}
+	return clean
+}
+
 var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_usage_updated_at":     {},
 	"grok_billing_snapshot":      {},
@@ -1181,40 +1221,9 @@ func lockAndMergeAccountProbeExtra(
 			AND type = $3
 			AND credentials = $4::jsonb
 			AND proxy_id IS NOT DISTINCT FROM $5,
-			COALESCE(
-				platform IN (` + ollamaCloudUsagePlatformsSQL + `)
-				AND $2 IN (` + ollamaCloudUsagePlatformsSQL + `)
-				AND type = 'apikey'
-				AND $3 = 'apikey'
-				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key'
-				AND ` + ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'") + `
-				AND ` + ollamaCloudBaseURLMatchesSQL("$4::jsonb ->> 'base_url'") + `,
-				false
-			),
-			COALESCE(
-				(
-					(platform = 'opencode_go' AND $2 = 'opencode_go'
-						AND COALESCE(btrim(credentials ->> 'account_mode') <> 'zen', true)
-						AND COALESCE(btrim($4::jsonb ->> 'account_mode') <> 'zen', true))
-					OR (platform IN (` + opencodeGoUsageMountPlatformsSQL + `)
-						AND $2 IN (` + opencodeGoUsageMountPlatformsSQL + `)
-						AND ` + opencodeGoBaseURLMatchSQLPrefix + `credentials ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `
-						AND ` + opencodeGoBaseURLMatchSQLPrefix + `$4::jsonb ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `)
-				)
-				AND type = 'apikey'
-				AND $3 = 'apikey'
-				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key',
-				false
-			),
-			proxy_id IS NOT DISTINCT FROM $5,
 			extra -> 'upstream_billing_probe_enabled',
 			extra -> 'upstream_billing_rate_sync_enabled',
-			extra -> 'upstream_billing_probe',
-			extra -> 'ollama_cloud_usage_session',
-			extra -> 'ollama_cloud_usage_auto_refresh',
-			extra -> 'ollama_cloud_usage_snapshot',
-			extra -> 'opencode_go_usage_auto_refresh',
-			extra -> 'opencode_go_usage_snapshot'
+			extra -> 'upstream_billing_probe'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL`
 	args := []any{account.ID, account.Platform, account.Type, string(credentials), proxyID}
@@ -1238,38 +1247,16 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	var (
-		identityUnchanged              bool
-		ollamaGroupIdentityUnchanged   bool
-		ollamaProxyIdentityUnchanged   bool
-		currentEnabled                 []byte
-		currentRateSyncEnabled         []byte
-		currentSnapshot                []byte
-		currentOllamaSession           []byte
-		currentOllamaAutoRefresh       []byte
-		currentOllamaSnapshot          []byte
-		opencodeGroupIdentityUnchanged bool
-		currentOpenCodeAutoRefresh     []byte
-		currentOpenCodeSnapshot        []byte
+		identityUnchanged      bool
+		currentEnabled         []byte
+		currentRateSyncEnabled []byte
+		currentSnapshot        []byte
 	)
 	scanDest := []any{
 		&identityUnchanged,
-		&ollamaGroupIdentityUnchanged,
-		&ollamaProxyIdentityUnchanged,
 		&currentEnabled,
 		&currentRateSyncEnabled,
 		&currentSnapshot,
-		&currentOllamaSession,
-		&currentOllamaAutoRefresh,
-		&currentOllamaSnapshot,
-		&opencodeGroupIdentityUnchanged,
-		&currentOpenCodeAutoRefresh,
-		&currentOpenCodeSnapshot,
-	}
-	// Older focused repository tests (and installations upgraded from the
-	// pre-OpenCode query) may provide the original nine-column projection. Keep
-	// that projection readable while the production query uses all twelve.
-	if columns, columnsErr := rows.Columns(); columnsErr == nil && len(columns) == 9 {
-		scanDest = scanDest[:9]
 	}
 	if err := rows.Scan(scanDest...); err != nil {
 		return nil, err
@@ -1283,11 +1270,11 @@ func lockAndMergeAccountProbeExtra(
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,
 		service.UpstreamBillingProbeExtraKey,
-		service.OllamaCloudUsageSessionExtraKey,
-		service.OllamaCloudUsageAutoRefreshExtraKey,
-		service.OllamaCloudUsageSnapshotExtraKey,
-		service.OpenCodeGoUsageAutoRefreshExtraKey,
-		service.OpenCodeGoUsageSnapshotExtraKey,
+		legacyOllamaCloudUsageSessionKey,
+		legacyOllamaCloudUsageAutoRefreshKey,
+		legacyOllamaCloudUsageSnapshotKey,
+		legacyOpenCodeGoUsageAutoRefreshKey,
+		legacyOpenCodeGoUsageSnapshotKey,
 	} {
 		delete(extra, key)
 	}
@@ -1346,39 +1333,6 @@ func lockAndMergeAccountProbeExtra(
 		}
 	}
 
-	if service.IsOllamaCloudUsageAccount(account) && ollamaGroupIdentityUnchanged {
-		for key, raw := range map[string][]byte{
-			service.OllamaCloudUsageSessionExtraKey:     currentOllamaSession,
-			service.OllamaCloudUsageAutoRefreshExtraKey: currentOllamaAutoRefresh,
-		} {
-			if value, ok, err := decodeAccountExtraJSON(raw); err != nil {
-				return nil, err
-			} else if ok {
-				extra[key] = value
-			}
-		}
-		if ollamaProxyIdentityUnchanged {
-			if snapshot, ok, err := decodeAccountExtraJSON(currentOllamaSnapshot); err != nil {
-				return nil, err
-			} else if ok {
-				extra[service.OllamaCloudUsageSnapshotExtraKey] = snapshot
-			}
-		}
-	}
-	if service.IsOpenCodeGoUsageAccount(account) && opencodeGroupIdentityUnchanged {
-		if value, ok, err := decodeAccountExtraJSON(currentOpenCodeAutoRefresh); err != nil {
-			return nil, err
-		} else if ok {
-			extra[service.OpenCodeGoUsageAutoRefreshExtraKey] = value
-		}
-		if ollamaProxyIdentityUnchanged {
-			if snapshot, ok, err := decodeAccountExtraJSON(currentOpenCodeSnapshot); err != nil {
-				return nil, err
-			} else if ok {
-				extra[service.OpenCodeGoUsageSnapshotExtraKey] = snapshot
-			}
-		}
-	}
 	return extra, nil
 }
 
@@ -1421,49 +1375,16 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 		SET
 			credentials = $1::jsonb,
 			extra = CASE
-				-- OpenCode Go 分支必须先于 Ollama 分支：两侧挂载平台相同，宽松
-				-- 的 Ollama 身份谓词会同时命中官方 OpenCode Go base_url。
-				WHEN type = 'apikey'
-					AND credentials IS DISTINCT FROM $1::jsonb
-					AND (
-						(platform = 'opencode_go'
-							AND COALESCE(btrim(credentials ->> 'account_mode') <> 'zen', true))
-						OR (platform IN (` + opencodeGoUsageMountPlatformsSQL + `)
-							AND ` + opencodeGoBaseURLMatchSQLPrefix + `credentials ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `)
-					)
-					AND (
-						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
-						OR (platform = 'opencode_go'
-							AND COALESCE(btrim($1::jsonb ->> 'account_mode') <> 'zen', true) IS NOT TRUE)
-						OR (platform IN (` + opencodeGoUsageMountPlatformsSQL + `)
-							AND (` + opencodeGoBaseURLMatchSQLPrefix + `$1::jsonb ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `) IS NOT TRUE)
-					)
-				THEN COALESCE(extra, '{}'::jsonb)
-					- 'upstream_billing_probe'
-					- 'opencode_go_usage_auto_refresh'
-					- 'opencode_go_usage_snapshot'
-				-- 凭证整体未变化 ⇒ Ollama 组身份必然未变化；顶层 DISTINCT 守卫防止
-				-- 非 Ollama 账号的无变化持久化误清探测快照或重写 NULL extra。
-				WHEN platform IN (` + ollamaCloudUsagePlatformsSQL + `)
-					AND type = 'apikey'
-					AND credentials IS DISTINCT FROM $1::jsonb
-					AND (
-						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
-						OR NOT (
-							` + ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'") + `
-							AND ` + ollamaCloudBaseURLMatchesSQL("$1::jsonb ->> 'base_url'") + `
-						)
-					)
+				-- Changed API-key credentials invalidate the generic billing probe
+				-- and discard metadata from the removed usage integrations.
+				WHEN type = 'apikey' AND credentials IS DISTINCT FROM $1::jsonb
 				THEN COALESCE(extra, '{}'::jsonb)
 					- 'upstream_billing_probe'
 					- 'ollama_cloud_usage_session'
 					- 'ollama_cloud_usage_auto_refresh'
 					- 'ollama_cloud_usage_snapshot'
-				-- 上游倍率探测已放宽到全部 API-key 平台：凭证变化即视为探测
-				-- 身份变化，丢弃 stale 快照。
-				WHEN type = 'apikey'
-					AND credentials IS DISTINCT FROM $1::jsonb
-				THEN COALESCE(extra, '{}'::jsonb) - 'upstream_billing_probe'
+					- 'opencode_go_usage_auto_refresh'
+					- 'opencode_go_usage_snapshot'
 				ELSE extra
 			END,
 			updated_at = NOW()
@@ -2683,7 +2604,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 					GroupID:             groupID,
 					AccountID:           acc.ID,
 					Concurrency:         acc.Concurrency,
-					Extra:               copyJSONMap(acc.Extra),
+					Extra:               stripLegacyUsageExtra(acc.Extra),
 					SessionWindowStart:  acc.SessionWindowStart,
 					SessionWindowEnd:    acc.SessionWindowEnd,
 					SessionWindowStatus: acc.SessionWindowStatus,
@@ -2747,7 +2668,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			if err := json.Unmarshal([]byte(extraRaw), &extra); err != nil {
 				return nil, err
 			}
-			row.Extra = extra
+			row.Extra = stripLegacyUsageExtra(extra)
 		}
 		out = append(out, row)
 	}
@@ -3805,11 +3726,6 @@ func upstreamBillingProbeSnapshotClearRequested(extra map[string]any) bool {
 	return ok && value == nil
 }
 
-func ollamaCloudUsageSnapshotClearRequested(extra map[string]any) bool {
-	value, ok := extra[service.OllamaCloudUsageSnapshotExtraKey]
-	return ok && value == nil
-}
-
 func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates service.AccountBulkUpdate) (int64, error) {
 	if len(ids) == 0 {
 		return 0, nil
@@ -3829,6 +3745,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		ids = uniquePositiveInt64s(ids)
 	}
 	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(updates.Extra)
+	updates.Extra = stripLegacyUsageExtra(updates.Extra)
 	if _, scoped := accountAdminPredicate(ctx); scoped {
 		// A restricted caller cannot enable upstream probing through a direct
 		// repository invocation.  The admin service also supplies the current
@@ -3843,7 +3760,6 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	_, ownerScoped := accountAdminPredicate(ctx)
 
 	idx := 1
-	ollamaProxyIdentityChanged := ""
 	if updates.Name != nil {
 		setClauses = append(setClauses, "name = $"+itoa(idx))
 		args = append(args, *updates.Name)
@@ -3853,11 +3769,9 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
 		if *updates.ProxyID == 0 {
 			setClauses = append(setClauses, "proxy_id = NULL")
-			ollamaProxyIdentityChanged = "proxy_id IS NOT NULL"
 		} else {
 			proxyPlaceholder := "$" + itoa(idx)
 			setClauses = append(setClauses, "proxy_id = "+proxyPlaceholder)
-			ollamaProxyIdentityChanged = "proxy_id IS DISTINCT FROM " + proxyPlaceholder
 			args = append(args, *updates.ProxyID)
 			idx++
 		}
@@ -3925,36 +3839,13 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		idx++
 	}
 
-	ollamaGroupIdentityChanges := make([]string, 0, 2)
-	if _, ok := updates.Credentials["api_key"]; ok {
-		ollamaGroupIdentityChanges = append(ollamaGroupIdentityChanges, "credentials -> 'api_key' IS DISTINCT FROM "+credentialPlaceholder+"::jsonb -> 'api_key'")
-	}
-	if _, ok := updates.Credentials["base_url"]; ok {
-		ollamaGroupIdentityChanges = append(ollamaGroupIdentityChanges,
-			"NOT ("+ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'")+
-				" AND "+ollamaCloudBaseURLMatchesSQL(credentialPlaceholder+"::jsonb ->> 'base_url'")+")")
-	}
-	opencodeGroupIdentityChanges := make([]string, 0, 3)
-	opencodeOldBaseURL := opencodeGoBaseURLMatchSQLPrefix + "credentials ->> 'base_url'" + opencodeGoBaseURLMatchSQLSuffix
-	opencodeOldUsageIdentity := "((platform = 'opencode_go' AND COALESCE(btrim(credentials ->> 'account_mode') <> 'zen', true))" +
-		" OR (platform IN (" + opencodeGoUsageMountPlatformsSQL + ") AND " + opencodeOldBaseURL + "))"
-	if _, ok := updates.Credentials["api_key"]; ok {
-		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
-			opencodeOldUsageIdentity+" AND credentials -> 'api_key' IS DISTINCT FROM "+credentialPlaceholder+"::jsonb -> 'api_key'")
-	}
-	if _, ok := updates.Credentials["base_url"]; ok {
-		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
-			"platform IN ("+opencodeGoUsageMountPlatformsSQL+") AND "+opencodeOldBaseURL+
-				" AND ("+opencodeGoBaseURLMatchSQLPrefix+credentialPlaceholder+"::jsonb ->> 'base_url'"+opencodeGoBaseURLMatchSQLSuffix+") IS NOT TRUE")
-	}
-	if _, ok := updates.Credentials["account_mode"]; ok {
-		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
-			"platform = 'opencode_go' AND COALESCE(btrim(credentials ->> 'account_mode') <> 'zen', true)"+
-				" AND COALESCE(btrim("+credentialPlaceholder+"::jsonb ->> 'account_mode') <> 'zen', true) IS NOT TRUE")
-	}
-
-	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || len(opencodeGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed {
+	if len(updates.Extra) > 0 || len(updates.Credentials) > 0 || updates.ProxyID != nil || updates.EnsureCodexFingerprintSeed {
 		extraExpression := "COALESCE(extra, '{}'::jsonb)"
+		if len(updates.Credentials) > 0 || updates.ProxyID != nil {
+			// Credential or proxy changes can change the upstream identity. Discard
+			// the generic billing result and retired feature metadata together.
+			extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe' - 'ollama_cloud_usage_session' - 'ollama_cloud_usage_auto_refresh' - 'ollama_cloud_usage_snapshot' - 'opencode_go_usage_auto_refresh' - 'opencode_go_usage_snapshot'"
+		}
 		if len(updates.Extra) > 0 {
 			payload, err := json.Marshal(updates.Extra)
 			if err != nil {
@@ -3966,53 +3857,6 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			if upstreamBillingProbeExplicitlyDisabled(updates.Extra) || upstreamBillingProbeSnapshotClearRequested(updates.Extra) {
 				extraExpression = "(" + extraExpression + ") - 'upstream_billing_probe'"
 			}
-			if ollamaCloudUsageSnapshotClearRequested(updates.Extra) {
-				extraExpression = "(" + extraExpression + ") - 'ollama_cloud_usage_snapshot'"
-			}
-		}
-		eligibleAccount := "platform IN (" + ollamaCloudUsagePlatformsSQL + ") AND type = 'apikey'"
-		groupIdentityChanged := ""
-		if len(ollamaGroupIdentityChanges) > 0 {
-			groupIdentityChanged = "(" + eligibleAccount + " AND (" + joinClauses(ollamaGroupIdentityChanges, " OR ") + "))"
-		}
-		snapshotIdentityChanged := groupIdentityChanged
-		if ollamaProxyIdentityChanged != "" {
-			proxyChanged := "(" + eligibleAccount + " AND " + ollamaProxyIdentityChanged + ")"
-			if snapshotIdentityChanged == "" {
-				snapshotIdentityChanged = proxyChanged
-			} else {
-				snapshotIdentityChanged = "(" + snapshotIdentityChanged + " OR " + proxyChanged + ")"
-			}
-		}
-		opencodeEligibleAccount := "type = 'apikey' AND " + opencodeOldUsageIdentity
-		opencodeGroupIdentityChanged := ""
-		if len(opencodeGroupIdentityChanges) > 0 {
-			opencodeGroupIdentityChanged = "(" + opencodeEligibleAccount + " AND (" + joinClauses(opencodeGroupIdentityChanges, " OR ") + "))"
-		}
-		opencodeSnapshotIdentityChanged := opencodeGroupIdentityChanged
-		if ollamaProxyIdentityChanged != "" {
-			opencodeProxyChanged := "(" + opencodeEligibleAccount + " AND " + ollamaProxyIdentityChanged + ")"
-			if opencodeSnapshotIdentityChanged == "" {
-				opencodeSnapshotIdentityChanged = opencodeProxyChanged
-			} else {
-				opencodeSnapshotIdentityChanged = "(" + opencodeSnapshotIdentityChanged + " OR " + opencodeProxyChanged + ")"
-			}
-		}
-		caseBranches := make([]string, 0, 4)
-		if opencodeGroupIdentityChanged != "" {
-			caseBranches = append(caseBranches, " WHEN "+opencodeGroupIdentityChanged+" THEN ("+extraExpression+") - 'opencode_go_usage_auto_refresh' - 'opencode_go_usage_snapshot'")
-		}
-		if opencodeSnapshotIdentityChanged != "" {
-			caseBranches = append(caseBranches, " WHEN "+opencodeSnapshotIdentityChanged+" THEN ("+extraExpression+") - 'opencode_go_usage_snapshot'")
-		}
-		if groupIdentityChanged != "" {
-			caseBranches = append(caseBranches, " WHEN "+groupIdentityChanged+" THEN ("+extraExpression+") - 'ollama_cloud_usage_session' - 'ollama_cloud_usage_auto_refresh' - 'ollama_cloud_usage_snapshot'")
-		}
-		if snapshotIdentityChanged != "" {
-			caseBranches = append(caseBranches, " WHEN "+snapshotIdentityChanged+" THEN ("+extraExpression+") - 'ollama_cloud_usage_snapshot'")
-		}
-		if len(caseBranches) > 0 {
-			extraExpression = "CASE" + strings.Join(caseBranches, "") + " ELSE " + extraExpression + " END"
 		}
 		if updates.EnsureCodexFingerprintSeed {
 			extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)
@@ -4205,7 +4049,13 @@ func updateProxyBindingShadows(ctx context.Context, exec sqlExecutor, parentIDs 
 		UPDATE accounts
 		SET proxy_id = $2,
 			extra = CASE WHEN proxy_id IS DISTINCT FROM $2::bigint
-				THEN COALESCE(extra, '{}'::jsonb) - 'upstream_billing_probe' - 'ollama_cloud_usage_snapshot'
+				THEN COALESCE(extra, '{}'::jsonb)
+					- 'upstream_billing_probe'
+					- 'ollama_cloud_usage_session'
+					- 'ollama_cloud_usage_auto_refresh'
+					- 'ollama_cloud_usage_snapshot'
+					- 'opencode_go_usage_auto_refresh'
+					- 'opencode_go_usage_snapshot'
 				ELSE extra END,
 			updated_at = NOW()
 		WHERE parent_account_id = ANY($1)
@@ -4484,9 +4334,13 @@ func applyAutomaticProxyAssignments(ctx context.Context, exec sqlExecutor, assig
 		SET proxy_id = assignment.proxy_id,
 			extra = CASE
 				WHEN a.proxy_id IS DISTINCT FROM assignment.proxy_id
-				 AND a.platform IN ('openai', 'anthropic')
-				 AND a.type = 'apikey'
-				THEN COALESCE(a.extra, '{}'::jsonb) - 'ollama_cloud_usage_snapshot'
+				THEN COALESCE(a.extra, '{}'::jsonb)
+					- 'upstream_billing_probe'
+					- 'ollama_cloud_usage_session'
+					- 'ollama_cloud_usage_auto_refresh'
+					- 'ollama_cloud_usage_snapshot'
+					- 'opencode_go_usage_auto_refresh'
+					- 'opencode_go_usage_snapshot'
 				ELSE a.extra
 			END,
 			updated_at = NOW()
@@ -4869,7 +4723,7 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 		Platform:                m.Platform,
 		Type:                    m.Type,
 		Credentials:             copyJSONMap(m.Credentials),
-		Extra:                   copyJSONMap(m.Extra),
+		Extra:                   stripLegacyUsageExtra(m.Extra),
 		ProxyID:                 m.ProxyID,
 		ProxyFallbackOriginID:   m.ProxyFallbackOriginID,
 		Concurrency:             m.Concurrency,

@@ -82,8 +82,8 @@ func TestLockAndMergeAccountProbeExtraUsesCurrentDatabaseSnapshot(t *testing.T) 
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot"}).
-					AddRow(tt.identityUnchanged, false, true, tt.databaseEnabled, nil, tt.databaseSnapshot, nil, nil, nil))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "enabled", "rate_sync_enabled", "snapshot"}).
+					AddRow(tt.identityUnchanged, tt.databaseEnabled, nil, tt.databaseSnapshot))
 
 			account := &service.Account{
 				ID:          27,
@@ -173,8 +173,8 @@ func TestLockAndMergeAccountProbeExtraNeverInfersProbeFromRateSync(t *testing.T)
 
 			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 				WithArgs(int64(31), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot"}).
-					AddRow(true, false, true, tt.databaseEnabled, tt.databaseRateSync, nil, nil, nil, nil))
+				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "enabled", "rate_sync_enabled", "snapshot"}).
+					AddRow(true, tt.databaseEnabled, tt.databaseRateSync, nil))
 
 			account := &service.Account{
 				ID:          31,
@@ -195,45 +195,6 @@ func TestLockAndMergeAccountProbeExtraNeverInfersProbeFromRateSync(t *testing.T)
 				require.NotContains(t, got, service.UpstreamBillingRateSyncEnabledExtraKey)
 			} else {
 				require.Equal(t, tt.wantRateSync, got[service.UpstreamBillingRateSyncEnabledExtraKey])
-			}
-			require.NoError(t, mock.ExpectationsWereMet())
-		})
-	}
-}
-
-func TestLockAndMergeAccountProbeExtraProtectsOllamaManagedFields(t *testing.T) {
-	for _, identityUnchanged := range []bool{true, false} {
-		t.Run(map[bool]string{true: "same identity keeps snapshot", false: "changed identity clears snapshot"}[identityUnchanged], func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = db.Close() })
-			client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
-			t.Cleanup(func() { _ = client.Close() })
-
-			mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
-				WithArgs(int64(29), service.PlatformAnthropic, service.AccountTypeAPIKey, `{"api_key":"key","base_url":"https://ollama.com"}`, nil).
-				WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot"}).
-					AddRow(identityUnchanged, identityUnchanged, true, nil, nil, nil, []byte(`"local-ciphertext"`), []byte(`true`), []byte(`{"status":"ok"}`)))
-
-			account := &service.Account{
-				ID: 29, Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey,
-				Credentials: map[string]any{"api_key": "key", "base_url": "https://ollama.com"},
-				Extra: map[string]any{
-					service.OllamaCloudUsageSessionExtraKey:     "forged-ciphertext",
-					service.OllamaCloudUsageAutoRefreshExtraKey: false,
-					service.OllamaCloudUsageSnapshotExtraKey:    map[string]any{"status": "forged"},
-				},
-			}
-			got, err := lockAndMergeAccountProbeExtra(context.Background(), client, account, nil, nil)
-			require.NoError(t, err)
-			if identityUnchanged {
-				require.Equal(t, "local-ciphertext", got[service.OllamaCloudUsageSessionExtraKey])
-				require.Equal(t, true, got[service.OllamaCloudUsageAutoRefreshExtraKey])
-				require.Equal(t, map[string]any{"status": "ok"}, got[service.OllamaCloudUsageSnapshotExtraKey])
-			} else {
-				require.NotContains(t, got, service.OllamaCloudUsageSessionExtraKey)
-				require.NotContains(t, got, service.OllamaCloudUsageAutoRefreshExtraKey)
-				require.NotContains(t, got, service.OllamaCloudUsageSnapshotExtraKey)
 			}
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
@@ -293,6 +254,18 @@ func TestBulkUpdateNilProbeRemovesKeyInsteadOfWritingJSONNull(t *testing.T) {
 	_, err := repo.BulkUpdate(context.Background(), []int64{27}, service.AccountBulkUpdate{
 		Extra: map[string]any{service.UpstreamBillingProbeExtraKey: nil},
 	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, exec.execQueries)
+	require.Contains(t, normalizeSQLWhitespace(exec.execQueries[0]), "- 'upstream_billing_probe'")
+}
+
+func TestBulkUpdateProxyChangeRemovesProbeSnapshot(t *testing.T) {
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
+	repo := newAccountRepositoryWithSQL(nil, exec, nil)
+	proxyID := int64(19)
+
+	_, err := repo.BulkUpdate(context.Background(), []int64{27}, service.AccountBulkUpdate{ProxyID: &proxyID})
 
 	require.NoError(t, err)
 	require.NotEmpty(t, exec.execQueries)
@@ -389,8 +362,8 @@ func TestUpdateWithAccountBillingSettingsRollsBackWhenOutboxFails(t *testing.T) 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("SELECT")+`.*`+regexp.QuoteMeta("FOR NO KEY UPDATE")).
 		WithArgs(int64(27), service.PlatformOpenAI, service.AccountTypeAPIKey, `{"api_key":"sk-test"}`, nil).
-		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "ollama_group_unchanged", "ollama_proxy_unchanged", "enabled", "rate_sync_enabled", "snapshot", "ollama_session", "ollama_auto", "ollama_snapshot"}).
-			AddRow(true, false, true, []byte(`true`), []byte(`true`), []byte(`{"status":"ok"}`), nil, nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"identity_unchanged", "enabled", "rate_sync_enabled", "snapshot"}).
+			AddRow(true, []byte(`true`), []byte(`true`), []byte(`{"status":"ok"}`)))
 	mock.ExpectExec(`(?s)UPDATE .*accounts.*SET.*WHERE .*id.*`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`(?s)SELECT .* FROM "accounts" WHERE "id" = \$1`).

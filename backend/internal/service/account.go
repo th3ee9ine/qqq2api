@@ -305,11 +305,11 @@ func (a *Account) IsCNProvider() bool {
 	return a != nil && IsCNProvider(a.Platform)
 }
 
-// IsOpenAICompatible 报告账号是否走 OpenAI 网关（OpenAI 协议族）。
-// openai/grok 原生走 OpenAI 网关；国产供应商同为 OpenAI Chat Completions
-// 兼容上游，也经 OpenAI 网关转发。OpenCode 同样经 OpenAI 网关按模型分流。
+// IsOpenAICompatible reports whether an account uses the supported OpenAI
+// gateway platforms. Retired provider identifiers intentionally return false,
+// even when their historical protocol helpers remain available for migrations.
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.IsCNProvider() || a.IsOpenCodeGo())
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
 }
 
 func (a *Account) GeminiOAuthType() string {

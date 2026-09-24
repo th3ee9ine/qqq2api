@@ -68,7 +68,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 	billingModel := resolveOpenAIForwardModel(account, originalModel, "")
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
-	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。
+	// Qwen thinking 模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 	chatReq.Model = upstreamModel
 	if clientStream {
@@ -88,8 +88,6 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return nil, err
 	}
 	// /v1/responses 降级到 raw CC 的出站与 forwardAsRawChatCompletions 共用同一个
-	// 独立 Ollama Cloud token 钩子；chatReq.Model 已是模型映射后的 upstreamModel。
-	chatBody = clampOllamaCloudUpstreamMaxTokens(account, chatBody)
 	// Keep the final outbound tier for usage-time reconciliation. A policy
 	// filter that removes the field therefore leaves this nil.
 	serviceTier := extractOpenAIServiceTierFromBody(chatBody)

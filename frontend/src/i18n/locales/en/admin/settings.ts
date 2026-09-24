@@ -457,30 +457,6 @@ export default {
         saved: 'Upstream rate auto detection settings saved',
         saveFailed: 'Failed to save upstream rate auto detection settings'
       },
-      ollamaCloudUsage: {
-        title: 'Ollama Cloud Usage Refresh',
-        description: 'Refresh official Ollama settings-page usage driven by model requests for individually opted-in accounts. Disabled by default. Idle accounts are not polled.',
-        enabled: 'Enable global automatic refresh',
-        enabledHint: 'Only accounts with a stored browser session and their own automatic refresh switch enabled are refreshed, and only after subsequent model requests. Manual refresh remains available.',
-        intervalMinutes: 'Max wait while requests continue (minutes)',
-        intervalHint: 'Range: 15–1440 minutes. When continuous requests keep sliding the debounce, force a refresh after this wait.',
-        debounceMinutes: 'Quiet period after last request (minutes)',
-        debounceHint: 'Range: 1–60 minutes. Refresh after the latest model request has been quiet for this long.',
-        saved: 'Ollama Cloud usage refresh settings saved',
-        saveFailed: 'Failed to save Ollama Cloud usage refresh settings'
-      },
-      opencodeGoUsage: {
-        title: 'OpenCode Go Usage Refresh',
-        description: 'Refresh usage windows reported by the upstream OpenCode Go account for individually opted-in accounts. Disabled by default.',
-        enabled: 'Enable global automatic refresh',
-        enabledHint: 'Only accounts with their own automatic refresh switch enabled are refreshed. Manual refresh remains available.',
-        intervalMinutes: 'Max wait while requests continue (minutes)',
-        intervalHint: 'Range: 5–1440 minutes. When continuous requests keep sliding the debounce, force a refresh after this wait.',
-        debounceMinutes: 'Quiet period after last request (minutes)',
-        debounceHint: 'Range: 1–60 minutes, and must be less than the refresh interval. Refresh after the latest model request has been quiet for this long.',
-        saved: 'OpenCode Go usage refresh settings saved',
-        saveFailed: 'Failed to save OpenCode Go usage refresh settings'
-      },
       gatewayForwarding: {
         gptTitle: 'GPT Request Forwarding',
         gptDescription: 'Configure OpenAI Responses time-to-first-token metrics, Codex upstream identity, and version synchronization',

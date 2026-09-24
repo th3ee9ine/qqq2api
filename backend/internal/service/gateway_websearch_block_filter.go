@@ -32,12 +32,9 @@ var (
 //     No upstream ever issued them, so clients replaying the conversation
 //     (e.g. Claude Code) poison every follow-up request. They are stripped
 //     for all upstreams.
-//  2. For passback-required upstreams (Kimi/GLM …, see
-//     ResolveThinkingProtocol) all server_tool_use / web_search_tool_result
-//     blocks are stripped: these upstreams only accept
-//     text/thinking/image/tool_use/tool_result and reject anything else with
-//     400 "invalid value: `server_tool_use`". anthropic-strict and unknown
-//     upstreams keep genuine blocks untouched.
+//  2. Qwen thinking models cannot accept genuine web-search history blocks, so
+//     all such blocks are stripped for that remaining passback model family.
+//     Unknown and retired vendor models retain genuine upstream-issued blocks.
 //
 // The emulated assistant turn always carries a trailing text summary, so the
 // search context survives the strip. A message whose content would become
@@ -49,7 +46,6 @@ func FilterWebSearchHistoryBlocks(body []byte, mappedModel string) []byte {
 	}
 
 	stripAll := ResolveThinkingProtocol(mappedModel) == ThinkingProtocolPassbackRequired
-
 	jsonStr := *(*string)(unsafe.Pointer(&body))
 	msgsRes := gjson.Get(jsonStr, "messages")
 	if !msgsRes.Exists() || !msgsRes.IsArray() {

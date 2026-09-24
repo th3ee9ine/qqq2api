@@ -546,7 +546,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'minimax' | 'opencode_go' | 'composite'
+export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'composite'
 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -934,7 +934,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'minimax' | 'opencode_go'
+export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok'
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 
@@ -1126,96 +1126,6 @@ export interface UpstreamBillingRatesResponse {
   page_size: number
 }
 
-export type OllamaCloudUsageStatus = 'ok' | 'unauthorized' | 'failed'
-
-export interface OllamaCloudUsageWindow {
-  used_percent: number
-  reset_at?: string
-  reset_text?: string
-}
-
-export interface OllamaCloudUsageModel {
-  model: string
-  window: 'five_hour' | 'seven_day'
-  requests: number
-}
-
-export interface OllamaCloudUsageData {
-  plan?: string
-  five_hour?: OllamaCloudUsageWindow
-  seven_day?: OllamaCloudUsageWindow
-  balance?: string
-  models?: OllamaCloudUsageModel[]
-}
-
-export interface OllamaCloudUsageSnapshot {
-  status: OllamaCloudUsageStatus
-  data?: OllamaCloudUsageData
-  fetched_at?: string
-  last_attempt_at: string
-  next_refresh_at: string
-  failure_count?: number
-  http_status?: number
-  last_error?: string
-}
-
-export interface OllamaCloudUsageState {
-  account_id: number
-  eligible: boolean
-  configured: boolean
-  auto_refresh_enabled: boolean
-  encryption_key_configured: boolean
-  snapshot?: OllamaCloudUsageSnapshot
-}
-
-export interface OllamaCloudUsageSettings {
-  enabled: boolean
-  /** Max wait while model requests keep arriving (minutes). */
-  interval_minutes: number
-  /** Trailing quiet period after the latest model request (minutes). */
-  debounce_minutes: number
-}
-
-export type OpenCodeGoUsageStatus = 'ok' | 'unauthorized' | 'failed'
-
-export interface OpenCodeGoUsageWindow {
-  status?: string
-  percent: number
-  resets_at?: string
-}
-
-export interface OpenCodeGoUsageData {
-  rolling?: OpenCodeGoUsageWindow
-  weekly?: OpenCodeGoUsageWindow
-  monthly?: OpenCodeGoUsageWindow
-}
-
-export interface OpenCodeGoUsageSnapshot {
-  status: OpenCodeGoUsageStatus
-  data?: OpenCodeGoUsageData
-  fetched_at?: string
-  last_attempt_at?: string
-  next_refresh_at?: string
-  failure_count?: number
-  http_status?: number
-  last_error?: string
-}
-
-export interface OpenCodeGoUsageState {
-  account_id: number
-  eligible: boolean
-  auto_refresh_enabled: boolean
-  snapshot?: OpenCodeGoUsageSnapshot
-}
-
-export interface OpenCodeGoUsageSettings {
-  enabled: boolean
-  /** Max wait while model requests keep arriving (minutes). */
-  interval_minutes: number
-  /** Trailing quiet period after the latest model request (minutes). */
-  debounce_minutes: number
-}
-
 export type GrokMediaEligibilityMode = 'auto' | 'enabled' | 'disabled'
 
 export interface GrokMediaEligibilityState {
@@ -1239,8 +1149,6 @@ export interface Account {
   credentials_status?: Record<string, boolean>
   /** Provider-reported ChatGPT subscription expiry (active_until). */
   subscription_expires_at?: string
-  ollama_cloud_usage?: OllamaCloudUsageState
-  opencode_go_usage?: OpenCodeGoUsageState
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>

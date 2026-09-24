@@ -29,12 +29,13 @@ func TestGeneratedWireIncludesStandaloneImageStorageHandler(t *testing.T) {
 		"pluginKVStore, openAIGatewayService",
 		"admin.NewPluginHandler(pluginManager)",
 		"service.ProvideOpenAIQuotaAutoResetService(",
-		"service.ProvideOllamaCloudUsageService(",
 	} {
 		require.Contains(t, generated, retained)
 	}
 
 	for _, retired := range []string{
+		"service.ProvideOllamaCloudUsageService(",
+		"service.ProvideOpenCodeGoUsageService(",
 		"admin.NewUserHandler",
 		"admin.NewRedeemHandler",
 		"admin.NewPromoCodeHandler",
@@ -127,8 +128,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // openAIGateway
 		nil, // scheduledTestRunner
 		nil, // upstreamBillingProbe
-		nil, // ollamaCloudUsage
-		nil, // opencodeGoUsage
 		nil, // auditLog
 		nil, // openAIAutoReset
 		nil, // openAISessionCleanup

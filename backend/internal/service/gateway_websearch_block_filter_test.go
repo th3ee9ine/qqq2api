@@ -59,9 +59,8 @@ func TestFilterWebSearchHistoryBlocks_KeepsGenuineBlocksForAnthropicStrict(t *te
 }
 
 func TestFilterWebSearchHistoryBlocks_StripsAllBlocksForPassbackRequired(t *testing.T) {
-	// GLM only accepts text/thinking/image/tool_use/tool_result and rejects
-	// server_tool_use with 400, so genuine blocks must be stripped as well.
-	out := FilterWebSearchHistoryBlocks([]byte(genuineWebSearchBody), "glm-4.7")
+	// Preserve the remaining Qwen passback model's web-search compatibility.
+	out := FilterWebSearchHistoryBlocks([]byte(genuineWebSearchBody), "qwen3-large-thinking")
 
 	require.Equal(t, []string{"text", "text"}, collectContentTypes(t, out))
 	require.NotContains(t, string(out), "server_tool_use")
@@ -91,13 +90,13 @@ func TestFilterWebSearchHistoryBlocks_NoWebSearchBlocksFastPath(t *testing.T) {
 }
 
 func TestFilterWebSearchHistoryBlocks_EmptiedMessageGetsPlaceholder(t *testing.T) {
-	body := []byte(`{"model":"glm-4.7","messages":[` +
+	body := []byte(`{"model":"qwen3-large-thinking","messages":[` +
 		`{"role":"user","content":[{"type":"text","text":"search"}]},` +
 		`{"role":"assistant","content":[` +
 		`{"type":"server_tool_use","id":"srvtoolu_01X","name":"web_search","input":{"query":"q"}},` +
 		`{"type":"web_search_tool_result","tool_use_id":"srvtoolu_01X","content":[]}]}]}`)
 
-	out := FilterWebSearchHistoryBlocks(body, "glm-4.7")
+	out := FilterWebSearchHistoryBlocks(body, "qwen3-large-thinking")
 
 	msgs := gjson.GetBytes(out, "messages").Array()
 	require.Len(t, msgs, 2)

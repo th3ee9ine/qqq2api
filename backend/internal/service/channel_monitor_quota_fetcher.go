@@ -227,12 +227,9 @@ func (f *ChannelMonitorQuotaFetcher) fetchUncached(ctx context.Context, accountI
 	// 下游服务不再各自 GetByID（每次含 proxies/groups 联查）。
 	switch account.Platform {
 	case domain.PlatformKimi, domain.PlatformZhipu, domain.PlatformMiniMax:
-		if account.IsCodingPlan() {
-			return f.fetchCNQuota(ctx, account, now)
-		}
-		return f.fetchCNBalance(ctx, account, now)
+		return quotaErrorSnapshot("retired", "platform is no longer supported", now)
 	case domain.PlatformOpenCodeGo:
-		return f.fetchCNQuota(ctx, account, now)
+		return quotaErrorSnapshot("retired", "platform is no longer supported", now)
 	default:
 		return f.fetchUsage(ctx, account, now)
 	}

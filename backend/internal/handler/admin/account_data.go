@@ -109,9 +109,6 @@ func accountExportExtraForContext(ctx context.Context, extra map[string]any) map
 		case service.UpstreamBillingProbeExtraKey,
 			service.UpstreamBillingProbeEnabledExtraKey,
 			service.UpstreamBillingRateSyncEnabledExtraKey,
-			service.OllamaCloudUsageSessionExtraKey,
-			service.OllamaCloudUsageAutoRefreshExtraKey,
-			service.OllamaCloudUsageSnapshotExtraKey,
 			"grok_billing_snapshot",
 			"grok_usage_snapshot":
 			continue

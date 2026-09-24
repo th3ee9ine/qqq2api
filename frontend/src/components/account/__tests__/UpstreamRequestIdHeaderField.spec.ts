@@ -47,7 +47,7 @@ describe('UpstreamRequestIdHeaderField', () => {
   })
 
   it('omits the examples section when no header is known for the platform', () => {
-    const wrapper = mountField({ platform: 'kimi', type: 'oauth' })
+    const wrapper = mountField({ platform: 'custom', type: 'oauth' })
     const text = wrapper.text()
 
     expect(text).toContain('admin.accounts.upstreamRequestIdHeaderHelp.intro')

@@ -1647,18 +1647,6 @@
         />
       </div>
 
-      <OllamaCloudUsageSettings
-        v-if="account?.ollama_cloud_usage?.eligible"
-        :account="account"
-        @updated="handleOllamaCloudUsageUpdated"
-      />
-
-      <OpenCodeGoUsageSettings
-        v-if="account?.opencode_go_usage?.eligible"
-        :account="account"
-        @updated="handleOpenCodeGoUsageUpdated"
-      />
-
       <!-- Anthropic API Key 自动透传开关 -->
       <div
         v-if="account?.platform === 'anthropic' && account?.type === 'apikey'"
@@ -2650,8 +2638,6 @@ import type {
   OpenAIResponsesMode,
   GrokMediaEligibilityMode,
   GrokMediaEligibilityState,
-  OllamaCloudUsageState,
-  OpenCodeGoUsageState,
   Proxy,
   UpdateAccountRequest
 } from '@/types'
@@ -2672,8 +2658,6 @@ import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import HeaderOverrideEditor from './HeaderOverrideEditor.vue'
 import ModelWhitelistSelector from './ModelWhitelistSelector.vue'
-import OllamaCloudUsageSettings from './OllamaCloudUsageSettings.vue'
-import OpenCodeGoUsageSettings from './OpenCodeGoUsageSettings.vue'
 import QuotaLimitCard from './QuotaLimitCard.vue'
 
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
@@ -2709,8 +2693,7 @@ const authStore = useAuthStore()
 const supported = computed(() =>
   props.account?.platform === 'anthropic' ||
   props.account?.platform === 'openai' ||
-  props.account?.platform === 'grok' ||
-  props.account?.platform === 'opencode_go'
+  props.account?.platform === 'grok'
 )
 const isOpenAI = computed(() => props.account?.platform === 'openai')
 const isApiKey = computed(() => props.account?.type === 'apikey')
@@ -2727,12 +2710,6 @@ const isGrokOAuthAccount = computed(
   () => props.account?.platform === 'grok' && props.account?.type === 'oauth'
 )
 const isSparkShadow = computed(() => Boolean(props.account?.parent_account_id))
-const handleOllamaCloudUsageUpdated = (state: OllamaCloudUsageState) => {
-  if (props.account) emit('updated', { ...props.account, ollama_cloud_usage: state })
-}
-const handleOpenCodeGoUsageUpdated = (state: OpenCodeGoUsageState) => {
-  if (props.account) emit('updated', { ...props.account, opencode_go_usage: state })
-}
 const modelPlatform = computed(() => props.account?.type === 'bedrock' ? 'bedrock' : props.account?.platform)
 const supportsAccountSchedulingThresholdOverride = computed(() =>
   props.account?.platform === 'anthropic' || props.account?.platform === 'openai'

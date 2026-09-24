@@ -146,7 +146,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	nativeCNResponses := account.UsesNativeCNResponses()
 	originalBody := body
-	rememberOpenCodeInboundBody(c, originalBody)
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
@@ -274,7 +273,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
 		mappedModel := account.GetMappedModel(reqModel)
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, mappedModel)
-		// 国产模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
+		// Qwen thinking 模型默认 effort 补充：也要用 mappedModel 判定是否是 passback-required 上游。
 		reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, mappedModel)
 		return s.forwardOpenAIPassthrough(
 			ctx,
@@ -1027,7 +1026,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
-	// 国产模型默认 effort 补充：此处 reqModel 已被 mapping 重写为 billingModel。
+	// Qwen thinking 模型默认 effort 补充：此处 reqModel 已被 mapping 重写为 billingModel。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, reqModel)
 	reasoningEffortValue := ""
 	if reasoningEffort != nil {
@@ -1536,7 +1535,6 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
-	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, body, openCodeSessionHintBody(promptCacheKey))
 	// x-codex-beta-features：按真实 Codex 的会话级行为补注（在账号级覆写之后，
 	// 保证不被覆盖丢失）。
 	applyOpenAICodexBetaFeatures(c, account, req.Header)

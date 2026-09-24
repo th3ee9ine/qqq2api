@@ -789,14 +789,14 @@ func TestUpstreamBillingProbeUnsupportedDelayIsStretchedAndBounded(t *testing.T)
 
 // 加长退避只把 unsupported 账号移出周期性热队列，手动探测不受影响。
 func TestUpstreamBillingProbeUnsupportedBackoffDefersRunnerButNotManualProbe(t *testing.T) {
-	// Ollama Cloud 形态：官方域，不发请求直接落 unsupported。
+	// 官方 API 形态：该端点不提供本服务的计费协议，不发请求直接落 unsupported。
 	account := &Account{
 		ID:          31,
 		Platform:    PlatformAnthropic,
 		Type:        AccountTypeAPIKey,
 		Status:      StatusActive,
 		Concurrency: 1,
-		Credentials: map[string]any{"api_key": "sk-ollama", "base_url": "https://ollama.com/v1"},
+		Credentials: map[string]any{"api_key": "sk-anthropic", "base_url": "https://api.anthropic.com/v1"},
 		Extra:       map[string]any{UpstreamBillingProbeEnabledExtraKey: true},
 	}
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{account.ID: account}}

@@ -1021,12 +1021,8 @@ func isUpstreamBillingProbeAccount(account *Account) bool {
 // subdomain, after stripping the port and a trailing DNS dot — because no
 // third-party relay can live under these domains, while custom gateways
 // (the only targets that can answer /v1/billing) are still probed.
-// ollama.com is a first-class configuration here (Ollama Cloud accounts are
-// platform openai/anthropic with base_url https://ollama.com/v1), and it is
-// an official provider API just like the rest, so it belongs on this list.
-// CN provider domains (moonshot.cn / kimi.com / bigmodel.cn.com)
-// serve the same role: official APIs that can never host /v1/billing,
-// so their accounts short-circuit to "unsupported" without a request.
+// Official provider domains can never host /v1/billing, so accounts pointed
+// at them short-circuit to "unsupported" without a request.
 var upstreamBillingProbeOfficialAPIDomains = []string{
 	"anthropic.com",
 	"googleapis.com",
@@ -1034,11 +1030,6 @@ var upstreamBillingProbeOfficialAPIDomains = []string{
 	"grok.com",
 	"openai.com",
 	"openai.azure.com",
-	"ollama.com",
-	"moonshot.cn",
-	"kimi.com",
-	"bigmodel.cn",
-	"opencode.ai",
 }
 
 func upstreamBillingProbeTargetIsOfficialAPI(baseURL string) bool {

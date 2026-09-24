@@ -114,8 +114,6 @@ func accountAdminRequestAllowed(method, path string) bool {
 	// render account rows and editors.
 	for _, readOnlyPath := range []string{
 		"/admin/accounts/upstream-billing-probe/settings",
-		"/admin/accounts/ollama-cloud-usage/settings",
-		"/admin/accounts/opencode-go-usage/settings",
 	} {
 		if path == readOnlyPath {
 			return method == http.MethodGet

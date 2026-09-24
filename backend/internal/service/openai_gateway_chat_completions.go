@@ -73,7 +73,6 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defaultMappedModel string,
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
-	rememberOpenCodeInboundBody(c, body)
 	// Resolve the client execution scope before the Chat Completions payload is
 	// converted or the account/model-specific Codex transform rewrites it. The
 	// downstream Responses request reuses the same Turn-State collector, so this
@@ -803,9 +802,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 		if terminalEventType != "" && terminalEventType != "response.completed" && terminalEventType != "response.done" {
 			return
 		}
-			if !s.openAICodexTurnStateResponseCommitAllowed(c, account, stagedTurnState.Get(openAICodexTurnStateHeader), upstreamModel) {
-				return
-			}
+		if !s.openAICodexTurnStateResponseCommitAllowed(c, account, stagedTurnState.Get(openAICodexTurnStateHeader), upstreamModel) {
+			return
+		}
 		c.Writer.Header().Set(openAICodexTurnStateHeader, stagedTurnState.Get(openAICodexTurnStateHeader))
 		turnStateHeaderDelivered = true
 	})

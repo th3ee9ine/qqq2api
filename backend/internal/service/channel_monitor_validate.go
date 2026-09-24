@@ -19,9 +19,6 @@ var monitorProviders = map[string]struct{}{
 	MonitorProviderGemini:      {},
 	MonitorProviderGrok:        {},
 	MonitorProviderAntigravity: {},
-	MonitorProviderKimi:        {},
-	MonitorProviderZhipu:       {},
-	MonitorProviderMiniMax:     {},
 }
 
 // probeCapableProviders 支持探活（probe / quota_probe）的 provider。
@@ -33,9 +30,6 @@ var probeCapableProviders = map[string]struct{}{
 	MonitorProviderAnthropic: {},
 	MonitorProviderGemini:    {},
 	MonitorProviderGrok:      {},
-	MonitorProviderKimi:      {},
-	MonitorProviderZhipu:     {},
-	MonitorProviderMiniMax:   {},
 }
 
 // validateProvider 校验 provider 字符串。
@@ -216,18 +210,9 @@ func normalizeMonitorPrimaryModel(provider, checkMode, model string) string {
 func monitorAccountQuotaCapability(account *Account) error {
 	switch account.Platform {
 	case PlatformOpenCodeGo:
-		return nil
+		return ErrChannelMonitorAccountNotSupportable
 	case PlatformKimi, PlatformZhipu, PlatformMiniMax:
-		if account.IsCodingPlan() {
-			if p := account.GetCodingPlanProvider(); p != PlatformKimi && p != PlatformZhipu && p != PlatformMiniMax {
-				return ErrChannelMonitorAccountNotSupportable
-			}
-			return nil
-		}
-		if account.Platform == PlatformZhipu || account.Platform == PlatformMiniMax {
-			return ErrChannelMonitorAccountNotSupportable
-		}
-		return nil
+		return ErrChannelMonitorAccountNotSupportable
 	case PlatformAnthropic:
 		if account.Type == AccountTypeOAuth || account.Type == AccountTypeSetupToken {
 			return nil

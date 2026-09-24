@@ -372,9 +372,6 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 		for key, value := range *req.Extra {
 			extra[key] = value
 		}
-		delete(extra, OllamaCloudUsageSessionExtraKey)
-		delete(extra, OllamaCloudUsageAutoRefreshExtraKey)
-		delete(extra, OllamaCloudUsageSnapshotExtraKey)
 		account.Extra = prepareCodexFingerprintExtraForUpdate(account, extra)
 	} else {
 		account.Extra = prepareCodexFingerprintExtraForUpdate(account, account.Extra)
@@ -549,9 +546,6 @@ func (s *AccountService) TestCredentials(ctx context.Context, id int64) error {
 		return nil
 	case PlatformGrok:
 		// Grok OAuth credentials are validated via token exchange/refresh and request-path probes.
-		return nil
-	case PlatformKimi, PlatformZhipu, PlatformMiniMax, PlatformOpenCodeGo:
-		// 国产 OpenAI 兼容供应商与 OpenCode：凭证为 API Key，实际可用性经余额/额度探测与转发路径验证。
 		return nil
 	default:
 		return fmt.Errorf("unsupported platform: %s", account.Platform)

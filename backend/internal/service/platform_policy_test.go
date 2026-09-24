@@ -29,13 +29,16 @@ func TestRemovedProviderHasNoBuiltinCapabilities(t *testing.T) {
 func TestRetiredPlatformsAreNotActive(t *testing.T) {
 	for _, platform := range []string{
 		PlatformGemini, PlatformAntigravity,
-		PlatformKimi, PlatformZhipu, "deepseek",
+		PlatformKimi, PlatformZhipu, PlatformMiniMax, PlatformOpenCodeGo, "deepseek",
 	} {
 		require.True(t, IsRetiredPlatform(platform), platform)
 		require.False(t, IsActiveAccountPlatform(platform), platform)
 		require.False(t, IsActiveGroupPlatform(platform), platform)
 		require.ErrorIs(t, requireActiveAccountPlatform(platform), ErrPlatformRetired)
 		require.ErrorIs(t, requireActiveGroupPlatform(platform), ErrPlatformRetired)
+		account := &Account{Platform: platform, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true}
+		require.False(t, account.IsOpenAICompatible(), platform)
+		require.False(t, account.IsSchedulable(), platform)
 	}
 
 	for _, platform := range []string{PlatformAnthropic, PlatformOpenAI, PlatformGrok, " GROK "} {
@@ -57,7 +60,7 @@ func TestRetiredPlatformsAreNotActive(t *testing.T) {
 
 func TestGatewayAccessTokenRejectsRetiredPlatforms(t *testing.T) {
 	svc := &GatewayService{}
-	for _, platform := range []string{PlatformGemini, PlatformAntigravity, PlatformKimi, PlatformZhipu, "deepseek", "GLM"} {
+	for _, platform := range []string{PlatformGemini, PlatformAntigravity, PlatformKimi, PlatformZhipu, PlatformMiniMax, PlatformOpenCodeGo, "deepseek", "GLM"} {
 		token, tokenType, err := svc.GetAccessToken(context.Background(), &Account{
 			Platform:    platform,
 			Type:        AccountTypeAPIKey,

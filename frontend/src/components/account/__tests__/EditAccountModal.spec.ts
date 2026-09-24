@@ -169,11 +169,6 @@ const ProxySelectorStub = defineComponent({
   `
 })
 
-const OllamaCloudUsageSettingsStub = defineComponent({
-  name: 'OllamaCloudUsageSettings',
-  template: '<div data-testid="ollama-cloud-usage-settings" />'
-})
-
 function buildAccount() {
   return {
     id: 1,
@@ -326,8 +321,7 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
         Icon: true,
         ProxySelector: ProxySelectorStub,
         GroupSelector: renderGroupSelector ? false : GroupSelectorStub,
-        ModelWhitelistSelector: ModelWhitelistSelectorStub,
-        OllamaCloudUsageSettings: OllamaCloudUsageSettingsStub
+        ModelWhitelistSelector: ModelWhitelistSelectorStub
       }
     }
   })
@@ -339,21 +333,6 @@ describe('EditAccountModal', () => {
     authIsAdmin.value = true
     listTLSProfilesMock.mockReset().mockResolvedValue([{ id: 7, name: 'Chrome profile' }])
     getWebSearchEmulationConfigMock.mockReset().mockResolvedValue({ enabled: false, providers: [] })
-  })
-
-  it('keeps the original Ollama Cloud usage settings for eligible OpenAI-compatible accounts', () => {
-    const account = buildAccount()
-    account.ollama_cloud_usage = {
-      account_id: account.id,
-      eligible: true,
-      configured: false,
-      auto_refresh_enabled: false,
-      encryption_key_configured: true
-    }
-
-    const wrapper = mountModal(account)
-
-    expect(wrapper.get('[data-testid="ollama-cloud-usage-settings"]').exists()).toBe(true)
   })
 
   it('hides and omits account rate controls for account administrators', async () => {

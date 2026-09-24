@@ -45,7 +45,7 @@ const (
 func IsRetiredPlatform(platform string) bool {
 	switch platform {
 	case PlatformGemini, PlatformAntigravity,
-		PlatformKimi, PlatformZhipu, "deepseek", "glm":
+		PlatformKimi, PlatformZhipu, PlatformMiniMax, PlatformOpenCodeGo, "deepseek", "glm":
 		return true
 	default:
 		return false

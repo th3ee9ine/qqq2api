@@ -81,7 +81,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		grokCacheIdentity = resolveGrokCacheIdentity(c, body, "", upstreamModel)
 	}
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
-	// 国产模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。
+	// Qwen thinking 模型默认 effort 补充：需要 mappedModel 判定，推迟到 billingModel 算出之后。
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, body, billingModel)
 
 	// 3. Rewrite model in body (no protocol conversion)
@@ -89,10 +89,6 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if upstreamModel != originalModel {
 		upstreamBody = ReplaceModelInBody(body, upstreamModel)
 	}
-	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(upstreamBody, upstreamModel); normalized {
-		upstreamBody = normalizedBody
-	}
-
 	// 4. Apply OpenAI fast policy on the CC body
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, upstreamBody)
 	if policyErr != nil {
@@ -162,8 +158,6 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 			return nil, fmt.Errorf("sanitize Grok unsupported fields: %w", err)
 		}
 	}
-	upstreamBody = applyOllamaCloudRawChatCompletionsRequest(account, upstreamBody)
-	upstreamBody = clampOllamaCloudUpstreamMaxTokens(account, upstreamBody)
 
 	logger.L().Debug("openai chat_completions raw: forwarding without protocol conversion",
 		zap.Int64("account_id", account.ID),
@@ -176,11 +170,6 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	// 5. Build and send upstream request via the shared CC pipeline
 	targetURL, err := s.rawChatCompletionsURL(account)
 	if err != nil {
-		return nil, err
-	}
-	upstreamBody, err = normalizeStrictChatDeveloperRoles(account, targetURL, upstreamBody)
-	if err != nil {
-		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
 	SetActualOpenAIUpstreamEndpoint(c, grokChatRawEndpoint)
@@ -351,7 +340,6 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				}
 			}
 		}
-		line = applyOllamaCloudRawChatCompletionsSSELine(account, line)
 		line = stripEmptyChatToolCallIdentityFromSSELine(line)
 
 		writeLine(line)
@@ -523,7 +511,6 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		upstreamRequestID := firstNonEmpty(requestID, resp.Header.Get("xai-request-id"))
 		return nil, newGrokMissingUsageFailoverError(c, account, upstreamRequestID)
 	}
-	respBody = applyOllamaCloudRawChatCompletionsResponse(account, respBody)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

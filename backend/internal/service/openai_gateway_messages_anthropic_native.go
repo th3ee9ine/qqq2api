@@ -57,22 +57,12 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 		}
 		body = rewritten
 	}
-	if normalized, changed := NormalizeGLM53AnthropicThinking(body, upstreamModel); changed {
-		body = normalized
-	}
-
 	// 记录客户端请求的推理强度：优先 Claude 协议的 output_config.effort；
-	// 缺失且 thinking 已启用时，按国产 passback-required 模型兜底为 high
-	// （对齐 Anthropic 网关 gateway_handler 的记录语义，避免该路径长期落 NULL）。
 	requestedReasoningEffort := NormalizeClaudeOutputEffort(gjson.GetBytes(body, "output_config.effort").String())
-	reasoningEffort := ApplyThinkingEnabledFallback(
-		requestedReasoningEffort,
-		body,
-		billingModel,
-	)
+	reasoningEffort := ApplyThinkingEnabledFallback(requestedReasoningEffort, body, billingModel)
 
 	// 与 Anthropic 平台 passthrough 相同的 pre-filter：剥离空文本块与上游
-	// 无法接受的 web-search 历史块（GLM/Kimi 对 server_tool_use 400）。
+	// 无法接受的 web-search 历史块。
 	body = StripEmptyTextBlocks(body)
 	body = FilterWebSearchHistoryBlocks(body, upstreamModel)
 
@@ -153,7 +143,6 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	body []byte,
 	apiKey string,
 	targetURL string,
-	sessionBodies ...[]byte,
 ) (*http.Request, []byte, error) {
 	// 能力维度 body sanitize：与 Anthropic 平台 passthrough 相同，按 beta
 	// header 决定是否保留 body 中的 beta 能力字段，避免客户端"body 带字段但
@@ -188,8 +177,7 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 	}
 
 	// 覆盖入站鉴权残留，注入上游认证（默认 x-api-key；可经 extra
-	// anthropic_apikey_auth_scheme 切换 Authorization: Bearer；Ollama Cloud
-	// 上游按实际 base_url 强制 Bearer，与 nativeAnthropicTargetURL 同源）。
+	// anthropic_apikey_auth_scheme 切换 Authorization: Bearer）。
 	req.Header.Del("authorization")
 	req.Header.Del("x-api-key")
 	req.Header.Del("x-goog-api-key")
@@ -205,8 +193,6 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
-	payloads := append([][]byte{body}, sessionBodies...)
-	applyOpenCodeSessionHeader(c, account, targetURL, req.Header, payloads...)
 
 	return req, body, nil
 }

@@ -28,7 +28,7 @@ import (
 //
 // 以及 messages / chat_completions 两条 Responses 主路径中逐字相同的错误处理块。
 // 所有 helper 都是对既有内联代码的等价提取，不改变任何行为；各路径的差异
-// （GLM effort 归一化、fast policy、Grok 分支、ClientDisconnect 语义等）仍留在
+// （fast policy、Grok 分支、ClientDisconnect 语义等）仍留在
 // 调用方，属于有意保留的行为差异，不在此强行统一。
 
 // newUpstreamSSEScanner 构造读取上游 SSE 流的行扫描器，复用初始缓冲区。
@@ -245,8 +245,6 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	// 账号级请求头覆写：放在所有内置默认头（含 Grok CLI 身份头）之后应用，
 	// 使配置值获得除共享传输层强制头之外的最高优先级。
 	account.ApplyHeaderOverrides(upstreamReq.Header)
-	applyOpenCodeSessionHeader(c, account, targetURL, upstreamReq.Header, body)
-
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
