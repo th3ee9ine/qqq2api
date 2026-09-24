@@ -67,6 +67,7 @@ type AccountHandler struct {
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+	opencodeGoUsage         *service.OpenCodeGoUsageService
 	cfg                     *config.Config
 }
 
@@ -77,6 +78,14 @@ func (h *AccountHandler) SetUpstreamBillingProbeService(probe *service.UpstreamB
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
 	h.ollamaCloudUsage = usage
+}
+
+// SetOpenCodeGoUsageService attaches the optional OpenCode Go usage-window
+// service. Keeping this setter preserves the compatibility constructor used by
+// focused admin tests while the production graph injects the service through
+// Wire.
+func (h *AccountHandler) SetOpenCodeGoUsageService(usage *service.OpenCodeGoUsageService) {
+	h.opencodeGoUsage = usage
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -342,6 +351,9 @@ type AccountSchedulerGroupScore struct {
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
 func (h *AccountHandler) accountResponseFromService(ctx context.Context, account *service.Account) *dto.Account {
+	if h != nil && h.opencodeGoUsage != nil && account != nil {
+		_ = h.opencodeGoUsage.ResolveOpenCodeGoUsageAccounts(ctx, []*service.Account{account})
+	}
 	out := dto.AccountFromService(account)
 	if h != nil && h.ollamaCloudUsage != nil && out != nil {
 		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
@@ -350,6 +362,9 @@ func (h *AccountHandler) accountResponseFromService(ctx context.Context, account
 }
 
 func (h *AccountHandler) accountListResponseFromService(ctx context.Context, account *service.Account) *dto.Account {
+	if h != nil && h.opencodeGoUsage != nil && account != nil {
+		_ = h.opencodeGoUsage.ResolveOpenCodeGoUsageAccounts(ctx, []*service.Account{account})
+	}
 	out := dto.AccountFromServiceShallow(account)
 	if out != nil && account != nil {
 		out.Proxy = dto.ProxyFromService(account.Proxy)
@@ -690,6 +705,16 @@ func (h *AccountHandler) List(c *gin.Context) {
 			return
 		}
 	}
+	if h.opencodeGoUsage != nil && len(accounts) > 0 {
+		accountPointers := make([]*service.Account, len(accounts))
+		for index := range accounts {
+			accountPointers[index] = &accounts[index]
+		}
+		if err := h.opencodeGoUsage.ResolveOpenCodeGoUsageAccounts(c.Request.Context(), accountPointers); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
 
 	// Get current concurrency counts for all accounts
 	accountIDs := make([]int64, len(accounts))
@@ -944,6 +969,12 @@ func (h *AccountHandler) GetByID(c *gin.Context) {
 	}
 	if h.ollamaCloudUsage != nil {
 		if err := h.ollamaCloudUsage.ResolveAccounts(c.Request.Context(), []*service.Account{account}); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	if h.opencodeGoUsage != nil {
+		if err := h.opencodeGoUsage.ResolveOpenCodeGoUsageAccounts(c.Request.Context(), []*service.Account{account}); err != nil {
 			response.ErrorFrom(c, err)
 			return
 		}

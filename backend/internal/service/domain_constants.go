@@ -568,6 +568,11 @@ const (
 	// SettingKeyOllamaCloudUsageSettings stores the opt-in global runner switch and interval.
 	SettingKeyOllamaCloudUsageSettings = "ollama_cloud_usage_settings"
 
+	// SettingKeyOpenCodeGoUsageSettings stores the opt-in OpenCode Go usage
+	// refresh runner settings.  It is separate from the Ollama Cloud setting so
+	// each provider can be enabled and tuned independently.
+	SettingKeyOpenCodeGoUsageSettings = "opencode_go_usage_settings"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================

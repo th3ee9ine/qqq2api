@@ -1176,6 +1176,46 @@ export interface OllamaCloudUsageSettings {
   debounce_minutes: number
 }
 
+export type OpenCodeGoUsageStatus = 'ok' | 'unauthorized' | 'failed'
+
+export interface OpenCodeGoUsageWindow {
+  status?: string
+  percent: number
+  resets_at?: string
+}
+
+export interface OpenCodeGoUsageData {
+  rolling?: OpenCodeGoUsageWindow
+  weekly?: OpenCodeGoUsageWindow
+  monthly?: OpenCodeGoUsageWindow
+}
+
+export interface OpenCodeGoUsageSnapshot {
+  status: OpenCodeGoUsageStatus
+  data?: OpenCodeGoUsageData
+  fetched_at?: string
+  last_attempt_at?: string
+  next_refresh_at?: string
+  failure_count?: number
+  http_status?: number
+  last_error?: string
+}
+
+export interface OpenCodeGoUsageState {
+  account_id: number
+  eligible: boolean
+  auto_refresh_enabled: boolean
+  snapshot?: OpenCodeGoUsageSnapshot
+}
+
+export interface OpenCodeGoUsageSettings {
+  enabled: boolean
+  /** Max wait while model requests keep arriving (minutes). */
+  interval_minutes: number
+  /** Trailing quiet period after the latest model request (minutes). */
+  debounce_minutes: number
+}
+
 export type GrokMediaEligibilityMode = 'auto' | 'enabled' | 'disabled'
 
 export interface GrokMediaEligibilityState {
@@ -1200,6 +1240,7 @@ export interface Account {
   /** Provider-reported ChatGPT subscription expiry (active_until). */
   subscription_expires_at?: string
   ollama_cloud_usage?: OllamaCloudUsageState
+  opencode_go_usage?: OpenCodeGoUsageState
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
     model_rate_limits?: Record<string, { rate_limited_at: string; rate_limit_reset_at: string }>

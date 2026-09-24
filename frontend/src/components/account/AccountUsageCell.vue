@@ -174,6 +174,11 @@
         :account="account"
         @updated="handleOllamaCloudUsageUpdated"
       />
+      <OpenCodeGoUsageCell
+        v-if="account.opencode_go_usage?.eligible"
+        :account="account"
+        @updated="handleOpenCodeGoUsageUpdated"
+      />
       <!-- Today stats row (requests, tokens, cost) -->
       <div v-if="todayStats" class="mb-0.5 flex items-center">
         <div class="flex items-center gap-1.5 text-[9px] text-gray-500 dark:text-gray-400">
@@ -200,7 +205,7 @@
       <UsageProgressBar v-if="quotaTotalBar" label="total" :utilization="quotaTotalBar.utilization" color="purple" />
 
       <!-- No data at all -->
-      <div v-if="!todayStats && !todayStatsLoading && !hasApiKeyQuota && !account.ollama_cloud_usage?.eligible" class="text-xs text-gray-400">-</div>
+      <div v-if="!todayStats && !todayStatsLoading && !hasApiKeyQuota && !account.ollama_cloud_usage?.eligible && !account.opencode_go_usage?.eligible" class="text-xs text-gray-400">-</div>
     </div>
     <div v-else class="text-xs text-gray-400">-</div>
   </div>
@@ -219,6 +224,7 @@ import GrokUsageSummary from './GrokUsageSummary.vue'
 import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import OpenAIQuotaResetCell from './OpenAIQuotaResetCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
+import OpenCodeGoUsageCell from './OpenCodeGoUsageCell.vue'
 
 const CACHE_TTL_MS = 5 * 60 * 1000
 const QUOTA_RESET_SUPPRESS_MS = 5 * 1000
@@ -274,7 +280,7 @@ let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = nul
 let visibilityObserver: IntersectionObserver | null = null
 
 const isSupportedPlatform = computed(() =>
-  props.account.platform === 'anthropic' || props.account.platform === 'openai' || props.account.platform === 'grok'
+  props.account.platform === 'anthropic' || props.account.platform === 'openai' || props.account.platform === 'grok' || props.account.platform === 'opencode_go'
 )
 const isAnthropicWindowAccount = computed(() =>
   props.account.platform === 'anthropic' &&
@@ -442,6 +448,9 @@ function handleQuotaResetAccountUpdated(account: Account) {
 }
 function handleOllamaCloudUsageUpdated(state: NonNullable<Account['ollama_cloud_usage']>) {
   emit('account-updated', { ...props.account, ollama_cloud_usage: state })
+}
+function handleOpenCodeGoUsageUpdated(state: NonNullable<Account['opencode_go_usage']>) {
+  emit('account-updated', { ...props.account, opencode_go_usage: state })
 }
 onMounted(() => {
   if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {

@@ -231,18 +231,22 @@ func invalidateProxyProbeSnapshots(ctx context.Context, exec sqlExecutor, proxyI
 	// Read-side account/proxy projections remain owner-scoped elsewhere.
 	query := `
 		UPDATE accounts
-		SET extra = COALESCE(extra, '{}'::jsonb)
-				- 'upstream_billing_probe'
-				- 'ollama_cloud_usage_snapshot',
+			SET extra = COALESCE(extra, '{}'::jsonb)
+					- 'upstream_billing_probe'
+					- 'ollama_cloud_usage_snapshot'
+					- 'opencode_go_usage_snapshot',
 			updated_at = NOW()
 		WHERE proxy_id = $1
 			AND type = 'apikey'
 			AND (
 				(extra ? 'upstream_billing_probe'
 					AND extra -> 'upstream_billing_probe' <> 'null'::jsonb)
-				OR (platform IN (` + ollamaCloudUsagePlatformsSQL + `)
-					AND extra ? 'ollama_cloud_usage_snapshot'
-					AND extra -> 'ollama_cloud_usage_snapshot' <> 'null'::jsonb)
+					OR (platform IN (` + ollamaCloudUsagePlatformsSQL + `)
+						AND extra ? 'ollama_cloud_usage_snapshot'
+						AND extra -> 'ollama_cloud_usage_snapshot' <> 'null'::jsonb)
+					OR ((` + opencodeGoUsageEligibleSQL + `)
+						AND extra ? 'opencode_go_usage_snapshot'
+						AND extra -> 'opencode_go_usage_snapshot' <> 'null'::jsonb)
 				)
 			AND deleted_at IS NULL
 		RETURNING id

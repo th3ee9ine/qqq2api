@@ -207,6 +207,8 @@ func TestOpenCodeGoQuotaURL(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, "https://opencode.ai/zen/go/v1/usage", openCodeGoQuotaURL(""))
 	require.Equal(t, "https://opencode.ai/zen/go/v1/usage", openCodeGoQuotaURL(DefaultOpenCodeGoBaseURL+"/"))
+	require.Equal(t, "https://opencode.ai/zen/go/v1/usage", openCodeGoQuotaURL(DefaultOpenCodeGoAnthropicBaseURL))
+	require.Equal(t, "https://opencode.ai/zen/go/v1/usage", openCodeGoQuotaURL("https://opencode.ai/zen/go/v1/"))
 	require.Equal(t, "https://custom.example/v1/usage", openCodeGoQuotaURL("https://custom.example/v1"))
 }
 

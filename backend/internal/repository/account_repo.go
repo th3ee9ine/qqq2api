@@ -1191,13 +1191,30 @@ func lockAndMergeAccountProbeExtra(
 				AND ` + ollamaCloudBaseURLMatchesSQL("$4::jsonb ->> 'base_url'") + `,
 				false
 			),
+			COALESCE(
+				(
+					(platform = 'opencode_go' AND $2 = 'opencode_go'
+						AND COALESCE(btrim(credentials ->> 'account_mode') <> 'zen', true)
+						AND COALESCE(btrim($4::jsonb ->> 'account_mode') <> 'zen', true))
+					OR (platform IN (` + opencodeGoUsageMountPlatformsSQL + `)
+						AND $2 IN (` + opencodeGoUsageMountPlatformsSQL + `)
+						AND ` + opencodeGoBaseURLMatchSQLPrefix + `credentials ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `
+						AND ` + opencodeGoBaseURLMatchSQLPrefix + `$4::jsonb ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `)
+				)
+				AND type = 'apikey'
+				AND $3 = 'apikey'
+				AND credentials -> 'api_key' IS NOT DISTINCT FROM $4::jsonb -> 'api_key',
+				false
+			),
 			proxy_id IS NOT DISTINCT FROM $5,
 			extra -> 'upstream_billing_probe_enabled',
 			extra -> 'upstream_billing_rate_sync_enabled',
 			extra -> 'upstream_billing_probe',
 			extra -> 'ollama_cloud_usage_session',
 			extra -> 'ollama_cloud_usage_auto_refresh',
-			extra -> 'ollama_cloud_usage_snapshot'
+			extra -> 'ollama_cloud_usage_snapshot',
+			extra -> 'opencode_go_usage_auto_refresh',
+			extra -> 'opencode_go_usage_snapshot'
 		FROM accounts
 		WHERE id = $1 AND deleted_at IS NULL`
 	args := []any{account.ID, account.Platform, account.Type, string(credentials), proxyID}
@@ -1221,17 +1238,20 @@ func lockAndMergeAccountProbeExtra(
 	}
 
 	var (
-		identityUnchanged            bool
-		ollamaGroupIdentityUnchanged bool
-		ollamaProxyIdentityUnchanged bool
-		currentEnabled               []byte
-		currentRateSyncEnabled       []byte
-		currentSnapshot              []byte
-		currentOllamaSession         []byte
-		currentOllamaAutoRefresh     []byte
-		currentOllamaSnapshot        []byte
+		identityUnchanged              bool
+		ollamaGroupIdentityUnchanged   bool
+		ollamaProxyIdentityUnchanged   bool
+		currentEnabled                 []byte
+		currentRateSyncEnabled         []byte
+		currentSnapshot                []byte
+		currentOllamaSession           []byte
+		currentOllamaAutoRefresh       []byte
+		currentOllamaSnapshot          []byte
+		opencodeGroupIdentityUnchanged bool
+		currentOpenCodeAutoRefresh     []byte
+		currentOpenCodeSnapshot        []byte
 	)
-	if err := rows.Scan(
+	scanDest := []any{
 		&identityUnchanged,
 		&ollamaGroupIdentityUnchanged,
 		&ollamaProxyIdentityUnchanged,
@@ -1241,7 +1261,17 @@ func lockAndMergeAccountProbeExtra(
 		&currentOllamaSession,
 		&currentOllamaAutoRefresh,
 		&currentOllamaSnapshot,
-	); err != nil {
+		&opencodeGroupIdentityUnchanged,
+		&currentOpenCodeAutoRefresh,
+		&currentOpenCodeSnapshot,
+	}
+	// Older focused repository tests (and installations upgraded from the
+	// pre-OpenCode query) may provide the original nine-column projection. Keep
+	// that projection readable while the production query uses all twelve.
+	if columns, columnsErr := rows.Columns(); columnsErr == nil && len(columns) == 9 {
+		scanDest = scanDest[:9]
+	}
+	if err := rows.Scan(scanDest...); err != nil {
 		return nil, err
 	}
 	if err := rows.Err(); err != nil {
@@ -1256,6 +1286,8 @@ func lockAndMergeAccountProbeExtra(
 		service.OllamaCloudUsageSessionExtraKey,
 		service.OllamaCloudUsageAutoRefreshExtraKey,
 		service.OllamaCloudUsageSnapshotExtraKey,
+		service.OpenCodeGoUsageAutoRefreshExtraKey,
+		service.OpenCodeGoUsageSnapshotExtraKey,
 	} {
 		delete(extra, key)
 	}
@@ -1333,6 +1365,20 @@ func lockAndMergeAccountProbeExtra(
 			}
 		}
 	}
+	if service.IsOpenCodeGoUsageAccount(account) && opencodeGroupIdentityUnchanged {
+		if value, ok, err := decodeAccountExtraJSON(currentOpenCodeAutoRefresh); err != nil {
+			return nil, err
+		} else if ok {
+			extra[service.OpenCodeGoUsageAutoRefreshExtraKey] = value
+		}
+		if ollamaProxyIdentityUnchanged {
+			if snapshot, ok, err := decodeAccountExtraJSON(currentOpenCodeSnapshot); err != nil {
+				return nil, err
+			} else if ok {
+				extra[service.OpenCodeGoUsageSnapshotExtraKey] = snapshot
+			}
+		}
+	}
 	return extra, nil
 }
 
@@ -1375,6 +1421,27 @@ func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, cre
 		SET
 			credentials = $1::jsonb,
 			extra = CASE
+				-- OpenCode Go 分支必须先于 Ollama 分支：两侧挂载平台相同，宽松
+				-- 的 Ollama 身份谓词会同时命中官方 OpenCode Go base_url。
+				WHEN type = 'apikey'
+					AND credentials IS DISTINCT FROM $1::jsonb
+					AND (
+						(platform = 'opencode_go'
+							AND COALESCE(btrim(credentials ->> 'account_mode') <> 'zen', true))
+						OR (platform IN (` + opencodeGoUsageMountPlatformsSQL + `)
+							AND ` + opencodeGoBaseURLMatchSQLPrefix + `credentials ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `)
+					)
+					AND (
+						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
+						OR (platform = 'opencode_go'
+							AND COALESCE(btrim($1::jsonb ->> 'account_mode') <> 'zen', true) IS NOT TRUE)
+						OR (platform IN (` + opencodeGoUsageMountPlatformsSQL + `)
+							AND (` + opencodeGoBaseURLMatchSQLPrefix + `$1::jsonb ->> 'base_url'` + opencodeGoBaseURLMatchSQLSuffix + `) IS NOT TRUE)
+					)
+				THEN COALESCE(extra, '{}'::jsonb)
+					- 'upstream_billing_probe'
+					- 'opencode_go_usage_auto_refresh'
+					- 'opencode_go_usage_snapshot'
 				-- 凭证整体未变化 ⇒ Ollama 组身份必然未变化；顶层 DISTINCT 守卫防止
 				-- 非 Ollama 账号的无变化持久化误清探测快照或重写 NULL extra。
 				WHEN platform IN (` + ollamaCloudUsagePlatformsSQL + `)
@@ -3867,8 +3934,26 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 			"NOT ("+ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'")+
 				" AND "+ollamaCloudBaseURLMatchesSQL(credentialPlaceholder+"::jsonb ->> 'base_url'")+")")
 	}
+	opencodeGroupIdentityChanges := make([]string, 0, 3)
+	opencodeOldBaseURL := opencodeGoBaseURLMatchSQLPrefix + "credentials ->> 'base_url'" + opencodeGoBaseURLMatchSQLSuffix
+	opencodeOldUsageIdentity := "((platform = 'opencode_go' AND COALESCE(btrim(credentials ->> 'account_mode') <> 'zen', true))" +
+		" OR (platform IN (" + opencodeGoUsageMountPlatformsSQL + ") AND " + opencodeOldBaseURL + "))"
+	if _, ok := updates.Credentials["api_key"]; ok {
+		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
+			opencodeOldUsageIdentity+" AND credentials -> 'api_key' IS DISTINCT FROM "+credentialPlaceholder+"::jsonb -> 'api_key'")
+	}
+	if _, ok := updates.Credentials["base_url"]; ok {
+		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
+			"platform IN ("+opencodeGoUsageMountPlatformsSQL+") AND "+opencodeOldBaseURL+
+				" AND ("+opencodeGoBaseURLMatchSQLPrefix+credentialPlaceholder+"::jsonb ->> 'base_url'"+opencodeGoBaseURLMatchSQLSuffix+") IS NOT TRUE")
+	}
+	if _, ok := updates.Credentials["account_mode"]; ok {
+		opencodeGroupIdentityChanges = append(opencodeGroupIdentityChanges,
+			"platform = 'opencode_go' AND COALESCE(btrim(credentials ->> 'account_mode') <> 'zen', true)"+
+				" AND COALESCE(btrim("+credentialPlaceholder+"::jsonb ->> 'account_mode') <> 'zen', true) IS NOT TRUE")
+	}
 
-	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed {
+	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || len(opencodeGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" || updates.EnsureCodexFingerprintSeed {
 		extraExpression := "COALESCE(extra, '{}'::jsonb)"
 		if len(updates.Extra) > 0 {
 			payload, err := json.Marshal(updates.Extra)
@@ -3899,13 +3984,35 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 				snapshotIdentityChanged = "(" + snapshotIdentityChanged + " OR " + proxyChanged + ")"
 			}
 		}
+		opencodeEligibleAccount := "type = 'apikey' AND " + opencodeOldUsageIdentity
+		opencodeGroupIdentityChanged := ""
+		if len(opencodeGroupIdentityChanges) > 0 {
+			opencodeGroupIdentityChanged = "(" + opencodeEligibleAccount + " AND (" + joinClauses(opencodeGroupIdentityChanges, " OR ") + "))"
+		}
+		opencodeSnapshotIdentityChanged := opencodeGroupIdentityChanged
+		if ollamaProxyIdentityChanged != "" {
+			opencodeProxyChanged := "(" + opencodeEligibleAccount + " AND " + ollamaProxyIdentityChanged + ")"
+			if opencodeSnapshotIdentityChanged == "" {
+				opencodeSnapshotIdentityChanged = opencodeProxyChanged
+			} else {
+				opencodeSnapshotIdentityChanged = "(" + opencodeSnapshotIdentityChanged + " OR " + opencodeProxyChanged + ")"
+			}
+		}
+		caseBranches := make([]string, 0, 4)
+		if opencodeGroupIdentityChanged != "" {
+			caseBranches = append(caseBranches, " WHEN "+opencodeGroupIdentityChanged+" THEN ("+extraExpression+") - 'opencode_go_usage_auto_refresh' - 'opencode_go_usage_snapshot'")
+		}
+		if opencodeSnapshotIdentityChanged != "" {
+			caseBranches = append(caseBranches, " WHEN "+opencodeSnapshotIdentityChanged+" THEN ("+extraExpression+") - 'opencode_go_usage_snapshot'")
+		}
 		if groupIdentityChanged != "" {
-			extraExpression = "CASE" +
-				" WHEN " + groupIdentityChanged + " THEN (" + extraExpression + ") - 'ollama_cloud_usage_session' - 'ollama_cloud_usage_auto_refresh' - 'ollama_cloud_usage_snapshot'" +
-				" WHEN " + snapshotIdentityChanged + " THEN (" + extraExpression + ") - 'ollama_cloud_usage_snapshot'" +
-				" ELSE " + extraExpression + " END"
-		} else if snapshotIdentityChanged != "" {
-			extraExpression = "CASE WHEN " + snapshotIdentityChanged + " THEN (" + extraExpression + ") - 'ollama_cloud_usage_snapshot' ELSE " + extraExpression + " END"
+			caseBranches = append(caseBranches, " WHEN "+groupIdentityChanged+" THEN ("+extraExpression+") - 'ollama_cloud_usage_session' - 'ollama_cloud_usage_auto_refresh' - 'ollama_cloud_usage_snapshot'")
+		}
+		if snapshotIdentityChanged != "" {
+			caseBranches = append(caseBranches, " WHEN "+snapshotIdentityChanged+" THEN ("+extraExpression+") - 'ollama_cloud_usage_snapshot'")
+		}
+		if len(caseBranches) > 0 {
+			extraExpression = "CASE" + strings.Join(caseBranches, "") + " ELSE " + extraExpression + " END"
 		}
 		if updates.EnsureCodexFingerprintSeed {
 			extraExpression = ensureCodexFingerprintSeedSQL(extraExpression)

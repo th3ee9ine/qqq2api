@@ -323,5 +323,9 @@ func openCodeGoQuotaURL(baseURL string) string {
 	if base == "" {
 		base = DefaultOpenCodeGoBaseURL
 	}
-	return base + openCodeGoUsagePath
+	// The Anthropic-compatible base is /zen/go while the OpenAI-compatible
+	// base is /zen/go/v1. The official quota endpoint always lives below the
+	// versioned path, so normalize both variants before appending /usage.
+	base = strings.TrimSuffix(base, "/v1")
+	return base + "/v1" + openCodeGoUsagePath
 }
