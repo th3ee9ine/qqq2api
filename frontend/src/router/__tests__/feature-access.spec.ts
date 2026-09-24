@@ -117,6 +117,31 @@ describe('feature route guard', () => {
     appStore.fetchPublicSettings.mockReset()
   })
 
+  it('requires authentication for the debug workbench and its former public URL', async () => {
+    expect(routerHarness.routes.find((route) => route.path === '/')).toMatchObject({
+      redirect: '/admin/debug-workbench',
+    })
+
+    const adminRoute = routerHarness.routes.find((route) => route.path === '/admin/debug-workbench')
+    expect(adminRoute).toMatchObject({
+      name: 'AdminDebugWorkbench',
+      meta: { requiresAuth: true, requiresAdmin: true },
+    })
+
+    const legacyRoute = routerHarness.routes.find((route) => route.path === '/debug-workbench')
+    expect(legacyRoute).toMatchObject({ redirect: '/admin/debug-workbench' })
+
+    authStore.isAuthenticated = false
+    const { navigation, next } = runGuard({ requiresAdmin: true }, '/admin/debug-workbench')
+    await navigation
+
+    expect(next).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith({
+      path: '/login',
+      query: { redirect: '/admin/debug-workbench' },
+    })
+  })
+
   it('does not register model plaza and redirects its legacy URL', async () => {
     expect(routerHarness.routes.some((route) => route.path === '/model-plaza')).toBe(false)
 

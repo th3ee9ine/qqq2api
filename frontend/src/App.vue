@@ -54,9 +54,7 @@ onMounted(async () => {
   // Check if setup is needed
   try {
     const status = await getSetupStatus()
-    // Keep the local debug workbench reachable even when the backend has not
-    // been initialized yet; it runs with fixture accounts and mock responses.
-    if (status.needs_setup && route.path !== '/setup' && route.path !== '/debug-workbench') {
+    if (status.needs_setup && route.path !== '/setup') {
       router.replace('/setup')
       return
     }
