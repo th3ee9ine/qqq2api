@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/robfig/cron/v3"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
 const settingKeyBackupArchiveCheckpoint = "backup_monthly_archive_checkpoint"

@@ -20,9 +20,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/th3ee9ine/qqq2api/internal/config"
+	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 )
 
 const (
@@ -56,18 +56,6 @@ var (
 	ErrBackupRecordsCorrupt   = infraerrors.InternalServer("BACKUP_RECORDS_CORRUPT", "backup records data is corrupted")
 	ErrBackupS3ConfigCorrupt  = infraerrors.InternalServer("BACKUP_S3_CONFIG_CORRUPT", "backup S3 config data is corrupted")
 	ErrBackupArchiveProtected = infraerrors.Conflict("BACKUP_ARCHIVE_PROTECTED", "explicit confirmation is required to delete an archived backup")
-
-	// ErrSecretEncryptionKeyNotConfigured is returned when an S3 SecretAccessKey
-	// would be encrypted with an auto-generated (ephemeral) key. That key is
-	// regenerated on every process start, so the persisted ciphertext becomes
-	// undecryptable after a restart/upgrade ("cipher: message authentication
-	// failed"), silently breaking S3 backup/image storage (#4524). Mirrors the
-	// existing guards for payments (payment.ProvideEncryptionKey) and TOTP
-	// enablement, which likewise refuse to depend on an auto-generated key.
-	ErrSecretEncryptionKeyNotConfigured = infraerrors.BadRequest(
-		"SECRET_ENCRYPTION_KEY_NOT_CONFIGURED",
-		"cannot store the S3 secret access key: no fixed secret encryption key is configured, so the auto-generated key would change on every restart and make the stored secret undecryptable after a restart or upgrade. Set a fixed TOTP_ENCRYPTION_KEY (e.g. generate one with `openssl rand -hex 32`) and try again",
-	)
 )
 
 // ─── 接口定义 ───
