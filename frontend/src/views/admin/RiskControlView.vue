@@ -1267,7 +1267,7 @@ function switchEngine(value: string | number | boolean | null) {
   moderationTestResult.value = null
 }
 
-function engineDraftFromConfig(config: ContentModerationConfig | undefined, engine: ModerationEngine): EngineDraft {
+function engineDraftFromConfig(config: ContentModerationConfig | import('@/api/admin/riskControl').ContentModerationEngineConfig | undefined, engine: ModerationEngine): EngineDraft {
   return {
     base_url: config?.base_url || (engine === 'typesafe' ? 'https://api.typesafe.ai' : 'https://api.openai.com'),
     model: config?.model || (engine === 'typesafe' ? 'jev-latest' : 'omni-moderation-latest'),

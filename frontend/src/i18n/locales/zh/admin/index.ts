@@ -9,6 +9,7 @@ import promptAudit from './promptAudit'
 import plugins from './plugins'
 import accountSessions from './accountSessions'
 import reliability from './reliability'
+import accountAdmins from './accountAdmins'
 
 export default {
   ...overview,
@@ -22,4 +23,5 @@ export default {
   ...plugins,
   ...accountSessions,
   ...reliability,
+  ...accountAdmins,
 }

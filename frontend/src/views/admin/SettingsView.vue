@@ -4955,6 +4955,69 @@
                 </div>
                 <Toggle v-model="form.openai_codex_version_auto_sync_enabled" />
               </div>
+
+              <!-- Claude Code 客户端版本号 -->
+              <div>
+                <label
+                  for="claude-code-client-version"
+                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                >
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.claudeCodeClientVersion",
+                    )
+                  }}
+                </label>
+                <input
+                  id="claude-code-client-version"
+                  v-model="form.claude_code_client_version"
+                  type="text"
+                  class="input w-full font-mono text-sm"
+                  data-testid="claude-code-client-version"
+                  maxlength="64"
+                  placeholder="2.1.280"
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{
+                    t(
+                      "admin.settings.gatewayForwarding.claudeCodeClientVersionHint",
+                    )
+                  }}
+                </p>
+              </div>
+
+              <!-- Claude Code 版本号自动同步 -->
+              <div class="flex items-center justify-between">
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.claudeCodeVersionAutoSync",
+                      )
+                    }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.gatewayForwarding.claudeCodeVersionAutoSyncHint",
+                      )
+                    }}
+                  </p>
+                  <p
+                    v-if="claudeSyncedVersionLabel"
+                    class="mt-0.5 text-xs text-gray-500 dark:text-gray-400"
+                    data-testid="claude-code-client-version-synced"
+                  >
+                    {{ claudeSyncedVersionLabel }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="form.claude_code_version_auto_sync_enabled"
+                  data-testid="claude-code-version-auto-sync"
+                />
+              </div>
             </div>
           </div>
 
@@ -5220,21 +5283,6 @@
                     {{ t("admin.settings.openaiFastPolicy.addModelPattern") }}
                   </button>
                 </div>
-                <div class="relative w-full shrink-0 sm:w-32">
-                  <input
-                    id="openai-oauth-scheduling-rate-multiplier"
-                    v-model.number="form.openai_oauth_scheduling_rate_multiplier"
-                    class="input pr-8"
-                    data-testid="openai-oauth-scheduling-rate-multiplier"
-                    min="0"
-                    step="0.01"
-                    type="number"
-                  />
-                  <span
-                    class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-400"
-                  >x</span>
-                </div>
-              </div>
 
                 <!-- Other Models Action (only when target models are non-empty) -->
                 <div
@@ -6213,64 +6261,6 @@
                     }}
                   </button>
                 </div>
-                <Toggle v-model="form.openai_codex_version_auto_sync_enabled" />
-              </div>
-
-              <!-- Claude Code 客户端版本号 -->
-              <div>
-                <label
-                  class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
-                >
-                  {{
-                    t(
-                      "admin.settings.gatewayForwarding.claudeCodeClientVersion",
-                    )
-                  }}
-                </label>
-                <input
-                  v-model="form.claude_code_client_version"
-                  type="text"
-                  class="input w-full font-mono text-sm"
-                  placeholder="2.1.280"
-                />
-                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-                  {{
-                    t(
-                      "admin.settings.gatewayForwarding.claudeCodeClientVersionHint",
-                    )
-                  }}
-                </p>
-              </div>
-
-              <!-- Claude Code 版本号自动同步 -->
-              <div class="flex items-center justify-between">
-                <div>
-                  <label
-                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                  >
-                    {{
-                      t(
-                        "admin.settings.gatewayForwarding.claudeCodeVersionAutoSync",
-                      )
-                    }}
-                  </label>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    {{
-                      t(
-                        "admin.settings.gatewayForwarding.claudeCodeVersionAutoSyncHint",
-                      )
-                    }}
-                  </p>
-                  <p
-                    v-if="claudeSyncedVersionLabel"
-                    class="mt-0.5 text-xs text-gray-500 dark:text-gray-400"
-                  >
-                    {{ claudeSyncedVersionLabel }}
-                  </p>
-                </div>
-                <Toggle v-model="form.claude_code_version_auto_sync_enabled" />
-              </div>
-
               </template>
             </div>
           </div>
@@ -13251,6 +13241,61 @@ watch(
     }
   },
 );
+
+// Several legacy settings panels remain intentionally hidden behind feature
+// gates while their state is kept for persisted configuration compatibility.
+// Keep their bindings live for vue-tsc so re-enabling a panel does not require
+// deleting and recreating its editor state.
+void [
+  AppLayout, Icon, ConfirmDialog, PaymentProviderList, GroupBadge, GroupOptionItem,
+  Toggle, ProxySelector, EmailTemplateEditor, TotpStepUpDialog,
+  paymentGuideHref, handleSettingsTabKeydown, loginAgreementRoutePath,
+  claudeOAuthSystemPromptBlockTypeOptions, claudeOAuthSystemPromptCacheTTLOptions,
+  getClaudeOAuthPresetLabel, addClaudeOAuthSystemPromptBlock,
+  toggleClaudeOAuthSystemPromptBlock, removeClaudeOAuthSystemPromptBlock,
+  moveClaudeOAuthSystemPromptBlock, applyClaudeOAuthSystemPromptPreset,
+  markClaudeOAuthSystemPromptBlockCustom, resetClaudeOAuthSystemPromptBlocks,
+  schedulingThresholdPlatforms, captchaMasterEnabled, selectCaptchaProvider,
+  tencentCaptchaLinks, openAIAdvancedSchedulerWeightFields, authSourceDefaultsMeta,
+  openTestDialog, toggleProviderExpand, removeWebSearchProvider, addWebSearchProvider,
+  formatSubscribedAt, parseSubscribedAt, quotaPercentage, resetWebSearchUsage,
+  copyApiKey, testWebSearchProvider, defaultSubscriptionGroupOptions,
+  removeRegistrationEmailSuffixWhitelistTag, handleRegistrationEmailSuffixWhitelistDraftInput,
+  handleRegistrationEmailSuffixWhitelistDraftKeydown, handleRegistrationEmailSuffixWhitelistPaste,
+  removeForwardedClientIpHeader, handleForwardedClientIpHeaderKeydown,
+  handleForwardedClientIpHeaderPaste, addQuotaNotifyEmail,
+  setAndCopyLinuxdoRedirectUrl, setAndCopyEmailOAuthRedirectUrl,
+  handleWeChatOpenEnabledChange, handleWeChatMPEnabledChange, handleWeChatMobileEnabledChange,
+  setAndCopyWeChatRedirectUrl, setAndCopyOIDCRedirectUrl, addMenuItem, removeMenuItem,
+  moveMenuItem, addEndpoint, removeEndpoint, addLoginAgreementDocument,
+  removeLoginAgreementDocument, codexFingerprintNoRequired, addCodexFingerprintRow,
+  removeCodexFingerprintRow, addCodexBlacklistRow, removeCodexBlacklistRow,
+  addCodexWhitelistRow, removeCodexWhitelistRow,
+  codexOriginatorOptions, codexVersionModeOptions, codexUserAgentOptions,
+  codexVersionOptions, applyCodexOriginatorPreset, applyCodexUserAgentPreset,
+  setCodexVersionMode, selectCodexVersion, syncCodexVersion, codexSyncedVersionLabel,
+  claudeSyncedVersionLabel, addDefaultSubscription, removeDefaultSubscription,
+  addAuthSourceDefaultSubscription, removeAuthSourceDefaultSubscription,
+  testSmtpConnection, sendTestEmail, saveImageStorageConfig, testImageStorageConnection,
+  regenerateAdminApiKey, deleteAdminApiKey, copyNewKey, saveUpstreamBillingProbeSettings,
+  saveOverloadCooldownSettings, savePanelRateLimitSettings, saveRateLimit429CooldownSettings,
+  saveStreamTimeoutSettings, saveRectifierSettings, betaPolicyActionOptions,
+  betaPolicyScopeOptions, betaPresets, commonModelPatterns, getBetaDisplayName,
+  applyBetaPreset, addQuickPattern, openaiFastPolicyTierOptions,
+  openaiFastPolicyActionOptions, openaiFastPolicyActionSummary,
+  hasOpenAIFastPolicyTargetModels, openaiFastPolicyScopeOptions,
+  addOpenAIFastPolicyRule, removeOpenAIFastPolicyRule,
+  addOpenAIFastPolicyModelPattern, removeOpenAIFastPolicyModelPattern,
+  saveBetaPolicySettings, hasAnyPaymentTypeEnabled, openCreateProvider,
+  openEditProvider, handleSaveProvider, handleToggleField, handleToggleType,
+  confirmDeleteProvider, handleReorderProviders, handleDeleteProvider,
+  handleAffiliateConfirm, cancelAffiliateConfirm, onAffiliateSearchInput,
+  changeAffiliatePage, toggleAffiliateSelectAll, toggleAffiliateSelect,
+  openAffiliateModal, onAffiliateUserSearchInput, selectAffiliateUser,
+  clearSelectedAffiliateUser, submitAffiliateModal, askResetAffiliateUser,
+  openAffiliateBatchModal, submitAffiliateBatchModal,
+]
+
 </script>
 
 <style scoped>

@@ -147,6 +147,10 @@ var ProviderSet = wire.NewSet(
 	// Image storage (async image task result offload)
 	ProvideImageStorageFactory,
 
+	// Database backup storage and PostgreSQL dump/restore.
+	NewS3BackupStoreFactory,
+	NewPgDumper,
+
 	// HTTP service ports (DI Strategy A: return interface directly)
 	NewTurnstileVerifier,
 	NewTencentCaptchaVerifier,
@@ -158,6 +162,7 @@ var ProviderSet = wire.NewSet(
 	NewClaudeOAuthClient,
 	NewHTTPUpstream,
 	NewOpenAIOAuthClient,
+	NewOpenAIReferralClient,
 	NewGrokOAuthClient,
 	NewGeminiOAuthClient,
 	NewGeminiCliCodeAssistClient,

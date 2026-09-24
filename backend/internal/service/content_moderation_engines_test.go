@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/th3ee9ine/qqq2api/internal/pkg/typesafe"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/typesafe"
 )
 
 func TestContentModerationEngineProfilesPreserveLegacy(t *testing.T) {
@@ -30,7 +30,9 @@ func TestContentModerationEngineProfilesPreserveLegacy(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, base, view.BaseURL)
 	require.Equal(t, 0.92, view.Thresholds["sexual"])
-	require.True(t, view.AutoBanEnabled)
+	// QQQ2API keeps the legacy fail-safe policy: automatic bans remain disabled
+	// even when an upstream profile contains the historical flag.
+	require.False(t, view.AutoBanEnabled)
 	require.Equal(t, "pre_block", view.Mode)
 	var stored ContentModerationConfig
 	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &stored))

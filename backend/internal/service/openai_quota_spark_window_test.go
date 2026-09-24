@@ -696,9 +696,9 @@ func TestQueryUsageResetCreditDetails401NonFatal(t *testing.T) {
 	require.Empty(t, usage.RateLimitResetCredits.Credits)
 
 	// A count without expiration details must not be persisted (the reader could
-	// never age it out). QueryUsage may persist an independent paid-credit
-	// snapshot, but neither operation may replace the reset-credit snapshot.
-	require.Contains(t, repo.extraUpdates[100], openaiQuotaPaidCreditsKey)
+	// never age it out). QueryUsage is read-only, so it must not write a paid-
+	// credit snapshot either; explicit admin refresh persists that separately.
+	require.NotContains(t, repo.extraUpdates, int64(100))
 	require.NotContains(t, repo.extraUpdates[100], openaiQuotaResetCreditsKey)
 	writesBefore := repo.extraUpdateCalls
 	require.Error(t, svc.CacheResetCreditsSnapshot(ctx, 100, usage.RateLimitResetCredits))

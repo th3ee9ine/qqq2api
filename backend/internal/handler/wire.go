@@ -168,6 +168,48 @@ func ProvideAdminHandlersWithSessionCleanup(
 	return h
 }
 
+// ProvideAdminHandlersWithSessionCleanupAndBackup extends the compatibility
+// constructor with the database-backup handler without changing the older
+// source-compatible entry points used by focused tests and integrations.
+func ProvideAdminHandlersWithSessionCleanupAndBackup(
+	grokOAuthHandler *admin.GrokOAuthHandler,
+	dashboardHandler *admin.DashboardHandler,
+	groupHandler *admin.GroupHandler,
+	modelPricingHandler *admin.ModelPricingHandler,
+	accountHandler *admin.AccountHandler,
+	accountAdminHandler *admin.AccountAdminHandler,
+	imageStorageHandler *admin.ImageStorageHandler,
+	oauthHandler *admin.OAuthHandler,
+	openaiOAuthHandler *admin.OpenAIOAuthHandler,
+	proxyHandler *admin.ProxyHandler,
+	settingHandler *admin.SettingHandler,
+	opsHandler *admin.OpsHandler,
+	systemHandler *admin.SystemHandler,
+	usageHandler *admin.UsageHandler,
+	errorPassthroughHandler *admin.ErrorPassthroughHandler,
+	tlsFingerprintProfileHandler *admin.TLSFingerprintProfileHandler,
+	pluginHandler *admin.PluginHandler,
+	apiKeyHandler *admin.AdminAPIKeyHandler,
+	scheduledTestHandler *admin.ScheduledTestHandler,
+	contentModerationHandler *admin.ContentModerationHandler,
+	promptAuditHandler *securityaudit.PromptAdminHandler,
+	auditLogHandler *admin.AuditLogHandler,
+	backupHandler *admin.BackupHandler,
+	upstreamBillingProbe *service.UpstreamBillingProbeService,
+	openAISessionCleanup *service.OpenAISessionCleanupService,
+) *AdminHandlers {
+	h := ProvideAdminHandlersWithSessionCleanup(
+		grokOAuthHandler, dashboardHandler, groupHandler, modelPricingHandler,
+		accountHandler, accountAdminHandler, imageStorageHandler, oauthHandler,
+		openaiOAuthHandler, proxyHandler, settingHandler, opsHandler, systemHandler,
+		usageHandler, errorPassthroughHandler, tlsFingerprintProfileHandler,
+		pluginHandler, apiKeyHandler, scheduledTestHandler, contentModerationHandler,
+		promptAuditHandler, auditLogHandler, upstreamBillingProbe, openAISessionCleanup,
+	)
+	h.Backup = backupHandler
+	return h
+}
+
 func provideAdminHandlersWithSessionCleanup(
 	dashboardHandler *admin.DashboardHandler,
 	groupHandler *admin.GroupHandler,
@@ -359,6 +401,7 @@ var ProviderSet = wire.NewSet(
 	ProvideDebugAccountHandler,
 	admin.NewAccountAdminHandler,
 	admin.NewImageStorageHandler,
+	admin.NewBackupHandler,
 	admin.NewOAuthHandler,
 	ProvideOpenAIOAuthHandler,
 	admin.NewProxyHandler,
@@ -375,6 +418,6 @@ var ProviderSet = wire.NewSet(
 	admin.NewAuditLogHandler,
 
 	// AdminHandlers and Handlers constructors
-	ProvideAdminHandlersWithSessionCleanup,
+	ProvideAdminHandlersWithSessionCleanupAndBackup,
 	ProvideHandlers,
 )

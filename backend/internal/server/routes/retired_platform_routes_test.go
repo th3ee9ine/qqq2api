@@ -46,6 +46,25 @@ func TestAdminRoutesRetiredPlatformEndpointsAreNotRegistered(t *testing.T) {
 	}
 
 	for _, route := range []string{
+		"GET /api/v1/admin/backups/s3-config",
+		"PUT /api/v1/admin/backups/s3-config",
+		"POST /api/v1/admin/backups/s3-config/test",
+		"GET /api/v1/admin/backups/schedule",
+		"PUT /api/v1/admin/backups/schedule",
+		"GET /api/v1/admin/backups/image-storage",
+		"PUT /api/v1/admin/backups/image-storage",
+		"POST /api/v1/admin/backups/image-storage/test",
+		"POST /api/v1/admin/backups",
+		"GET /api/v1/admin/backups",
+		"GET /api/v1/admin/backups/:id",
+		"DELETE /api/v1/admin/backups/:id",
+		"GET /api/v1/admin/backups/:id/download-url",
+		"POST /api/v1/admin/backups/:id/restore",
+	} {
+		require.True(t, registered[route], route)
+	}
+
+	for _, route := range []string{
 		"GET /api/v1/admin/users",
 		"GET /api/v1/admin/users/:id",
 		"POST /api/v1/admin/users",
@@ -90,13 +109,6 @@ func TestAdminRoutesRetiredPlatformEndpointsAreNotRegistered(t *testing.T) {
 		"GET /api/v1/admin/accounts/:id/opencode-go-usage",
 		"PUT /api/v1/admin/accounts/:id/opencode-go-usage/auto-refresh",
 		"POST /api/v1/admin/accounts/:id/opencode-go-usage/refresh",
-		"GET /api/v1/admin/backups/s3-config",
-		"POST /api/v1/admin/backups",
-		"GET /api/v1/admin/backups",
-		"GET /api/v1/admin/backups/:id",
-		"DELETE /api/v1/admin/backups/:id",
-		"GET /api/v1/admin/backups/:id/download-url",
-		"POST /api/v1/admin/backups/:id/restore",
 		"GET /api/v1/admin/data-management/agent/health",
 		"POST /api/v1/admin/data-management/backups",
 		"GET /api/v1/admin/data-management/backups",

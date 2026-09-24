@@ -128,14 +128,20 @@ const canSend = computed(() => fresh.value && !isShadow.value && !loading.value 
   && eligibility.value?.should_show === true && count.value !== null && count.value > 0
   && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim()) && (!needsConsent.value || confirmed.value))
 
-function errorMessage(value: unknown): string {
-  const err = value as { reason?: string; code?: string; message?: string }
+function errorMessage(value: unknown, duringSend = false): string {
+  const err = value as { status?: number; reason?: string; code?: string; message?: string }
   const key = err.reason || err.code || ''
+  // A send may have reached the upstream even when the response was lost.
+  // Treat network cancellation as an uncertain outcome only on the send path;
+  // eligibility queries remain safe to retry.
+  if (duringSend && (err.status === 0 || ['ECONNABORTED', 'ETIMEDOUT', 'ERR_NETWORK', 'ERR_CANCELED'].includes(key))) {
+    return t('admin.accounts.openaiReferral.sendUnknown')
+  }
   const keys: Record<string, string> = {
     OPENAI_REFERRAL_UNAVAILABLE: 'unavailable', OPENAI_REFERRAL_FORBIDDEN: 'unavailable',
     OPENAI_REFERRAL_INVALID_EMAIL: 'invalidEmail', OPENAI_REFERRAL_REJECTED: 'rejected',
     OPENAI_REFERRAL_ALREADY_EXISTS: 'alreadyInvited', OPENAI_REFERRAL_RATE_LIMITED: 'rateLimited',
-    OPENAI_REFERRAL_SEND_UNKNOWN: 'sendUnknown', ECONNABORTED: 'sendUnknown',
+    OPENAI_REFERRAL_SEND_UNKNOWN: 'sendUnknown',
     OPENAI_REFERRAL_PROGRAM_CHANGED: 'programChanged', OPENAI_REFERRAL_CONFIRMATION_REQUIRED: 'consentRequired',
   }
   return keys[key] ? t(`admin.accounts.openaiReferral.${keys[key]}`) : err.message || t('common.error')
@@ -197,7 +203,7 @@ async function sendInvite() {
   } catch (err) {
     if (current !== generation) return
     fresh.value = false
-    error.value = errorMessage(err)
+    error.value = errorMessage(err, true)
   } finally {
     if (current === generation) sending.value = false
   }

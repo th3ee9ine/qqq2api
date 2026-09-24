@@ -6,6 +6,7 @@ export interface BackupS3Config {
   bucket: string
   access_key_id: string
   secret_access_key?: string
+  secret_configured?: boolean
   prefix: string
   force_path_style: boolean
 }

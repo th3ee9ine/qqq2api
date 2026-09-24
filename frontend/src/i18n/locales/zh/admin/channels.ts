@@ -229,6 +229,14 @@ export default {
 
     riskControl: {
       title: '风控中心',
+      activeEngine: '当前审核引擎：{engine}',
+      auditSource: '审核来源',
+      engine: '审核引擎',
+      engineUnavailable: '当前选择的审核引擎不可用。',
+      legacyAuditSource: '旧版 OpenAI 审核配置',
+      skippedImages: '已跳过 {count} 张图片（仅审核文本）',
+      typeSafeNotice: 'TypeSafe 使用独立的引擎地址、模型、Key 与阈值配置。',
+      typeSafeThresholds: 'TypeSafe 阈值',
       description: '配置内容审计策略并查看审核记录',
       loadFailed: '加载风控中心失败',
       saveFailed: '保存内容审计配置失败',

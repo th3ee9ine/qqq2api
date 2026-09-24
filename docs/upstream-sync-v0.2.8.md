@@ -28,6 +28,20 @@
 
 历史 `accounts.extra` 中的旧用量字段会在仓储映射、批量更新、代理变更和 DTO 响应边界被过滤，以避免旧缓存重新暴露已退役集成的 session/snapshot。字段名仅作为兼容清理键保留。
 
+## 2026-09-25 后续扩展同步
+
+在上述 v0.2.8 选择性同步之后，基于 `/Users/th3ee9ine/Downloads/sub2api-main/`
+继续逐项补入并适配定制版的功能：
+
+- HostService 的插件命名空间 KV、声明能力校验、只读状态通道和结构化账号只读元数据。
+- reasoning effort 计费倍率、Claude Code 客户端版本自动同步，以及简易模式的可选 API Key 消费窗口和可选默认分组创建。
+- TypeSafe 独立内容审计配置档。
+- Codex 积分/付费积分快照、推荐邀请管理；推荐邀请的 HTTP 传输已隔离到 repository adapter，发送不重试，响应错误脱敏，未知发送结果 fail closed。
+- 月度备份归档、独立保留策略、S3/PostgreSQL 服务接线、管理后台页面和 step-up 保护；继承已有 S3 密钥时重新加密保存。
+- 滚动日志保留策略和本轮涉及的 OpenAI WS/HTTP、调度、流式、网关、代理、审核、Grok、Codex 及前端交互修复。
+
+本轮继续保留 QQQ2API 的模块路径 `github.com/th3ee9ine/qqq2api`、平台退役边界、日志脱敏、定制调度与权限策略；没有重新引入 OpenCode Go、Ollama Cloud 专属集成、Kimi、Zhipu 或 MiniMax，也没有直接快进上游分支或使用批量 `--theirs` 解决冲突。
+
 ## 验证
 
 后端使用缓存的 Go 1.27 工具链执行；最新删除改动完成后应执行：
@@ -38,6 +52,6 @@ GOSUMDB=sum.golang.org GOTOOLCHAIN=auto GOPROXY=https://goproxy.cn,direct \
   /Users/th3ee9ine/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/bin/go test ./...
 ```
 
-本次变更已完成后端全包编译、Repository/middleware 测试和 thinking/gateway 定向测试；前端 `pnpm run typecheck`、`pnpm run lint`、`pnpm run build` 通过，针对账号编辑、模型白名单、请求头、分组 provider 和设置页的 94 个定向测试通过。前端全量测试保留两个定制版既有失败：`GroupsView.compositePlatforms.spec.ts` 的旧平台断言未包含 `grok`，以及 `UsageTable.spec.ts` 的 UA fixture 与旧文案断言不一致；没有修改这些基线差异来掩盖结果。
+此前 v0.2.8 退役提交的验证记录仍只适用于该轮提交。2026-09-25 后续扩展的验证以当前工作树为准：完成修改后应重新运行后端相关包测试、Wire 生成检查，以及前端 `pnpm run typecheck`、`pnpm run lint:check`、`pnpm run build`。后续扩展仍有未提交改动时，不把旧轮次的全包结果表述为当前树的全量通过；任何定制版基线失败都单独列出并保留原断言。
 
 本次只保存本地代码和迁移改动，未推送 Git，未发布 Docker 镜像。发布前需要另行检查迁移 checksum、运行时版本和镜像 manifest。

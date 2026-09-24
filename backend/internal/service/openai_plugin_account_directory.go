@@ -111,6 +111,9 @@ func accountReadableSnapshotJSON(account *Account) []byte {
 	clone.Credentials = nil
 	clone.Groups = nil
 	clone.AccountGroups = nil
+	// AccountAdminID is an internal ownership boundary used for server-side
+	// scoping. It is not plugin-readable account metadata.
+	clone.AccountAdminID = nil
 	data, err := json.Marshal(&clone)
 	if err != nil {
 		return nil

@@ -254,7 +254,17 @@ const creditsButtonTitle = computed(() => {
 })
 
 const updateCredits = (usage: OpenAIQuotaUsage | null) => {
-  creditsData.value = usage?.credits ? { credits: usage.credits, fetched_at: usage.fetched_at } : null
+  const credits = usage?.credits
+  creditsData.value = credits
+    ? {
+        credits: {
+          has_credits: credits.has_credits === true,
+          unlimited: credits.unlimited === true,
+          balance: credits.balance == null ? null : String(credits.balance),
+        },
+        fetched_at: usage.fetched_at,
+      }
+    : null
 }
 
 const paidCredits = computed<OpenAIPaidCredits | null>(() => {

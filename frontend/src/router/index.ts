@@ -266,6 +266,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/backups',
+    name: 'AdminBackups',
+    component: () => import('@/views/admin/BackupView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Backups',
+      titleKey: 'admin.backup.title',
+      descriptionKey: 'admin.backup.description'
+    }
+  },
+  {
     path: '/admin/debug-workbench',
     name: 'AdminDebugWorkbench',
     component: () => import('@/views/admin/DebugWorkbenchView.vue'),

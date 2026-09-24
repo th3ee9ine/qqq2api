@@ -13,6 +13,11 @@ type BackupHandler struct {
 	imageStorage  *service.ImageStorageSettingService
 }
 
+type backupS3ConfigResponse struct {
+	*service.BackupS3Config
+	SecretConfigured bool `json:"secret_configured"`
+}
+
 func NewBackupHandler(backupService *service.BackupService, userService *service.UserService, imageStorage *service.ImageStorageSettingService) *BackupHandler {
 	return &BackupHandler{
 		backupService: backupService,
@@ -29,7 +34,7 @@ func (h *BackupHandler) GetS3Config(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, cfg)
+	response.Success(c, backupS3ConfigResponse{BackupS3Config: cfg, SecretConfigured: cfg.SecretConfigured})
 }
 
 func (h *BackupHandler) UpdateS3Config(c *gin.Context) {
@@ -43,7 +48,7 @@ func (h *BackupHandler) UpdateS3Config(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, cfg)
+	response.Success(c, backupS3ConfigResponse{BackupS3Config: cfg, SecretConfigured: cfg.SecretConfigured})
 }
 
 func (h *BackupHandler) TestS3Connection(c *gin.Context) {

@@ -90,6 +90,9 @@ type BackupS3Config struct {
 	SecretAccessKey string `json:"secret_access_key,omitempty"` //nolint:revive // field name follows AWS convention
 	Prefix          string `json:"prefix"`                      // S3 key 前缀，如 "backups/"
 	ForcePathStyle  bool   `json:"force_path_style"`
+	// SecretConfigured is response metadata and is never persisted with the
+	// credential JSON.
+	SecretConfigured bool `json:"-"`
 }
 
 // IsConfigured 检查必要字段是否已配置
@@ -375,6 +378,7 @@ func (s *BackupService) GetS3Config(ctx context.Context) (*BackupS3Config, error
 		return &BackupS3Config{}, nil
 	}
 	// 脱敏返回
+	cfg.SecretConfigured = cfg.SecretAccessKey != ""
 	cfg.SecretAccessKey = ""
 	return cfg, nil
 }
@@ -385,6 +389,18 @@ func (s *BackupService) UpdateS3Config(ctx context.Context, cfg BackupS3Config) 
 		old, _ := s.loadS3Config(ctx)
 		if old != nil {
 			cfg.SecretAccessKey = old.SecretAccessKey
+			if cfg.SecretAccessKey != "" {
+				// loadS3Config returns the usable plaintext. Re-encrypt an
+				// inherited secret before persisting the edited configuration.
+				if !s.encryptionKeyConfigured {
+					return nil, ErrSecretEncryptionKeyNotConfigured
+				}
+				encrypted, err := s.encryptor.Encrypt(cfg.SecretAccessKey)
+				if err != nil {
+					return nil, fmt.Errorf("encrypt inherited secret: %w", err)
+				}
+				cfg.SecretAccessKey = encrypted
+			}
 		}
 	} else {
 		// 拒绝用自动生成的临时密钥加密：该密钥每次重启都会变化，落库的密文在
@@ -414,6 +430,7 @@ func (s *BackupService) UpdateS3Config(ctx context.Context, cfg BackupS3Config) 
 	s.s3Cfg = nil
 	s.storeMu.Unlock()
 
+	cfg.SecretConfigured = cfg.SecretAccessKey != ""
 	cfg.SecretAccessKey = ""
 	return &cfg, nil
 }

@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
 	"github.com/th3ee9ine/qqq2api/internal/service"
-	"github.com/gin-gonic/gin"
 )
 
 type openAIReferralService interface {
@@ -81,13 +81,18 @@ func (h *OpenAIOAuthHandler) SendReferralInvite(c *gin.Context) {
 	}
 	// The email is already sent. Refresh failure must not turn it into a failed
 	// submission and encourage a duplicate send, even if the browser disconnects.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), 8*time.Second)
-	defer cancel()
-	eligibility, refreshErr := h.referralService.QueryReferralEligibility(ctx, id)
+	baseCtx := context.WithoutCancel(c.Request.Context())
+	refreshCtx, cancelRefresh := context.WithTimeout(baseCtx, 8*time.Second)
+	eligibility, refreshErr := h.referralService.QueryReferralEligibility(refreshCtx, id)
+	cancelRefresh()
 	if refreshErr != nil {
 		eligibility = nil
 	}
-	cacheErr := h.referralService.CacheReferralSnapshot(ctx, id, eligibility)
+	// Refresh may use its entire deadline. Persist the post-send snapshot with
+	// an independent deadline so a slow upstream cannot prevent cache cleanup.
+	cacheCtx, cancelCache := context.WithTimeout(baseCtx, 3*time.Second)
+	defer cancelCache()
+	cacheErr := h.referralService.CacheReferralSnapshot(cacheCtx, id, eligibility)
 	response.Success(c, openAIReferralSendResponse{
 		OpenAIReferralSendResult:      *result,
 		openAIReferralRefreshResponse: openAIReferralRefreshResponse{Eligibility: eligibility, CachePersisted: cacheErr == nil},

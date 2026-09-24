@@ -69,6 +69,9 @@ func RegisterAdminRoutes(
 		// 使用记录管理
 		registerUsageRoutes(admin, h)
 
+		// 数据库备份与月度归档
+		registerBackupRoutes(admin, h, stepUpAuth)
+
 		// 错误透传规则管理
 		registerErrorPassthroughRoutes(admin, h)
 
@@ -495,6 +498,31 @@ func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		usage.GET("/cleanup-tasks", h.Admin.Usage.ListCleanupTasks)
 		usage.POST("/cleanup-tasks", h.Admin.Usage.CreateCleanupTask)
 		usage.POST("/cleanup-tasks/:id/cancel", h.Admin.Usage.CancelCleanupTask)
+	}
+}
+
+func registerBackupRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
+	backups := admin.Group("/backups")
+	{
+		backups.GET("/s3-config", h.Admin.Backup.GetS3Config)
+		// Changing the S3 destination can exfiltrate full database backups.
+		backups.PUT("/s3-config", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.UpdateS3Config)
+		backups.POST("/s3-config/test", h.Admin.Backup.TestS3Connection)
+		backups.GET("/schedule", h.Admin.Backup.GetSchedule)
+		backups.PUT("/schedule", h.Admin.Backup.UpdateSchedule)
+		backups.GET("/image-storage", h.Admin.Backup.GetImageStorageConfig)
+		// Changing the image object-storage destination can redirect generated
+		// content to an external account, so keep the same step-up gate.
+		backups.PUT("/image-storage", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.UpdateImageStorageConfig)
+		backups.POST("/image-storage/test", h.Admin.Backup.TestImageStorageConnection)
+		backups.POST("", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.CreateBackup)
+		backups.GET("", h.Admin.Backup.ListBackups)
+		backups.GET("/:id", h.Admin.Backup.GetBackup)
+		backups.DELETE("/:id", h.Admin.Backup.DeleteBackup)
+		// The download URL grants direct access to the complete database dump.
+		backups.GET("/:id/download-url", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.GetDownloadURL)
+		// Restore can overwrite the whole database, including the step-up setting.
+		backups.POST("/:id/restore", gin.HandlerFunc(stepUpAuth), h.Admin.Backup.RestoreBackup)
 	}
 }
 

@@ -4,6 +4,36 @@ export type ModerationMode = 'off' | 'observe' | 'pre_block'
 export type ContentModerationEndpointProtocol = 'moderations' | 'chat_completions' | 'responses'
 export type KeywordBlockingMode = 'keyword_only' | 'keyword_and_api' | 'api_only'
 export type ContentModerationModelFilterType = 'all' | 'include' | 'exclude'
+export type ModerationEngine = 'openai' | 'typesafe'
+
+export interface ContentModerationEngineConfig {
+  base_url: string
+  model: string
+  proxy_id: number | null
+  api_key_configured: boolean
+  api_key_masked: string
+  api_key_count: number
+  api_key_masks: string[]
+  api_key_statuses: ContentModerationAPIKeyStatus[]
+  timeout_ms: number
+  retry_count: number
+  thresholds: Record<string, number>
+}
+
+export type UpdateModerationEngineConfig = Partial<ContentModerationEngineConfig> & {
+  api_key?: string
+  api_keys?: string[]
+  api_keys_mode?: 'append' | 'replace'
+  delete_api_key_hashes?: string[]
+  clear_api_key?: boolean
+}
+
+export interface ContentModerationEngineMeta {
+  engine: ModerationEngine
+  model: string
+  rules_version?: string
+  skipped_images?: number
+}
 
 export interface ContentModerationModelFilter {
   type: ContentModerationModelFilterType
@@ -11,6 +41,8 @@ export interface ContentModerationModelFilter {
 }
 
 export interface ContentModerationConfig {
+  engine: ModerationEngine
+  engine_configs?: Partial<Record<ModerationEngine, ContentModerationEngineConfig>>
   enabled: boolean
   mode: ModerationMode
   base_url: string
@@ -60,6 +92,8 @@ export interface ContentModerationAPIKeyStatus {
 }
 
 export interface TestContentModerationAPIKeysPayload {
+  engine?: ModerationEngine
+  thresholds?: Record<string, number>
   api_keys?: string[]
   base_url?: string
   model?: string
@@ -78,6 +112,7 @@ export interface TestContentModerationAPIKeysResponse {
 }
 
 export interface ContentModerationTestAuditResult {
+  engine_meta?: ContentModerationEngineMeta
   flagged: boolean
   highest_category: string
   highest_score: number
@@ -87,6 +122,8 @@ export interface ContentModerationTestAuditResult {
 }
 
 export interface UpdateContentModerationConfig {
+  engine?: ModerationEngine
+  engine_configs?: Partial<Record<ModerationEngine, UpdateModerationEngineConfig>>
   enabled?: boolean
   mode?: ModerationMode
   base_url?: string
@@ -119,6 +156,7 @@ export interface UpdateContentModerationConfig {
 }
 
 export interface ContentModerationRuntimeStatus {
+  engine: ModerationEngine
   enabled: boolean
   risk_control_enabled: boolean
   mode: ModerationMode
@@ -165,6 +203,7 @@ export interface ContentModerationAPIKeyLoad {
 }
 
 export interface ContentModerationLog {
+  engine_meta?: ContentModerationEngineMeta
   id: number
   request_id: string
   api_key_id: number | null

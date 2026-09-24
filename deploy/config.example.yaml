@@ -100,6 +100,16 @@ webauthn:
 # - simple: 隐藏 SaaS 功能，跳过计费和余额校验
 run_mode: "standard"
 
+# Simple-mode startup and API-key spending-window controls.
+# 简易模式启动与 API Key 消费窗口控制。
+simple_mode:
+  # Keep the historical automatic platform-default group creation by default.
+  # 是否在简易模式启动时自动创建平台默认分组。
+  auto_create_default_groups: true
+# When enabled in simple mode, enforce API-key 5h/1d/7d spending windows.
+# 简易模式下是否启用 API Key 5 小时/1 天/7 天消费窗口限制。
+simple_mode_key_rate_limit_enabled: false
+
 # =============================================================================
 # CORS Configuration
 # 跨域资源共享 (CORS) 配置

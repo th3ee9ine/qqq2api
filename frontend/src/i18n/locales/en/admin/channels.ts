@@ -229,6 +229,14 @@ export default {
 
     riskControl: {
       title: 'Risk Control',
+      activeEngine: 'Active audit engine: {engine}',
+      auditSource: 'Audit source',
+      engine: 'Audit engine',
+      engineUnavailable: 'The selected audit engine is currently unavailable.',
+      legacyAuditSource: 'Legacy OpenAI moderation configuration',
+      skippedImages: '{count} image(s) skipped (text-only audit)',
+      typeSafeNotice: 'TypeSafe uses its independent engine endpoint, model, keys, and thresholds.',
+      typeSafeThresholds: 'TypeSafe thresholds',
       description: 'Configure content moderation and review audit records',
       loadFailed: 'Failed to load risk control',
       saveFailed: 'Failed to save content moderation config',
