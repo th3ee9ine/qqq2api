@@ -255,6 +255,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAICodexClientVersionSynced:                     "",
 		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingKeyEnableOpenAIAccountLocalDeviceIdentity:             "true",
+		SettingKeyClaudeCodeClientVersion:                            "",
+		SettingKeyClaudeCodeClientVersionSynced:                      "",
+		SettingKeyClaudeCodeVersionAutoSyncEnabled:                   "true",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -910,6 +913,14 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		result.EnableOpenAIAccountLocalDeviceIdentity = v == "true"
 	} else {
 		result.EnableOpenAIAccountLocalDeviceIdentity = true
+	}
+	result.ClaudeCodeClientVersion = NormalizeClaudeCodeClientVersion(settings[SettingKeyClaudeCodeClientVersion])
+	result.ClaudeCodeClientVersionSynced = NormalizeClaudeCodeClientVersion(settings[SettingKeyClaudeCodeClientVersionSynced])
+	// 自动同步默认开启：缺失/空值一律视为开启。
+	if v, ok := settings[SettingKeyClaudeCodeVersionAutoSyncEnabled]; ok && v != "" {
+		result.ClaudeCodeVersionAutoSyncEnabled = v == "true"
+	} else {
+		result.ClaudeCodeVersionAutoSyncEnabled = true
 	}
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]

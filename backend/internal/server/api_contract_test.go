@@ -687,6 +687,9 @@ func TestAPIContracts(t *testing.T) {
 					"openai_codex_originator_default":    "Codex Desktop",
 					"openai_codex_user_agent_default":     "Codex Desktop/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
 					"openai_codex_client_version_default": "0.154.0",
+					"claude_code_client_version": "",
+					"claude_code_client_version_synced": "",
+					"claude_code_version_auto_sync_enabled": true,
 					"openai_fast_policy_settings": {
 						"rules": []
 					},
@@ -1002,6 +1005,9 @@ func TestAPIContracts(t *testing.T) {
 					"openai_codex_originator_default":    "Codex Desktop",
 					"openai_codex_user_agent_default":     "Codex Desktop/0.154.0 (Mac OS 26.2.0; arm64) Apple_Terminal/466 (Codex Desktop; 26.911.61220)",
 					"openai_codex_client_version_default": "0.154.0",
+					"claude_code_client_version": "",
+					"claude_code_client_version_synced": "",
+					"claude_code_version_auto_sync_enabled": true,
 					"openai_fast_policy_settings": {
 						"rules": []
 					},

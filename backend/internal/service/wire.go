@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/th3ee9ine/qqq2api/internal/pkg/claude"
+
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 	dbent "github.com/th3ee9ine/qqq2api/ent"
@@ -380,6 +382,18 @@ func ProvideOpenAICodexVersionSyncService(
 	return svc
 }
 
+// ProvideClaudeCodeVersionSyncService creates and starts ClaudeCodeVersionSyncService.
+// 出站 Claude Code 身份的版本号靠它跟随官方发布，无需为了跟版本而发新版本；面板可关闭。
+func ProvideClaudeCodeVersionSyncService(
+	settingRepo SettingRepository,
+	settingService *SettingService,
+	githubClient GitHubReleaseClient,
+) *ClaudeCodeVersionSyncService {
+	svc := NewClaudeCodeVersionSyncService(settingRepo, settingService, githubClient, claudeCodeVersionSyncInterval)
+	svc.Start()
+	return svc
+}
+
 // ProvideProxyExpiryService creates and starts ProxyExpiryService.
 func ProvideProxyExpiryService(proxyRepo ProxyRepository, runtimeBlocker AccountRuntimeBlocker) *ProxyExpiryService {
 	svc := NewProxyExpiryService(proxyRepo, time.Minute, runtimeBlocker)
@@ -745,9 +759,10 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	SetCodexCanonicalResponsesVersionResolver(func() string {
 		return svc.GetOpenAICodexResponsesVersion(context.Background())
 	})
-	// Prime the account-local device identity switch so auth/control-plane
-	// requests observe the persisted setting before the first gateway request.
 	_, _, _ = svc.GetGatewayForwardingSettings(context.Background())
+	claude.SetCLIVersionResolver(func() string {
+		return svc.GetClaudeCodeClientVersion(context.Background())
+	})
 	return svc
 }
 
@@ -903,6 +918,7 @@ var ProviderSet = wire.NewSet(
 	ProvideTokenRefreshService,
 	ProvideAccountExpiryService,
 	ProvideOpenAICodexVersionSyncService,
+	ProvideClaudeCodeVersionSyncService,
 	ProvideProxyExpiryService,
 	ProvideTimingWheelService,
 	ProvideDashboardAggregationService,

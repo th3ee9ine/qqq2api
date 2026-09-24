@@ -172,11 +172,11 @@ func ContentModerationCategories() []string {
 type ContentModerationConfig struct {
 	Engine   string                         `json:"engine,omitempty"`
 	TypeSafe *ContentModerationEngineConfig `json:"typesafe,omitempty"`
-	Enabled  bool   `json:"enabled"`
-	Mode     string `json:"mode"`
-	BaseURL  string `json:"base_url"`
-	Model    string `json:"model"`
-	Protocol string `json:"protocol"`
+	Enabled  bool                           `json:"enabled"`
+	Mode     string                         `json:"mode"`
+	BaseURL  string                         `json:"base_url"`
+	Model    string                         `json:"model"`
+	Protocol string                         `json:"protocol"`
 	// ProxyID 指定审计请求使用的代理服务器（IP管理-代理服务器），nil 表示直连。
 	ProxyID              *int64                       `json:"proxy_id,omitempty"`
 	APIKey               string                       `json:"api_key,omitempty"`
@@ -211,39 +211,39 @@ type ContentModerationConfig struct {
 type ContentModerationConfigView struct {
 	Engine                         string                                  `json:"engine"`
 	EngineConfigs                  map[string]*ContentModerationConfigView `json:"engine_configs,omitempty"`
-	Enabled                        bool                            `json:"enabled"`
-	Mode                           string                          `json:"mode"`
-	BaseURL                        string                          `json:"base_url"`
-	Model                          string                          `json:"model"`
-	Protocol                       string                          `json:"protocol"`
-	ProxyID                        *int64                          `json:"proxy_id"`
-	APIKeyConfigured               bool                            `json:"api_key_configured"`
-	APIKeyMasked                   string                          `json:"api_key_masked"`
-	APIKeyCount                    int                             `json:"api_key_count"`
-	APIKeyMasks                    []string                        `json:"api_key_masks"`
-	APIKeyStatuses                 []ContentModerationAPIKeyStatus `json:"api_key_statuses"`
-	TimeoutMS                      int                             `json:"timeout_ms"`
-	SampleRate                     int                             `json:"sample_rate"`
-	AllGroups                      bool                            `json:"all_groups"`
-	GroupIDs                       []int64                         `json:"group_ids"`
-	RecordNonHits                  bool                            `json:"record_non_hits"`
-	Thresholds                     map[string]float64              `json:"thresholds"`
-	WorkerCount                    int                             `json:"worker_count"`
-	QueueSize                      int                             `json:"queue_size"`
-	BlockStatus                    int                             `json:"block_status"`
-	BlockMessage                   string                          `json:"block_message"`
-	EmailOnHit                     bool                            `json:"email_on_hit"`
-	AutoBanEnabled                 bool                            `json:"auto_ban_enabled"`
-	BanThreshold                   int                             `json:"ban_threshold"`
-	ViolationWindowHours           int                             `json:"violation_window_hours"`
-	RetryCount                     int                             `json:"retry_count"`
-	HitRetentionDays               int                             `json:"hit_retention_days"`
-	NonHitRetentionDays            int                             `json:"non_hit_retention_days"`
-	PreHashCheckEnabled            bool                            `json:"pre_hash_check_enabled"`
-	BlockedKeywords                []string                        `json:"blocked_keywords"`
-	KeywordBlockingMode            string                          `json:"keyword_blocking_mode"`
-	ModelFilter                    ContentModerationModelFilter    `json:"model_filter"`
-	CyberPolicyExcludeFromBanCount bool                            `json:"cyber_policy_exclude_from_ban_count"`
+	Enabled                        bool                                    `json:"enabled"`
+	Mode                           string                                  `json:"mode"`
+	BaseURL                        string                                  `json:"base_url"`
+	Model                          string                                  `json:"model"`
+	Protocol                       string                                  `json:"protocol"`
+	ProxyID                        *int64                                  `json:"proxy_id"`
+	APIKeyConfigured               bool                                    `json:"api_key_configured"`
+	APIKeyMasked                   string                                  `json:"api_key_masked"`
+	APIKeyCount                    int                                     `json:"api_key_count"`
+	APIKeyMasks                    []string                                `json:"api_key_masks"`
+	APIKeyStatuses                 []ContentModerationAPIKeyStatus         `json:"api_key_statuses"`
+	TimeoutMS                      int                                     `json:"timeout_ms"`
+	SampleRate                     int                                     `json:"sample_rate"`
+	AllGroups                      bool                                    `json:"all_groups"`
+	GroupIDs                       []int64                                 `json:"group_ids"`
+	RecordNonHits                  bool                                    `json:"record_non_hits"`
+	Thresholds                     map[string]float64                      `json:"thresholds"`
+	WorkerCount                    int                                     `json:"worker_count"`
+	QueueSize                      int                                     `json:"queue_size"`
+	BlockStatus                    int                                     `json:"block_status"`
+	BlockMessage                   string                                  `json:"block_message"`
+	EmailOnHit                     bool                                    `json:"email_on_hit"`
+	AutoBanEnabled                 bool                                    `json:"auto_ban_enabled"`
+	BanThreshold                   int                                     `json:"ban_threshold"`
+	ViolationWindowHours           int                                     `json:"violation_window_hours"`
+	RetryCount                     int                                     `json:"retry_count"`
+	HitRetentionDays               int                                     `json:"hit_retention_days"`
+	NonHitRetentionDays            int                                     `json:"non_hit_retention_days"`
+	PreHashCheckEnabled            bool                                    `json:"pre_hash_check_enabled"`
+	BlockedKeywords                []string                                `json:"blocked_keywords"`
+	KeywordBlockingMode            string                                  `json:"keyword_blocking_mode"`
+	ModelFilter                    ContentModerationModelFilter            `json:"model_filter"`
+	CyberPolicyExcludeFromBanCount bool                                    `json:"cyber_policy_exclude_from_ban_count"`
 }
 
 type ContentModerationAPIKeyStatus struct {
@@ -279,11 +279,11 @@ type ContentModerationAPIKeyLoad struct {
 type TestContentModerationAPIKeysInput struct {
 	Engine     string              `json:"engine"`
 	Thresholds *map[string]float64 `json:"thresholds"`
-	APIKeys   []string `json:"api_keys"`
-	BaseURL   string   `json:"base_url"`
-	Model     string   `json:"model"`
-	Protocol  string   `json:"protocol"`
-	TimeoutMS int      `json:"timeout_ms"`
+	APIKeys    []string            `json:"api_keys"`
+	BaseURL    string              `json:"base_url"`
+	Model      string              `json:"model"`
+	Protocol   string              `json:"protocol"`
+	TimeoutMS  int                 `json:"timeout_ms"`
 	// ProxyID nil 表示沿用已保存配置的代理；<=0 表示强制直连测试；>0 表示指定代理测试。
 	ProxyID *int64   `json:"proxy_id"`
 	Prompt  string   `json:"prompt"`
@@ -298,22 +298,22 @@ type TestContentModerationAPIKeysResult struct {
 
 type ContentModerationTestAuditResult struct {
 	EngineMeta      *ContentModerationEngineMeta `json:"engine_meta,omitempty"`
-	Flagged         bool               `json:"flagged"`
-	HighestCategory string             `json:"highest_category"`
-	HighestScore    float64            `json:"highest_score"`
-	CompositeScore  float64            `json:"composite_score"`
-	CategoryScores  map[string]float64 `json:"category_scores"`
-	Thresholds      map[string]float64 `json:"thresholds"`
+	Flagged         bool                         `json:"flagged"`
+	HighestCategory string                       `json:"highest_category"`
+	HighestScore    float64                      `json:"highest_score"`
+	CompositeScore  float64                      `json:"composite_score"`
+	CategoryScores  map[string]float64           `json:"category_scores"`
+	Thresholds      map[string]float64           `json:"thresholds"`
 }
 
 type UpdateContentModerationConfigInput struct {
 	Engine        *string                                       `json:"engine"`
 	EngineConfigs map[string]UpdateContentModerationEngineInput `json:"engine_configs"`
-	Enabled  *bool   `json:"enabled"`
-	Mode     *string `json:"mode"`
-	BaseURL  *string `json:"base_url"`
-	Model    *string `json:"model"`
-	Protocol *string `json:"protocol"`
+	Enabled       *bool                                         `json:"enabled"`
+	Mode          *string                                       `json:"mode"`
+	BaseURL       *string                                       `json:"base_url"`
+	Model         *string                                       `json:"model"`
+	Protocol      *string                                       `json:"protocol"`
 	// ProxyID nil 表示不修改；<=0 表示清除代理（恢复直连）；>0 表示指定代理。
 	ProxyID                        *int64                        `json:"proxy_id"`
 	APIKey                         *string                       `json:"api_key"`
@@ -431,34 +431,34 @@ type ContentModerationDecision struct {
 
 type ContentModerationLog struct {
 	EngineMeta        *ContentModerationEngineMeta `json:"engine_meta,omitempty"`
-	ID                int64              `json:"id"`
-	RequestID         string             `json:"request_id"`
-	UserID            *int64             `json:"-"`
-	UserEmail         string             `json:"-"`
-	APIKeyID          *int64             `json:"api_key_id,omitempty"`
-	APIKeyName        string             `json:"api_key_name"`
-	GroupID           *int64             `json:"group_id,omitempty"`
-	GroupName         string             `json:"group_name"`
-	Endpoint          string             `json:"endpoint"`
-	Provider          string             `json:"provider"`
-	Model             string             `json:"model"`
-	Mode              string             `json:"mode"`
-	Action            string             `json:"action"`
-	Flagged           bool               `json:"flagged"`
-	HighestCategory   string             `json:"highest_category"`
-	HighestScore      float64            `json:"highest_score"`
-	MatchedKeyword    string             `json:"matched_keyword"`
-	CategoryScores    map[string]float64 `json:"category_scores"`
-	ThresholdSnapshot map[string]float64 `json:"threshold_snapshot"`
-	InputExcerpt      string             `json:"input_excerpt"`
-	UpstreamLatencyMS *int               `json:"upstream_latency_ms,omitempty"`
-	Error             string             `json:"error"`
-	ViolationCount    int                `json:"violation_count"`
-	AutoBanned        bool               `json:"-"`
-	EmailSent         bool               `json:"email_sent"`
-	UserStatus        string             `json:"-"`
-	QueueDelayMS      *int               `json:"queue_delay_ms,omitempty"`
-	CreatedAt         time.Time          `json:"created_at"`
+	ID                int64                        `json:"id"`
+	RequestID         string                       `json:"request_id"`
+	UserID            *int64                       `json:"-"`
+	UserEmail         string                       `json:"-"`
+	APIKeyID          *int64                       `json:"api_key_id,omitempty"`
+	APIKeyName        string                       `json:"api_key_name"`
+	GroupID           *int64                       `json:"group_id,omitempty"`
+	GroupName         string                       `json:"group_name"`
+	Endpoint          string                       `json:"endpoint"`
+	Provider          string                       `json:"provider"`
+	Model             string                       `json:"model"`
+	Mode              string                       `json:"mode"`
+	Action            string                       `json:"action"`
+	Flagged           bool                         `json:"flagged"`
+	HighestCategory   string                       `json:"highest_category"`
+	HighestScore      float64                      `json:"highest_score"`
+	MatchedKeyword    string                       `json:"matched_keyword"`
+	CategoryScores    map[string]float64           `json:"category_scores"`
+	ThresholdSnapshot map[string]float64           `json:"threshold_snapshot"`
+	InputExcerpt      string                       `json:"input_excerpt"`
+	UpstreamLatencyMS *int                         `json:"upstream_latency_ms,omitempty"`
+	Error             string                       `json:"error"`
+	ViolationCount    int                          `json:"violation_count"`
+	AutoBanned        bool                         `json:"-"`
+	EmailSent         bool                         `json:"email_sent"`
+	UserStatus        string                       `json:"-"`
+	QueueDelayMS      *int                         `json:"queue_delay_ms,omitempty"`
+	CreatedAt         time.Time                    `json:"created_at"`
 }
 
 type ContentModerationLogFilter struct {
@@ -654,6 +654,9 @@ func (s *ContentModerationService) GetConfig(ctx context.Context) (*ContentModer
 	if err != nil {
 		return nil, err
 	}
+	// Status reports active-engine counters and key namespaces, so project the
+	// selected profile before reading the flat runtime fields.
+	cfg = cfg.effectiveEngine(cfg.Engine)
 	return s.engineConfigView(cfg), nil
 }
 
@@ -1465,6 +1468,7 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 	if err != nil {
 		return nil, err
 	}
+	cfg = cfg.effectiveEngine(cfg.Engine)
 	riskEnabled := s.isRiskControlEnabled(ctx)
 	active := int(s.asyncActive.Load())
 	if active < 0 {
@@ -1529,7 +1533,7 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 		PreBlockAPIKeyAvailableCount: s.preBlockAPIKeyAvailableCount(cfg.apiKeys()),
 		PreBlockAPIKeyTotalCalls:     s.preBlockAPIKeyTotalCalls(cfg.apiKeys()),
 		PreBlockAPIKeyLoads:          s.preBlockAPIKeyLoads(cfg.apiKeys()),
-		APIKeyStatuses:               s.apiKeyStatuses(cfg.apiKeys()),
+		APIKeyStatuses:               s.apiKeyStatuses(cfg.apiKeys(), cfg.Engine),
 		FlaggedHashCount:             flaggedHashCount,
 		LastCleanupAt:                lastCleanupAt,
 		LastCleanupDeletedHit:        s.lastCleanupDeletedHit.Load(),
@@ -1678,10 +1682,14 @@ func (s *ContentModerationService) refreshRuntimeSnapshot(ctx context.Context) (
 	if err != nil {
 		return nil, err
 	}
+	// Runtime callers consume the active engine through the legacy flat fields
+	// (apiKeys, BaseURL, thresholds, and so on). Keep the persisted profiles
+	// intact, but project the selected profile into the immutable runtime copy.
+	runtimeConfig := cfg.effectiveEngine(cfg.Engine)
 	snapshot := &contentModerationRuntimeSnapshot{
 		riskControlEnabled: values[SettingKeyRiskControlEnabled] == "true",
-		config:             cfg,
-		keywordMatcher:     newContentModerationKeywordMatcher(cfg.BlockedKeywords),
+		config:             runtimeConfig,
+		keywordMatcher:     newContentModerationKeywordMatcher(runtimeConfig.BlockedKeywords),
 		configDigest:       configDigest,
 		loadedAt:           time.Now(),
 	}
@@ -1700,8 +1708,8 @@ func (s *ContentModerationService) replaceRuntimeConfig(cfg *ContentModerationCo
 	if !hasSnapshot {
 		return
 	}
-	config := cloneContentModerationConfig(cfg)
-	keywordMatcher := newContentModerationKeywordMatcher(cfg.BlockedKeywords)
+	config := cfg.effectiveEngine(cfg.Engine)
+	keywordMatcher := newContentModerationKeywordMatcher(config.BlockedKeywords)
 	configDigest := sha256.Sum256(raw)
 
 	s.runtimeRefreshMu.Lock()
@@ -1791,7 +1799,7 @@ func (s *ContentModerationService) callModeration(ctx context.Context, cfg *Cont
 			break
 		}
 		if trackLoad {
-				s.beginModerationAPIKeyCall(key, cfg.Engine)
+			s.beginModerationAPIKeyCall(key, cfg.Engine)
 		}
 		start := time.Now()
 		httpStatus := 0
@@ -2525,7 +2533,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		apiKeyMasked = masks[0]
 	}
 	return &ContentModerationConfigView{
-		Engine:                          cfg.Engine,
+		Engine:                         cfg.Engine,
 		Enabled:                        cfg.Enabled,
 		Mode:                           cfg.Mode,
 		BaseURL:                        cfg.BaseURL,
@@ -2536,7 +2544,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		APIKeyMasked:                   apiKeyMasked,
 		APIKeyCount:                    len(keys),
 		APIKeyMasks:                    masks,
-		APIKeyStatuses:                 s.apiKeyStatuses(keys),
+		APIKeyStatuses:                 s.apiKeyStatuses(keys, cfg.Engine),
 		TimeoutMS:                      cfg.TimeoutMS,
 		SampleRate:                     cfg.SampleRate,
 		AllGroups:                      cfg.AllGroups,
@@ -2768,6 +2776,7 @@ func buildContentModerationTestAuditResult(result *moderationAPIResult, threshol
 	flagged, highestCategory, highestScore := evaluateModerationScores(scores, thresholdSnapshot)
 	compositeScore := highestScore
 	return &ContentModerationTestAuditResult{
+		EngineMeta:      result.EngineMeta,
 		Flagged:         flagged,
 		HighestCategory: highestCategory,
 		HighestScore:    highestScore,
@@ -2797,9 +2806,9 @@ type moderationAPIResponse struct {
 }
 
 type moderationAPIResult struct {
-	EngineMeta      *ContentModerationEngineMeta `json:"engine_meta,omitempty"`
-	Flagged        bool               `json:"flagged"`
-	CategoryScores map[string]float64 `json:"category_scores"`
+	EngineMeta     *ContentModerationEngineMeta `json:"engine_meta,omitempty"`
+	Flagged        bool                         `json:"flagged"`
+	CategoryScores map[string]float64           `json:"category_scores"`
 }
 
 func evaluateModerationScores(scores map[string]float64, thresholds map[string]float64) (bool, string, float64) {
