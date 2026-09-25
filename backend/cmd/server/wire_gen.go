@@ -219,13 +219,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogRepository := repository.NewAuditLogRepository(db)
 	auditLogService := service.ProvideAuditLogService(auditLogRepository, settingService)
 	auditLogHandler := admin.NewAuditLogHandler(auditLogService, totpService)
-	backupObjectStoreFactory := repository.NewS3BackupStoreFactory()
-	dbDumper := repository.NewPgDumper(configConfig, db)
-	backupService := service.ProvideBackupService(settingRepository, configConfig, secretEncryptor, backupObjectStoreFactory, dbDumper, leaderLockCache, db)
-	backupHandler := admin.NewBackupHandler(backupService, userService, imageStorageSettingService)
 	upstreamBillingProbeService := service.ProvideUpstreamBillingProbeService(accountRepository, accountTestService, settingService, leaderLockCache, db)
 	openAISessionCleanupService := service.ProvideOpenAISessionCleanupService(accountRepository, openAIQuotaService, leaderLockCache, settingService)
-	adminHandlers := handler.ProvideAdminHandlersWithSessionCleanupAndBackup(grokOAuthHandler, dashboardHandler, groupHandler, modelPricingHandler, accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler, openAIOAuthHandler, proxyHandler, settingHandler, opsHandler, systemHandler, adminUsageHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, contentModerationHandler, promptAdminHandler, auditLogHandler, backupHandler, upstreamBillingProbeService, openAISessionCleanupService)
+	adminHandlers := handler.ProvideAdminHandlersWithSessionCleanup(grokOAuthHandler, dashboardHandler, groupHandler, modelPricingHandler, accountHandler, accountAdminHandler, imageStorageHandler, oAuthHandler, openAIOAuthHandler, proxyHandler, settingHandler, opsHandler, systemHandler, adminUsageHandler, errorPassthroughHandler, tlsFingerprintProfileHandler, pluginHandler, adminAPIKeyHandler, scheduledTestHandler, contentModerationHandler, promptAdminHandler, auditLogHandler, upstreamBillingProbeService, openAISessionCleanupService)
 	usageRecordWorkerPool := service.NewUsageRecordWorkerPool(configConfig)
 	userMsgQueueCache := repository.NewUserMsgQueueCache(redisClient)
 	userMessageQueueService := service.ProvideUserMessageQueueService(userMsgQueueCache, rpmCache, configConfig)
@@ -262,7 +258,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	claudeCodeVersionSyncService := service.ProvideClaudeCodeVersionSyncService(settingRepository, settingService, gitHubReleaseClient)
 	proxyExpiryService := service.ProvideProxyExpiryService(proxyRepository, openAIGatewayService)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig)
-	v := provideCleanupWithSessionCleanupAndBackup(grokOAuthService, client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, oAuthService, openAIOAuthService, openAIGatewayService, scheduledTestRunnerService, upstreamBillingProbeService, auditLogService, openAIQuotaAutoResetService, openAISessionCleanupService, backupService, promptService, pluginManager)
+	v := provideCleanupWithSessionCleanup(grokOAuthService, client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, oAuthService, openAIOAuthService, openAIGatewayService, scheduledTestRunnerService, upstreamBillingProbeService, auditLogService, openAIQuotaAutoResetService, openAISessionCleanupService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -334,11 +330,10 @@ func provideCleanup(
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
-	backupSvc *service.BackupService,
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
 ) func() {
-	return provideCleanupWithSessionCleanupAndBackup(
+	return provideCleanupWithSessionCleanup(
 		nil,
 		entClient,
 		rdb,
@@ -372,14 +367,11 @@ func provideCleanup(
 		auditLog,
 		openAIAutoReset,
 		nil,
-		backupSvc,
 		promptAudit,
 		pluginManager,
 	)
 }
 
-// provideCleanupWithSessionCleanup preserves the pre-backup helper signature
-// for package-local tests and integrations.
 func provideCleanupWithSessionCleanup(
 	grokOAuth *service.GrokOAuthService,
 	entClient *ent.Client,
@@ -417,57 +409,6 @@ func provideCleanupWithSessionCleanup(
 	promptAudit *securityaudit.PromptService,
 	pluginManager *service.PluginManager,
 ) func() {
-	return provideCleanupWithSessionCleanupAndBackup(
-		grokOAuth, entClient, rdb, opsMetricsCollector, opsAggregation,
-		opsAlertEvaluator, opsCleanup, opsScheduledReport, opsSystemLogSink,
-		opsService, opsIngressReject, apiKeyService, authCacheInvalidationWorker,
-		schedulerSnapshot, tokenRefresh, accountExpiry, codexVersionSync,
-		claudeCodeVersionSync, proxyExpiry, usageCleanup, idempotencyCleanup,
-		pricing, emailQueue, billingCache, usageRecordWorkerPool, oauth,
-		openaiOAuth, openAIGateway, scheduledTestRunner, upstreamBillingProbe,
-		auditLog, openAIAutoReset, openAISessionCleanup, nil, promptAudit,
-		pluginManager,
-	)
-}
-
-func provideCleanupWithSessionCleanupAndBackup(
-	grokOAuth *service.GrokOAuthService,
-	entClient *ent.Client,
-	rdb *redis.Client,
-	opsMetricsCollector *service.OpsMetricsCollector,
-	opsAggregation *service.OpsAggregationService,
-	opsAlertEvaluator *service.OpsAlertEvaluatorService,
-	opsCleanup *service.OpsCleanupService,
-	opsScheduledReport *service.OpsScheduledReportService,
-	opsSystemLogSink *service.OpsSystemLogSink,
-	opsService *service.OpsService,
-	opsIngressReject *service.OpsIngressRejectAggregator,
-	apiKeyService *service.APIKeyService,
-	authCacheInvalidationWorker *service.AuthCacheInvalidationWorker,
-	schedulerSnapshot *service.SchedulerSnapshotService,
-	tokenRefresh *service.TokenRefreshService,
-	accountExpiry *service.AccountExpiryService,
-	codexVersionSync *service.OpenAICodexVersionSyncService,
-	claudeCodeVersionSync *service.ClaudeCodeVersionSyncService,
-	proxyExpiry *service.ProxyExpiryService,
-	usageCleanup *service.UsageCleanupService,
-	idempotencyCleanup *service.IdempotencyCleanupService,
-	pricing *service.PricingService,
-	emailQueue *service.EmailQueueService,
-	billingCache *service.BillingCacheService,
-	usageRecordWorkerPool *service.UsageRecordWorkerPool,
-	oauth *service.OAuthService,
-	openaiOAuth *service.OpenAIOAuthService,
-	openAIGateway *service.OpenAIGatewayService,
-	scheduledTestRunner *service.ScheduledTestRunnerService,
-	upstreamBillingProbe *service.UpstreamBillingProbeService,
-	auditLog *service.AuditLogService,
-	openAIAutoReset *service.OpenAIQuotaAutoResetService,
-	openAISessionCleanup *service.OpenAISessionCleanupService,
-	backupSvc *service.BackupService,
-	promptAudit *securityaudit.PromptService,
-	pluginManager *service.PluginManager,
-) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -499,12 +440,6 @@ func provideCleanupWithSessionCleanupAndBackup(
 			{"OpenAISessionCleanupService", func() error {
 				if openAISessionCleanup != nil {
 					openAISessionCleanup.Stop()
-				}
-				return nil
-			}},
-			{"BackupService", func() error {
-				if backupSvc != nil {
-					backupSvc.Stop()
 				}
 				return nil
 			}},

@@ -61,7 +61,7 @@ func TestAdminRoutesRetiredPlatformEndpointsAreNotRegistered(t *testing.T) {
 		"GET /api/v1/admin/backups/:id/download-url",
 		"POST /api/v1/admin/backups/:id/restore",
 	} {
-		require.True(t, registered[route], route)
+		require.False(t, registered[route], route)
 	}
 
 	for _, route := range []string{

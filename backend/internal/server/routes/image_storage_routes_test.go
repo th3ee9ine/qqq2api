@@ -45,9 +45,9 @@ func TestAdminImageStorageRoutesAreStandaloneAndUpdateRequiresStepUp(t *testing.
 	require.True(t, registered["GET /api/v1/admin/settings/image-storage"])
 	require.True(t, registered["PUT /api/v1/admin/settings/image-storage"])
 	require.True(t, registered["POST /api/v1/admin/settings/image-storage/test"])
-	require.True(t, registered["GET /api/v1/admin/backups/image-storage"])
-	require.True(t, registered["PUT /api/v1/admin/backups/image-storage"])
-	require.True(t, registered["POST /api/v1/admin/backups/image-storage/test"])
+	require.False(t, registered["GET /api/v1/admin/backups/image-storage"])
+	require.False(t, registered["PUT /api/v1/admin/backups/image-storage"])
+	require.False(t, registered["POST /api/v1/admin/backups/image-storage/test"])
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings/image-storage", nil)

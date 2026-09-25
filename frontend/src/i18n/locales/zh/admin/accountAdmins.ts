@@ -8,7 +8,7 @@ export default {
     identity: '身份',
     role: '角色',
     email: '邮箱',
-    emailPlaceholder: 'admin@example.com',
+    emailPlaceholder: "admin{'@'}example.com",
     username: '用户名',
     usernamePlaceholder: '可选的显示名称',
     notes: '备注',

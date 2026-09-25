@@ -17,7 +17,7 @@ import (
 // ---------------------------------------------------------------------------
 
 type errSettingRepo struct {
-	mockSettingRepo // embed the existing mock from backup_service_test.go
+	mockSettingRepo // embed the shared mock from setting_repo_mock_test.go
 	readErr         error
 }
 

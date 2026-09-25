@@ -8,7 +8,7 @@ export default {
     identity: 'Identity',
     role: 'Role',
     email: 'Email',
-    emailPlaceholder: 'admin@example.com',
+    emailPlaceholder: "admin{'@'}example.com",
     username: 'Username',
     usernamePlaceholder: 'Optional display name',
     notes: 'Notes',

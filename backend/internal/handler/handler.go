@@ -29,7 +29,6 @@ type AdminHandlers struct {
 	ContentModeration     *admin.ContentModerationHandler
 	PromptAudit           *securityaudit.PromptAdminHandler
 	AuditLog              *admin.AuditLogHandler
-	Backup                *admin.BackupHandler
 }
 
 // Handlers contains all HTTP handlers
