@@ -1696,7 +1696,7 @@ func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *
 		return nil
 	}
 	normalized := normalizeKnownOpenAICodexModel(model)
-	usesCacheWritePremium := isOpenAIGPT56Model(normalized) || openai.IsGPT6SolOrLunaModelSpelling(normalized)
+	usesCacheWritePremium := isOpenAIGPT56Model(normalized) || openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized)
 	needsMaxReasoningEffortMultiplier := isClaudeFable51Model(model) && pricing.MaxReasoningEffortMultiplier == nil
 	needsCacheCreationPolicy := usesCacheWritePremium && !pricing.CacheCreationPriceExplicit && (pricing.CacheCreationPricePerToken <= 0 ||
 		(pricing.InputPricePerTokenPriority > 0 && pricing.CacheCreationPricePerTokenPriority <= 0))

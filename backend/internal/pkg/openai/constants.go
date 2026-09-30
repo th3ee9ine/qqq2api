@@ -81,8 +81,9 @@ var instructionsGPT55 string
 //go:embed instructions_gpt6_astra.txt
 var instructionsGPT6Astra string
 
-// CodexGPT61SolMetadata is the complete official descriptor from openai/codex
-// b1e72963c3b71a9265a551e54beff078384efed9, codex-rs/models-manager/models.json.
+// CodexGPT61SolMetadata is the GPT-6.1 Sol descriptor from openai/codex
+// b1e72963c3b71a9265a551e54beff078384efed9, with context limits aligned to
+// the current official API model page.
 //
 //go:embed codex_gpt61_sol.json
 var CodexGPT61SolMetadata []byte

@@ -3715,8 +3715,20 @@ func TestGPT61SolOfflineCodexCatalog(t *testing.T) {
 	require.Equal(t, "GPT-6.1-Sol", model["display_name"])
 	require.Equal(t, "low", model["default_reasoning_level"])
 	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, effortsFromManifestModel(t, model))
-	require.Equal(t, float64(272_000), model["context_window"])
-	require.Equal(t, float64(872_000), model["max_context_window"])
+	require.Equal(t, float64(1_050_000), model["context_window"])
+	require.Equal(t, float64(922_000), model["max_context_window"])
 	require.Equal(t, "xhigh", model["multi_agent_reasoning_effort"])
 	require.Equal(t, []any{"text", "image"}, model["input_modalities"])
+}
+
+func TestGPT61SolAPIKeyCatalogUsesFullResponses(t *testing.T) {
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Credentials: map[string]any{"base_url": "https://api.openai.com"}}
+	body, err := completeAPIKeyCodexModelsManifestMetadata([]byte(`{"models":[{"slug":"gpt-6.1-sol"}]}`), true, account)
+	require.NoError(t, err)
+	var catalog struct {
+		Models []map[string]any `json:"models"`
+	}
+	require.NoError(t, json.Unmarshal(body, &catalog))
+	require.Equal(t, false, catalog.Models[0]["use_responses_lite"])
+	require.Equal(t, "low", catalog.Models[0]["default_reasoning_level"])
 }

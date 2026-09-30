@@ -32,6 +32,19 @@ func applyOpenAICompatModelNormalization(req *apicompat.AnthropicRequest) {
 	if originalModel == "" {
 		return
 	}
+	if openai.IsGPT61SolModelSpelling(originalModel) {
+		canonical := openai.CanonicalizeOpenAIModelAliasSpelling(originalModel)
+		if effort, ok := strings.CutPrefix(canonical, "gpt-6.1-sol-"); ok && effort != "openai-compact" {
+			req.Model = "gpt-6.1-sol"
+			if req.OutputConfig == nil {
+				req.OutputConfig = &apicompat.AnthropicOutputConfig{}
+			}
+			if req.OutputConfig.Effort == "" {
+				req.OutputConfig.Effort = effort
+			}
+			return
+		}
+	}
 
 	normalizedModel, derivedEffort, hasReasoningSuffix := splitOpenAICompatReasoningModel(originalModel)
 	if hasReasoningSuffix && normalizedModel != "" {
