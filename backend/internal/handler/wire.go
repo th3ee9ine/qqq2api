@@ -42,11 +42,13 @@ func ProvideDebugAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	gateway *service.OpenAIGatewayService,
+	claudeResetCredits *service.ClaudeResetCreditService,
 ) *admin.AccountHandler {
 	h := admin.ProvideAccountHandler(grokOAuthService, grokQuotaService, cfg, adminService, oauthService, openaiOAuthService,
 		rateLimitService, accountUsageService, accountTestService, concurrencyService,
 		crsSyncService, sessionLimitCache, rpmCache, tokenCacheInvalidator)
 	h.SetDebugWorkbenchService(service.NewDebugWorkbenchService(gateway, adminService))
+	h.SetClaudeResetCreditService(claudeResetCredits)
 	return h
 }
 
@@ -262,6 +264,7 @@ func ProvideOpenAIGatewayHandler(
 	opsService *service.OpsService,
 	cfg *config.Config,
 	coordinator *securityaudit.Coordinator,
+	compositeResolver *service.CompositeRouteResolver,
 ) *OpenAIGatewayHandler {
 	// Host account-directory access is capability-gated by PluginManager. Wire it
 	// alongside the existing transport hook before the manager starts runtimes.
@@ -271,6 +274,7 @@ func ProvideOpenAIGatewayHandler(
 	gatewayService.SetPluginManager(pluginManager)
 	h := NewOpenAIGatewayHandler(gatewayService, concurrencyService, billingCacheService, apiKeyService,
 		usageRecordWorkerPool, errorPassthroughService, contentModerationService, opsService, cfg)
+	h.compositeResolver = compositeResolver
 	h.securityAuditCoordinator = coordinator
 	h.grokMediaEligibilityProber = grokQuotaService
 	return h

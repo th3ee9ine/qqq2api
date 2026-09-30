@@ -36,6 +36,30 @@ func CyberSessionExplicitBlockKey(apiKeyID int64, c *gin.Context, body []byte) s
 	return cyberSessionExplicitBlockKeyForIdentity(apiKeyID, identity)
 }
 
+// CyberSessionTranscriptBlockKeys returns the transcript-derived keys used by
+// older callers when inspecting the cyber block store. The customized gateway
+// only writes and checks explicit conversation identities, so these keys are
+// intentionally not part of the active request gate; keeping the helper here
+// preserves the service API for diagnostics and compatibility tests.
+func CyberSessionTranscriptBlockKeys(apiKeyID int64, body []byte) []string {
+	derived := deriveOpenAICyberTranscriptBlockKeys(apiKeyID, body)
+	if len(derived.lookupKeys) == 0 {
+		return nil
+	}
+	keys := []string{derived.lookupKeys[len(derived.lookupKeys)-1]}
+	if derived.preLatestUserKey != "" && derived.preLatestUserKey != keys[0] {
+		keys = append(keys, derived.preLatestUserKey)
+	}
+	return keys
+}
+
+// CyberSessionTranscriptLookupKeys exposes all cumulative transcript keys for
+// diagnostic callers. Request admission does not use these broad keys in the
+// customized build.
+func CyberSessionTranscriptLookupKeys(apiKeyID int64, body []byte) []string {
+	return deriveOpenAICyberTranscriptBlockKeys(apiKeyID, body).lookupKeys
+}
+
 // Typed keys deliberately do not read older untyped/cache-derived digests: their
 // identity namespace cannot be recovered safely, so those entries expire by TTL.
 func cyberSessionExplicitBlockKeyForIdentity(apiKeyID int64, identity openAIClientSessionIdentity) string {

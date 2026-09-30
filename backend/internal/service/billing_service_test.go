@@ -1803,19 +1803,49 @@ func TestGetModelPricingWithChannel_UnknownModelReturnsError(t *testing.T) {
 	require.Contains(t, err.Error(), "pricing not found")
 }
 
-func TestGetModelPricingWithChannel_NilImageOutputPriceZerosAndMarksExplicit(t *testing.T) {
-	svc := newTestBillingService()
+func TestGetModelPricingWithChannel_NilImagePricesInheritCatalog(t *testing.T) {
+	svc := NewBillingService(&config.Config{}, newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
+		"gpt-image-2": {
+			Mode:                    "image_generation",
+			InputCostPerToken:       5e-6,
+			OutputCostPerToken:      10e-6,
+			InputCostPerImageToken:  8e-6,
+			OutputCostPerImageToken: 30e-6,
+		},
+	}))
 
 	chPricing := &ChannelModelPricing{
-		InputPrice:  testPtrFloat64(10e-6),
-		OutputPrice: testPtrFloat64(20e-6),
-		// ImageOutputPrice intentionally nil
+		InputPrice:  testPtrFloat64(6e-6),
+		OutputPrice: testPtrFloat64(12e-6),
+		// ImageInputPrice / ImageOutputPrice intentionally nil
 	}
-	pricing, err := svc.GetModelPricingWithChannel("claude-sonnet-4", chPricing)
+	pricing, err := svc.GetModelPricingWithChannel("gpt-image-2", chPricing)
 	require.NoError(t, err)
 
+	require.InDelta(t, 6e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 30e-6, pricing.ImageOutputPricePerToken, 1e-12)
+	require.False(t, pricing.ImageOutputPriceExplicit)
+	require.InDelta(t, 8e-6, pricing.ImageInputPricePerToken, 1e-12)
+}
+
+func TestGetModelPricingWithChannel_ExplicitImagePricesOverrideCatalog(t *testing.T) {
+	svc := NewBillingService(&config.Config{}, newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
+		"gpt-image-2": {
+			Mode:                    "image_generation",
+			InputCostPerToken:       5e-6,
+			InputCostPerImageToken:  8e-6,
+			OutputCostPerImageToken: 30e-6,
+		},
+	}))
+
+	pricing, err := svc.GetModelPricingWithChannel("gpt-image-2", &ChannelModelPricing{
+		ImageInputPrice:  testPtrFloat64(9e-6),
+		ImageOutputPrice: testPtrFloat64(0),
+	})
+	require.NoError(t, err)
 	require.Equal(t, 0.0, pricing.ImageOutputPricePerToken)
-	require.True(t, pricing.ImageOutputPriceExplicit)
+	require.True(t, pricing.ImageOutputPriceExplicit, "显式 0 仍表示图片输出免费")
+	require.InDelta(t, 9e-6, pricing.ImageInputPricePerToken, 1e-12)
 }
 
 func TestComputeTokenBreakdown_ExplicitZeroImagePrice_NoFallback(t *testing.T) {
@@ -1878,5 +1908,76 @@ func TestGetModelPricing_Grok47OfficialFallback(t *testing.T) {
 			require.InDelta(t, 2.0, pricing.LongContextOutputMultiplier, 1e-12)
 			require.False(t, pricing.SupportsCacheBreakdown)
 		})
+	}
+}
+
+func TestAstraUltrafastPricingUsesSixTimesStandard(t *testing.T) {
+	data, err := os.ReadFile("../../resources/model-pricing/model_prices_and_context_window.json")
+	require.NoError(t, err)
+	catalog := &PricingService{}
+	catalog.pricingData, err = catalog.parsePricingData(data)
+	require.NoError(t, err)
+	for _, svc := range []*BillingService{newTestBillingService(), NewBillingService(&config.Config{}, &PricingService{}), NewBillingService(&config.Config{}, catalog)} {
+		for _, model := range []string{"gpt-6-astra", "gpt-6", "openai/gpt-6-astra"} {
+			for _, n := range []int{271999, 272000, 272001} {
+				tokens := UsageTokens{InputTokens: n - 3000, CacheReadTokens: 2000, CacheCreationTokens: 1000, OutputTokens: 500}
+				cost, err := svc.CalculateCostWithServiceTier(model, tokens, 1, "ultrafast")
+				require.NoError(t, err)
+				im, om := 1.0, 1.0
+				if n > 272000 {
+					im, om = 2, 1.5
+				}
+				require.InDelta(t, float64(n-3000)*60e-6*im, cost.InputCost, 1e-10)
+				require.InDelta(t, 2000*6e-6*im, cost.CacheReadCost, 1e-10)
+				require.InDelta(t, 1000*75e-6*im, cost.CacheCreationCost, 1e-10)
+				require.InDelta(t, 500*300e-6*om, cost.OutputCost, 1e-10)
+			}
+		}
+		for _, model := range []string{
+			"claude-sonnet-5-5",
+			"anthropic/claude-sonnet-5.5",
+			"us.anthropic.claude-sonnet-5-5",
+		} {
+			t.Run(source+"/"+model, func(t *testing.T) {
+				tokens := UsageTokens{
+					InputTokens: 100_000, OutputTokens: 500,
+					CacheReadTokens: 1000, CacheCreationTokens: 1000,
+					CacheCreation5mTokens: 400, CacheCreation1hTokens: 600,
+				}
+				cost, err := svc.CalculateCost(model, tokens, 1)
+				require.NoError(t, err)
+				require.InDelta(t, 100_000*2e-6, cost.InputCost, 1e-10)
+				require.InDelta(t, 400*2.5e-6+600*4e-6, cost.CacheCreationCost, 1e-10)
+				require.InDelta(t, 1000*0.2e-6, cost.CacheReadCost, 1e-10)
+				require.InDelta(t, 500*10e-6, cost.OutputCost, 1e-10)
+				require.False(t, cost.LongContextBillingApplied)
+			})
+		}
+	}
+	svc := newTestBillingService()
+	for _, custom := range []float64{0, 1e-6} {
+		fast := 3.0
+		p, err := svc.GetModelPricingWithChannel("gpt-6-astra", &ChannelModelPricing{InputPrice: &custom, OutputPrice: &custom, CacheWritePrice: &custom, CacheReadPrice: &custom, FastMultiplier: &fast})
+		require.NoError(t, err)
+		require.Equal(t, 6.0, configuredServiceTierMultiplier("ultrafast", p))
+		require.Equal(t, 3.0, configuredServiceTierMultiplier("priority", p))
+		cost := svc.computeTokenBreakdown(p, UsageTokens{InputTokens: 1000, OutputTokens: 1000, CacheReadTokens: 1000, CacheCreationTokens: 1000}, 1, "ultrafast", false)
+		require.InDelta(t, custom*24000, cost.TotalCost, 1e-10)
+	}
+	p, err := svc.GetModelPricing("gpt-6-sol")
+	require.NoError(t, err)
+	require.Equal(t, 2.0, configuredServiceTierMultiplier("ultrafast", p))
+}
+
+func TestGPT61SolExplicitZeroCacheWriteAcrossTiers(t *testing.T) {
+	pricing := &PricingService{}
+	var err error
+	pricing.pricingData, err = pricing.parsePricingData([]byte(`{"gpt-6.1-sol":{"litellm_provider":"openai","input_cost_per_token":0.000002,"output_cost_per_token":0.00001,"input_cost_per_token_flex":0.000001,"cache_creation_input_token_cost":0,"cache_creation_input_token_cost_priority":0.000005}}`))
+	require.NoError(t, err)
+	svc := NewBillingService(&config.Config{}, pricing)
+	for _, tier := range []string{"", "fast", "priority", "flex"} {
+		cost, err := svc.CalculateCostWithServiceTier("openai/gpt-6.1-sol-max", UsageTokens{CacheCreationTokens: 300000}, 1, tier)
+		require.NoError(t, err)
+		require.Zero(t, cost.CacheCreationCost)
 	}
 }

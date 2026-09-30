@@ -1,6 +1,7 @@
 import type { GroupPlatform } from '@/types'
 
 export const OPENAI_CC_SWITCH_CODEX_MODEL = 'gpt-5.5'
+export const GROK_CC_SWITCH_MODEL = 'grok-4.5'
 
 export type CcSwitchClientType = 'claude'
 
@@ -19,6 +20,37 @@ export interface CcSwitchImportDeeplinkInput {
   usageScript: string
 }
 
+/**
+ * Balance query CC Switch runs against an imported provider. The client can
+ * store either a root URL or one ending in `/v1`, so normalize both forms
+ * before appending the usage endpoint.
+ */
+export const CC_SWITCH_USAGE_SCRIPT = `({
+    request: {
+      url: "{{baseUrl}}".replace(/\\/+$/, "").replace(/\\/v1$/, "") + "/v1/usage",
+      method: "GET",
+      headers: { "Authorization": "Bearer {{apiKey}}" }
+    },
+    extractor: function(response) {
+      const remaining = response?.remaining ?? response?.quota?.remaining ?? response?.balance;
+      const unit = response?.unit ?? response?.quota?.unit ?? "USD";
+      return {
+        isValid: response?.is_active ?? response?.isValid ?? true,
+        remaining,
+        unit
+      };
+    }
+  })`
+
+function withV1Endpoint(baseUrl: string): string {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, '')
+  return normalizedBaseUrl.endsWith('/v1') ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`
+}
+
+function withoutTrailingSlashes(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '')
+}
+
 export function resolveCcSwitchImportConfig(
   platform: GroupPlatform | undefined | null,
   _clientType: CcSwitchClientType,
@@ -28,8 +60,15 @@ export function resolveCcSwitchImportConfig(
     case 'openai':
       return {
         app: 'codex',
-        endpoint: baseUrl,
+        // CC Switch's Codex provider appends the OpenAI-compatible path.
+        endpoint: withoutTrailingSlashes(baseUrl),
         model: OPENAI_CC_SWITCH_CODEX_MODEL
+      }
+    case 'grok':
+      return {
+        app: 'grokbuild',
+        endpoint: withV1Endpoint(baseUrl),
+        model: GROK_CC_SWITCH_MODEL
       }
     case 'anthropic':
     case 'composite':

@@ -58,6 +58,7 @@ func TestGeminiModelAllowlist_DisabledPreservesNativeResponse(t *testing.T) {
 	require.False(t, dropped)
 	require.Equal(t, body, filtered)
 }
+
 // TestGeminiV1BetaHandler_PlatformRoutingInvariant 文档化并验证 Handler 层的平台路由逻辑不变量
 // 该测试确保 gemini 和 antigravity 平台的路由逻辑符合预期
 func TestGeminiV1BetaHandler_PlatformRoutingInvariant(t *testing.T) {

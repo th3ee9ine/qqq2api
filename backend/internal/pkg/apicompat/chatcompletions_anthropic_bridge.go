@@ -99,13 +99,9 @@ func AnthropicToChatCompletionsRequest(req *AnthropicRequest) (*ChatCompletionsR
 		}
 	}
 
-	// Reasoning effort: output_config.effort maps 1:1, with max→xhigh for legacy
-	// models. thinking.type itself is ignored, matching the Responses bridge.
-	effort := "medium"
-	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
-		effort = req.OutputConfig.Effort
-	}
-	out.ReasoningEffort = mapAnthropicEffortToResponsesForModel(req.Model, effort)
+	// Match the Responses bridge, including an explicit thinking disable and
+	// GPT-6.1 Sol's native max spelling.
+	out.ReasoningEffort = anthropicReasoningEffort(req)
 
 	parallelToolCalls := true
 	out.ParallelToolCalls = &parallelToolCalls

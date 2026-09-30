@@ -1081,6 +1081,7 @@
       :api-key="selectedKey?.key || ''"
       :base-url="publicSettings?.api_base_url || ''"
       :platform="selectedKey?.group?.platform || null"
+      :claude-code-only="selectedKey?.group?.claude_code_only || false"
       :allow-messages-dispatch="selectedKey?.group?.allow_messages_dispatch || false"
       @close="closeUseKeyModal"
     />
@@ -1186,7 +1187,7 @@ import { maskApiKey } from '@/utils/maskApiKey'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import { platformBadgeLightClass } from '@/utils/platformColors'
 import { KEY_GROUP_PROVIDERS, KEY_GROUP_PROVIDER_ICONS, getKeyGroupProvider, type KeyGroupProvider } from '@/utils/keyGroupProviders'
-import { buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
+import { CC_SWITCH_USAGE_SCRIPT, buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
 
 // Helper to format date for datetime-local input
 const formatDateTimeLocal = (isoDate: string): string => {
@@ -1966,22 +1967,7 @@ const executeCcsImport = (row: ApiKey) => {
   const baseUrl = publicSettings.value?.api_base_url || window.location.origin
   const platform = row.group?.platform || 'anthropic'
 
-  const usageScript = `({
-    request: {
-      url: "{{baseUrl}}/v1/usage",
-      method: "GET",
-      headers: { "Authorization": "Bearer {{apiKey}}" }
-    },
-    extractor: function(response) {
-      const remaining = response?.remaining ?? response?.quota?.remaining ?? response?.balance;
-      const unit = response?.unit ?? response?.quota?.unit ?? "USD";
-      return {
-        isValid: response?.is_active ?? response?.isValid ?? true,
-        remaining,
-        unit
-      };
-    }
-  })`
+  const usageScript = CC_SWITCH_USAGE_SCRIPT
   const providerName = (publicSettings.value?.site_name || 'QQQ2API').trim() || 'QQQ2API'
   const deeplink = buildCcSwitchImportDeeplink({
     baseUrl,

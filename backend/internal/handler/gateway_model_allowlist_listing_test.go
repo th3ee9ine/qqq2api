@@ -9,9 +9,9 @@ import (
 
 	"github.com/th3ee9ine/qqq2api/internal/service"
 
-	middleware2 "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	middleware2 "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 )
 
 // 通配条目在 /v1/models 中展开为候选来源中所有匹配项，保持来源顺序。

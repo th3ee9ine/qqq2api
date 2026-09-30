@@ -193,6 +193,10 @@ func (s *OpenAIGatewayService) buildNativeAnthropicUpstreamRequest(
 
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
+	// Claude Sonnet 5.5 toolsets are incompatible with the legacy fine-grained
+	// tool streaming beta. Apply the same capability filter used by the native
+	// Anthropic gateway after account overrides so the final wire header is safe.
+	filterSonnet55ToolsetBetaHeader(req.Header, body, gjson.GetBytes(body, "model").String())
 
 	return req, body, nil
 }

@@ -6,9 +6,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/claude"
-	"github.com/stretchr/testify/require"
 )
 
 func TestGetClaudeCodeClientVersionPriority(t *testing.T) {

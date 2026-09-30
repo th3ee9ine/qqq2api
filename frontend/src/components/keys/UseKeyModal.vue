@@ -187,7 +187,7 @@
                 {{ t('keys.useKeyModal.codexModelCatalog.description') }}
               </p>
               <p class="mt-1 break-all font-mono text-xs text-gray-700 dark:text-gray-300">
-                {{ codexModelCatalogPath }}
+                {{ codexModelCatalogMode === 'remote' ? codexModelCatalogUrl : codexModelCatalogPath }}
               </p>
             </div>
             <button
@@ -260,8 +260,8 @@ import { saveAs } from 'file-saver'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
+import { buildCodexModelCatalogUrl, fetchCodexModelsManifest } from '@/api/codex'
 import type { GroupPlatform } from '@/types'
-import { fetchCodexModelsManifest } from '@/api/codex'
 import {
   findCodexCatalogModel,
   formatCodexReasoningEffortTomlLine,
@@ -274,6 +274,7 @@ interface Props {
   apiKey: string
   baseUrl: string
   platform: GroupPlatform | null
+  claudeCodeOnly?: boolean
   allowMessagesDispatch?: boolean
 }
 
@@ -308,6 +309,10 @@ const codexAuthMode = ref<CodexAuthMode>('legacy')
 const codexModelManifestState = ref<'idle' | 'loading' | 'ready' | 'error'>('idle')
 const codexModelManifestContent = ref('')
 const codexModelManifestModelCount = ref(0)
+const codexModelCatalogMode = ref<'remote' | 'file'>('remote')
+const codexModelManifestResponseBytes = ref(0)
+const codexModelCatalogOversized = computed(() => codexModelManifestResponseBytes.value > 1024 * 1024)
+const codexModelCatalogUrl = computed(() => buildCodexModelCatalogUrl(props.baseUrl))
 let codexModelManifestController: AbortController | null = null
 let codexModelManifestRequestID = 0
 const showCodexModelCatalog = computed(() =>
@@ -316,8 +321,10 @@ const showCodexModelCatalog = computed(() =>
 )
 const codexModelCatalogPath = computed(() => activeTab.value === 'windows'
   ? '%userprofile%\\.codex\\codex-models.json'
-  : '~/.codex/codex-models.json'
+  : CODEX_MODEL_CATALOG_CONFIG_PATH
 )
+// Codex accepts the leading ~/ path in config.toml on every supported shell.
+const CODEX_MODEL_CATALOG_CONFIG_PATH = '~/.codex/codex-models.json'
 const isSupportedPlatform = computed(() =>
   props.platform === 'anthropic' ||
   props.platform === 'openai' ||
@@ -328,7 +335,7 @@ const isSupportedPlatform = computed(() =>
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => props.platform === 'grok' ? 'grok' : props.platform === 'openai' ? 'codex' : 'claude')
 
-watch(() => props.platform, () => {
+watch(() => [props.platform, props.claudeCodeOnly], () => {
   activeTab.value = 'unix'
   activeClientTab.value = defaultClientTab.value
   codexAuthMode.value = 'legacy'
@@ -498,6 +505,7 @@ function resetCodexModelManifest() {
   codexModelManifestState.value = 'idle'
   codexModelManifestContent.value = ''
   codexModelManifestModelCount.value = 0
+  codexModelManifestResponseBytes.value = 0
 }
 
 async function loadCodexModelManifest() {
@@ -511,6 +519,8 @@ async function loadCodexModelManifest() {
     if (requestID !== codexModelManifestRequestID) return
     codexModelManifestContent.value = result.content
     codexModelManifestModelCount.value = result.modelCount
+    codexModelManifestResponseBytes.value = result.responseBytes
+    if (codexModelCatalogOversized.value) codexModelCatalogMode.value = 'file'
     codexModelManifestState.value = 'ready'
   } catch {
     if (requestID === codexModelManifestRequestID) codexModelManifestState.value = 'error'
@@ -772,7 +782,7 @@ windows_wsl_setup_acknowledged = true
 [model_providers.OpenAI]
 name = "OpenAI"
 base_url = "${baseUrl}"
-wire_api = "responses"
+${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = "${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}"\n` : ''}wire_api = "responses"
 ${generateCodexProviderAuthConfig()}
 
 [features]
@@ -821,7 +831,7 @@ windows_wsl_setup_acknowledged = true
 [model_providers.OpenAI]
 name = "OpenAI"
 base_url = "${baseUrl}"
-wire_api = "responses"
+${codexModelCatalogMode.value === 'remote' ? `model_catalog_url = "${escapeTomlBasicString(buildCodexModelCatalogUrl(baseUrl))}"\n` : ''}wire_api = "responses"
 supports_websockets = true
 ${generateCodexProviderAuthConfig()}
 
@@ -1084,6 +1094,19 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
         variants: {
           low: { effort: 'low' }, medium: { effort: 'medium' }, high: { effort: 'high' },
           xhigh: { effort: 'xhigh' }, max: { effort: 'max' }
+        }
+      },
+      'claude-sonnet-5-5': {
+        name: 'Claude Sonnet 5.5',
+        limit: { context: 1000000, output: 128000 },
+        modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+        options: { thinking: { type: 'adaptive' }, effort: 'high' },
+        variants: {
+          low: { effort: 'low' },
+          medium: { effort: 'medium' },
+          high: { effort: 'high' },
+          xhigh: { effort: 'xhigh' },
+          max: { effort: 'max' }
         }
       }
     }

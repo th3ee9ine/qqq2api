@@ -94,6 +94,8 @@ type BillingCache interface {
 
 // ModelPricing 模型价格配置（per-token价格，与LiteLLM格式一致）
 type ModelPricing struct {
+	// UltrafastMultiplier is model-owned and independent of operator Fast pricing.
+	UltrafastMultiplier                float64
 	InputPricePerToken                 float64  // 每token输入价格 (USD)
 	InputPricePerTokenPriority         float64  // priority service tier 下每token输入价格 (USD)
 	ImageInputPricePerToken            float64  // 图片输入 token 价格 (USD)，用于多模态 embedding 等图文不同价场景；为 0 时回退到 InputPricePerToken
@@ -151,6 +153,9 @@ func serviceTierCostMultiplier(serviceTier string) float64 {
 
 func configuredServiceTierMultiplier(serviceTier string, pricing *ModelPricing) float64 {
 	if pricing != nil {
+		if normalizeBillingServiceTier(serviceTier) == OpenAIFastTierUltrafast && pricing.UltrafastMultiplier > 0 {
+			return pricing.UltrafastMultiplier
+		}
 		switch normalizeBillingServiceTier(serviceTier) {
 		case "priority", "fast":
 			if pricing.FastMultiplier != nil {
@@ -368,7 +373,15 @@ func (s *BillingService) initFallbackPricing() {
 		CacheCreation1hPrice:       8e-6,
 		SupportsCacheBreakdown:     true,
 	}
-
+	s.fallbackPrices["claude-sonnet-5-5"] = &ModelPricing{
+		InputPricePerToken:         2e-6,
+		OutputPricePerToken:        10e-6,
+		CacheCreationPricePerToken: 2.5e-6,
+		CacheReadPricePerToken:     0.2e-6,
+		CacheCreation5mPrice:       2.5e-6,
+		CacheCreation1hPrice:       4e-6,
+		SupportsCacheBreakdown:     true,
+	}
 	// Claude Fable 5.x uses the same input/output and cache-write prices, while
 	// Fable 5.1 reduces cache reads from $1 to $0.25 per MTok.
 	s.fallbackPrices["claude-fable-5"] = &ModelPricing{
@@ -905,6 +918,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	if claude.IsOpus55(modelLower) {
 		return s.fallbackPrices["claude-opus-5-5"]
 	}
+	if claude.IsSonnet55(modelLower) {
+		return s.fallbackPrices["claude-sonnet-5-5"]
+	}
 	if strings.Contains(modelLower, "opus") {
 		// "opus-5" 必须先判：不能用裸 "5" 匹配，否则 claude-opus-4-5 会被误判。
 		if strings.Contains(modelLower, "opus-5") || strings.Contains(modelLower, "opus5") {
@@ -1217,7 +1233,7 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 				InputPricePerTokenPriority:         litellmPricing.InputCostPerTokenPriority,
 				OutputPricePerToken:                litellmPricing.OutputCostPerToken,
 				OutputPricePerTokenPriority:        litellmPricing.OutputCostPerTokenPriority,
-				CacheCreationPriceExplicit:         openai.IsGPT6SolOrLunaModelSpelling(model) && litellmPricing.CacheCreationInputTokenCostExplicit,
+				CacheCreationPriceExplicit:         (openai.IsGPT6SolOrLunaModelSpelling(model) || openai.IsGPT61SolModelSpelling(model)) && litellmPricing.CacheCreationInputTokenCostExplicit,
 				CacheCreationPricePerToken:         litellmPricing.CacheCreationInputTokenCost,
 				CacheCreationPricePerTokenPriority: litellmPricing.CacheCreationInputTokenCostPriority,
 				CacheReadPricePerToken:             litellmPricing.CacheReadInputTokenCost,
@@ -1251,8 +1267,8 @@ func (s *BillingService) GetModelPricing(model string) (*ModelPricing, error) {
 	return nil, fmt.Errorf("%w for model: %s", ErrModelPricingUnavailable, model)
 }
 
-// GetModelPricingWithChannel 获取模型定价，渠道配置的价格覆盖默认值
-// 渠道存在时，未配置的图片输出价格归零（不回退到 LiteLLM）
+// GetModelPricingWithChannel 获取模型定价，渠道配置的价格覆盖默认值。
+// 与其他 token 字段一致，渠道留空的图片输入/输出价沿用目录价，见 applyChannelImagePriceOverrides。
 func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing *ChannelModelPricing) (*ModelPricing, error) {
 	pricing, err := s.GetModelPricing(model)
 	if err != nil {
@@ -1276,7 +1292,7 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 		pricing.ImageOutputPricePerToken = 0
 	}
 	pricing.ImageOutputPriceExplicit = true
-	applyChannelImageInputPrice(channelPricing, pricing)
+	applyChannelImagePriceOverrides(channelPricing, pricing)
 	return pricing, nil
 }
 
@@ -1707,7 +1723,7 @@ func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *
 	}
 	if fastRatio > 0 {
 		enforceOpenAIFastPricingRatio(&cloned, fastRatio)
-		if openai.IsGPT6SolOrLunaModelSpelling(normalized) && cloned.CacheCreationPriceExplicit {
+		if (openai.IsGPT6SolOrLunaModelSpelling(normalized) || openai.IsGPT61SolModelSpelling(normalized)) && cloned.CacheCreationPriceExplicit {
 			cloned.CacheCreationPricePerTokenPriority = cloned.CacheCreationPricePerToken * fastRatio
 		}
 	}

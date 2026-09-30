@@ -28,3 +28,30 @@ func TestEffortLevelsForModel(t *testing.T) {
 		})
 	}
 }
+
+func TestIsOpus55OpenRouterExactAlias(t *testing.T) {
+	t.Parallel()
+	for _, model := range []string{"claude-opus-5-5", "anthropic/claude-opus-5.5"} {
+		require.True(t, IsOpus55(model), model)
+	}
+	for _, model := range []string{"claude-opus-5", "anthropic/claude-opus-5.6", "anthropic/claude-opus-5.5-preview"} {
+		require.False(t, IsOpus55(model), model)
+	}
+}
+
+func TestIsSonnet55(t *testing.T) {
+	t.Parallel()
+	for _, model := range []string{
+		"claude-sonnet-5-5",
+		"anthropic/claude-sonnet-5.5",
+		"anthropic.claude-sonnet-5-5",
+		"us.anthropic.claude-sonnet-5-5",
+		"us-gov.anthropic.claude-sonnet-5-5",
+		"global.anthropic.claude-sonnet-5-5-thinking",
+	} {
+		require.True(t, IsSonnet55(model), model)
+	}
+	for _, model := range []string{"claude-sonnet-5", "claude-sonnet-5-5-preview", "claude-opus-5-5"} {
+		require.False(t, IsSonnet55(model), model)
+	}
+}

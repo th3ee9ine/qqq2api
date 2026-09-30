@@ -7,8 +7,8 @@ import (
 	"database/sql"
 	"testing"
 
-	dbmigrations "github.com/th3ee9ine/qqq2api/migrations"
 	"github.com/stretchr/testify/require"
+	dbmigrations "github.com/th3ee9ine/qqq2api/migrations"
 )
 
 const groupModelAllowlistRepairMigration = "236_group_model_allowlist_repair.sql"

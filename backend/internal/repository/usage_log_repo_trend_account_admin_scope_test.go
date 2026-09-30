@@ -36,7 +36,7 @@ func TestUsageLogTrendQueriesApplyAccountAdminScope(t *testing.T) {
 			WithArgs(start, end, 5, start, end, int64(41)).
 			WillReturnRows(rowsForUserUsageTrend())
 
-		got, err := repo.GetUserUsageTrend(ctx, start, end, "day", 5)
+		got, err := repo.GetUserUsageTrend(ctx, start, end, "day", 5, "tokens")
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		require.NoError(t, mock.ExpectationsWereMet())

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
-	"github.com/stretchr/testify/require"
 )
 
 func TestRequestLogRetention_RuntimePolicy(t *testing.T) {

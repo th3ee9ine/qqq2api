@@ -2,12 +2,12 @@ package handler
 
 import (
 	"encoding/json"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/gemini"
 	"github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"github.com/th3ee9ine/qqq2api/internal/service"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
 	"io"
 	"net/http"
 	"net/http/httptest"

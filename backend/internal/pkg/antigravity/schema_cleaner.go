@@ -2,6 +2,7 @@ package antigravity
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -256,7 +257,17 @@ func cleanJSONSchemaRecursive(value any) any {
 
 		// 规范化 const 关键字 (Draft 6+ 转换为 Gemini 兼容的 enum: [const])
 		if constVal, exists := schemaMap["const"]; exists {
-			if _, hasEnum := schemaMap["enum"]; !hasEnum {
+			// const and enum are an intersection: preserve both constraints while
+			// converting const to Gemini's enum representation.
+			if enum, hasEnum := schemaMap["enum"].([]any); hasEnum {
+				filtered := make([]any, 0, 1)
+				for _, candidate := range enum {
+					if reflect.DeepEqual(candidate, constVal) {
+						filtered = append(filtered, candidate)
+					}
+				}
+				schemaMap["enum"] = filtered
+			} else {
 				schemaMap["enum"] = []any{constVal}
 			}
 			if _, hasType := schemaMap["type"]; !hasType {

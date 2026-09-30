@@ -537,11 +537,11 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 		utilization5h, has5h := resolveOpenAIQuotaUtilization(account.Extra, "5h", now)
 		utilization7d, has7d := resolveOpenAIQuotaUtilization(account.Extra, "7d", now)
 		if has5h && utilization5h >= config.Threshold5h {
-			notifyOpenAIAutoReset(account.ID)
+			notifyOpenAIAutoResetFromScheduler(account.ID)
 			return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: config.Threshold5h, utilization: utilization5h, reason: "quota_auto_reset_pending_5h"}
 		}
 		if has7d && utilization7d >= config.Threshold7d {
-			notifyOpenAIAutoReset(account.ID)
+			notifyOpenAIAutoResetFromScheduler(account.ID)
 			return true, openAIQuotaAutoPauseDecision{window: "7d", threshold: config.Threshold7d, utilization: utilization7d, reason: "quota_auto_reset_pending_7d"}
 		}
 
@@ -558,7 +558,7 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 			if state != nil && state.Status == OpenAIAutoResetStatusAvailable && state.AvailableCount > 0 && !openAIAutoResetStateStale(state, now) {
 				return false, openAIQuotaAutoPauseDecision{}
 			}
-			notifyOpenAIAutoReset(account.ID)
+			notifyOpenAIAutoResetFromScheduler(account.ID)
 			if pauseReached5h {
 				return true, openAIQuotaAutoPauseDecision{window: "5h", threshold: pause5h, utilization: utilization5h, reason: "quota_auto_reset_credit_check_5h"}
 			}
@@ -749,8 +749,8 @@ func resolveAccountExtraNumber(extra map[string]any, keys ...string) (float64, b
 
 // resolveOpenAIQuotaUtilization returns the current utilization ratio (0..1) for the
 // given Codex usage window. ok=false means there is no usable signal to pause on:
-// either no snapshot exists, or the window has already rolled over so the cached
-// percentage is stale. The stale guard matters because a paused account stops
+// either no snapshot exists, the window has rolled over, or an old snapshot has
+// no known future reset. The stale guard matters because a paused account stops
 // receiving requests, so its snapshot is never refreshed from upstream headers —
 // without this check an old used_percent would keep the account paused forever even
 // after the real window reset.
@@ -762,12 +762,17 @@ func resolveOpenAIQuotaUtilization(extra map[string]any, window string, now time
 	if openAIQuotaWindowReset(extra, window, now) {
 		return 0, false
 	}
-	// 快照过于陈旧（账号长期未收到流量刷新）时，不再据此暂停。放行后下一次响应头
+	// 快照过于陈旧且没有明确的未来重置时间时，不再据此暂停。放行后下一次响应头
 	// 会刷新快照实现自愈，避免账号在错误/过期的 used% 上被永久跳过（issue #2994）。
-	if openAICodexSnapshotStaleForPause(extra, now) {
+	if openAICodexSnapshotStaleForPause(extra, now) && !openAIQuotaWindowResetPending(extra, window, now) {
 		return 0, false
 	}
 	return usedPercent / 100, true
+}
+
+func openAIQuotaWindowResetPending(extra map[string]any, window string, now time.Time) bool {
+	resetAt, ok := openAICodexWindowResetAt(extra, window)
+	return ok && now.Before(resetAt)
 }
 
 // openAICodexSnapshotStaleForPause reports whether the Codex usage snapshot is stale
@@ -1634,6 +1639,9 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAIAccountBeforeProfit(
 	if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, fresh, platform, requestedModel, requireCompact, requiredCapability) {
 		return nil
 	}
+	if !openAIAccountMatchesCompositeModelRoute(ctx, fresh, requestedModel) {
+		return nil
+	}
 	if !parentHealthyForShadow(fresh, s.parentAccountLookup(ctx)) {
 		return nil
 	}
@@ -1686,6 +1694,9 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 		if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
 			return nil
 		}
+		if !openAIAccountMatchesCompositeModelRoute(ctx, account, requestedModel) {
+			return nil
+		}
 		if s.isOpenAIAccountBlockedBySchedulingThreshold(ctx, account) {
 			return nil
 		}
@@ -1711,6 +1722,9 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if !isOpenAICompatibleAccountEligibleForRequestBeforeProfit(ctx, latest, platform, requestedModel, requireCompact, requiredCapability) {
 		return nil
 	}
+	if !openAIAccountMatchesCompositeModelRoute(ctx, latest, requestedModel) {
+		return nil
+	}
 	if !parentHealthyForShadow(latest, s.parentAccountLookup(ctx)) {
 		return nil
 	}
@@ -1724,6 +1738,23 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 		return nil
 	}
 	return latest
+}
+
+// openAIAccountMatchesCompositeModelRoute enforces account-scoped composite
+// aliases at the scheduler boundary. An account route is owned by the account
+// whose model mapping matches the public alias; other accounts in the same
+// group must not receive the request merely because they share the group.
+func openAIAccountMatchesCompositeModelRoute(ctx context.Context, account *Account, requestedModel string) bool {
+	source, ok := CompositeRouteSourceFromContext(ctx)
+	if !ok || source != CompositeRouteSourceAccount || account == nil {
+		return true
+	}
+	publicModel, ok := RequestedPublicModelFromContext(ctx)
+	if !ok || strings.TrimSpace(publicModel) == "" {
+		publicModel = requestedModel
+	}
+	_, matched := account.ResolveMappedModel(strings.TrimSpace(publicModel))
+	return matched
 }
 
 func (s *OpenAIGatewayService) openAIAccountMatchesSchedulingGroup(account *Account, groupID *int64) bool {

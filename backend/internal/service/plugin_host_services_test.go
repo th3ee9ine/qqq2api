@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	pluginv1 "github.com/th3ee9ine/qqq2api/pkg/pluginapi/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	pluginv1 "github.com/th3ee9ine/qqq2api/pkg/pluginapi/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

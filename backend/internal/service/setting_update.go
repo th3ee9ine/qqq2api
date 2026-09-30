@@ -470,6 +470,10 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 
 	// cyber 会话屏蔽开关 + TTL
 	updates[SettingKeyCyberSessionBlockEnabled] = strconv.FormatBool(settings.CyberSessionBlockEnabled)
+	if _, err := ParseCyberPolicyUserAllowlist(settings.CyberPolicyUserAllowlist); err != nil {
+		return nil, err
+	}
+	updates[SettingKeyCyberPolicyUserAllowlist] = settings.CyberPolicyUserAllowlist
 	if settings.CyberSessionBlockTTLSeconds > 0 {
 		updates[SettingKeyCyberSessionBlockTTLSeconds] = strconv.Itoa(settings.CyberSessionBlockTTLSeconds)
 	}

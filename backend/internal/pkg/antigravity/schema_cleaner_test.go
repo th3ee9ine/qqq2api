@@ -218,4 +218,3 @@ func TestCleanJSONSchema_EmptyPrefixItems(t *testing.T) {
 	require.NotNil(t, emptyTuple["items"])
 	assert.Equal(t, "string", emptyTuple["items"].(map[string]any)["type"])
 }
-

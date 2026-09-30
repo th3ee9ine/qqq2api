@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/th3ee9ine/qqq2api/internal/pkg/typesafe"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/typesafe"
 )
 
 // Opt-in paid network test. Never use real customer prompts or embed a credential.

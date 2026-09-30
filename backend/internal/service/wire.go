@@ -851,6 +851,21 @@ func ProvideAdminService(
 	)
 }
 
+// ProvideClaudeResetCreditService wires the Claude reset query and, with the
+// idempotency store and Redis leases, manual redemption.
+func ProvideClaudeResetCreditService(
+	accounts AccountRepository,
+	tokens *ClaudeTokenProvider,
+	proxies ProxyRepository,
+	settings *SettingService,
+	idem *IdempotencyCoordinator,
+	locks LeaderLockCache,
+) *ClaudeResetCreditService {
+	s := NewClaudeResetCreditService(accounts, tokens, proxies, settings)
+	s.ConfigureRedemption(idem, locks)
+	return s
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	ProvideGrokOAuthService,
@@ -880,6 +895,7 @@ var ProviderSet = wire.NewSet(
 	ProvideImageTaskService,
 	wire.Bind(new(AccountRuntimeBlocker), new(*OpenAIGatewayService)),
 	NewOAuthService,
+	ProvideClaudeResetCreditService,
 	ProvideOpenAIOAuthService,
 	NewCompositeTokenCacheInvalidator,
 	wire.Bind(new(TokenCacheInvalidator), new(*CompositeTokenCacheInvalidator)),

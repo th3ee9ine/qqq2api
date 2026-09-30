@@ -19,29 +19,29 @@ function mountPlan(platform: AccountPlatform, planType: string) {
 }
 
 describe('PlatformTypeBadge ChatGPT plan tiers', () => {
-  it('labels pro / chatgptpro as Pro 20x with the Pro color', () => {
+  it('labels pro / chatgptpro as Pro 200 with the Pro color', () => {
     for (const planType of ['pro', 'chatgptpro', 'PRO']) {
       const wrapper = mountPlan('openai', planType)
 
-      expect(wrapper.text()).toContain('Pro 20x')
+      expect(wrapper.text()).toContain('Pro 200')
       expect(wrapper.html()).toContain('bg-violet-100')
     }
   })
 
-  it('labels prolite as Pro 5x sharing the Pro color', () => {
+  it('labels prolite as Pro 100 sharing the Pro color', () => {
     for (const planType of ['prolite', 'PROLITE', 'pro_lite']) {
       const wrapper = mountPlan('openai', planType)
 
-      expect(wrapper.text()).toContain('Pro 5x')
+      expect(wrapper.text()).toContain('Pro 100')
       expect(wrapper.html()).toContain('bg-violet-100')
-      expect(wrapper.text()).not.toContain('Pro 20x')
+      expect(wrapper.text()).not.toContain('Pro 200')
     }
   })
 
-  it('labels team as Business Standard with the Team color', () => {
+  it('labels team as Business with the Team color', () => {
     const wrapper = mountPlan('openai', 'team')
 
-    expect(wrapper.text()).toContain('Business Standard')
+    expect(wrapper.text()).toContain('Business')
     expect(wrapper.html()).toContain('bg-indigo-100')
   })
 
@@ -70,15 +70,15 @@ describe('PlatformTypeBadge ChatGPT plan tiers', () => {
   })
 
   it('falls back to the raw value for unknown plans', () => {
-    const wrapper = mountPlan('openai', 'enterprise')
+    const wrapper = mountPlan('openai', 'future_sku')
 
-    expect(wrapper.text()).toContain('enterprise')
+    expect(wrapper.text()).toContain('future_sku')
     expect(wrapper.html()).not.toContain('bg-violet-100')
     expect(wrapper.html()).not.toContain('bg-indigo-100')
   })
 
   it('does not apply the ChatGPT tier naming to other platforms', () => {
-    // Antigravity 的 Pro 与 Grok 的 pro 是各自产品线的档位，不能显示成 Pro 20x。
+    // Antigravity 的 Pro 与 Grok 的 pro 是各自产品线的档位，不能显示成 Pro 200。
     for (const platform of ['antigravity', 'grok'] as AccountPlatform[]) {
       const wrapper = mountPlan(platform, 'pro')
 

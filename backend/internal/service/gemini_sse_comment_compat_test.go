@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
 func TestGeminiClientRejectsSSEComments(t *testing.T) {

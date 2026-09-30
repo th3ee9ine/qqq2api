@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	middleware "github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"github.com/th3ee9ine/qqq2api/internal/service"
-	"github.com/gin-gonic/gin"
 )
 
 // SeedanceTasks exposes Ark's native asynchronous video task protocol.

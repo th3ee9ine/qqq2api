@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/th3ee9ine/qqq2api/internal/service"
 	"github.com/redis/go-redis/v9"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 // pluginKVKeyPrefix 是所有插件通用键值存储在 Redis 中的根前缀。版本段 v1 便于未来

@@ -52,7 +52,7 @@ x-anthropic-billing-header: cc_version=2.1.271.4bf; cc_entrypoint=claude-desktop
 
 Claude Code 提供 [`CLAUDE_CODE_ATTRIBUTION_HEADER`](https://code.claude.com/docs/en/env-vars) 环境变量，但桌面端是否继承该配置需要实测。本次仅修改全局 Claude 设置并未消除 Desktop 请求中的元数据。
 
-更重要的是，原生 Anthropic OAuth 线路有相反的报告：禁用 attribution 会造成 429，见 [issue #6344](https://github.com/Wei-Shaw/sub2api/issues/6344)。因此，不建议为这个 Antigravity 问题统一设置 `CLAUDE_CODE_ATTRIBUTION_HEADER=0` 或在所有上游请求中删除该文本。
+更重要的是，原生 Anthropic OAuth 线路有相反的报告：禁用 attribution 会造成 429，见 [issue #6344](https://github.com/th3ee9ine/qqq2api/issues/6344)。因此，不建议为这个 Antigravity 问题统一设置 `CLAUDE_CODE_ATTRIBUTION_HEADER=0` 或在所有上游请求中删除该文本。
 
 ## 验证与仍需排查的情况
 

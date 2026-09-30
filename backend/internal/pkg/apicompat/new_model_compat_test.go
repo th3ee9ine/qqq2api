@@ -189,6 +189,10 @@ func TestGPT6ChatSamplingAndCacheFields(t *testing.T) {
 	for _, model := range []string{"gpt-6.1-sol", "openai/gpt-6.1-sol-high", "gpt-6-sol", "gpt-6-luna"} {
 		for _, effort := range []string{"", "none", "medium", "max"} {
 			out, err := ChatCompletionsToResponses(&ChatCompletionsRequest{Model: model, ReasoningEffort: effort, Temperature: &temperature, TopP: &temperature, PromptCacheOptions: json.RawMessage(`{"mode":"explicit","ttl":"30m"}`), Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"hello","prompt_cache_breakpoint":{"mode":"explicit"}}]`)}}})
+			if effort == "none" && strings.Contains(model, "gpt-6.1-sol") {
+				require.Error(t, err)
+				continue
+			}
 			require.NoError(t, err)
 			require.Equal(t, model, out.Model)
 			if effort == "none" && !strings.Contains(model, "gpt-6.1-sol") {

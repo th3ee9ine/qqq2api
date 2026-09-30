@@ -110,6 +110,8 @@ describe('UseKeyModal', () => {
     expect(configToml).toBeDefined()
     expect(configToml).toContain('requires_openai_auth = false')
     expect(configToml).toContain('http_headers = { "x-openai-actor-authorization" = "local-image-extension" }')
+    expect(configToml).toContain('model_catalog_url = "https://example.com/v1/models"')
+    expect(configToml).not.toContain('model_catalog_json')
     expect(configToml).not.toContain('env_key')
     expect(configToml).not.toContain('image_generation')
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
@@ -208,6 +210,8 @@ describe('UseKeyModal', () => {
 
     const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
     const configToml = codeBlocks.find((content) => content.includes('supports_websockets = true'))
+    expect(configToml).toContain('model_catalog_url = "https://example.com/v1/models"')
+    expect(configToml).not.toContain('model_catalog_json')
 
     expect(wrapper.get('[data-testid="codex-auth-mode-api-key"]').attributes('aria-checked')).toBe('true')
     expect(configToml).toBeDefined()
