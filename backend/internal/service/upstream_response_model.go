@@ -12,7 +12,7 @@ import (
 // compact fallback maps the outbound request to another model.
 func preserveOpenAIResponseModel(models ...string) bool {
 	for _, model := range models {
-		if isOpenAIGPT6AstraModel(model) || openai.IsGPT6SolOrLunaModelSpelling(model) || isCodexAutoReviewFamilyModel(model) {
+		if isOpenAIGPT6AstraModel(model) || openai.IsGPT6SolOrLunaModelSpelling(model) || openai.IsGPT61SolModelSpelling(model) || isCodexAutoReviewFamilyModel(model) {
 			return true
 		}
 	}

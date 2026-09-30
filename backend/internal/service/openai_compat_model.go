@@ -24,20 +24,6 @@ func NormalizeOpenAICompatRequestedModel(model string) string {
 }
 
 func applyOpenAICompatModelNormalization(req *apicompat.AnthropicRequest) {
-	if req != nil && openai.IsGPT61SolModelSpelling(req.Model) {
-		canonical := openai.CanonicalizeOpenAIModelAliasSpelling(req.Model)
-		if effort, ok := strings.CutPrefix(canonical, "gpt-6.1-sol-"); ok && effort != "openai-compact" {
-			req.Model = "gpt-6.1-sol"
-			if req.OutputConfig == nil {
-				req.OutputConfig = &apicompat.AnthropicOutputConfig{}
-			}
-			if req.OutputConfig.Effort == "" {
-				req.OutputConfig.Effort = effort
-			}
-			return
-		}
-	}
-
 	if req == nil {
 		return
 	}
@@ -57,11 +43,6 @@ func applyOpenAICompatModelNormalization(req *apicompat.AnthropicRequest) {
 	}
 
 	claudeEffort := openAIReasoningEffortToClaudeOutputEffort(derivedEffort)
-	if openai.CanonicalGPT6SolOrLunaModel(originalModel) == "gpt-6.1-sol" {
-		// This OpenAI bridge supports distinct xhigh and max levels. Using
-		// Claude's max as an intermediate for xhigh would upgrade the request.
-		claudeEffort = derivedEffort
-	}
 	if claudeEffort == "" {
 		return
 	}
@@ -107,11 +88,6 @@ func splitOpenAICompatReasoningModel(model string) (normalizedModel string, reas
 		reasoningEffort = last
 	case "xhigh", "extrahigh":
 		reasoningEffort = "xhigh"
-	case "max":
-		if openai.CanonicalGPT6SolOrLunaModel(modelID) != "gpt-6.1-sol" {
-			return trimmed, "", false
-		}
-		reasoningEffort = "max"
 	default:
 		return trimmed, "", false
 	}

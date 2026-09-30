@@ -1142,8 +1142,7 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 }
 
 func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, error) {
-	if !openai.IsGPT6SolOrLunaModelSpelling(model) ||
-		(openai.SupportsGPT6NoneReasoningEffort(model) && gjson.GetBytes(body, "reasoning.effort").String() == "none") {
+	if (!openai.IsGPT6SolOrLunaModelSpelling(model) && !openai.IsGPT61SolModelSpelling(model)) || gjson.GetBytes(body, "reasoning.effort").String() == "none" {
 		return body, false, nil
 	}
 	out := body
@@ -1175,14 +1174,9 @@ func normalizeGPT6ResponsesSampling(body []byte, model string) ([]byte, bool, er
 	return out, changed, nil
 }
 
-// model is optional for compatibility with callers that infer it from body.
-func normalizeOpenAIResponsesReasoningMode(body []byte, modelArg ...string) ([]byte, bool, error) {
+func normalizeOpenAIResponsesReasoningMode(body []byte, model string) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
-	}
-	model := ""
-	if len(modelArg) > 0 {
-		model = modelArg[0]
 	}
 	if model == "" {
 		model = gjson.GetBytes(body, "model").String()
@@ -1394,7 +1388,7 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 	if err != nil {
 		return body, false, err
 	}
-	if reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(normalized); reasoningErr != nil {
+	if reasoningBody, reasoningChanged, reasoningErr := normalizeOpenAIResponsesReasoningMode(normalized, ""); reasoningErr != nil {
 		return body, false, reasoningErr
 	} else if reasoningChanged {
 		normalized = reasoningBody
@@ -2320,9 +2314,7 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
 
 	switch value {
-	case "none", "minimal":
-		return ""
-	case "low", "medium", "high":
+	case "none", "minimal", "low", "medium", "high":
 		return value
 	case "xhigh", "extrahigh", "max":
 		return "xhigh"
@@ -2333,7 +2325,7 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 }
 
 func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
-	if strings.EqualFold(strings.TrimSpace(raw), "none") && openai.SupportsGPT6NoneReasoningEffort(model) {
+	if strings.EqualFold(strings.TrimSpace(raw), "none") && openai.IsGPT6SolOrLunaModelSpelling(model) {
 		return "none"
 	}
 	if strings.EqualFold(strings.TrimSpace(raw), "max") && supportsOpenAIReasoningEffortMax(model) {

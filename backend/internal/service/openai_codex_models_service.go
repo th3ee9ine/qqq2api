@@ -337,7 +337,6 @@ const (
 	configuredCodexGrokBuildContext    = 256_000
 	configuredCodexGPT56MaxContext     = 872_000
 	configuredCodexGPT6AstraContext    = 1_050_000
-	configuredCodexGPT61SolContext     = 1_050_000
 	configuredCodexToolOutputMaxTokens = 10_000
 )
 
@@ -502,13 +501,8 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 			descriptor.TruncationPolicy = configuredCodexTruncationPolicy{Mode: "tokens", Limit: configuredCodexToolOutputMaxTokens}
 			// Use the existing 5.6 window as an offline compatibility template;
 			// live account metadata remains authoritative for Sol/Luna.
-			if isOpenAIGPT56Model(modelID) || openai.IsGPT6SolOrLunaModelSpelling(modelID) {
+			if isOpenAIGPT56Model(modelID) || openai.IsGPT6SolOrLunaModelSpelling(modelID) || openai.IsGPT61SolModelSpelling(modelID) {
 				descriptor.MaxContextWindow = configuredCodexGPT56MaxContext
-			}
-			if openai.CanonicalGPT6SolOrLunaModel(modelID) == "gpt-6.1-sol" {
-				// Official GPT-6.1 Sol context; live account metadata still takes precedence.
-				descriptor.ContextWindow = configuredCodexGPT61SolContext
-				descriptor.MaxContextWindow = configuredCodexGPT61SolContext
 			}
 			if isOpenAIGPT6AstraModel(modelID) {
 				// Codex resolves the Ultra workflow to this effort before inference.
@@ -528,33 +522,10 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 	}
 
 	if openai.IsGPT61SolModelSpelling(modelID) {
-		// Keep the local catalog's conservative defaults for fields that affect
-		// routing and client capability negotiation. The embedded upstream
-		// descriptor supplies the richer Codex instructions and metadata, but its
-		// public context window and image capabilities must not replace the
-		// customized offline contract.
-		localDisplayName := descriptor.DisplayName
-		localDescription := descriptor.Description
-		localDefaultReasoningLevel := descriptor.DefaultReasoningLevel
-		localSupportedReasoningLevels := append([]configuredCodexReasoningLevel(nil), descriptor.SupportedReasoningLevels...)
-		localServiceTiers := append([]configuredCodexServiceTier(nil), descriptor.ServiceTiers...)
-		localContextWindow := descriptor.ContextWindow
-		localMaxContextWindow := descriptor.MaxContextWindow
-		localInputModalities := append([]string(nil), descriptor.InputModalities...)
-		localSupportsImageDetailOriginal := descriptor.SupportsImageDetailOriginal
 		if err := json.Unmarshal(openai.CodexGPT61SolMetadata, &descriptor); err != nil {
 			panic(err)
 		}
 		descriptor.Slug = modelID
-		descriptor.DisplayName = localDisplayName
-		descriptor.Description = localDescription
-		descriptor.DefaultReasoningLevel = localDefaultReasoningLevel
-		descriptor.SupportedReasoningLevels = localSupportedReasoningLevels
-		descriptor.ServiceTiers = localServiceTiers
-		descriptor.ContextWindow = localContextWindow
-		descriptor.MaxContextWindow = localMaxContextWindow
-		descriptor.InputModalities = localInputModalities
-		descriptor.SupportsImageDetailOriginal = localSupportsImageDetailOriginal
 		descriptor.officialMetadata = openai.CodexGPT61SolMetadata
 	}
 	return descriptor

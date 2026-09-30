@@ -3686,8 +3686,8 @@ func TestFetchCodexModelsManifestOAuthSharedAcrossGroupsWithIndependentFiltering
 	require.EqualValues(t, 1, calls.Load(), "同一账号两个分组同时请求时只发一次上游请求")
 }
 
-func TestGPT6SolLunaAndGPT61SolCatalogKeepsAuthoritativeCapabilities(t *testing.T) {
-	for _, id := range []string{"gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"} {
+func TestGPT6SolLunaCatalogKeepsAuthoritativeCapabilities(t *testing.T) {
+	for _, id := range []string{"gpt-6-sol", "gpt-6-luna"} {
 		svc := &OpenAIGatewayService{}
 		manifest := &OpenAIModelsResponse{Body: []byte(`{"models":[{"slug":"` + id + `","supported_reasoning_levels":[{"effort":"ultra"}],"default_reasoning_level":"ultra","multi_agent_reasoning_effort":"xhigh","service_tiers":[{"id":"ultrafast"}],"context_window":300000,"max_context_window":900000,"supports_search_tool":false,"apply_patch_tool_type":null}]}`)}
 		account := newCodexModelsAPIKeyTestAccount("https://api.openai.com/v1")
@@ -3705,28 +3705,18 @@ func TestGPT6SolLunaAndGPT61SolCatalogKeepsAuthoritativeCapabilities(t *testing.
 	}
 }
 
-func TestGPT61SolConfiguredCodexManifest(t *testing.T) {
+func TestGPT61SolOfflineCodexCatalog(t *testing.T) {
 	body, err := BuildCodexModelsManifest([]string{"gpt-6.1-sol"})
 	require.NoError(t, err)
 	models := decodeCodexManifestModels(t, body)
 	require.Len(t, models, 1)
 	model := models[0]
 	require.Equal(t, "gpt-6.1-sol", model["slug"])
-	require.Equal(t, "GPT-6.1 Sol", model["display_name"])
-	require.Equal(t, "medium", model["default_reasoning_level"])
-	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max"}, effortsFromManifestModel(t, model))
-	require.Equal(t, float64(1_050_000), model["context_window"])
-	require.Equal(t, float64(1_050_000), model["max_context_window"])
-	require.Equal(t, []any{"text"}, model["input_modalities"], "offline descriptors stay conservative until account capabilities are known")
-	require.Equal(t, []any{map[string]any{
-		"id": "priority", "name": "Fast", "description": "Priority processing for lower latency.",
-	}}, model["service_tiers"])
-
-	manifest := &OpenAIModelsResponse{Body: body}
-	svc := &OpenAIGatewayService{}
-	require.NoError(t, svc.CompleteAPIKeyCodexModelsManifestForClient(manifest, newCodexModelsAPIKeyTestAccount("https://api.openai.com/v1")))
-	models = decodeCodexManifestModels(t, manifest.Body)
-	require.Len(t, models, 1)
-	require.Equal(t, []any{"text", "image"}, models[0]["input_modalities"])
-	require.Equal(t, true, models[0]["supports_image_detail_original"])
+	require.Equal(t, "GPT-6.1-Sol", model["display_name"])
+	require.Equal(t, "low", model["default_reasoning_level"])
+	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, effortsFromManifestModel(t, model))
+	require.Equal(t, float64(272_000), model["context_window"])
+	require.Equal(t, float64(872_000), model["max_context_window"])
+	require.Equal(t, "xhigh", model["multi_agent_reasoning_effort"])
+	require.Equal(t, []any{"text", "image"}, model["input_modalities"])
 }

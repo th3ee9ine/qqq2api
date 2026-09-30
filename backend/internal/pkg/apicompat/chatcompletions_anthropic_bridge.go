@@ -27,7 +27,7 @@ import (
 //
 // Helper functions from the Responses bridges (anthropicImageToDataURI,
 // extractAnthropicTextFromBlocks, fromResponsesCallID, sanitizeAnthropicToolUseInput,
-// parseAnthropicSystemContentParts, isReasoningModel, mapAnthropicEffortToResponsesForModel,
+// parseAnthropicSystemContentParts, isReasoningModel, mapAnthropicEffortToResponses,
 // normalizeToolParameters) are reused so the conversion semantics stay identical.
 
 // ---------------------------------------------------------------------------
@@ -99,8 +99,7 @@ func AnthropicToChatCompletionsRequest(req *AnthropicRequest) (*ChatCompletionsR
 		}
 	}
 
-	// Match the Responses bridge, including an explicit thinking disable and
-	// GPT-6.1 Sol's native max spelling.
+	// Match the Responses bridge, including an explicit thinking disable.
 	out.ReasoningEffort = anthropicReasoningEffort(req)
 
 	parallelToolCalls := true

@@ -1516,17 +1516,24 @@ func TestNormalizeCodexModel_Gpt53(t *testing.T) {
 
 func TestNormalizeCodexModel_GPT6SolLunaPreservesEffortAndCompactSuffixes(t *testing.T) {
 	for input, expected := range map[string]string{
-		"gpt-6.1-sol":                       "gpt-6.1-sol",
-		"gpt-6.1-sol-high":                  "gpt-6.1-sol-high",
-		"gpt-6.1-sol-max":                   "gpt-6.1-sol-max",
-		"OPENAI/GPT-6.1_SOL_NONE":           "gpt-6.1-sol-none",
-		"openai/gpt-6.1-sol-openai-compact": "gpt-6.1-sol-openai-compact",
-		"gpt-6-sol-high":                    "gpt-6-sol-high",
-		"gpt-6-sol-max":                     "gpt-6-sol-max",
-		"gpt-6-luna-none":                   "gpt-6-luna-none",
-		"openai/gpt-6-luna-openai-compact":  "gpt-6-luna-openai-compact",
+		"gpt-6-sol-high":                   "gpt-6-sol-high",
+		"gpt-6-sol-max":                    "gpt-6-sol-max",
+		"gpt-6-luna-none":                  "gpt-6-luna-none",
+		"openai/gpt-6-luna-openai-compact": "gpt-6-luna-openai-compact",
 	} {
 		require.Equal(t, expected, normalizeCodexModel(input))
+	}
+}
+
+func TestNormalizeCodexModel_GPT61SolUsesUpstreamCanonicalModel(t *testing.T) {
+	for _, input := range []string{
+		"gpt-6.1-sol",
+		"gpt-6.1-sol-high",
+		"gpt-6.1-sol-max",
+		"OPENAI/GPT-6.1_SOL_NONE",
+		"openai/gpt-6.1-sol-openai-compact",
+	} {
+		require.Equal(t, "gpt-6.1-sol", normalizeCodexModel(input))
 	}
 }
 

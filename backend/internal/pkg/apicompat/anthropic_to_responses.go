@@ -61,8 +61,6 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 	}
 
 	// An explicit thinking disable takes precedence over output_config.effort.
-	// Keep GPT-6.1 Sol's native max spelling while retaining the historical
-	// max-to-xhigh mapping for older Responses models.
 	effort := anthropicReasoningEffort(req)
 	out.Reasoning = &ResponsesReasoning{
 		Effort:  effort,
@@ -436,7 +434,7 @@ func anthropicReasoningEffort(req *AnthropicRequest) string {
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
 		effort = req.OutputConfig.Effort
 	}
-	return mapAnthropicEffortToResponsesForModel(req.Model, effort)
+	return mapAnthropicEffortToResponses(effort)
 }
 
 // mapAnthropicEffortToResponses maps shared effort levels directly and maps
@@ -446,15 +444,6 @@ func mapAnthropicEffortToResponses(effort string) string {
 		return "xhigh"
 	}
 	return effort // low→low, medium→medium, high→high, unknown→passthrough
-}
-
-// GPT-6.1 Sol exposes max directly; retain that level across both Anthropic
-// bridges without changing the historical max-to-xhigh mapping of older models.
-func mapAnthropicEffortToResponsesForModel(model, effort string) string {
-	if effort == "max" && openai.CanonicalGPT6SolOrLunaModel(model) == "gpt-6.1-sol" {
-		return effort
-	}
-	return mapAnthropicEffortToResponses(effort)
 }
 
 // convertAnthropicToolsToResponses maps Anthropic tool definitions to

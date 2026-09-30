@@ -1550,14 +1550,10 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		if pricing, ok := s.pricingData[normalizeKnownOpenAICodexModel(model)]; ok {
 			return pricing
 		}
-		switch openai.CanonicalGPT6SolOrLunaModel(model) {
-		case "gpt-6.1-sol":
-			return openAIGPT61SolFallbackPricing
-		case "gpt-6-sol":
+		if strings.HasPrefix(model, "gpt-6-sol") {
 			return openAIGPT6SolFallbackPricing
-		case "gpt-6-luna":
-			return openAIGPT6LunaFallbackPricing
 		}
+		return openAIGPT6LunaFallbackPricing
 	}
 
 	// 尝试的回退变体
