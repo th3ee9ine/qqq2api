@@ -718,6 +718,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			requestView = newOpenAIRequestView(body)
 		}
 	}
+	// API-key Responses requests bypass the OAuth transform. Apply only GPT-6
+	// sampling compatibility, after mapping/rebuilds, without changing unrelated
+	// API-key reasoning.mode fields or sampling for a mapped non-GPT-6 model.
+	if account.IsOpenAIApiKey() {
+		if normalizedBody, changed, normalizeErr := normalizeGPT6ResponsesSampling(body, upstreamModel); normalizeErr != nil {
+			return nil, normalizeErr
+		} else if changed {
+			body = normalizedBody
+			requestView = newOpenAIRequestView(body)
+			reqBody = nil
+		}
+	}
 	// Run after orphan-output filtering and all request-map rebuilds so a
 	// compaction trigger cannot remain ahead of surviving history items.
 	if normalizedBody, changed, normalizeErr := NormalizeCompactionTriggerInputOrder(body); normalizeErr != nil {

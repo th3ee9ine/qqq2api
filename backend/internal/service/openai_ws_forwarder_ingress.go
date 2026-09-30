@@ -398,6 +398,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = next
 		}
 		SetOpsUpstreamModel(c, upstreamModel)
+		// Sampling support follows the final mapped model, including a model
+		// inherited from the previous turn when this frame omits it.
+		if account.IsOpenAIApiKey() {
+			if samplingBody, samplingChanged, samplingErr := normalizeGPT6ResponsesSampling(normalized, upstreamModel); samplingErr != nil {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", samplingErr)
+			} else if samplingChanged {
+				normalized = samplingBody
+			}
+		}
 		if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
 			if stripped, changed, stripErr := stripOpenAIImageGenerationToolsFromRawPayload(normalized); stripErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", stripErr)

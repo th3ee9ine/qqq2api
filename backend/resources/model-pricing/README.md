@@ -35,3 +35,9 @@ The file contains JSON data with model pricing information including:
 - Model capabilities
 
 Last updated: 2025-08-10
+
+## GPT-6.1 Sol
+
+The `gpt-6.1-sol` entry was verified against the [official model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and [pricing page](https://developers.openai.com/api/docs/pricing) on 2026-09-30. Standard USD rates per million tokens are $2 input, $0.10 cached input, $2.50 cache writes, and $10 output. Fast is 2x; Batch and Flex are 0.5x. Above 272,000 input tokens, input/cache rates are 2x and output is 1.5x for the full request.
+
+Context is 1,050,000 tokens with 128,000 maximum output tokens. Reasoning supports `low`, `medium` (default), `high`, `xhigh`, and `max`; `none` and `minimal` are unsupported. Tool calling uses Responses; upstream Chat Completions supports this model without tool calling.

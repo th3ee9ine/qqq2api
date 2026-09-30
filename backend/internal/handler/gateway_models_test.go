@@ -760,7 +760,7 @@ func assertGrokGatewayReasoningEfforts(t *testing.T, groupID int64, modelID stri
 	require.Equal(t, want, model.ReasoningEfforts)
 }
 
-func TestGatewayModels_GPT6SolLunaDiscoveryRespectsGroupAndAccountRestrictions(t *testing.T) {
+func TestGatewayModels_GPT6SolLunaAndGPT61SolDiscoveryRespectsGroupAndAccountRestrictions(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		selected   []string
@@ -768,8 +768,9 @@ func TestGatewayModels_GPT6SolLunaDiscoveryRespectsGroupAndAccountRestrictions(t
 		want       []string
 	}{
 		{"selected and ordered", []string{"gpt-6-luna", "gpt-6-sol"}, false, []string{"gpt-6-luna", "gpt-6-sol"}},
+		{"GPT 6.1 selected and ordered", []string{"gpt-6.1-sol", "gpt-6-sol"}, false, []string{"gpt-6.1-sol", "gpt-6-sol"}},
 		{"group excludes new models", []string{"gpt-5.6-sol"}, false, []string{"gpt-5.6-sol"}},
-		{"account restricts new models", []string{"gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"}, true, []string{"gpt-5.6-sol"}},
+		{"account restricts new models", []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol"}, true, []string{"gpt-5.6-sol"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			groupID := int64(25)

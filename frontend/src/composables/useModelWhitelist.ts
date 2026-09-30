@@ -1,6 +1,6 @@
 const openaiModels = [
   'gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-  'gpt-6', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna',
+  'gpt-6', 'gpt-6-astra', 'gpt-6-sol', 'gpt-6.1-sol', 'gpt-6-luna',
   'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-2026-03-05',
   'gpt-5.3-codex-spark', 'codex-auto-review',
   'gpt-5.2', 'gpt-5.2-2025-12-11', 'gpt-5.2-chat-latest',
@@ -68,6 +68,7 @@ const openaiPresetMappings = [
   { label: 'GPT-6', from: 'gpt-6', to: 'gpt-6', color: 'bg-violet-100 text-violet-700' },
   { label: 'GPT-6 Astra', from: 'gpt-6-astra', to: 'gpt-6-astra', color: 'bg-indigo-100 text-indigo-700' },
   { label: 'GPT-6 Sol', from: 'gpt-6-sol', to: 'gpt-6-sol', color: 'bg-indigo-100 text-indigo-700' },
+  { label: 'GPT-6.1 Sol', from: 'gpt-6.1-sol', to: 'gpt-6.1-sol', color: 'bg-indigo-100 text-indigo-700' },
   { label: 'GPT-6 Luna', from: 'gpt-6-luna', to: 'gpt-6-luna', color: 'bg-indigo-100 text-indigo-700' },
   { label: 'GPT-5.4', from: 'gpt-5.4', to: 'gpt-5.4', color: 'bg-rose-100 text-rose-700' },
   { label: 'GPT-5.2', from: 'gpt-5.2', to: 'gpt-5.2', color: 'bg-red-100 text-red-700' },

@@ -14,15 +14,30 @@ func TestNormalizeKnownOpenAICodexModelGPT6Astra(t *testing.T) {
 
 func TestNormalizeKnownOpenAICodexModelGPT6SolLuna(t *testing.T) {
 	tests := map[string]string{
-		"gpt-6-sol":                        "gpt-6-sol",
-		"openai/gpt-6-sol-max":             "gpt-6-sol",
-		"gpt-6-luna-high":                  "gpt-6-luna",
-		"OPENAI/GPT-6_LUNA_OPENAI_COMPACT": "gpt-6-luna",
+		"gpt-6.1-sol":                       "gpt-6.1-sol",
+		"openai/gpt-6.1-sol-max":            "gpt-6.1-sol",
+		"OPENAI/GPT-6.1_SOL_OPENAI_COMPACT": "gpt-6.1-sol",
+		"gpt-6-sol":                         "gpt-6-sol",
+		"openai/gpt-6-sol-max":              "gpt-6-sol",
+		"gpt-6-luna-high":                   "gpt-6-luna",
+		"OPENAI/GPT-6_LUNA_OPENAI_COMPACT":  "gpt-6-luna",
 	}
 	for input, expected := range tests {
 		t.Run(input, func(t *testing.T) {
 			require.Equal(t, expected, normalizeKnownOpenAICodexModel(input))
 		})
+	}
+}
+
+func TestUsageBillingModelCandidatesGPT61SolKeepsVersionIdentity(t *testing.T) {
+	require.Equal(t,
+		[]string{"openai/gpt-6.1-sol-max", "gpt-6.1-sol-max", "gpt-6.1-sol"},
+		usageBillingModelCandidates("openai/gpt-6.1-sol-max"),
+	)
+	require.True(t, isOpenAIGPT6Model("gpt-6.1-sol"))
+	require.False(t, isOpenAIGPT6AstraModel("gpt-6.1-sol"))
+	for _, unknown := range []string{"gpt-6.1", "gpt-6.1-luna", "gpt-6.1-sol-preview", "gpt-6.1-solitude"} {
+		require.Empty(t, normalizeKnownOpenAICodexModel(unknown), unknown)
 	}
 }
 

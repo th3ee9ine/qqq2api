@@ -34,13 +34,26 @@ func TestDefaultModelsIncludeGPTImage25(t *testing.T) {
 }
 
 func TestGPT6SolLunaModelIdentity(t *testing.T) {
-	for _, model := range []string{"gpt-6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} {
 		require.Contains(t, DefaultModelIDs(), model)
-		require.True(t, IsGPT6SolOrLunaModelSpelling(model))
-		require.True(t, IsGPT6SolOrLunaModelSpelling(model+"-max"))
-		require.True(t, IsGPT6SolOrLunaModelSpelling("openai/"+model+"-openai-compact"))
+		for _, suffix := range []string{"", "-none", "-low", "-medium", "-high", "-xhigh", "-max", "-openai-compact"} {
+			spelling := "openai/" + model + suffix
+			require.True(t, IsGPT6SolOrLunaModelSpelling(spelling), spelling)
+			require.Equal(t, model, CanonicalGPT6SolOrLunaModel(spelling), spelling)
+		}
 	}
-	require.False(t, IsGPT6SolOrLunaModelSpelling("gpt-6-astra"))
-	require.False(t, IsGPT6SolOrLunaModelSpelling("gpt-6-solitude"))
-	require.False(t, IsGPT6SolOrLunaModelSpelling("gpt-6-luna-preview"))
+	for _, model := range []string{"gpt-6-astra", "gpt-6-solitude", "gpt-6-luna-preview", "gpt-6.1", "gpt-6.1-luna", "gpt-6.1-sol-preview", "gpt-6.1-solitude", "gpt-6.10-sol"} {
+		require.False(t, IsGPT6SolOrLunaModelSpelling(model), model)
+		require.Empty(t, CanonicalGPT6SolOrLunaModel(model), model)
+	}
+	require.Equal(t, "gpt-6.1-sol", CanonicalGPT6SolOrLunaModel(" OPENAI/GPT-6.1_SOL_HIGH "))
+}
+
+func TestGPT6NoneReasoningSupportExcludesGPT61Sol(t *testing.T) {
+	for _, model := range []string{"gpt-6-sol", "openai/gpt-6-luna-none"} {
+		require.True(t, SupportsGPT6NoneReasoningEffort(model), model)
+	}
+	for _, model := range []string{"gpt-6.1-sol", "openai/gpt-6.1-sol-none", "gpt-6.1-sol-openai-compact", "gpt-6-astra", "unknown"} {
+		require.False(t, SupportsGPT6NoneReasoningEffort(model), model)
+	}
 }

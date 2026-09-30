@@ -27,7 +27,7 @@ import (
 //
 // Helper functions from the Responses bridges (anthropicImageToDataURI,
 // extractAnthropicTextFromBlocks, fromResponsesCallID, sanitizeAnthropicToolUseInput,
-// parseAnthropicSystemContentParts, isReasoningModel, mapAnthropicEffortToResponses,
+// parseAnthropicSystemContentParts, isReasoningModel, mapAnthropicEffortToResponsesForModel,
 // normalizeToolParameters) are reused so the conversion semantics stay identical.
 
 // ---------------------------------------------------------------------------
@@ -99,13 +99,13 @@ func AnthropicToChatCompletionsRequest(req *AnthropicRequest) (*ChatCompletionsR
 		}
 	}
 
-	// Reasoning effort: output_config.effort maps 1:1 (max→xhigh). thinking.type
-	// itself is ignored (the Responses bridge behaves identically).
+	// Reasoning effort: output_config.effort maps 1:1, with max→xhigh for legacy
+	// models. thinking.type itself is ignored, matching the Responses bridge.
 	effort := "medium"
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
 		effort = req.OutputConfig.Effort
 	}
-	out.ReasoningEffort = mapAnthropicEffortToResponses(effort)
+	out.ReasoningEffort = mapAnthropicEffortToResponsesForModel(req.Model, effort)
 
 	parallelToolCalls := true
 	out.ParallelToolCalls = &parallelToolCalls

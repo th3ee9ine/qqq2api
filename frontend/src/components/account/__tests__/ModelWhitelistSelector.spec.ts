@@ -107,14 +107,14 @@ describe('ModelWhitelistSelector', () => {
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
-  it('keeps the existing model selection behavior', async () => {
+  it.each(['gpt-5.6-sol', 'gpt-6.1-sol'])('selects the exact model ID %s', async (modelID) => {
     const wrapper = mountSelector()
     await wrapper.get('div.cursor-pointer').trigger('click')
 
-    const row = findModelRow(wrapper, 'gpt-5.6-sol')
+    const row = findModelRow(wrapper, modelID)
     await row.get('[data-testid="select-model"]').trigger('click')
 
-    expect(wrapper.emitted('update:modelValue')).toEqual([[['gpt-5.6-sol']]])
+    expect(wrapper.emitted('update:modelValue')).toEqual([[[modelID]]])
     expect(copyToClipboard).not.toHaveBeenCalled()
   })
 

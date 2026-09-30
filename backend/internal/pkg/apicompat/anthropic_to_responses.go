@@ -60,13 +60,13 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 	// Determine reasoning effort: only output_config.effort controls the
 	// level; thinking.type is ignored. Default follows Codex CLI / airgate's
 	// Anthropic bridge shape, which uses medium when unset.
-	// Anthropic levels map 1:1 to OpenAI: low→low, medium→medium, high→high, max→xhigh.
+	// Anthropic levels map 1:1 to OpenAI, except legacy models map max→xhigh.
 	effort := "medium"
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
 		effort = req.OutputConfig.Effort
 	}
 	out.Reasoning = &ResponsesReasoning{
-		Effort:  mapAnthropicEffortToResponses(effort),
+		Effort:  mapAnthropicEffortToResponsesForModel(req.Model, effort),
 		Summary: "auto",
 	}
 
@@ -439,6 +439,15 @@ func mapAnthropicEffortToResponses(effort string) string {
 		return "xhigh"
 	}
 	return effort // low→low, medium→medium, high→high, unknown→passthrough
+}
+
+// GPT-6.1 Sol exposes max directly; retain that level across both Anthropic
+// bridges without changing the historical max-to-xhigh mapping of older models.
+func mapAnthropicEffortToResponsesForModel(model, effort string) string {
+	if effort == "max" && openai.CanonicalGPT6SolOrLunaModel(model) == "gpt-6.1-sol" {
+		return effort
+	}
+	return mapAnthropicEffortToResponses(effort)
 }
 
 // convertAnthropicToolsToResponses maps Anthropic tool definitions to

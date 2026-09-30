@@ -69,6 +69,20 @@ func TestUpstreamModelMismatchThreeStateAndCaseInsensitiveComparison(t *testing.
 	require.True(t, *mismatched)
 }
 
+func TestGPT61SolPreservesUpstreamIdentityAndDetectsDifferentModels(t *testing.T) {
+	for _, model := range []string{"gpt-6.1-sol", "openai/gpt-6.1-sol-high", "gpt-6.1-sol-openai-compact"} {
+		require.True(t, preserveOpenAIResponseModel(model), model)
+	}
+	matched := upstreamModelMismatch("gpt-6.1-sol", "gpt-6.1-sol")
+	require.NotNil(t, matched)
+	require.False(t, *matched)
+	for _, model := range []string{"gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "gpt-5.6-sol"} {
+		mismatch := upstreamModelMismatch("gpt-6.1-sol", model)
+		require.NotNil(t, mismatch)
+		require.True(t, *mismatch, model)
+	}
+}
+
 func TestUpstreamModelMismatchTreatsGrokBuildRuntimeIDsAsAliases(t *testing.T) {
 	tests := []struct {
 		name          string

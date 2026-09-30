@@ -828,6 +828,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	} else if compatibilityChanged {
 		firstClientMessage = normalized
 	}
+	if account.IsOpenAIApiKey() {
+		if samplingBody, samplingChanged, samplingErr := normalizeGPT6ResponsesSampling(firstClientMessage, capturedSessionModel); samplingErr != nil {
+			return fmt.Errorf("normalize first websocket response.create sampling: %w", samplingErr)
+		} else if samplingChanged {
+			firstClientMessage = samplingBody
+		}
+	}
 	if account.IsOpenAIOAuthLike() {
 		aliasedBody, reverse, aliased, aliasErr := aliasOpenAIOAuthReservedToolNamesBody(firstClientMessage)
 		if aliasErr != nil {
@@ -1171,6 +1178,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			if isResponseCreate && model != "" && model != strings.TrimSpace(gjson.GetBytes(payload, "model").String()) {
 				payload = s.ReplaceModelInBody(payload, model)
+			}
+			// Hooks and session inheritance have now resolved the actual wire
+			// model; an earlier cleanup could use a different model's rules.
+			if isResponseCreate && account.IsOpenAIApiKey() {
+				if samplingBody, samplingChanged, samplingErr := normalizeGPT6ResponsesSampling(payload, model); samplingErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", samplingErr)
+				} else if samplingChanged {
+					payload = samplingBody
+				}
 			}
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
 			// 多轮 passthrough usage：仅在成功（non-block / non-err）

@@ -365,6 +365,16 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if actualModel == "" {
 			actualModel = reqModel
 		}
+		// Passthrough keeps the body model (apart from explicit compact fallback),
+		// not the normal account mapping. Normalize sampling against that actual
+		// wire model on every attempt, including a compact fallback retry.
+		if account.IsOpenAIApiKey() {
+			if normalizedBody, changed, normalizeErr := normalizeGPT6ResponsesSampling(body, actualModel); normalizeErr != nil {
+				return nil, normalizeErr
+			} else if changed {
+				body = normalizedBody
+			}
+		}
 		SetOpsUpstreamModel(c, actualModel)
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token, actualModel)

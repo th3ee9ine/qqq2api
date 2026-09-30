@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/th3ee9ine/qqq2api/internal/pkg/apicompat"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 )
 
 func NormalizeOpenAICompatRequestedModel(model string) string {
@@ -39,6 +40,11 @@ func applyOpenAICompatModelNormalization(req *apicompat.AnthropicRequest) {
 	}
 
 	claudeEffort := openAIReasoningEffortToClaudeOutputEffort(derivedEffort)
+	if openai.CanonicalGPT6SolOrLunaModel(originalModel) == "gpt-6.1-sol" {
+		// This OpenAI bridge supports distinct xhigh and max levels. Using
+		// Claude's max as an intermediate for xhigh would upgrade the request.
+		claudeEffort = derivedEffort
+	}
 	if claudeEffort == "" {
 		return
 	}
@@ -84,6 +90,11 @@ func splitOpenAICompatReasoningModel(model string) (normalizedModel string, reas
 		reasoningEffort = last
 	case "xhigh", "extrahigh":
 		reasoningEffort = "xhigh"
+	case "max":
+		if openai.CanonicalGPT6SolOrLunaModel(modelID) != "gpt-6.1-sol" {
+			return trimmed, "", false
+		}
+		reasoningEffort = "max"
 	default:
 		return trimmed, "", false
 	}

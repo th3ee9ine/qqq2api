@@ -337,6 +337,7 @@ const (
 	configuredCodexGrokBuildContext    = 256_000
 	configuredCodexGPT56MaxContext     = 872_000
 	configuredCodexGPT6AstraContext    = 1_050_000
+	configuredCodexGPT61SolContext     = 1_050_000
 	configuredCodexToolOutputMaxTokens = 10_000
 )
 
@@ -499,6 +500,11 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 			// live account metadata remains authoritative for Sol/Luna.
 			if isOpenAIGPT56Model(modelID) || openai.IsGPT6SolOrLunaModelSpelling(modelID) {
 				descriptor.MaxContextWindow = configuredCodexGPT56MaxContext
+			}
+			if openai.CanonicalGPT6SolOrLunaModel(modelID) == "gpt-6.1-sol" {
+				// Official GPT-6.1 Sol context; live account metadata still takes precedence.
+				descriptor.ContextWindow = configuredCodexGPT61SolContext
+				descriptor.MaxContextWindow = configuredCodexGPT61SolContext
 			}
 			if isOpenAIGPT6AstraModel(modelID) {
 				// Codex resolves the Ultra workflow to this effort before inference.

@@ -27,6 +27,7 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 			model                      string
 			input, output, write, read float64
 		}{
+			{"gpt-6.1-sol", 2e-6, 10e-6, 2.5e-6, 0.1e-6},
 			{"gpt-6-sol", 2e-6, 10e-6, 2.5e-6, 0.2e-6},
 			{"gpt-6-luna", 0.1e-6, 0.5e-6, 0.125e-6, 0.01e-6},
 		} {
@@ -68,7 +69,7 @@ func TestNewModelPricingCatalogFallbackAndContext(t *testing.T) {
 
 func TestNewModelPricingChannelOverridesAndFamilyIsolation(t *testing.T) {
 	svc := NewBillingService(&config.Config{}, nil)
-	for _, model := range []string{"gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"} {
+	for _, model := range []string{"gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5"} {
 		t.Run(model, func(t *testing.T) {
 			zero := 0.0
 			prices, err := svc.GetModelPricingWithChannel(model, &ChannelModelPricing{InputPrice: &zero, OutputPrice: &zero, CacheWritePrice: &zero, CacheReadPrice: &zero})
@@ -106,9 +107,45 @@ func TestNewModelPricingExplicitZeroCacheWrite(t *testing.T) {
 func TestNewModelPricingAliasesRetainExplicitOverrides(t *testing.T) {
 	zero := &LiteLLMModelPricing{}
 	svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
-		"gpt-6-sol": zero, "gpt-6-luna": zero, "claude-opus-5-5": zero,
+		"gpt-6.1-sol": zero, "gpt-6-sol": zero, "gpt-6-luna": zero, "claude-opus-5-5": zero,
 	}}
-	for _, model := range []string{"gpt-6-sol-max", "openai/gpt-6-luna-openai-compact", "claude-opus-5-5-thinking"} {
+	for _, model := range []string{"gpt-6.1-sol-max", "openai/gpt-6.1-sol-openai-compact", "gpt-6-sol-max", "openai/gpt-6-luna-openai-compact", "claude-opus-5-5-thinking"} {
 		require.Same(t, zero, svc.GetModelPricing(model))
+	}
+}
+
+func TestGPT61SolPricingKeepsVersionSpecificRates(t *testing.T) {
+	oldSol := &LiteLLMModelPricing{InputCostPerToken: 7e-6, OutputCostPerToken: 30e-6}
+	luna := &LiteLLMModelPricing{InputCostPerToken: 0.1e-6, OutputCostPerToken: 0.5e-6}
+	astra := &LiteLLMModelPricing{InputCostPerToken: 10e-6, OutputCostPerToken: 50e-6}
+	pricing := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gpt-6-sol": oldSol, "gpt-6-luna": luna, "gpt-6-astra": astra,
+	}}
+	for _, model := range []string{"gpt-6.1-sol", "gpt-6.1-sol-max", "openai/gpt-6.1-sol-openai-compact", "OPENAI/GPT-6.1_SOL_HIGH"} {
+		t.Run(model, func(t *testing.T) {
+			got := pricing.GetModelPricing(model)
+			require.Same(t, openAIGPT61SolFallbackPricing, got)
+			billing := NewBillingService(&config.Config{}, pricing)
+			cost, err := billing.CalculateCostWithServiceTier(model, UsageTokens{InputTokens: 1000, CacheReadTokens: 1000}, 1, "priority")
+			require.NoError(t, err)
+			require.InDelta(t, 0.004, cost.InputCost, 1e-12)
+			require.InDelta(t, 0.0002, cost.CacheReadCost, 1e-12)
+		})
+	}
+	require.Same(t, oldSol, pricing.GetModelPricing("gpt-6-sol"))
+	require.Same(t, luna, pricing.GetModelPricing("gpt-6-luna"))
+	require.Same(t, astra, pricing.GetModelPricing("gpt-6-astra"))
+}
+
+func TestGPT61SolPricingExplicitZeroCacheWrite(t *testing.T) {
+	pricing := &PricingService{}
+	var err error
+	pricing.pricingData, err = pricing.parsePricingData([]byte(`{"gpt-6.1-sol":{"litellm_provider":"openai","input_cost_per_token":0.000002,"output_cost_per_token":0.00001,"input_cost_per_token_flex":0.000001,"cache_creation_input_token_cost":0}}`))
+	require.NoError(t, err)
+	billing := NewBillingService(&config.Config{}, pricing)
+	for _, tier := range []string{"", "priority", "flex"} {
+		cost, err := billing.CalculateCostWithServiceTier("gpt-6.1-sol-max", UsageTokens{CacheCreationTokens: 1000}, 1, tier)
+		require.NoError(t, err)
+		require.Zero(t, cost.CacheCreationCost)
 	}
 }

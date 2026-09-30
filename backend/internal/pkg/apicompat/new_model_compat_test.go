@@ -3,6 +3,7 @@ package apicompat
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -185,12 +186,14 @@ func replayThinkingOutputs(t *testing.T, model string, outputs []ResponsesOutput
 
 func TestGPT6ChatSamplingAndCacheFields(t *testing.T) {
 	temperature := 0.7
-	for _, model := range []string{"gpt-6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-6.1-sol", "openai/gpt-6.1-sol-high", "gpt-6-sol", "gpt-6-luna"} {
 		for _, effort := range []string{"", "none", "medium", "max"} {
 			out, err := ChatCompletionsToResponses(&ChatCompletionsRequest{Model: model, ReasoningEffort: effort, Temperature: &temperature, TopP: &temperature, PromptCacheOptions: json.RawMessage(`{"mode":"explicit","ttl":"30m"}`), Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"hello","prompt_cache_breakpoint":{"mode":"explicit"}}]`)}}})
 			require.NoError(t, err)
-			if effort == "none" {
+			require.Equal(t, model, out.Model)
+			if effort == "none" && !strings.Contains(model, "gpt-6.1-sol") {
 				require.NotNil(t, out.Temperature)
+				require.NotNil(t, out.TopP)
 			} else {
 				require.Nil(t, out.Temperature)
 				require.Nil(t, out.TopP)
@@ -203,7 +206,7 @@ func TestGPT6ChatSamplingAndCacheFields(t *testing.T) {
 
 func TestGPT6AnthropicBridgePreservesModelAndReasoningRules(t *testing.T) {
 	temperature := 0.4
-	for _, model := range []string{"gpt-6-sol", "gpt-6-luna"} {
+	for _, model := range []string{"gpt-6.1-sol", "openai/gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"} {
 		out, err := AnthropicToResponses(&AnthropicRequest{
 			Model:       model,
 			MaxTokens:   100,
@@ -223,6 +226,35 @@ func TestGPT6AnthropicBridgePreservesModelAndReasoningRules(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, model+"-high", chat.Model)
 		require.Nil(t, chat.Temperature)
+	}
+}
+
+func TestGPT61SolAnthropicBridgesPreserveMaxEffort(t *testing.T) {
+	for _, tc := range []struct {
+		model string
+		want  string
+	}{
+		{model: "gpt-6.1-sol", want: "max"},
+		{model: "openai/gpt-6.1-sol-high", want: "max"},
+		{model: "gpt-6-sol", want: "xhigh"},
+		{model: "gpt-5.5", want: "xhigh"},
+	} {
+		t.Run(tc.model, func(t *testing.T) {
+			req := &AnthropicRequest{
+				Model:        tc.model,
+				OutputConfig: &AnthropicOutputConfig{Effort: "max"},
+				Messages:     []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}},
+			}
+			responses, err := AnthropicToResponses(req)
+			require.NoError(t, err)
+			require.Equal(t, tc.model, responses.Model)
+			require.NotNil(t, responses.Reasoning)
+			require.Equal(t, tc.want, responses.Reasoning.Effort)
+			chat, err := AnthropicToChatCompletionsRequest(req)
+			require.NoError(t, err)
+			require.Equal(t, tc.model, chat.Model)
+			require.Equal(t, tc.want, chat.ReasoningEffort)
+		})
 	}
 }
 

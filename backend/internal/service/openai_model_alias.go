@@ -37,11 +37,8 @@ func normalizeKnownOpenAICodexModel(model string) string {
 		}
 	}
 
-	if openai.IsGPT6SolOrLunaModelSpelling(normalized) {
-		if strings.HasPrefix(normalized, "gpt-6-sol") {
-			return "gpt-6-sol"
-		}
-		return "gpt-6-luna"
+	if base := openai.CanonicalGPT6SolOrLunaModel(normalized); base != "" {
+		return base
 	}
 
 	switch {
