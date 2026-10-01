@@ -18,17 +18,17 @@ import (
 const maxAPIKeyAuthorizationHeaderBytes = service.MaxAPIKeyCredentialBytes + 128
 
 // NewAPIKeyAuthMiddleware 创建 API Key 认证中间件
-func NewAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, subscriptionService *service.SubscriptionService, cfg *config.Config) APIKeyAuthMiddleware {
-	return APIKeyAuthMiddleware(apiKeyAuthWithSubscription(apiKeyService, subscriptionService, cfg))
+func NewAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, cfg *config.Config) APIKeyAuthMiddleware {
+	return APIKeyAuthMiddleware(apiKeyAuth(apiKeyService, cfg))
 }
 
 // ProvideAPIKeyAuthMiddleware keeps the production graph free of the retired
-// user-subscription service. The legacy constructor remains for focused tests.
+// user-subscription service.
 func ProvideAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, cfg *config.Config) APIKeyAuthMiddleware {
-	return NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)
+	return NewAPIKeyAuthMiddleware(apiKeyService, cfg)
 }
 
-// apiKeyAuthWithSubscription API Key认证中间件。
+// apiKeyAuth API Key认证中间件。
 //
 // 中间件职责分为两层：
 //   - 鉴权（Authentication）：验证 Key 有效性、技术归属、IP 限制 —— 始终执行
@@ -37,7 +37,7 @@ func ProvideAPIKeyAuthMiddleware(apiKeyService *service.APIKeyService, cfg *conf
 // /v1/usage、/v1/billing 端点与异步生图任务查询只需鉴权，不需要计费执行。
 // usage 允许过期/配额耗尽的 Key 查询自身用量，billing 用于读取当前 Key 的倍率配置，
 // 异步生图查询允许已耗尽额度的 Key 拉取自身任务结果。
-func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, _ *service.SubscriptionService, cfg *config.Config) gin.HandlerFunc {
+func apiKeyAuth(apiKeyService *service.APIKeyService, cfg *config.Config) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// ── 1. 提取 API Key ──────────────────────────────────────────
 		if rejectInvalidAuthAbuse(c, apiKeyService) {

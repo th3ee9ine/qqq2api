@@ -23,7 +23,6 @@ type CRSSyncService struct {
 	proxyRepo          ProxyRepository
 	oauthService       *OAuthService
 	openaiOAuthService *OpenAIOAuthService
-	geminiOAuthService *GeminiOAuthService
 	cfg                *config.Config
 }
 
@@ -32,7 +31,6 @@ func NewCRSSyncService(
 	proxyRepo ProxyRepository,
 	oauthService *OAuthService,
 	openaiOAuthService *OpenAIOAuthService,
-	geminiOAuthService *GeminiOAuthService,
 	cfg *config.Config,
 ) *CRSSyncService {
 	return &CRSSyncService{
@@ -40,7 +38,6 @@ func NewCRSSyncService(
 		proxyRepo:          proxyRepo,
 		oauthService:       oauthService,
 		openaiOAuthService: openaiOAuthService,
-		geminiOAuthService: geminiOAuthService,
 		cfg:                cfg,
 	}
 }
@@ -1234,21 +1231,7 @@ func (s *CRSSyncService) refreshOAuthToken(ctx context.Context, account *Account
 			}
 			newCredentials = NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
 		}
-	case PlatformGemini:
-		if s.geminiOAuthService == nil {
-			return nil
-		}
-		tokenInfo, refreshErr := s.geminiOAuthService.RefreshAccountToken(ctx, account)
-		if refreshErr != nil {
-			err = refreshErr
-		} else {
-			newCredentials = s.geminiOAuthService.BuildAccountCredentials(tokenInfo)
-			for k, v := range account.Credentials {
-				if _, exists := newCredentials[k]; !exists {
-					newCredentials[k] = v
-				}
-			}
-		}
+
 	default:
 		return nil
 	}

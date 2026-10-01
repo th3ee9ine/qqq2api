@@ -102,16 +102,10 @@ func DetectModelPlatform(model string) (string, bool) {
 			return PlatformAnthropic, true
 		case "openai", "chatgpt":
 			return PlatformOpenAI, true
-		case "google", "google-ai-studio", "gemini":
-			return PlatformGemini, true
+
 		case "xai", "x-ai", "grok":
 			return PlatformGrok, true
-		case "kimi", "moonshot":
-			return PlatformKimi, true
-		case "zhipu", "glm", "bigmodel":
-			return PlatformZhipu, true
-		case "minimax":
-			return PlatformMiniMax, true
+
 		}
 		if rest != "" {
 			normalized = strings.TrimPrefix(rest, "models/")
@@ -134,23 +128,10 @@ func DetectModelPlatform(model string) (string, bool) {
 		strings.HasPrefix(normalized, "whisper-"),
 		hasOpenAISeriesPrefix(normalized):
 		return PlatformOpenAI, true
-	case strings.HasPrefix(normalized, "gemini-"),
-		strings.HasPrefix(normalized, "learnlm-"):
-		return PlatformGemini, true
+
 	case normalized == "grok" || strings.HasPrefix(normalized, "grok-"):
 		return PlatformGrok, true
-	case normalized == "k3",
-		normalized == "k3-256k",
-		strings.HasPrefix(normalized, "kimi-"),
-		strings.HasPrefix(normalized, "moonshot-"):
-		return PlatformKimi, true
-	case strings.HasPrefix(normalized, "glm-"):
-		return PlatformZhipu, true
-	case strings.HasPrefix(normalized, "minimax-"),
-		strings.HasPrefix(normalized, "abab5"),
-		strings.HasPrefix(normalized, "abab6"),
-		strings.HasPrefix(normalized, "abab7"):
-		return PlatformMiniMax, true
+
 	default:
 		return "", false
 	}

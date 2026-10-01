@@ -11,7 +11,7 @@ import (
 )
 
 type cyberAllowlistSettingsRepo struct {
-	authSourceDefaultsRepoStub
+	memorySettingRepoStub
 }
 
 func (r *cyberAllowlistSettingsRepo) GetValue(_ context.Context, key string) (string, error) {
@@ -24,7 +24,7 @@ func (r *cyberAllowlistSettingsRepo) GetValue(_ context.Context, key string) (st
 
 func TestUpdateSettingsCyberAllowlistRoundTripAndImmediateRefresh(t *testing.T) {
 	ctx := context.Background()
-	repo := &cyberAllowlistSettingsRepo{authSourceDefaultsRepoStub{values: map[string]string{}}}
+	repo := &cyberAllowlistSettingsRepo{memorySettingRepoStub{values: map[string]string{}}}
 	svc := NewSettingService(repo, &config.Config{})
 	resetGatewayForwardingSettingsCacheForTest(t)
 	defer svc.refreshCachedSettings(&SystemSettings{})

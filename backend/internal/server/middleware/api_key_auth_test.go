@@ -37,7 +37,7 @@ func TestAPIKeyAuthRejectsOversizedCredentialsBeforeLookup(t *testing.T) {
 		{"Authorization": strings.Repeat("x", maxAPIKeyAuthorizationHeaderBytes+1)},
 	} {
 		r := gin.New()
-		r.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(svc, nil, cfg)))
+		r.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(svc, cfg)))
 		r.GET("/t", func(c *gin.Context) { c.Status(http.StatusOK) })
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -78,7 +78,7 @@ func TestAPIKeyAuthSubjectUsesKeyConcurrency(t *testing.T) {
 			cfg := &config.Config{RunMode: runMode}
 			svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
 			router := gin.New()
-			router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(svc, nil, cfg)))
+			router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(svc, cfg)))
 			router.GET("/t", func(c *gin.Context) {
 				subject, ok := GetAuthSubjectFromContext(c)
 				require.True(t, ok)
@@ -122,7 +122,7 @@ func TestAPIKeyAuthGlobalKeyIgnoresTechnicalOwnerStatus(t *testing.T) {
 		t.Run(runMode, func(t *testing.T) {
 			cfg := &config.Config{RunMode: runMode}
 			svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
-			router := newAuthTestRouter(svc, nil, cfg)
+			router := newAuthTestRouter(svc, cfg)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -176,17 +176,7 @@ func TestAPIKeyAuthGlobalKeySkipsOwnerSubscriptionChecks(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeStandard}
 		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
 
-		subscriptionCalls := 0
-		subscriptionRepo := &stubUserSubscriptionRepo{
-			getActive: func(context.Context, int64, int64) (*service.UserSubscription, error) {
-				subscriptionCalls++
-				return nil, service.ErrSubscriptionNotFound
-			},
-		}
-		subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
-		t.Cleanup(subscriptionService.Stop)
-
-		router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
+		router := newAuthTestRouter(apiKeyService, cfg)
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -194,13 +184,12 @@ func TestAPIKeyAuthGlobalKeySkipsOwnerSubscriptionChecks(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
-		require.Zero(t, subscriptionCalls)
 	})
 
 	t.Run("simple_mode_uses_the_same_global_key", func(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeSimple}
 		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-		router := newAuthTestRouter(apiKeyService, nil, cfg)
+		router := newAuthTestRouter(apiKeyService, cfg)
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -213,7 +202,7 @@ func TestAPIKeyAuthGlobalKeySkipsOwnerSubscriptionChecks(t *testing.T) {
 	t.Run("simple_mode_accepts_lowercase_bearer", func(t *testing.T) {
 		cfg := &config.Config{RunMode: config.RunModeSimple}
 		apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-		router := newAuthTestRouter(apiKeyService, nil, cfg)
+		router := newAuthTestRouter(apiKeyService, cfg)
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -264,7 +253,7 @@ func TestAPIKeyAuthSetsGroupContext(t *testing.T) {
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
 	router := gin.New()
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 	router.GET("/t", func(c *gin.Context) {
 		groupFromCtx, ok := c.Request.Context().Value(ctxkey.Group).(*service.Group)
 		if !ok || groupFromCtx == nil || groupFromCtx.ID != group.ID {
@@ -327,7 +316,7 @@ func TestAPIKeyAuthGlobalKeyDoesNotUseOwnerExclusiveGroupEntitlements(t *testing
 
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	router := newAuthTestRouter(apiKeyService, nil, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -377,7 +366,7 @@ func TestAPIKeyAuthOverwritesInvalidContextGroup(t *testing.T) {
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
 	router := gin.New()
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 
 	invalidGroup := &service.Group{
 		ID:       group.ID,
@@ -506,7 +495,7 @@ func TestAPIKeyAuthRejectsUnavailableGroup(t *testing.T) {
 					businessLimitedReason, _ = v.(string)
 				}
 			})
-			router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+			router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 			router.GET("/t", func(c *gin.Context) {
 				c.JSON(http.StatusOK, gin.H{"ok": true})
 			})
@@ -615,7 +604,7 @@ func TestAPIKeyAuthMarksOnlyExpectedIngressRejections(t *testing.T) {
 				c.Next()
 				reason, rejected = GetIngressRejectReason(c)
 			})
-			router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+			router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 			router.GET("/t", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 			w := httptest.NewRecorder()
@@ -681,7 +670,7 @@ func TestAPIKeyAuthSetsOpsFallbackKeyOnEarlyAbort(t *testing.T) {
 		c.Next()
 		fallback, fallbackOK = GetOpsFallbackAPIKey(c)
 	})
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 	router.GET("/t", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -796,7 +785,7 @@ func TestAPIKeyAuthIPRestrictionUsesTrustedPathWhenSwitchDisabled(t *testing.T) 
 			businessLimitedReason, _ = v.(string)
 		}
 	})
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 	router.GET("/t", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -849,7 +838,7 @@ func TestAPIKeyAuthIPRestrictionIncludesClientIPForBlacklistDenial(t *testing.T)
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
 	router := gin.New()
 	require.NoError(t, router.SetTrustedProxies(nil))
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 	router.GET("/t", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -898,7 +887,7 @@ func TestAPIKeyAuthIPRestrictionUsesConfiguredTrustedProxy(t *testing.T) {
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
 	router := gin.New()
 	require.NoError(t, router.SetTrustedProxies([]string{"9.9.9.9"}))
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 	router.GET("/t", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -949,7 +938,7 @@ func TestAPIKeyAuthIPRestrictionUsesForwardedClientIPInDenialWhenTrusted(t *test
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
 	router := gin.New()
 	require.NoError(t, router.SetTrustedProxies([]string{"9.9.9.9"}))
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 	router.GET("/t", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -1004,7 +993,7 @@ func TestAPIKeyAuthTouchesLastUsedOnSuccess(t *testing.T) {
 
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	router := newAuthTestRouter(apiKeyService, nil, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -1051,7 +1040,7 @@ func TestAPIKeyAuthTouchLastUsedFailureDoesNotBlock(t *testing.T) {
 
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	router := newAuthTestRouter(apiKeyService, nil, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -1097,7 +1086,7 @@ func TestAPIKeyAuthTouchesLastUsedInStandardMode(t *testing.T) {
 
 	cfg := &config.Config{RunMode: config.RunModeStandard}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	router := newAuthTestRouter(apiKeyService, nil, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -1141,7 +1130,6 @@ func TestAPIKeyAuthBillingInfoSkipsBillingAndSideEffects(t *testing.T) {
 	}
 
 	touchCalls := 0
-	subscriptionCalls := 0
 	apiKeyRepo := &stubApiKeyRepo{
 		getByKey: func(context.Context, string) (*service.APIKey, error) {
 			clone := *apiKey
@@ -1152,17 +1140,9 @@ func TestAPIKeyAuthBillingInfoSkipsBillingAndSideEffects(t *testing.T) {
 			return nil
 		},
 	}
-	subscriptionRepo := &stubUserSubscriptionRepo{
-		getActive: func(context.Context, int64, int64) (*service.UserSubscription, error) {
-			subscriptionCalls++
-			return nil, service.ErrSubscriptionNotFound
-		},
-	}
 	cfg := &config.Config{RunMode: config.RunModeStandard}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	subscriptionService := service.NewSubscriptionService(nil, subscriptionRepo, nil, nil, cfg)
-	t.Cleanup(subscriptionService.Stop)
-	router := newAuthTestRouter(apiKeyService, subscriptionService, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/billing", nil)
@@ -1170,7 +1150,6 @@ func TestAPIKeyAuthBillingInfoSkipsBillingAndSideEffects(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.Zero(t, subscriptionCalls)
 	require.Zero(t, touchCalls)
 }
 
@@ -1192,7 +1171,7 @@ func TestAPIKeyAuthBillingInfoSkipsLastUsedInSimpleMode(t *testing.T) {
 	}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	router := newAuthTestRouter(apiKeyService, nil, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/billing", nil)
@@ -1221,7 +1200,7 @@ func TestAPIKeyAuthUsageStillTouchesLastUsed(t *testing.T) {
 	}
 	cfg := &config.Config{RunMode: config.RunModeStandard}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	router := newAuthTestRouter(apiKeyService, nil, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/usage", nil)
@@ -1264,7 +1243,7 @@ func TestAPIKeyAuthGlobalKeyIgnoresLegacyOwnerMinimumBalanceReserve(t *testing.T
 	cfg := &config.Config{RunMode: config.RunModeStandard}
 	cfg.Billing.MinimumBalanceReserve = 0.01
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	router := newAuthTestRouter(apiKeyService, nil, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -1307,7 +1286,7 @@ func TestAPIKeyAuthGlobalKeyIgnoresLegacyOwnerZeroBalance(t *testing.T) {
 
 	cfg := &config.Config{RunMode: config.RunModeStandard}
 	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
-	router := newAuthTestRouter(apiKeyService, nil, cfg)
+	router := newAuthTestRouter(apiKeyService, cfg)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/t", nil)
@@ -1338,7 +1317,7 @@ func TestAPIKeyAuthOpenAIQuotaErrorFormat(t *testing.T) {
 	}}
 
 	cfg := &config.Config{RunMode: config.RunModeStandard}
-	router := newAuthTestRouter(service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg), nil, cfg)
+	router := newAuthTestRouter(service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg), cfg)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	req.Header.Set("x-api-key", apiKey.Key)
@@ -1380,7 +1359,7 @@ func TestAPIKeyAuthQuotaErrorKeepsLegacyFormatOutsideResponses(t *testing.T) {
 	}}
 
 	cfg := &config.Config{RunMode: config.RunModeStandard}
-	router := newAuthTestRouter(service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg), nil, cfg)
+	router := newAuthTestRouter(service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg), cfg)
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	req.Header.Set("x-api-key", apiKey.Key)
@@ -1390,9 +1369,9 @@ func TestAPIKeyAuthQuotaErrorKeepsLegacyFormatOutsideResponses(t *testing.T) {
 	requireAPIKeyAuthError(t, w, "API_KEY_QUOTA_EXHAUSTED", "API key 额度已用完")
 }
 
-func newAuthTestRouter(apiKeyService *service.APIKeyService, subscriptionService *service.SubscriptionService, cfg *config.Config) *gin.Engine {
+func newAuthTestRouter(apiKeyService *service.APIKeyService, cfg *config.Config) *gin.Engine {
 	router := gin.New()
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, subscriptionService, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 	ok := func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	}

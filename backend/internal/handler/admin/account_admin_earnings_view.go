@@ -97,12 +97,6 @@ type accountAdminUsageInfo struct {
 	SevenDay              *accountAdminUsageProgress `json:"seven_day,omitempty"`
 	SevenDaySonnet        *accountAdminUsageProgress `json:"seven_day_sonnet,omitempty"`
 	SevenDayFable         *accountAdminUsageProgress `json:"seven_day_fable,omitempty"`
-	GeminiSharedDaily     *accountAdminUsageProgress `json:"gemini_shared_daily,omitempty"`
-	GeminiProDaily        *accountAdminUsageProgress `json:"gemini_pro_daily,omitempty"`
-	GeminiFlashDaily      *accountAdminUsageProgress `json:"gemini_flash_daily,omitempty"`
-	GeminiSharedMinute    *accountAdminUsageProgress `json:"gemini_shared_minute,omitempty"`
-	GeminiProMinute       *accountAdminUsageProgress `json:"gemini_pro_minute,omitempty"`
-	GeminiFlashMinute     *accountAdminUsageProgress `json:"gemini_flash_minute,omitempty"`
 	GrokLocalUsage        *accountAdminWindowStats   `json:"grok_local_usage,omitempty"`
 	GrokLocalUsage24h     *accountAdminWindowStats   `json:"grok_local_usage_24h,omitempty"`
 	GrokLocalUsage7d      *accountAdminWindowStats   `json:"grok_local_usage_7d,omitempty"`
@@ -121,12 +115,6 @@ func accountAdminUsageInfoView(usage *service.UsageInfo) *accountAdminUsageInfo 
 		SevenDay:              accountAdminUsageProgressView(usage.SevenDay),
 		SevenDaySonnet:        accountAdminUsageProgressView(usage.SevenDaySonnet),
 		SevenDayFable:         accountAdminUsageProgressView(usage.SevenDayFable),
-		GeminiSharedDaily:     accountAdminUsageProgressView(usage.GeminiSharedDaily),
-		GeminiProDaily:        accountAdminUsageProgressView(usage.GeminiProDaily),
-		GeminiFlashDaily:      accountAdminUsageProgressView(usage.GeminiFlashDaily),
-		GeminiSharedMinute:    accountAdminUsageProgressView(usage.GeminiSharedMinute),
-		GeminiProMinute:       accountAdminUsageProgressView(usage.GeminiProMinute),
-		GeminiFlashMinute:     accountAdminUsageProgressView(usage.GeminiFlashMinute),
 		GrokLocalUsage:        accountAdminWindowStatsView(usage.GrokLocalUsage),
 		GrokLocalUsage24h:     accountAdminWindowStatsView(usage.GrokLocalUsage24h),
 		GrokLocalUsage7d:      accountAdminWindowStatsView(usage.GrokLocalUsage7d),

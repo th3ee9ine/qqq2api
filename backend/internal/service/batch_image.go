@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
@@ -413,4 +414,9 @@ func CanTransitionBatchImageJob(from, to string) bool {
 	}
 	_, ok := allowed[from][to]
 	return ok
+}
+
+// BatchImageHoldRequestID preserves references to historical batch billing records.
+func BatchImageHoldRequestID(batchID string) string {
+	return "batch_image_hold:" + strings.TrimSpace(batchID)
 }

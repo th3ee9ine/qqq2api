@@ -53,12 +53,15 @@ func (s *settingHandlerPublicRepoStub) Delete(ctx context.Context, key string) e
 	panic("unexpected Delete call")
 }
 
-func TestSettingHandler_GetPublicSettings_ForcesRetiredEmailSignupFlagOff(t *testing.T) {
+func TestSettingHandler_GetPublicSettings_OmitsRetiredFeatures(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	repo := &settingHandlerPublicRepoStub{
 		values: map[string]string{
-			service.SettingKeyForceEmailOnThirdPartySignup: "true",
+			"force_email_on_third_party_signup": "true",
+			"balance_low_notify_enabled":        "true",
+			"balance_low_notify_threshold":      "20",
+			"balance_low_notify_recharge_url":   "https://example.com/recharge",
 		},
 	}
 	h := NewSettingHandler(service.NewSettingService(repo, &config.Config{}), "test-version")
@@ -72,14 +75,17 @@ func TestSettingHandler_GetPublicSettings_ForcesRetiredEmailSignupFlagOff(t *tes
 	require.Equal(t, http.StatusOK, recorder.Code)
 
 	var resp struct {
-		Code int `json:"code"`
-		Data struct {
-			ForceEmailOnThirdPartySignup bool `json:"force_email_on_third_party_signup"`
-		} `json:"data"`
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.False(t, resp.Data.ForceEmailOnThirdPartySignup)
+	for _, field := range []string{
+		"force_email_on_third_party_signup", "balance_low_notify_enabled",
+		"balance_low_notify_threshold", "balance_low_notify_recharge_url",
+	} {
+		require.NotContains(t, resp.Data, field)
+	}
 }
 
 func TestSettingHandler_GetPublicSettings_ExposesTencentCaptchaConfiguration(t *testing.T) {
@@ -117,19 +123,19 @@ func TestSettingHandler_GetPublicSettings_ExposesTencentCaptchaConfiguration(t *
 	require.Equal(t, service.TencentCaptchaRegionINTL, resp.Data.TencentCaptchaRegion)
 }
 
-func TestSettingHandler_GetPublicSettings_ForcesRetiredWeChatOAuthFlagsOff(t *testing.T) {
+func TestSettingHandler_GetPublicSettings_OmitsRetiredWeChatOAuthFlags(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	h := NewSettingHandler(service.NewSettingService(&settingHandlerPublicRepoStub{
 		values: map[string]string{
-			service.SettingKeyWeChatConnectEnabled:             "true",
-			service.SettingKeyWeChatConnectAppID:               "wx-mp-app",
-			service.SettingKeyWeChatConnectAppSecret:           "wx-mp-secret",
-			service.SettingKeyWeChatConnectMode:                "mp",
-			service.SettingKeyWeChatConnectScopes:              "snsapi_base",
-			service.SettingKeyWeChatConnectOpenEnabled:         "true",
-			service.SettingKeyWeChatConnectMPEnabled:           "true",
-			service.SettingKeyWeChatConnectRedirectURL:         "https://api.example.com/api/v1/auth/oauth/wechat/callback",
-			service.SettingKeyWeChatConnectFrontendRedirectURL: "/auth/wechat/callback",
+			"wechat_connect_enabled":               "true",
+			"wechat_connect_app_id":                "wx-mp-app",
+			"wechat_connect_app_secret":            "wx-mp-secret",
+			"wechat_connect_mode":                  "mp",
+			"wechat_connect_scopes":                "snsapi_base",
+			"wechat_connect_open_enabled":          "true",
+			"wechat_connect_mp_enabled":            "true",
+			"wechat_connect_redirect_url":          "https://api.example.com/api/v1/auth/oauth/wechat/callback",
+			"wechat_connect_frontend_redirect_url": "/auth/wechat/callback",
 		},
 	}, &config.Config{}), "test-version")
 
@@ -142,16 +148,12 @@ func TestSettingHandler_GetPublicSettings_ForcesRetiredWeChatOAuthFlagsOff(t *te
 	require.Equal(t, http.StatusOK, recorder.Code)
 
 	var resp struct {
-		Code int `json:"code"`
-		Data struct {
-			WeChatOAuthEnabled     bool `json:"wechat_oauth_enabled"`
-			WeChatOAuthOpenEnabled bool `json:"wechat_oauth_open_enabled"`
-			WeChatOAuthMPEnabled   bool `json:"wechat_oauth_mp_enabled"`
-		} `json:"data"`
+		Code int            `json:"code"`
+		Data map[string]any `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.False(t, resp.Data.WeChatOAuthEnabled)
-	require.False(t, resp.Data.WeChatOAuthOpenEnabled)
-	require.False(t, resp.Data.WeChatOAuthMPEnabled)
+	require.NotContains(t, resp.Data, "wechat_oauth_enabled")
+	require.NotContains(t, resp.Data, "wechat_oauth_open_enabled")
+	require.NotContains(t, resp.Data, "wechat_oauth_mp_enabled")
 }

@@ -69,21 +69,10 @@ func (s *GatewayService) DiagnoseModelAvailabilityForPlatform(
 		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
 	}
 
-	useMixed := platform == PlatformAnthropic || platform == PlatformGemini
 	platforms := []string{platform}
-	if useMixed {
-		platforms = append(platforms, PlatformAntigravity)
-	}
-
 	queryGroupID := groupID
 	includeGrouped := false
-	if useMixed {
-		// Preserve the generic scheduler's scope rules: an explicit group wins
-		// for mixed scheduling, while group-less simple mode scans all accounts.
-		if groupID == nil && s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-			includeGrouped = true
-		}
-	} else if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		queryGroupID = nil
 		includeGrouped = true
 	}
@@ -98,9 +87,7 @@ func (s *GatewayService) DiagnoseModelAvailabilityForPlatform(
 
 	diag := ModelAvailabilityDiagnosis{}
 	for i := range accounts {
-		if useMixed && accounts[i].Platform == PlatformAntigravity && !accounts[i].IsMixedSchedulingEnabled() {
-			continue
-		}
+
 		diag.HasAccountsInPool = true
 		if s.isModelSupportedByAccountWithContext(ctx, &accounts[i], requestedModel) {
 			diag.HasModelSupport = true

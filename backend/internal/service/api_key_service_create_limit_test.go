@@ -48,13 +48,21 @@ func (s *createLimitCacheStub) IncrementCreateCount(ctx context.Context, userID 
 	return s.createCounts[userID], nil
 }
 
+type createLimitUserRepoStub struct {
+	*userRepoStub
+}
+
+func (s *createLimitUserRepoStub) GetFirstAdmin(context.Context) (*User, error) {
+	return s.user, nil
+}
+
 func newCreateLimitService(repo *createLimitAPIKeyRepoStub, cache *createLimitCacheStub, maxActive, maxPerHour int) *APIKeyService {
 	cfg := &config.Config{}
 	cfg.APIKeyCreate.MaxActivePerUser = maxActive
 	cfg.APIKeyCreate.MaxPerUserPerHour = maxPerHour
 	return &APIKeyService{
 		apiKeyRepo: repo,
-		userRepo:   &userRepoStub{user: &User{ID: 7}},
+		userRepo:   &createLimitUserRepoStub{userRepoStub: &userRepoStub{user: &User{ID: 7, Role: RoleAdmin, Status: StatusActive}}},
 		cache:      cache,
 		cfg:        cfg,
 	}

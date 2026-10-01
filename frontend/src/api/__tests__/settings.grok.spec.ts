@@ -4,15 +4,10 @@ const { get, put } = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }));
 vi.mock("../client", () => ({ apiClient: { get, put } }));
 
 import {
-  appendAuthSourceDefaultsToUpdateRequest,
-  buildAuthSourceDefaultsState,
   getSettings,
   normalizeAccountSchedulingThresholdsMap,
-  normalizePlatformQuotasMap,
   sanitizeAccountSchedulingThresholdsMap,
-  sanitizePlatformQuotasMap,
   updateSettings,
-  type UpdateSettingsRequest,
 } from "../admin/settings";
 
 describe("admin Grok settings", () => {
@@ -36,17 +31,6 @@ describe("admin Grok settings", () => {
     expect(put).toHaveBeenCalledWith("/admin/settings", settings);
   });
 
-  it("keeps Grok quota zeroes and custom caps through default normalization and saving", () => {
-    const grok = { daily: 0, weekly: 12.5, monthly: 40 };
-    const quotas = sanitizePlatformQuotasMap(normalizePlatformQuotasMap({ grok }));
-    expect(quotas.grok).toEqual(grok);
-    expect(Object.keys(quotas)).toEqual(["anthropic", "openai", "grok"]);
-
-    const state = buildAuthSourceDefaultsState({ auth_source_default_email_platform_quotas: { grok } });
-    const request: UpdateSettingsRequest = {};
-    appendAuthSourceDefaultsToUpdateRequest(request, state);
-    expect(request.auth_source_default_email_platform_quotas?.grok).toEqual(grok);
-  });
 
   it("preserves the Grok scheduling threshold without re-enabling retired providers", () => {
     const normalized = normalizeAccountSchedulingThresholdsMap({ grok: 82.9 });

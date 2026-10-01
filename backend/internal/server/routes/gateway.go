@@ -28,7 +28,6 @@ func RegisterGatewayRoutes(
 	h *handler.Handlers,
 	apiKeyAuth middleware.APIKeyAuthMiddleware,
 	_ *service.APIKeyService,
-	_ *service.SubscriptionService,
 	opsService *service.OpsService,
 	settingService *service.SettingService,
 	compositeResolver *service.CompositeRouteResolver,

@@ -123,73 +123,15 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	// OpenCode Go：按模型原生协议分流（与 inbound 协议正交）。
 	// 规则未命中一律兜底 Chat Completions，只有显式 Responses 才走下方转换链。
-	if account.IsOpenCodeGo() {
-		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)
-		proto := openCodeGoNativeProtocol(account, mapped)
-		if proto != APIProtocolResponses {
-			if isResponsesShape {
-				if proto == APIProtocolAnthropic {
-					return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "")
-				}
-				var responsesReq apicompat.ResponsesRequest
-				if err := json.Unmarshal(body, &responsesReq); err != nil {
-					return nil, fmt.Errorf("parse responses-shaped chat completions request: %w", err)
-				}
-				chatReq, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(
-					&responsesReq,
-					&apicompat.ResponsesToChatOptions{ReasoningContentByID: s.reasoningContentByID},
-				)
-				if err != nil {
-					return nil, fmt.Errorf("convert responses-shaped chat completions request: %w", err)
-				}
-				chatBody, err := json.Marshal(chatReq)
-				if err != nil {
-					return nil, fmt.Errorf("marshal converted chat completions request: %w", err)
-				}
-				return s.forwardAsRawChatCompletions(ctx, c, account, chatBody, defaultMappedModel)
-			}
-			if proto == APIProtocolAnthropic {
-				return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel)
-			}
-			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
-		}
-	}
 
 	// 自适应账号的标准 Chat Completions 入站使用供应商原生 CC 端点。
 	// Responses 形状下，Kimi 继续走下方原生 Responses 链；GLM
 	// 没有 Responses 端点，先转换成 Chat Completions 再直转。
-	if account.IsAdaptiveAPIProtocol() && !account.IsOpenCodeGo() {
-		if !isResponsesShape {
-			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
-		}
-		if !account.SupportsNativeCNResponses() {
-			var responsesReq apicompat.ResponsesRequest
-			if err := json.Unmarshal(body, &responsesReq); err != nil {
-				return nil, fmt.Errorf("parse responses-shaped chat completions request: %w", err)
-			}
-			chatReq, err := apicompat.ResponsesToChatCompletionsRequestWithOptions(
-				&responsesReq,
-				&apicompat.ResponsesToChatOptions{ReasoningContentByID: s.reasoningContentByID},
-			)
-			if err != nil {
-				return nil, fmt.Errorf("convert responses-shaped chat completions request: %w", err)
-			}
-			chatBody, err := json.Marshal(chatReq)
-			if err != nil {
-				return nil, fmt.Errorf("marshal converted chat completions request: %w", err)
-			}
-			return s.forwardAsRawChatCompletions(ctx, c, account, chatBody, defaultMappedModel)
-		}
-		// Kimi 原生 Responses 请求继续走下方 Responses→Chat 回程转换。
-	}
 
 	// 入口分流（国产供应商 Anthropic 协议）：上游为供应商原生 Anthropic 端点，
 	// CC 入站请求经 CC→Responses→Anthropic 转换链直通该端点。必须先于
 	// ShouldUseResponsesAPI 分流：该类账号经 probe 落标
 	// openai_responses_supported=false，会先命中下方的 CC 直转分支。
-	if account.IsAnthropicProtocol() {
-		return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel)
-	}
 
 	// 固定 chat_completions 的 CN 账号，以及强制或已探测确认不支持 Responses
 	// 的其他 APIKey 账号，均走 CC 直转。
@@ -437,7 +379,6 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 			return s.forwardAsChatCompletions(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel, compatPromptCacheTenantIsolated)
 		}
 		if account.Type == AccountTypeAPIKey &&
-			!account.IsOpenCodeGo() &&
 			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
 			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {
 			logger.L().Info("openai chat_completions: /responses unsupported, falling back to raw chat completions",

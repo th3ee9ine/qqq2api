@@ -36,24 +36,6 @@ type userRepoStub struct {
 	domainLimitedCreates int
 }
 
-func (s *userRepoStub) CountUsersByEmailDomain(_ context.Context, domain string) (int, error) {
-	if s.domainCountErr != nil {
-		return 0, s.domainCountErr
-	}
-	return s.domainCounts[domain], nil
-}
-
-func (s *userRepoStub) CreateWithEmailAliasGuardAndDomainLimit(ctx context.Context, user *User, domain string) error {
-	s.domainLimitedCreates++
-	if s.domainLimitErr != nil {
-		return s.domainLimitErr
-	}
-	if s.domainCounts[domain] > 0 {
-		return ErrEmailDomainRegistrationLimit
-	}
-	return s.CreateWithEmailAliasGuard(ctx, user)
-}
-
 func (s *userRepoStub) Create(ctx context.Context, user *User) error {
 	if s.createErr != nil {
 		return s.createErr
@@ -68,17 +50,6 @@ func (s *userRepoStub) Create(ctx context.Context, user *User) error {
 	s.usersByEmail[user.Email] = user
 	s.user = user
 	return nil
-}
-
-func (s *userRepoStub) CreateWithEmailAliasGuard(ctx context.Context, user *User) error {
-	s.guardedCreates++
-	if s.aliasErr != nil {
-		return s.aliasErr
-	}
-	if s.aliasExists {
-		return ErrEmailExists
-	}
-	return s.Create(ctx, user)
 }
 
 func (s *userRepoStub) GetByID(ctx context.Context, id int64) (*User, error) {
@@ -135,18 +106,6 @@ func (s *userRepoStub) Delete(ctx context.Context, id int64) error {
 	return s.deleteErr
 }
 
-func (s *userRepoStub) GetUserAvatar(ctx context.Context, userID int64) (*UserAvatar, error) {
-	panic("unexpected GetUserAvatar call")
-}
-
-func (s *userRepoStub) UpsertUserAvatar(ctx context.Context, userID int64, input UpsertUserAvatarInput) (*UserAvatar, error) {
-	panic("unexpected UpsertUserAvatar call")
-}
-
-func (s *userRepoStub) DeleteUserAvatar(ctx context.Context, userID int64) error {
-	panic("unexpected DeleteUserAvatar call")
-}
-
 func (s *userRepoStub) List(ctx context.Context, params pagination.PaginationParams) ([]User, *pagination.PaginationResult, error) {
 	panic("unexpected List call")
 }
@@ -200,13 +159,6 @@ func (s *userRepoStub) ExistsByEmail(ctx context.Context, email string) (bool, e
 	return s.exists, nil
 }
 
-func (s *userRepoStub) ExistsByEmailAlias(ctx context.Context, email string) (bool, error) {
-	if s.aliasErr != nil {
-		return false, s.aliasErr
-	}
-	return s.aliasExists, nil
-}
-
 func (s *userRepoStub) RemoveGroupFromAllowedGroups(ctx context.Context, groupID int64) (int64, error) {
 	panic("unexpected RemoveGroupFromAllowedGroups call")
 }
@@ -217,14 +169,6 @@ func (s *userRepoStub) RemoveGroupFromUserAllowedGroups(ctx context.Context, use
 
 func (s *userRepoStub) AddGroupToAllowedGroups(ctx context.Context, userID int64, groupID int64) error {
 	panic("unexpected AddGroupToAllowedGroups call")
-}
-
-func (s *userRepoStub) ListUserAuthIdentities(ctx context.Context, userID int64) ([]UserAuthIdentityRecord, error) {
-	panic("unexpected ListUserAuthIdentities call")
-}
-
-func (s *userRepoStub) UnbindUserAuthProvider(context.Context, int64, string) error {
-	panic("unexpected UnbindUserAuthProvider call")
 }
 
 func (s *userRepoStub) UpdateTotpSecret(ctx context.Context, userID int64, encryptedSecret *string) error {
@@ -408,84 +352,6 @@ func (s *proxyRepoStub) CountExpired(_ context.Context) (int64, error) {
 }
 func (s *proxyRepoStub) CountExpiringSoon(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
-}
-
-type redeemRepoStub struct {
-	deleteErrByID map[int64]error
-	deletedIDs    []int64
-
-	batchUpdateIDs    []int64
-	batchUpdateFields RedeemCodeBatchUpdateFields
-	batchUpdateResult int64
-	batchUpdateErr    error
-	batchUpdateCalled bool
-}
-
-func (s *redeemRepoStub) Create(ctx context.Context, code *RedeemCode) error {
-	panic("unexpected Create call")
-}
-
-func (s *redeemRepoStub) CreateBatch(ctx context.Context, codes []RedeemCode) error {
-	panic("unexpected CreateBatch call")
-}
-
-func (s *redeemRepoStub) GetByID(ctx context.Context, id int64) (*RedeemCode, error) {
-	panic("unexpected GetByID call")
-}
-
-func (s *redeemRepoStub) GetByCode(ctx context.Context, code string) (*RedeemCode, error) {
-	panic("unexpected GetByCode call")
-}
-
-func (s *redeemRepoStub) Update(ctx context.Context, code *RedeemCode) error {
-	panic("unexpected Update call")
-}
-
-func (s *redeemRepoStub) BatchUpdate(ctx context.Context, ids []int64, fields RedeemCodeBatchUpdateFields) (int64, error) {
-	s.batchUpdateCalled = true
-	s.batchUpdateIDs = append([]int64(nil), ids...)
-	s.batchUpdateFields = fields
-	if s.batchUpdateErr != nil {
-		return 0, s.batchUpdateErr
-	}
-	if s.batchUpdateResult != 0 {
-		return s.batchUpdateResult, nil
-	}
-	return int64(len(ids)), nil
-}
-
-func (s *redeemRepoStub) Delete(ctx context.Context, id int64) error {
-	s.deletedIDs = append(s.deletedIDs, id)
-	if s.deleteErrByID != nil {
-		if err, ok := s.deleteErrByID[id]; ok {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *redeemRepoStub) Use(ctx context.Context, id, userID int64) error {
-	panic("unexpected Use call")
-}
-
-func (s *redeemRepoStub) List(ctx context.Context, params pagination.PaginationParams) ([]RedeemCode, *pagination.PaginationResult, error) {
-	panic("unexpected List call")
-}
-
-func (s *redeemRepoStub) ListWithFilters(ctx context.Context, params pagination.PaginationParams, codeType, status, search string) ([]RedeemCode, *pagination.PaginationResult, error) {
-	panic("unexpected ListWithFilters call")
-}
-
-func (s *redeemRepoStub) ListByUser(ctx context.Context, userID int64, limit int) ([]RedeemCode, error) {
-	panic("unexpected ListByUser call")
-}
-
-func (s *redeemRepoStub) ListByUserPaginated(ctx context.Context, userID int64, params pagination.PaginationParams, codeType string) ([]RedeemCode, *pagination.PaginationResult, error) {
-	panic("unexpected ListByUserPaginated call")
-}
-
-func (s *redeemRepoStub) SumPositiveBalanceByUser(ctx context.Context, userID int64) (float64, error) {
-	panic("unexpected SumPositiveBalanceByUser call")
 }
 
 type subscriptionInvalidateCall struct {
@@ -759,56 +625,4 @@ func TestAdminService_DeleteProxy_Error(t *testing.T) {
 
 	err := svc.DeleteProxy(context.Background(), 33)
 	require.ErrorIs(t, err, deleteErr)
-}
-
-func TestAdminService_DeleteRedeemCode_Success(t *testing.T) {
-	repo := &redeemRepoStub{}
-	svc := &adminServiceImpl{redeemCodeRepo: repo}
-
-	err := svc.DeleteRedeemCode(context.Background(), 10)
-	require.NoError(t, err)
-	require.Equal(t, []int64{10}, repo.deletedIDs)
-}
-
-func TestAdminService_DeleteRedeemCode_Idempotent(t *testing.T) {
-	repo := &redeemRepoStub{}
-	svc := &adminServiceImpl{redeemCodeRepo: repo}
-
-	err := svc.DeleteRedeemCode(context.Background(), 999)
-	require.NoError(t, err)
-	require.Equal(t, []int64{999}, repo.deletedIDs)
-}
-
-func TestAdminService_DeleteRedeemCode_Error(t *testing.T) {
-	deleteErr := errors.New("delete failed")
-	repo := &redeemRepoStub{deleteErrByID: map[int64]error{1: deleteErr}}
-	svc := &adminServiceImpl{redeemCodeRepo: repo}
-
-	err := svc.DeleteRedeemCode(context.Background(), 1)
-	require.ErrorIs(t, err, deleteErr)
-	require.Equal(t, []int64{1}, repo.deletedIDs)
-}
-
-func TestAdminService_BatchDeleteRedeemCodes_Success(t *testing.T) {
-	repo := &redeemRepoStub{}
-	svc := &adminServiceImpl{redeemCodeRepo: repo}
-
-	deleted, err := svc.BatchDeleteRedeemCodes(context.Background(), []int64{1, 2, 3})
-	require.NoError(t, err)
-	require.Equal(t, int64(3), deleted)
-	require.Equal(t, []int64{1, 2, 3}, repo.deletedIDs)
-}
-
-func TestAdminService_BatchDeleteRedeemCodes_PartialFailures(t *testing.T) {
-	repo := &redeemRepoStub{
-		deleteErrByID: map[int64]error{
-			2: errors.New("db error"),
-		},
-	}
-	svc := &adminServiceImpl{redeemCodeRepo: repo}
-
-	deleted, err := svc.BatchDeleteRedeemCodes(context.Background(), []int64{1, 2, 3})
-	require.NoError(t, err)
-	require.Equal(t, int64(2), deleted)
-	require.Equal(t, []int64{1, 2, 3}, repo.deletedIDs)
 }

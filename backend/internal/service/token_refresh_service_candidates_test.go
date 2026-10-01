@@ -117,6 +117,7 @@ func TestTokenRefreshService_ProcessRefreshUsesOAuthRefreshCandidates(t *testing
 	future := time.Now().Add(10 * time.Minute)
 	repo := &tokenRefreshCandidateRepo{
 		accounts: []Account{
+
 			{
 				ID:          1,
 				Platform:    PlatformOpenAI,
@@ -140,16 +141,7 @@ func TestTokenRefreshService_ProcessRefreshUsesOAuthRefreshCandidates(t *testing
 				Status:      StatusActive,
 				Credentials: map[string]any{"refresh_token": "refresh-token"},
 			},
-			{
-				ID:                      4,
-				Platform:                PlatformAntigravity,
-				Type:                    AccountTypeOAuth,
-				Status:                  StatusActive,
-				Schedulable:             true,
-				Credentials:             map[string]any{"refresh_token": "refresh-token"},
-				TempUnschedulableUntil:  &future,
-				TempUnschedulableReason: "token refresh retry exhausted: network timeout",
-			},
+
 			{
 				ID:          5,
 				Platform:    "other",
@@ -158,17 +150,11 @@ func TestTokenRefreshService_ProcessRefreshUsesOAuthRefreshCandidates(t *testing
 				Schedulable: true,
 				Credentials: map[string]any{"refresh_token": "refresh-token"},
 			},
-			{
-				ID:                      6,
-				Platform:                PlatformAntigravity,
-				Type:                    AccountTypeOAuth,
-				Status:                  StatusActive,
-				Schedulable:             true,
-				Credentials:             map[string]any{"refresh_token": "refresh-token"},
-				Extra:                   map[string]any{"privacy_mode": AntigravityPrivacySet},
-				TempUnschedulableUntil:  &future,
-				TempUnschedulableReason: "OAuth 401: unauthorized",
-			},
+
+			{ID: 6, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true,
+				Credentials:            map[string]any{"refresh_token": "refresh-token"},
+				Extra:                  map[string]any{"privacy_mode": "training_disabled"},
+				TempUnschedulableUntil: &future, TempUnschedulableReason: "OAuth 401: unauthorized"},
 			{
 				ID:          7,
 				Platform:    PlatformOpenAI,
@@ -184,8 +170,6 @@ func TestTokenRefreshService_ProcessRefreshUsesOAuthRefreshCandidates(t *testing
 		candidatePager: repo,
 		registrations: []tokenRefreshRegistration{
 			{platform: PlatformOpenAI, refresher: &tokenRefreshTestRefresher{}},
-			{platform: PlatformGemini, refresher: &tokenRefreshTestRefresher{}},
-			{platform: PlatformAntigravity, refresher: &tokenRefreshTestRefresher{}},
 		},
 		refreshPolicy: DefaultBackgroundRefreshPolicy(),
 		cfg:           &config.TokenRefreshConfig{RefreshBeforeExpiryHours: 1, MaxRetries: 1},

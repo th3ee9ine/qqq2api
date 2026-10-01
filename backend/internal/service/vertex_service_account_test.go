@@ -18,18 +18,6 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestBuildVertexGeminiURL(t *testing.T) {
-	got, err := buildVertexGeminiURL("my-project", "us-central1", "gemini-3-pro", "streamGenerateContent", true)
-	require.NoError(t, err)
-	require.Equal(t, "https://us-central1-aiplatform.googleapis.com/v1/projects/my-project/locations/us-central1/publishers/google/models/gemini-3-pro:streamGenerateContent?alt=sse", got)
-}
-
-func TestBuildVertexGeminiURLUsesGlobalEndpointHost(t *testing.T) {
-	got, err := buildVertexGeminiURL("my-project", "global", "gemini-3-flash-preview", "streamGenerateContent", true)
-	require.NoError(t, err)
-	require.Equal(t, "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/publishers/google/models/gemini-3-flash-preview:streamGenerateContent?alt=sse", got)
-}
-
 func TestBuildVertexAnthropicURL(t *testing.T) {
 	got, err := buildVertexAnthropicURL("my-project", "us-east5", "claude-sonnet-4-5@20250929", false)
 	require.NoError(t, err)
@@ -55,12 +43,6 @@ func TestBuildVertexAnthropicRequestBody(t *testing.T) {
 	require.Equal(t, vertexAnthropicVersion, gjson.GetBytes(got, "anthropic_version").String())
 	require.Equal(t, int64(64), gjson.GetBytes(got, "max_tokens").Int())
 	require.Equal(t, "hi", gjson.GetBytes(got, "messages.0.content").String())
-}
-
-func TestBuildVertexGeminiURLRejectsInvalidLocation(t *testing.T) {
-	_, err := buildVertexGeminiURL("my-project", "us-central1/path", "gemini-3-pro", "generateContent", false)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid vertex location")
 }
 
 func TestParseVertexServiceAccountKey(t *testing.T) {

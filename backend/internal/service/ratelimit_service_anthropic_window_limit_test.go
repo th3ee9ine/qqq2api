@@ -13,7 +13,7 @@ import (
 )
 
 type anthropicWindowLimitRepo struct {
-	mockAccountRepoForGemini
+	mockGatewayAccountRepo
 	rateLimitCalls          int
 	tempUnschedCalls        int
 	lastRateLimitReset      time.Time
@@ -59,7 +59,7 @@ func TestHandleUpstreamError_AnthropicWindowLimitPreemptsTempUnschedRule(t *test
 	headers.Set("anthropic-ratelimit-unified-5h-reset", strconv.FormatInt(resetAt.Unix(), 10))
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{
 		ID:       42,
 		Type:     AccountTypeOAuth,
@@ -119,7 +119,7 @@ func TestHandleUpstreamError_Anthropic7dOiOnlyMarksModelRateLimit(t *testing.T) 
 	headers := fable429Headers(reset5h, resetOI)
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{
 		ID:       42,
 		Type:     AccountTypeOAuth,
@@ -166,7 +166,7 @@ func TestHandleUpstreamError_AnthropicFableCreditsRequiredOnlyMarksModelRateLimi
 	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(resetAt.Unix(), 10))
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 	body := []byte(`{"type":"error","error":{"details":{"error_code":"credits_required","model":"claude-fable-5","disabled_reason":"org_level_disabled"},"message":"Usage credits are required for this model."}}`)
 
@@ -183,7 +183,7 @@ func TestHandleUpstreamError_AnthropicFableCreditsRequiredOnlyMarksModelRateLimi
 func TestHandleUpstreamError_AnthropicFableCreditsRequiredFallsBackToRequestedModel(t *testing.T) {
 	startedAt := time.Now()
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 	body := []byte(`{"type":"error","error":{"details":{"error_code":"credits_required"},"message":"Usage credits are required for this model."}}`)
 
@@ -201,7 +201,7 @@ func TestHandleUpstreamError_AnthropicNonFableCreditsRequiredKeepsLegacyBehavior
 	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(resetAt.Unix(), 10))
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 	body := []byte(`{"type":"error","error":{"details":{"error_code":"credits_required","model":"claude-opus-5"},"message":"Usage credits are required for this model."}}`)
 
@@ -225,7 +225,7 @@ func TestHandleUpstreamError_AnthropicSharedWindowStillWinsWithFableCreditsRequi
 	headers.Set("anthropic-ratelimit-unified-reset", strconv.FormatInt(reset5h.Unix(), 10))
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 	body := []byte(`{"type":"error","error":{"details":{"error_code":"credits_required","model":"claude-fable-5"}}}`)
 
@@ -246,7 +246,7 @@ func TestHandleUpstreamError_Anthropic5hWindowStillWinsOver7dOi(t *testing.T) {
 	headers.Set("anthropic-ratelimit-unified-5h-utilization", "1.0")
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 
 	svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, headers, nil, "claude-fable-5")
@@ -267,7 +267,7 @@ func TestHandleUpstreamError_AnthropicAccountWindowStillWinsOver7dOi(t *testing.
 	headers.Set("anthropic-ratelimit-unified-7d-utilization", "1.02")
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 
 	svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, headers, nil, "claude-fable-5")
@@ -293,7 +293,7 @@ func TestHandleUpstreamError_Anthropic429Without7dOiKeepsLegacyBehavior(t *testi
 	headers.Set("anthropic-ratelimit-unified-7d-utilization", "0.56")
 
 	repo := &anthropicWindowLimitRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{ID: 42, Type: AccountTypeOAuth, Platform: PlatformAnthropic}
 
 	svc.HandleUpstreamError(context.Background(), account, http.StatusTooManyRequests, headers, nil, "claude-fable-5")

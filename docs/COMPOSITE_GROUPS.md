@@ -11,6 +11,7 @@ Composite groups can route to these concrete account platforms:
 
 - Anthropic
 - OpenAI
+- Grok
 
 The selected concrete platform is used for account selection, post-usage
 billing, ops error platform attribution, model mapping/pricing lookup, and
@@ -68,6 +69,7 @@ Composite routing detects common public model IDs and provider-prefixed IDs:
 - `claude-*` and `anthropic/claude-*` route to Anthropic.
 - `gpt-*`, `o*`, `codex-*`, `text-embedding-*`, `dall-e-*`, and
   `openai/*` route to OpenAI.
+- Grok models route to Grok.
 
 Unknown or ambiguous model names fail closed with a client error instead of
 guessing a provider.

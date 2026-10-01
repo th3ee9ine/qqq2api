@@ -97,7 +97,7 @@
             <div>
               <span class="inline-flex items-center gap-1.5 text-xs font-medium text-primary-700 dark:text-primary-300">
                 <Icon name="shield" size="sm" />
-                {{ t('admin.users.roles.account_admin') }}
+                {{ t('admin.accountAdmins.roles.account_admin') }}
               </span>
               <p class="mt-1 text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accountAdmins.permissionScope') }}</p>
             </div>

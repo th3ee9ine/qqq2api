@@ -687,7 +687,7 @@ func TestResolveAccountStatsCost_CatalogPricingPriority(t *testing.T) {
 				groupID = 99
 			}
 			cost := resolveAccountStatsCost(context.Background(), cs, newTestBillingService(),
-				1, groupID, "gpt-5.4-mini", UsageTokens{InputTokens: 1000}, 1, 0.75, "", peak)
+				1, groupID, "gpt-5.4-mini", UsageTokens{InputTokens: 1000}, 1, 0.75, "", peak, false)
 			if tt.noChannel {
 				require.Nil(t, cost)
 				return

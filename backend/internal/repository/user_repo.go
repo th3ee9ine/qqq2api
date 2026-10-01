@@ -32,8 +32,6 @@ type userRepository struct {
 	sql    sqlExecutor
 }
 
-var _ service.RedeemUserAdjustmentRepository = (*userRepository)(nil)
-
 func NewUserRepository(client *dbent.Client, sqlDB *sql.DB) service.UserRepository {
 	return newUserRepositoryWithSQL(client, sqlDB)
 }
@@ -43,27 +41,10 @@ func newUserRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *userRepos
 }
 
 func (r *userRepository) Create(ctx context.Context, userIn *service.User) error {
-	return r.create(ctx, userIn, false, "")
+	return r.create(ctx, userIn)
 }
 
-// CreateWithEmailAliasGuard 见 service.UserRepository：在邮箱唯一性锁内复查收件箱身份，
-// 供注册路径使用。
-func (r *userRepository) CreateWithEmailAliasGuard(ctx context.Context, userIn *service.User) error {
-	return r.create(ctx, userIn, true, "")
-}
-
-// CountUsersByEmailDomain 统计指定可注册主域名及其子域名下的未删除用户。
-func (r *userRepository) CountUsersByEmailDomain(ctx context.Context, domain string) (int, error) {
-	return countUsersByEmailDomainWithClient(ctx, clientFromContext(ctx, r.client), domain)
-}
-
-// CreateWithEmailAliasGuardAndDomainLimit 串行化非白名单域名的注册请求，
-// 并在用户写入的同一事务内复查域名额度。
-func (r *userRepository) CreateWithEmailAliasGuardAndDomainLimit(ctx context.Context, userIn *service.User, domain string) error {
-	return r.create(ctx, userIn, true, normalizeEmailDomain(domain))
-}
-
-func (r *userRepository) create(ctx context.Context, userIn *service.User, guardEmailAlias bool, domainLimit string) error {
+func (r *userRepository) create(ctx context.Context, userIn *service.User) error {
 	if userIn == nil {
 		return nil
 	}
@@ -98,13 +79,6 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 	}
 
 	lockKeys := []string{normalizedEmailUniquenessLockKey(userIn.Email)}
-	if guardEmailAlias {
-		// 别名变体的字面量不同，唯一索引无法兜底；用收件箱身份锁把同一收件箱的并发注册串行化。
-		lockKeys = append(lockKeys, emailAliasUniquenessLockKey(userIn.Email))
-	}
-	if domainLimit != "" {
-		lockKeys = append(lockKeys, registrationEmailDomainLockKey(domainLimit))
-	}
 	releaseEmailLock, err := lockRepositoryScopedKeys(
 		txCtx,
 		txClient,
@@ -116,28 +90,8 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 	}
 	defer releaseEmailLock()
 
-	if domainLimit != "" {
-		count, err := countUsersByEmailDomainWithClient(txCtx, txClient, domainLimit)
-		if err != nil {
-			return err
-		}
-		if count > 0 {
-			return service.ErrEmailDomainRegistrationLimit
-		}
-	}
-
 	if err := ensureNormalizedEmailAvailableWithClient(txCtx, txClient, 0, userIn.Email); err != nil {
 		return err
-	}
-
-	if guardEmailAlias {
-		aliasExists, err := existsByEmailAliasWithClient(txCtx, txClient, userIn.Email)
-		if err != nil {
-			return err
-		}
-		if aliasExists {
-			return service.ErrEmailExists
-		}
 	}
 
 	createOp := txClient.User.Create().
@@ -164,9 +118,6 @@ func (r *userRepository) create(ctx context.Context, userIn *service.User, guard
 	}
 
 	if err := r.syncUserAllowedGroupsWithClient(txCtx, txClient, created.ID, userIn.AllowedGroups); err != nil {
-		return err
-	}
-	if err := ensureEmailAuthIdentityWithClient(txCtx, txClient, created.ID, created.Email, "user_repo_create"); err != nil {
 		return err
 	}
 
@@ -290,12 +241,6 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 		}
 	}
 
-	existing, err := clientFromContext(txCtx, txClient).User.Get(txCtx, userIn.ID)
-	if err != nil {
-		return translatePersistenceError(err, service.ErrUserNotFound, nil)
-	}
-	oldEmail := existing.Email
-
 	updateOp := txClient.User.UpdateOneID(userIn.ID)
 	if fields.Email {
 		updateOp = updateOp.SetEmail(userIn.Email)
@@ -358,11 +303,6 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 			return err
 		}
 	}
-	// 始终以库中的邮箱为准补齐 email 身份：未改邮箱时 updated.Email == oldEmail，
-	// 这里退化为幂等的身份补写，与改邮箱前的行为一致。
-	if err := replaceEmailAuthIdentityWithClient(txCtx, txClient, updated.ID, oldEmail, updated.Email, "user_repo_update"); err != nil {
-		return err
-	}
 
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
@@ -372,91 +312,6 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 
 	userIn.UpdatedAt = updated.UpdatedAt
 	return nil
-}
-
-func ensureEmailAuthIdentityWithClient(ctx context.Context, client *dbent.Client, userID int64, email string, source string) error {
-	client = clientFromContext(ctx, client)
-	if client == nil || userID <= 0 {
-		return nil
-	}
-
-	subject := normalizeEmailAuthIdentitySubject(email)
-	if subject == "" {
-		return nil
-	}
-
-	if err := client.AuthIdentity.Create().
-		SetUserID(userID).
-		SetProviderType("email").
-		SetProviderKey("email").
-		SetProviderSubject(subject).
-		SetVerifiedAt(time.Now().UTC()).
-		SetMetadata(map[string]any{"source": source}).
-		OnConflictColumns(
-			authidentity.FieldProviderType,
-			authidentity.FieldProviderKey,
-			authidentity.FieldProviderSubject,
-		).
-		DoNothing().
-		Exec(ctx); err != nil {
-		if !isSQLNoRowsError(err) {
-			return err
-		}
-	}
-
-	identity, err := client.AuthIdentity.Query().
-		Where(
-			authidentity.ProviderTypeEQ("email"),
-			authidentity.ProviderKeyEQ("email"),
-			authidentity.ProviderSubjectEQ(subject),
-		).
-		Only(ctx)
-	if err != nil {
-		if dbent.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-	if identity.UserID != userID {
-		return ErrAuthIdentityOwnershipConflict
-	}
-	return nil
-}
-
-func replaceEmailAuthIdentityWithClient(ctx context.Context, client *dbent.Client, userID int64, oldEmail, newEmail string, source string) error {
-	newSubject := normalizeEmailAuthIdentitySubject(newEmail)
-	if err := ensureEmailAuthIdentityWithClient(ctx, client, userID, newEmail, source); err != nil {
-		return err
-	}
-
-	oldSubject := normalizeEmailAuthIdentitySubject(oldEmail)
-	if oldSubject == "" || oldSubject == newSubject {
-		return nil
-	}
-
-	_, err := clientFromContext(ctx, client).AuthIdentity.Delete().
-		Where(
-			authidentity.UserIDEQ(userID),
-			authidentity.ProviderTypeEQ("email"),
-			authidentity.ProviderKeyEQ("email"),
-			authidentity.ProviderSubjectEQ(oldSubject),
-		).
-		Exec(ctx)
-	return err
-}
-
-func normalizeEmailAuthIdentitySubject(email string) string {
-	normalized := strings.ToLower(strings.TrimSpace(email))
-	if normalized == "" {
-		return ""
-	}
-	if strings.HasSuffix(normalized, service.LinuxDoConnectSyntheticEmailDomain) ||
-		strings.HasSuffix(normalized, service.OIDCConnectSyntheticEmailDomain) ||
-		strings.HasSuffix(normalized, service.WeChatConnectSyntheticEmailDomain) ||
-		strings.HasSuffix(normalized, service.DingTalkConnectSyntheticEmailDomain) {
-		return ""
-	}
-	return normalized
 }
 
 func (r *userRepository) Delete(ctx context.Context, id int64) error {
@@ -571,21 +426,6 @@ func (r *userRepository) ListWithFilters(ctx context.Context, params pagination.
 			apikey.GroupIDEQ(filters.APIKeyGroupID),
 			apikey.DeletedAtIsNil(),
 		))
-	}
-
-	// If attribute filters are specified, we need to filter by user IDs first
-	var allowedUserIDs []int64
-	if len(filters.Attributes) > 0 {
-		var attrErr error
-		allowedUserIDs, attrErr = r.filterUsersByAttributes(ctx, filters.Attributes)
-		if attrErr != nil {
-			return nil, nil, attrErr
-		}
-		if len(allowedUserIDs) == 0 {
-			// No users match the attribute filters
-			return []service.User{}, paginationResultFromTotal(0, params), nil
-		}
-		q = q.Where(dbuser.IDIn(allowedUserIDs...))
 	}
 
 	total, err := q.Clone().Count(userCtx)
@@ -784,56 +624,6 @@ func userLastUsedAtOrder(sortOrder string) []func(*entsql.Selector) {
 	}
 }
 
-// filterUsersByAttributes returns user IDs that match ALL the given attribute filters
-func (r *userRepository) filterUsersByAttributes(ctx context.Context, attrs map[int64]string) ([]int64, error) {
-	if len(attrs) == 0 {
-		return nil, nil
-	}
-
-	if r.sql == nil {
-		return nil, fmt.Errorf("sql executor is not configured")
-	}
-
-	clauses := make([]string, 0, len(attrs))
-	args := make([]any, 0, len(attrs)*2+1)
-	argIndex := 1
-	for attrID, value := range attrs {
-		clauses = append(clauses, fmt.Sprintf("(attribute_id = $%d AND value ILIKE $%d)", argIndex, argIndex+1))
-		args = append(args, attrID, "%"+value+"%")
-		argIndex += 2
-	}
-
-	query := fmt.Sprintf(
-		`SELECT user_id
-		 FROM user_attribute_values
-		 WHERE %s
-		 GROUP BY user_id
-		 HAVING COUNT(DISTINCT attribute_id) = $%d`,
-		strings.Join(clauses, " OR "),
-		argIndex,
-	)
-	args = append(args, len(attrs))
-
-	rows, err := r.sql.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	result := make([]int64, 0)
-	for rows.Next() {
-		var userID int64
-		if scanErr := rows.Scan(&userID); scanErr != nil {
-			return nil, scanErr
-		}
-		result = append(result, userID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
 func (r *userRepository) UpdateBalance(ctx context.Context, id int64, amount float64) error {
 	client := clientFromContext(ctx, r.client)
 	update := client.User.Update().Where(dbuser.IDEQ(id)).AddBalance(amount)
@@ -846,27 +636,6 @@ func (r *userRepository) UpdateBalance(ctx context.Context, id int64, amount flo
 		return translatePersistenceError(err, service.ErrUserNotFound, nil)
 	}
 	if n == 0 {
-		return service.ErrUserNotFound
-	}
-	return nil
-}
-
-func (r *userRepository) ApplyRedeemBalanceAdjustment(ctx context.Context, id int64, delta float64) error {
-	const updateSQL = `
-		UPDATE users
-		SET balance = GREATEST(balance + $1, 0), updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
-	`
-	client := clientFromContext(ctx, r.client)
-	result, err := client.ExecContext(ctx, updateSQL, delta, id)
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
 		return service.ErrUserNotFound
 	}
 	return nil
@@ -1056,27 +825,6 @@ func (r *userRepository) UpdateConcurrency(ctx context.Context, id int64, amount
 	return nil
 }
 
-func (r *userRepository) ApplyRedeemConcurrencyAdjustment(ctx context.Context, id int64, delta int) error {
-	const updateSQL = `
-		UPDATE users
-		SET concurrency = GREATEST(concurrency + $1, 0), updated_at = NOW()
-		WHERE id = $2 AND deleted_at IS NULL
-	`
-	client := clientFromContext(ctx, r.client)
-	result, err := client.ExecContext(ctx, updateSQL, delta, id)
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return service.ErrUserNotFound
-	}
-	return nil
-}
-
 func (r *userRepository) BatchSetConcurrency(ctx context.Context, userIDs []int64, value int) (int, error) {
 	if len(userIDs) == 0 {
 		return 0, nil
@@ -1150,143 +898,6 @@ func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool,
 // 上限只是兜底，避免公开未鉴权的注册/发码端点把大表整张读进内存。
 const emailAliasCandidateLimit = 50
 
-// ExistsByEmailAlias 见 service.UserRepository。软删除过滤沿用 ExistsByEmail 的默认行为。
-func (r *userRepository) ExistsByEmailAlias(ctx context.Context, email string) (bool, error) {
-	return existsByEmailAliasWithClient(ctx, clientFromContext(ctx, r.client), email)
-}
-
-func existsByEmailAliasWithClient(ctx context.Context, client *dbent.Client, email string) (bool, error) {
-	_, exists, err := emailAliasOwnerIDWithClient(ctx, client, email, 0)
-	return exists, err
-}
-
-func emailAliasOwnerIDWithClient(ctx context.Context, client *dbent.Client, email string, currentUserID int64) (int64, bool, error) {
-	if client == nil {
-		return 0, false, nil
-	}
-	probes := service.EmailAliasDedupProbes(email)
-	if len(probes) == 0 {
-		return 0, false, nil
-	}
-
-	preds := make([]predicate.User, 0, 2*len(probes))
-	for _, probe := range probes {
-		preds = append(preds,
-			dotStrippedEmailEQ(probe.Local+"@"+probe.Domain),
-			// "+后缀"的内容未知，只能按前缀匹配。
-			dotStrippedEmailLike(escapeLikeWildcards(probe.Local)+"+%@"+escapeLikeWildcards(probe.Domain)),
-		)
-	}
-	candidates, err := client.User.Query().
-		Where(dbuser.Or(preds...)).
-		Limit(emailAliasCandidateLimit).
-		Select(dbuser.FieldID, dbuser.FieldEmail).
-		All(ctx)
-	if err != nil {
-		return 0, false, err
-	}
-
-	// 探针会有过度匹配（点号只在 Gmail 家族无意义），最终判定必须回到完整归一化规则。
-	// 返回“其他用户”优先于当前用户，避免历史重复数据让调用方误判为仅当前用户占用。
-	identity := service.NormalizeEmailForAliasDedup(email)
-	var selfID int64
-	selfExists := false
-	for _, candidate := range candidates {
-		if service.NormalizeEmailForAliasDedup(candidate.Email) != identity {
-			continue
-		}
-		if candidate.ID != 0 && candidate.ID != currentUserID {
-			return candidate.ID, true, nil
-		}
-		if candidate.ID == currentUserID {
-			selfID = candidate.ID
-			selfExists = true
-		}
-	}
-	return selfID, selfExists, nil
-}
-
-// UpdateEmailWithAliasGuard 在调用方事务内更新主邮箱与密码哈希。
-//
-// 邮箱换绑不能只依赖服务层前置查重：两个并发请求可能同时看到同一收件箱未被占用。
-// 这里先按“字面邮箱 + 收件箱身份”加锁，复查是否已被其他用户占用，再执行写入；
-// PostgreSQL 使用事务级 advisory lock 跨实例互斥，测试内存库则由进程内锁兜底。
-func (r *userRepository) UpdateEmailWithAliasGuard(
-	ctx context.Context,
-	userID int64,
-	email string,
-	passwordHash string,
-) error {
-	if userID <= 0 {
-		return service.ErrUserNotFound
-	}
-	if strings.TrimSpace(email) == "" || passwordHash == "" {
-		return fmt.Errorf("email identity update requires email and password hash")
-	}
-	tx := dbent.TxFromContext(ctx)
-	if tx == nil {
-		return fmt.Errorf("email identity update requires a transaction")
-	}
-	client := tx.Client()
-
-	releaseEmailLock, err := lockRepositoryScopedKeys(
-		ctx,
-		client,
-		txAwareSQLExecutor(ctx, r.sql, r.client),
-		normalizedEmailUniquenessLockKey(email),
-		emailAliasUniquenessLockKey(email),
-	)
-	if err != nil {
-		return err
-	}
-	defer releaseEmailLock()
-
-	ownerID, exists, err := emailAliasOwnerIDWithClient(ctx, client, email, userID)
-	if err != nil {
-		return err
-	}
-	if exists && ownerID != userID {
-		return service.ErrEmailExists
-	}
-
-	if _, err := client.User.UpdateOneID(userID).
-		SetEmail(email).
-		SetPasswordHash(passwordHash).
-		Save(ctx); err != nil {
-		return translatePersistenceError(err, service.ErrUserNotFound, service.ErrEmailExists)
-	}
-	return nil
-}
-
-// dotStrippedEmailExpr 渲染下面的表达式：去掉存量邮箱的大小写、首尾空白（与
-// userEmailLookupPredicate 的精确匹配口径一致，历史数据存在带空白的行）以及全部点号。
-//
-//	REPLACE(LOWER(TRIM(email)), '.', '')
-//
-// 两侧都去点，因此一个域名探针即可同时覆盖 Gmail 点号变体与 FQDN 根点（user@gmail.com.）。
-// migrations/190 为同一表达式建了索引。
-func dotStrippedEmailExpr(b *entsql.Builder, s *entsql.Selector) *entsql.Builder {
-	return b.WriteString("REPLACE(LOWER(TRIM(").
-		Ident(s.C(dbuser.FieldEmail)).
-		WriteString(")), '.', '')")
-}
-
-func dotStrippedEmailEQ(value string) predicate.User {
-	return predicate.User(func(s *entsql.Selector) {
-		s.Where(entsql.P(func(b *entsql.Builder) {
-			dotStrippedEmailExpr(b, s).WriteString(" = ").Arg(value)
-		}))
-	})
-}
-
-func dotStrippedEmailLike(pattern string) predicate.User {
-	return predicate.User(func(s *entsql.Selector) {
-		s.Where(entsql.P(func(b *entsql.Builder) {
-			dotStrippedEmailExpr(b, s).WriteString(" LIKE ").Arg(pattern).WriteString(` ESCAPE '\'`)
-		}))
-	})
-}
-
 // escapeLikeWildcards 转义 LIKE 元字符：本地部分合法可含 % 与 _，不转义会扩大匹配面。
 var likeWildcardEscaper = strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`)
 
@@ -1339,58 +950,6 @@ func normalizedEmailUniquenessLockKey(email string) string {
 		return ""
 	}
 	return "users:normalized-email:" + normalized
-}
-
-func registrationEmailDomainLockKey(domain string) string {
-	domain = normalizeEmailDomain(domain)
-	if domain == "" {
-		return ""
-	}
-	return "users:registration-email-domain:" + domain
-}
-
-func normalizeEmailDomain(domain string) string {
-	return service.NormalizeRegistrationEmailDomain(domain)
-}
-
-func countUsersByEmailDomainWithClient(ctx context.Context, client *dbent.Client, domain string) (int, error) {
-	client = clientFromContext(ctx, client)
-	domain = normalizeEmailDomain(domain)
-	if client == nil || domain == "" {
-		return 0, nil
-	}
-	return client.User.Query().Where(userEmailDomainPredicate(domain)).Count(ctx)
-}
-
-func userEmailDomainPredicate(domain string) predicate.User {
-	domain = normalizeEmailDomain(domain)
-	escapedDomain := escapeLikeWildcards(domain)
-	exactPattern := "%@" + escapedDomain
-	subdomainPattern := "%@%." + escapedDomain
-	return predicate.User(func(s *entsql.Selector) {
-		s.Where(entsql.P(func(b *entsql.Builder) {
-			b.WriteString("(RTRIM(LOWER(TRIM(").
-				Ident(s.C(dbuser.FieldEmail)).
-				WriteString(")), '.') LIKE ").
-				Arg(exactPattern).
-				WriteString(` ESCAPE '\' OR RTRIM(LOWER(TRIM(`).
-				Ident(s.C(dbuser.FieldEmail)).
-				WriteString(")), '.') LIKE ").
-				Arg(subdomainPattern).
-				WriteString(` ESCAPE '\'`).
-				WriteString(")")
-		}))
-	})
-}
-
-// emailAliasUniquenessLockKey 按收件箱身份（而非邮箱字面量）加锁，使同一收件箱的不同
-// 别名变体在注册时互斥。
-func emailAliasUniquenessLockKey(email string) string {
-	identity := service.NormalizeEmailForAliasDedup(email)
-	if identity == "" {
-		return ""
-	}
-	return "users:email-alias-identity:" + identity
 }
 
 func (r *userRepository) AddGroupToAllowedGroups(ctx context.Context, userID int64, groupID int64) error {

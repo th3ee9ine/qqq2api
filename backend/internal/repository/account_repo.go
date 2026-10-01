@@ -3244,36 +3244,6 @@ func (r *accountRepository) ClearRateLimit(ctx context.Context, id int64) error 
 	return nil
 }
 
-func (r *accountRepository) ClearAntigravityQuotaScopes(ctx context.Context, id int64) error {
-	client := clientFromContext(ctx, r.client)
-	query := "UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) - 'antigravity_quota_scopes', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"
-	args := []any{id}
-	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
-		query += ownerClause
-		args = append(args, ownerArg)
-	}
-	result, err := client.ExecContext(
-		ctx,
-		query,
-		args...,
-	)
-	if err != nil {
-		return err
-	}
-
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected == 0 {
-		return service.ErrAccountNotFound
-	}
-	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
-		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue clear quota scopes failed: account=%d err=%v", id, err)
-	}
-	return nil
-}
-
 func (r *accountRepository) ClearModelRateLimits(ctx context.Context, id int64) error {
 	client := clientFromContext(ctx, r.client)
 	query := "UPDATE accounts SET extra = COALESCE(extra, '{}'::jsonb) - 'model_rate_limits', updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL"

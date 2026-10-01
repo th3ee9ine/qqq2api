@@ -12,7 +12,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	dbent "github.com/th3ee9ine/qqq2api/ent"
 	"github.com/th3ee9ine/qqq2api/internal/config"
-	"github.com/th3ee9ine/qqq2api/internal/payment"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 	"go.uber.org/zap"
@@ -39,42 +38,9 @@ func ProvideUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, b
 	return NewUpdateService(cache, githubClient, buildInfo.Version, buildInfo.BuildType)
 }
 
-// ProvideEmailQueueService creates EmailQueueService with default worker count
-func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
-	return NewEmailQueueService(emailService, 3)
-}
-
-// ProvideAuthService wires the administrator-only authentication runtime.
-// Registration-only dependencies (redeem codes, promo codes, subscriptions,
-// affiliates, and new-user platform quotas) are intentionally left nil because
-// none of their routes exist in this deployment.
-func ProvideAuthService(
-	entClient *dbent.Client,
-	userRepo UserRepository,
-	refreshTokenCache RefreshTokenCache,
-	cfg *config.Config,
-	settingService *SettingService,
-	emailService *EmailService,
-	turnstileService *TurnstileService,
-	tencentCaptchaService *TencentCaptchaService,
-	aliyunCaptchaService *AliyunCaptchaService,
-	emailQueueService *EmailQueueService,
-) *AuthService {
-	svc := NewAuthService(
-		entClient,
-		userRepo,
-		nil,
-		refreshTokenCache,
-		cfg,
-		settingService,
-		emailService,
-		turnstileService,
-		emailQueueService,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
+// ProvideAuthService wires administrator authentication and its captcha providers.
+func ProvideAuthService(userRepo UserRepository, refreshTokenCache RefreshTokenCache, cfg *config.Config, settingService *SettingService, turnstileService *TurnstileService, tencentCaptchaService *TencentCaptchaService, aliyunCaptchaService *AliyunCaptchaService) *AuthService {
+	svc := NewAuthService(userRepo, refreshTokenCache, cfg, settingService, turnstileService)
 	svc.SetTencentCaptchaService(tencentCaptchaService)
 	svc.SetAliyunCaptchaService(aliyunCaptchaService)
 	return svc
@@ -83,16 +49,6 @@ func ProvideAuthService(
 // ProvideOAuthRefreshAPI creates OAuthRefreshAPI with the default lock TTL.
 func ProvideOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCache) *OAuthRefreshAPI {
 	return NewOAuthRefreshAPI(accountRepo, tokenCache)
-}
-
-func ProvideBatchImageModelPricingResolver(resolver *ModelPricingResolver) *BatchImageModelPricingResolver {
-	return &BatchImageModelPricingResolver{Resolver: resolver}
-}
-
-func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, cfg *config.Config) *BatchImageCleanupService {
-	svc := NewBatchImageCleanupService(repo, accountRepo, cfg)
-	svc.Start()
-	return svc
 }
 
 // ProvideOpenAIOAuthService creates OpenAIOAuthService with privacy/account enrichment support.
@@ -244,7 +200,7 @@ func ProvideCRSSyncService(
 	openaiOAuthService *OpenAIOAuthService,
 	cfg *config.Config,
 ) *CRSSyncService {
-	return NewCRSSyncService(accountRepo, proxyRepo, oauthService, openaiOAuthService, nil, cfg)
+	return NewCRSSyncService(accountRepo, proxyRepo, oauthService, openaiOAuthService, cfg)
 }
 
 // ProvideOpenAIQuotaAutoResetService 启动账号级自动用卡队列与补偿扫描。
@@ -307,8 +263,6 @@ func ProvideAccountUsageService(
 		accountRepo,
 		usageLogRepo,
 		usageFetcher,
-		nil,
-		nil,
 		grokQuotaFetcher,
 		grokQuotaService,
 		openAIQuotaService,
@@ -333,10 +287,8 @@ func ProvideAccountTestService(
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
-		nil,
 		claudeTokenProvider,
 		grokTokenProvider,
-		nil,
 		httpUpstream,
 		cfg,
 		tlsFPProfileService,
@@ -398,16 +350,6 @@ func ProvideClaudeCodeVersionSyncService(
 // ProvideProxyExpiryService creates and starts ProxyExpiryService.
 func ProvideProxyExpiryService(proxyRepo ProxyRepository, runtimeBlocker AccountRuntimeBlocker) *ProxyExpiryService {
 	svc := NewProxyExpiryService(proxyRepo, time.Minute, runtimeBlocker)
-	svc.Start()
-	return svc
-}
-
-// ProvideSubscriptionExpiryService creates and starts SubscriptionExpiryService.
-func ProvideSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, settingRepo SettingRepository, notificationEmailService *NotificationEmailService, lockCache LeaderLockCache, db *sql.DB) *SubscriptionExpiryService {
-	svc := NewSubscriptionExpiryService(userSubRepo, time.Minute)
-	svc.SetSettingRepository(settingRepo)
-	svc.SetNotificationEmailService(notificationEmailService)
-	svc.SetLeaderLock(lockCache, db)
 	svc.Start()
 	return svc
 }
@@ -475,7 +417,7 @@ func ProvideRateLimitService(
 	settingService *SettingService,
 	tokenCacheInvalidator TokenCacheInvalidator,
 ) *RateLimitService {
-	svc := NewRateLimitService(accountRepo, usageRepo, cfg, nil, tempUnschedCache)
+	svc := NewRateLimitService(accountRepo, cfg, tempUnschedCache)
 	if healthCache, ok := tempUnschedCache.(OpenAIAPIKeyHealthCache); ok {
 		svc.SetOpenAIAPIKeyHealthCache(healthCache)
 	}
@@ -700,8 +642,6 @@ func ProvideOpsService(
 		concurrencyService,
 		gatewayService,
 		openAIGatewayService,
-		nil,
-		nil,
 		systemLogSink,
 	)
 	if settingService != nil {
@@ -732,7 +672,6 @@ func ProvideOpsIngressRejectAggregator(opsRepo OpsRepository, opsService *OpsSer
 // ProvideSettingService wires SettingService with group reader and proxy repo.
 func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupRepository, proxyRepo ProxyRepository, cfg *config.Config) *SettingService {
 	svc := NewSettingService(settingRepo, cfg)
-	svc.SetDefaultSubscriptionGroupReader(groupRepo)
 	svc.SetProxyRepository(proxyRepo)
 	if err := svc.MigrateGrokDefaultTextModel(context.Background()); err != nil {
 		logger.LegacyPrintf("service.setting", "Warning: migrate Grok default model failed: %v", err)
@@ -831,7 +770,6 @@ func ProvideAdminService(
 		accountRepo,
 		proxyRepo,
 		apiKeyRepo,
-		nil,
 		userGroupRateRepo,
 		userRPMCache,
 		billingCacheService,
@@ -841,10 +779,8 @@ func ProvideAdminService(
 		entClient,
 		settingService,
 		nil,
-		nil,
 		privacyClientFactory,
 		runtimeBlocker,
-		nil,
 		compositeRouteRepo,
 		compositeResolver,
 		channelCacheInvalidator,
@@ -921,7 +857,6 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsScheduledReportService,
 	NewEmailService,
 	NewNotificationEmailService,
-	ProvideEmailQueueService,
 	NewTurnstileService,
 	NewTencentCaptchaService,
 	NewAliyunCaptchaService,
@@ -987,31 +922,10 @@ func ProvideUserPlatformQuotaUsageFlusher(cfg *config.Config, cache BillingCache
 	return svc
 }
 
-// ProvidePaymentConfigService wraps NewPaymentConfigService to accept the named
-// payment.EncryptionKey type instead of raw []byte, avoiding Wire ambiguity.
-func ProvidePaymentConfigService(entClient *dbent.Client, settingRepo SettingRepository, key payment.EncryptionKey) *PaymentConfigService {
-	return NewPaymentConfigService(entClient, settingRepo, []byte(key))
-}
-
 // ProvideBalanceNotifyService creates BalanceNotifyService
 func ProvideBalanceNotifyService(emailService *EmailService, settingRepo SettingRepository, accountRepo AccountRepository, notificationEmailService *NotificationEmailService) *BalanceNotifyService {
 	svc := NewBalanceNotifyService(emailService, settingRepo, accountRepo)
 	svc.SetNotificationEmailService(notificationEmailService)
-	return svc
-}
-
-// ProvidePaymentService creates PaymentService and attaches notification email delivery.
-func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService, notificationEmailService *NotificationEmailService) *PaymentService {
-	svc := NewPaymentService(entClient, registry, loadBalancer, redeemService, subscriptionSvc, configService, userRepo, groupRepo, affiliateService)
-	svc.SetNotificationEmailService(notificationEmailService)
-	return svc
-}
-
-// ProvidePaymentOrderExpiryService creates and starts PaymentOrderExpiryService.
-func ProvidePaymentOrderExpiryService(paymentSvc *PaymentService, lockCache LeaderLockCache, db *sql.DB) *PaymentOrderExpiryService {
-	svc := NewPaymentOrderExpiryService(paymentSvc, 60*time.Second)
-	svc.SetLeaderLock(lockCache, db)
-	svc.Start()
 	return svc
 }
 

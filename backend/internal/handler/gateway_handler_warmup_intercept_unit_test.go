@@ -195,8 +195,7 @@ func newTestGatewayHandler(t *testing.T, group *service.Group, accounts []*servi
 		billingCacheService: billingCacheSvc,
 		concurrencyHelper:   concurrencyHelper,
 		// 这些字段对本测试不敏感，保持较小即可
-		maxAccountSwitches:       1,
-		maxAccountSwitchesGemini: 1,
+		maxAccountSwitches: 1,
 	}
 
 	cleanup := func() {

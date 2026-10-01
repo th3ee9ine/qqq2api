@@ -21,8 +21,6 @@ import type {
   CodexSessionImportRequest,
   CodexSessionImportResult,
   OpenAICodexPATCreateRequest,
-  CheckMixedChannelRequest,
-  CheckMixedChannelResponse,
   UpstreamBillingProbeResult,
   UpstreamBillingProbeSettings,
   UpstreamBillingRatesResponse,
@@ -264,15 +262,6 @@ export async function updateGrokMediaEligibility(
   return data
 }
 
-/**
- * Check mixed-channel risk for account-group binding.
- */
-export async function checkMixedChannelRisk(
-  payload: CheckMixedChannelRequest
-): Promise<CheckMixedChannelResponse> {
-  const { data } = await apiClient.post<CheckMixedChannelResponse>('/admin/accounts/check-mixed-channel', payload)
-  return data
-}
 
 /**
  * Delete account
@@ -1171,7 +1160,6 @@ export const accountsAPI = {
   update,
   getGrokMediaEligibility,
   updateGrokMediaEligibility,
-  checkMixedChannelRisk,
   delete: deleteAccount,
   toggleStatus,
   testAccount,

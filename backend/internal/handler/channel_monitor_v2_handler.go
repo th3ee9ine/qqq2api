@@ -96,8 +96,6 @@ func (h *ChannelMonitorV2Handler) Models(c *gin.Context)        { h.models(c, fa
 func (h *ChannelMonitorV2Handler) AdminModels(c *gin.Context)   { h.models(c, true) }
 func (h *ChannelMonitorV2Handler) Matrix(c *gin.Context)        { h.matrix(c, false) }
 func (h *ChannelMonitorV2Handler) AdminMatrix(c *gin.Context)   { h.matrix(c, true) }
-func (h *ChannelMonitorV2Handler) Users(c *gin.Context)         { h.users(c, false) }
-func (h *ChannelMonitorV2Handler) AdminUsers(c *gin.Context)    { h.users(c, true) }
 
 func (h *ChannelMonitorV2Handler) snapshot(c *gin.Context, admin bool) {
 	filter, ok := h.parseFilter(c)
@@ -162,27 +160,6 @@ func (h *ChannelMonitorV2Handler) Errors(c *gin.Context) {
 		return
 	}
 	result, err := h.service.ErrorsForViewer(c.Request.Context(), filter, admin)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, result)
-}
-
-func (h *ChannelMonitorV2Handler) users(c *gin.Context, admin bool) {
-	filter, ok := h.parseFilter(c)
-	if !ok {
-		return
-	}
-	subject, exists := middleware.GetAuthSubjectFromContext(c)
-	if !exists {
-		response.Error(c, http.StatusUnauthorized, "user not found in context")
-		return
-	}
-	if !h.scopeFilter(c, &filter, admin) {
-		return
-	}
-	result, err := h.service.Users(c.Request.Context(), filter, subject.UserID, admin)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

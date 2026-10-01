@@ -1392,10 +1392,10 @@
         <input v-model="expiresAtInput" type="datetime-local" class="input" />
         <div class="mt-2 flex flex-wrap gap-2">
           <button type="button" class="btn btn-secondary btn-sm" @click="expiresAt = getAccountExpiryTimestamp(1)">
-            {{ t('payment.oneMonth') }}
+            {{ t('common.oneMonth') }}
           </button>
           <button type="button" class="btn btn-secondary btn-sm" @click="expiresAt = getAccountExpiryTimestamp(12)">
-            {{ t('payment.oneYear') }}
+            {{ t('common.oneYear') }}
           </button>
         </div>
         <p class="input-hint">{{ t('admin.accounts.expiresAtHint') }}</p>

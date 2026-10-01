@@ -13,53 +13,6 @@ import (
 // templates. A mismatch would produce "%!(EXTRA ...)" or "%!v(MISSING)" in
 // the output, which these assertions will catch.
 
-// ---------- buildBalanceLowEmailBody ----------
-
-func TestBuildBalanceLowEmailBody_ContainsRequiredFields(t *testing.T) {
-	s := &BalanceNotifyService{}
-	body := s.buildBalanceLowEmailBody("Alice", 3.14, 10.0, "MySite", "")
-
-	// All substituted values should appear in the output.
-	require.Contains(t, body, "MySite")
-	require.Contains(t, body, "Alice")
-	require.Contains(t, body, "$3.14")
-	require.Contains(t, body, "$10.00")
-
-	// No fmt.Sprintf format error markers.
-	require.NotContains(t, body, "%!")
-	require.NotContains(t, body, "MISSING")
-	require.NotContains(t, body, "EXTRA")
-}
-
-func TestBuildBalanceLowEmailBody_WithRechargeURL(t *testing.T) {
-	s := &BalanceNotifyService{}
-	body := s.buildBalanceLowEmailBody("Bob", 5.0, 20.0, "Site", "https://example.com/pay")
-
-	// The recharge anchor element should appear with the URL.
-	require.Contains(t, body, `href="https://example.com/pay"`)
-	require.Contains(t, body, "立即充值")
-	require.NotContains(t, body, "%!")
-}
-
-func TestBuildBalanceLowEmailBody_RechargeURLEscaped(t *testing.T) {
-	s := &BalanceNotifyService{}
-	// Try a URL with characters that need HTML escaping.
-	body := s.buildBalanceLowEmailBody("u", 1.0, 5.0, "Site", `https://example.com/?a=1&b=<script>`)
-
-	// `&` and `<` should be escaped in the href.
-	require.Contains(t, body, "&amp;")
-	require.Contains(t, body, "&lt;script&gt;")
-	require.NotContains(t, body, "<script>")
-}
-
-func TestBuildBalanceLowEmailBody_NoRechargeURLOmitsButton(t *testing.T) {
-	s := &BalanceNotifyService{}
-	body := s.buildBalanceLowEmailBody("u", 1.0, 5.0, "Site", "")
-	// The anchor element should not be rendered (style class may still appear).
-	require.NotContains(t, body, `<a href`)
-	require.NotContains(t, body, "立即充值")
-}
-
 // ---------- buildQuotaAlertEmailBody ----------
 
 func TestBuildQuotaAlertEmailBody_AllFieldsPresent(t *testing.T) {
@@ -127,16 +80,6 @@ func TestBuildQuotaAlertEmailBody_RemainingClampedAtZero(t *testing.T) {
 }
 
 // ---------- sanity checks on the CSS `%%` escape ----------
-
-func TestBuildBalanceLowEmailBody_NoCSSFormatError(t *testing.T) {
-	s := &BalanceNotifyService{}
-	body := s.buildBalanceLowEmailBody("u", 1.0, 5.0, "Site", "")
-	// CSS `linear-gradient(135deg, #f59e0b 0%, #d97706 100%)` should appear with
-	// literal percent signs (from the %% escape in the template).
-	require.True(t,
-		strings.Contains(body, "0%") && strings.Contains(body, "100%"),
-		"CSS gradient percentages not rendered; got: %s", body)
-}
 
 func TestBuildQuotaAlertEmailBody_NoCSSFormatError(t *testing.T) {
 	s := &BalanceNotifyService{}

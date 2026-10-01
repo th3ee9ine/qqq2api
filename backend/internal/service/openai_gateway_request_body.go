@@ -12,7 +12,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/th3ee9ine/qqq2api/internal/pkg/apicompat"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 	"github.com/th3ee9ine/qqq2api/internal/util/urlvalidator"
@@ -116,42 +115,6 @@ func deleteOpenAIResponsesNoneReasoningEffortFromObject(account *Account, body m
 	if len(reasoning) == 0 {
 		delete(body, "reasoning")
 	}
-}
-
-// normalizeNativeCNResponsesRequestBody 适配无状态 CN Responses 端点：
-// 强制 store=false 并清除 previous_response_id（Kimi 官方
-// Responses 均不支持服务端状态存储，携带这些字段会被拒绝）。
-// 非原生 Responses 协议账号原样返回。
-func normalizeNativeCNResponsesRequestBody(account *Account, body []byte) []byte {
-	if account == nil || !account.UsesNativeCNResponses() {
-		return body
-	}
-	normalized, err := sjson.SetBytes(body, "store", false)
-	if err != nil {
-		return body
-	}
-	if stripped, err := sjson.DeleteBytes(normalized, "previous_response_id"); err == nil {
-		normalized = stripped
-	}
-
-	var requestBody map[string]any
-	if err := decodeOpenAIJSONUseNumber(normalized, &requestBody); err != nil {
-		return normalized
-	}
-	input, exists := requestBody["input"]
-	if !exists {
-		return normalized
-	}
-	liftedInput, changed := apicompat.LiftResponsesToolOutputMedia(input)
-	if !changed {
-		return normalized
-	}
-	requestBody["input"] = liftedInput
-	rebuilt, err := marshalOpenAIUpstreamJSON(requestBody)
-	if err != nil {
-		return normalized
-	}
-	return rebuilt
 }
 
 func trimOpenAIEncryptedReasoningItems(reqBody map[string]any) bool {

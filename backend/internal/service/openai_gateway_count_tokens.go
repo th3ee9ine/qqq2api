@@ -150,7 +150,7 @@ func prepareNativeOpenAIInputTokensCountRequest(body []byte, account *Account) (
 }
 
 func shouldEstimateOpenAIInputTokensLocally(account *Account) bool {
-	if account == nil || account.IsGrok() || account.IsCNProvider() || account.Type == AccountTypeUpstream {
+	if account == nil || account.IsGrok() || account.Type == AccountTypeUpstream {
 		return true
 	}
 	if account.Type != AccountTypeAPIKey {
@@ -267,21 +267,6 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	// 国产供应商与 OpenCode（全部协议，含 anthropic）：一律本地估算，不发上游请求。
 	// Kimi/智谱未承诺支持 count_tokens；转发上游的常态 404 会误伤账号调度。
 	// Claude Code 高频调用此端点，因此使用本地 tiktoken 估算。
-	if account.IsCNProvider() || account.IsOpenCodeGo() {
-		estimated, err := estimateAnthropicCountTokensLocally(body)
-		if err != nil {
-			writeAnthropicCountTokensError(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
-			return fmt.Errorf("count_tokens: estimate cn provider input tokens: %w", err)
-		}
-		logger.L().Debug("openai count_tokens: cn provider local estimate",
-			zap.Int64("account_id", account.ID),
-			zap.Int("estimated_input_tokens", estimated),
-		)
-		c.JSON(http.StatusOK, gin.H{
-			"input_tokens": estimated,
-		})
-		return nil
-	}
 
 	prepared, err := prepareOpenAIInputTokensCountRequest(body, account, defaultMappedModel)
 	if err != nil {

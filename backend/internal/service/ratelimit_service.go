@@ -21,9 +21,7 @@ import (
 // RateLimitService 处理限流和过载状态管理
 type RateLimitService struct {
 	accountRepo           AccountRepository
-	usageRepo             UsageLogRepository
 	cfg                   *config.Config
-	geminiQuotaService    *GeminiQuotaService
 	tempUnschedCache      TempUnschedCache
 	openAIAPIKeyHealth    OpenAIAPIKeyHealthCache
 	timeoutCounterCache   TimeoutCounterCache
@@ -31,8 +29,6 @@ type RateLimitService struct {
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
 	runtimeBlocker        AccountRuntimeBlocker
-	usageCacheMu          sync.RWMutex
-	usageCache            map[int64]*geminiUsageCacheEntry
 
 	// OpenAI Team 联动熔断的进程内去重：teamID → 去重窗口截止时间
 	openaiTeamLinkedMu     sync.Mutex
@@ -55,18 +51,6 @@ type AccountRecoveryOptions struct {
 	InvalidateToken bool
 }
 
-type geminiUsageCacheEntry struct {
-	windowStart time.Time
-	cachedAt    time.Time
-	totals      GeminiUsageTotals
-}
-
-type geminiUsageTotalsBatchProvider interface {
-	GetGeminiUsageTotalsBatch(ctx context.Context, accountIDs []int64, startTime, endTime time.Time) (map[int64]GeminiUsageTotals, error)
-}
-
-const geminiPrecheckCacheTTL = time.Minute
-
 const (
 	defaultRateLimit429CooldownSeconds = 5
 	maxRateLimit429CooldownSeconds     = 7200
@@ -88,14 +72,11 @@ const (
 )
 
 // NewRateLimitService 创建RateLimitService实例
-func NewRateLimitService(accountRepo AccountRepository, usageRepo UsageLogRepository, cfg *config.Config, geminiQuotaService *GeminiQuotaService, tempUnschedCache TempUnschedCache) *RateLimitService {
+func NewRateLimitService(accountRepo AccountRepository, cfg *config.Config, tempUnschedCache TempUnschedCache) *RateLimitService {
 	return &RateLimitService{
-		accountRepo:        accountRepo,
-		usageRepo:          usageRepo,
-		cfg:                cfg,
-		geminiQuotaService: geminiQuotaService,
-		tempUnschedCache:   tempUnschedCache,
-		usageCache:         make(map[int64]*geminiUsageCacheEntry),
+		accountRepo:      accountRepo,
+		cfg:              cfg,
+		tempUnschedCache: tempUnschedCache,
 	}
 }
 
@@ -480,20 +461,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			if upstreamMsg != "" {
 				msg = "OAuth 401: " + upstreamMsg
 			}
-			if authAccount.Platform == PlatformAntigravity {
-				extraUpdates := antigravityForceTokenRefreshExtra("401_invalid")
-				if err := s.accountRepo.UpdateExtra(ctx, authAccount.ID, extraUpdates); err != nil {
-					slog.Warn("antigravity_401_force_refresh_mark_failed", "account_id", authAccount.ID, "error", err)
-				} else {
-					if authAccount.Extra == nil {
-						authAccount.Extra = make(map[string]any, len(extraUpdates))
-					}
-					for k, v := range extraUpdates {
-						authAccount.Extra[k] = v
-					}
-					slog.Info("antigravity_401_force_refresh_marked", "account_id", authAccount.ID)
-				}
-			}
+
 			cooldownMinutes := s.cfg.RateLimit.OAuth401CooldownMinutes
 			if cooldownMinutes <= 0 {
 				cooldownMinutes = 10
@@ -516,11 +484,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	case 402:
 		// 国产供应商：余额不足是可恢复状态（充值/检测恢复后由周期任务自动解除），
 		// 不能走 handleAuthError 永久置 status=error。改为可恢复的临时停调。
-		if account.IsCNProvider() || account.IsOpenCodeZen() {
-			s.handleCNProviderInsufficientBalance(ctx, account, upstreamMsg)
-			shouldDisable = true
-			break
-		}
+
 		// OpenAI: deactivated_workspace 表示工作区已停用，直接标记 error
 		if account.Platform == PlatformOpenAI && gjson.GetBytes(responseBody, "detail.code").String() == "deactivated_workspace" {
 			msg := "Workspace deactivated (402): workspace has been deactivated"
@@ -573,376 +537,6 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 	return shouldDisable
 }
 
-// PreCheckUsage proactively checks local quota before dispatching a request.
-// Returns false when the account should be skipped.
-func (s *RateLimitService) PreCheckUsage(ctx context.Context, account *Account, requestedModel string) (bool, error) {
-	if account == nil || account.Platform != PlatformGemini {
-		return true, nil
-	}
-	if s.usageRepo == nil || s.geminiQuotaService == nil {
-		return true, nil
-	}
-
-	quota, ok := s.geminiQuotaService.QuotaForAccount(ctx, account)
-	if !ok {
-		return true, nil
-	}
-
-	now := time.Now()
-	modelClass := geminiModelClassFromName(requestedModel)
-
-	// 1) Daily quota precheck (RPD; resets at PST midnight)
-	{
-		var limit int64
-		if quota.SharedRPD > 0 {
-			limit = quota.SharedRPD
-		} else {
-			switch modelClass {
-			case geminiModelFlash:
-				limit = quota.FlashRPD
-			default:
-				limit = quota.ProRPD
-			}
-		}
-
-		if limit > 0 {
-			start := geminiDailyWindowStart(now)
-			totals, ok := s.getGeminiUsageTotals(account.ID, start, now)
-			if !ok {
-				stats, err := s.usageRepo.GetModelStatsWithFilters(ctx, start, now, 0, 0, account.ID, 0, nil, nil, nil)
-				if err != nil {
-					return true, err
-				}
-				totals = geminiAggregateUsage(stats)
-				s.setGeminiUsageTotals(account.ID, start, now, totals)
-			}
-
-			var used int64
-			if quota.SharedRPD > 0 {
-				used = totals.ProRequests + totals.FlashRequests
-			} else {
-				switch modelClass {
-				case geminiModelFlash:
-					used = totals.FlashRequests
-				default:
-					used = totals.ProRequests
-				}
-			}
-
-			if used >= limit {
-				resetAt := geminiDailyResetTime(now)
-				// NOTE:
-				// - This is a local precheck to reduce upstream 429s.
-				// - Do NOT mark the account as rate-limited here; rate_limit_reset_at should reflect real upstream 429s.
-				slog.Info("gemini_precheck_daily_quota_reached", "account_id", account.ID, "used", used, "limit", limit, "reset_at", resetAt)
-				return false, nil
-			}
-		}
-	}
-
-	// 2) Minute quota precheck (RPM; fixed window current minute)
-	{
-		var limit int64
-		if quota.SharedRPM > 0 {
-			limit = quota.SharedRPM
-		} else {
-			switch modelClass {
-			case geminiModelFlash:
-				limit = quota.FlashRPM
-			default:
-				limit = quota.ProRPM
-			}
-		}
-
-		if limit > 0 {
-			start := now.Truncate(time.Minute)
-			stats, err := s.usageRepo.GetModelStatsWithFilters(ctx, start, now, 0, 0, account.ID, 0, nil, nil, nil)
-			if err != nil {
-				return true, err
-			}
-			totals := geminiAggregateUsage(stats)
-
-			var used int64
-			if quota.SharedRPM > 0 {
-				used = totals.ProRequests + totals.FlashRequests
-			} else {
-				switch modelClass {
-				case geminiModelFlash:
-					used = totals.FlashRequests
-				default:
-					used = totals.ProRequests
-				}
-			}
-
-			if used >= limit {
-				resetAt := start.Add(time.Minute)
-				// Do not persist "rate limited" status from local precheck. See note above.
-				slog.Info("gemini_precheck_minute_quota_reached", "account_id", account.ID, "used", used, "limit", limit, "reset_at", resetAt)
-				return false, nil
-			}
-		}
-	}
-
-	return true, nil
-}
-
-// PreCheckUsageBatch performs quota precheck for multiple accounts in one request.
-// Returned map value=false means the account should be skipped.
-func (s *RateLimitService) PreCheckUsageBatch(ctx context.Context, accounts []*Account, requestedModel string) (map[int64]bool, error) {
-	result := make(map[int64]bool, len(accounts))
-	for _, account := range accounts {
-		if account == nil {
-			continue
-		}
-		result[account.ID] = true
-	}
-
-	if len(accounts) == 0 || requestedModel == "" {
-		return result, nil
-	}
-	if s.usageRepo == nil || s.geminiQuotaService == nil {
-		return result, nil
-	}
-
-	modelClass := geminiModelClassFromName(requestedModel)
-	now := time.Now()
-	dailyStart := geminiDailyWindowStart(now)
-	minuteStart := now.Truncate(time.Minute)
-
-	type quotaAccount struct {
-		account *Account
-		quota   GeminiQuota
-	}
-	quotaAccounts := make([]quotaAccount, 0, len(accounts))
-	for _, account := range accounts {
-		if account == nil || account.Platform != PlatformGemini {
-			continue
-		}
-		quota, ok := s.geminiQuotaService.QuotaForAccount(ctx, account)
-		if !ok {
-			continue
-		}
-		quotaAccounts = append(quotaAccounts, quotaAccount{
-			account: account,
-			quota:   quota,
-		})
-	}
-	if len(quotaAccounts) == 0 {
-		return result, nil
-	}
-
-	// 1) Daily precheck (cached + batch DB fallback)
-	dailyTotalsByID := make(map[int64]GeminiUsageTotals, len(quotaAccounts))
-	dailyMissIDs := make([]int64, 0, len(quotaAccounts))
-	for _, item := range quotaAccounts {
-		limit := geminiDailyLimit(item.quota, modelClass)
-		if limit <= 0 {
-			continue
-		}
-		accountID := item.account.ID
-		if totals, ok := s.getGeminiUsageTotals(accountID, dailyStart, now); ok {
-			dailyTotalsByID[accountID] = totals
-			continue
-		}
-		dailyMissIDs = append(dailyMissIDs, accountID)
-	}
-	if len(dailyMissIDs) > 0 {
-		totalsBatch, err := s.getGeminiUsageTotalsBatch(ctx, dailyMissIDs, dailyStart, now)
-		if err != nil {
-			return result, err
-		}
-		for _, accountID := range dailyMissIDs {
-			totals := totalsBatch[accountID]
-			dailyTotalsByID[accountID] = totals
-			s.setGeminiUsageTotals(accountID, dailyStart, now, totals)
-		}
-	}
-	for _, item := range quotaAccounts {
-		limit := geminiDailyLimit(item.quota, modelClass)
-		if limit <= 0 {
-			continue
-		}
-		accountID := item.account.ID
-		used := geminiUsedRequests(item.quota, modelClass, dailyTotalsByID[accountID], true)
-		if used >= limit {
-			resetAt := geminiDailyResetTime(now)
-			slog.Info("gemini_precheck_daily_quota_reached_batch", "account_id", accountID, "used", used, "limit", limit, "reset_at", resetAt)
-			result[accountID] = false
-		}
-	}
-
-	// 2) Minute precheck (batch DB)
-	minuteIDs := make([]int64, 0, len(quotaAccounts))
-	for _, item := range quotaAccounts {
-		accountID := item.account.ID
-		if !result[accountID] {
-			continue
-		}
-		if geminiMinuteLimit(item.quota, modelClass) <= 0 {
-			continue
-		}
-		minuteIDs = append(minuteIDs, accountID)
-	}
-	if len(minuteIDs) == 0 {
-		return result, nil
-	}
-
-	minuteTotalsByID, err := s.getGeminiUsageTotalsBatch(ctx, minuteIDs, minuteStart, now)
-	if err != nil {
-		return result, err
-	}
-	for _, item := range quotaAccounts {
-		accountID := item.account.ID
-		if !result[accountID] {
-			continue
-		}
-
-		limit := geminiMinuteLimit(item.quota, modelClass)
-		if limit <= 0 {
-			continue
-		}
-
-		used := geminiUsedRequests(item.quota, modelClass, minuteTotalsByID[accountID], false)
-		if used >= limit {
-			resetAt := minuteStart.Add(time.Minute)
-			slog.Info("gemini_precheck_minute_quota_reached_batch", "account_id", accountID, "used", used, "limit", limit, "reset_at", resetAt)
-			result[accountID] = false
-		}
-	}
-
-	return result, nil
-}
-
-func (s *RateLimitService) getGeminiUsageTotalsBatch(ctx context.Context, accountIDs []int64, start, end time.Time) (map[int64]GeminiUsageTotals, error) {
-	result := make(map[int64]GeminiUsageTotals, len(accountIDs))
-	if len(accountIDs) == 0 {
-		return result, nil
-	}
-
-	ids := make([]int64, 0, len(accountIDs))
-	seen := make(map[int64]struct{}, len(accountIDs))
-	for _, accountID := range accountIDs {
-		if accountID <= 0 {
-			continue
-		}
-		if _, ok := seen[accountID]; ok {
-			continue
-		}
-		seen[accountID] = struct{}{}
-		ids = append(ids, accountID)
-	}
-	if len(ids) == 0 {
-		return result, nil
-	}
-
-	if batchReader, ok := s.usageRepo.(geminiUsageTotalsBatchProvider); ok {
-		stats, err := batchReader.GetGeminiUsageTotalsBatch(ctx, ids, start, end)
-		if err != nil {
-			return nil, err
-		}
-		for _, accountID := range ids {
-			result[accountID] = stats[accountID]
-		}
-		return result, nil
-	}
-
-	for _, accountID := range ids {
-		stats, err := s.usageRepo.GetModelStatsWithFilters(ctx, start, end, 0, 0, accountID, 0, nil, nil, nil)
-		if err != nil {
-			return nil, err
-		}
-		result[accountID] = geminiAggregateUsage(stats)
-	}
-	return result, nil
-}
-
-func geminiDailyLimit(quota GeminiQuota, modelClass geminiModelClass) int64 {
-	if quota.SharedRPD > 0 {
-		return quota.SharedRPD
-	}
-	switch modelClass {
-	case geminiModelFlash:
-		return quota.FlashRPD
-	default:
-		return quota.ProRPD
-	}
-}
-
-func geminiMinuteLimit(quota GeminiQuota, modelClass geminiModelClass) int64 {
-	if quota.SharedRPM > 0 {
-		return quota.SharedRPM
-	}
-	switch modelClass {
-	case geminiModelFlash:
-		return quota.FlashRPM
-	default:
-		return quota.ProRPM
-	}
-}
-
-func geminiUsedRequests(quota GeminiQuota, modelClass geminiModelClass, totals GeminiUsageTotals, daily bool) int64 {
-	if daily {
-		if quota.SharedRPD > 0 {
-			return totals.ProRequests + totals.FlashRequests
-		}
-	} else {
-		if quota.SharedRPM > 0 {
-			return totals.ProRequests + totals.FlashRequests
-		}
-	}
-	switch modelClass {
-	case geminiModelFlash:
-		return totals.FlashRequests
-	default:
-		return totals.ProRequests
-	}
-}
-
-func (s *RateLimitService) getGeminiUsageTotals(accountID int64, windowStart, now time.Time) (GeminiUsageTotals, bool) {
-	s.usageCacheMu.RLock()
-	defer s.usageCacheMu.RUnlock()
-
-	if s.usageCache == nil {
-		return GeminiUsageTotals{}, false
-	}
-
-	entry, ok := s.usageCache[accountID]
-	if !ok || entry == nil {
-		return GeminiUsageTotals{}, false
-	}
-	if !entry.windowStart.Equal(windowStart) {
-		return GeminiUsageTotals{}, false
-	}
-	if now.Sub(entry.cachedAt) >= geminiPrecheckCacheTTL {
-		return GeminiUsageTotals{}, false
-	}
-	return entry.totals, true
-}
-
-func (s *RateLimitService) setGeminiUsageTotals(accountID int64, windowStart, now time.Time, totals GeminiUsageTotals) {
-	s.usageCacheMu.Lock()
-	defer s.usageCacheMu.Unlock()
-	if s.usageCache == nil {
-		s.usageCache = make(map[int64]*geminiUsageCacheEntry)
-	}
-	s.usageCache[accountID] = &geminiUsageCacheEntry{
-		windowStart: windowStart,
-		cachedAt:    now,
-		totals:      totals,
-	}
-}
-
-// GeminiCooldown returns the fallback cooldown duration for Gemini 429s based on tier.
-func (s *RateLimitService) GeminiCooldown(ctx context.Context, account *Account) time.Duration {
-	if account == nil {
-		return 5 * time.Minute
-	}
-	if s.geminiQuotaService == nil {
-		return 5 * time.Minute
-	}
-	return s.geminiQuotaService.CooldownForAccount(ctx, account)
-}
-
 // handleAuthError 处理认证类错误(401/403)，停止账号调度
 func (s *RateLimitService) handleAuthError(ctx context.Context, account *Account, errorMsg string) {
 	s.notifyAccountSchedulingBlocked(account, time.Time{}, "auth_error")
@@ -981,28 +575,20 @@ func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody 
 // Antigravity 平台区分 validation/violation/generic 三种类型，均 SetError 永久禁用；
 // 其他平台保持原有 SetError 行为。
 func (s *RateLimitService) handle403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
-	if account.Platform == PlatformAntigravity {
-		return s.handleAntigravity403(ctx, account, upstreamMsg, responseBody)
-	}
+
 	// Kimi reports its transient per-account concurrency/business limit as a 403.
 	// Keep the normal 403 failover signal (true), but never feed this exact message
 	// into the escalating 403 counter that can permanently mark the account error.
-	if isCNProviderConcurrencyLimit403(account, upstreamMsg) {
-		s.handleCNProviderConcurrencyLimit403(ctx, account)
-		return true
-	}
+
 	// Kimi 等 CN 供应商把 Coding Plan 配额窗口耗尽打成 403
 	// （error.type=access_terminated_error），这是窗口到期后自动恢复的限流
 	// 信号而非封禁：按 429 口径冷却到真实窗口重置点，避免落入下方通用 403
 	// 升级计数后被永久 SetError。
-	if isCNProviderQuotaExhausted403(account, responseBody, upstreamMsg) {
-		s.handleCNProviderQuotaExhausted403(ctx, account, upstreamMsg)
-		return true
-	}
+
 	// 国产供应商与 openai 同口径:HTML 403(CDN/代理拦截页)不构成账号失效证据,
 	// 且 403 在 failover 状态集里会被逐账号重放——直接 SetError 会让一个坏请求/
 	// 一层坏代理连环永久禁用整组账号。走 HTML 豁免 + N 次累计 + 临时冷却。
-	if account.Platform == PlatformOpenAI || IsCNProvider(account.Platform) || account.IsOpenCodeGo() {
+	if account.Platform == PlatformOpenAI {
 		return s.handleOpenAI403(ctx, account, upstreamMsg, responseBody)
 	}
 	// 非 Antigravity 平台：保持原有行为
@@ -1081,52 +667,6 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		"threshold", openAI403DisableThreshold,
 	)
 	return true
-}
-
-// handleAntigravity403 处理 Antigravity 平台的 403 错误
-// validation（需要验证）→ 永久 SetError（需人工去 Google 验证后恢复）
-// violation（违规封号）→ 永久 SetError（需人工处理）
-// generic（通用禁止）→ 永久 SetError
-func (s *RateLimitService) handleAntigravity403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
-	fbType := classifyForbiddenType(string(responseBody))
-
-	switch fbType {
-	case forbiddenTypeValidation:
-		// VALIDATION_REQUIRED: 永久禁用，需人工去 Google 验证后手动恢复
-		msg := buildForbiddenErrorMessage(
-			"Validation required (403):",
-			upstreamMsg,
-			responseBody,
-			"account needs Google verification",
-		)
-		if validationURL := extractValidationURL(string(responseBody)); validationURL != "" {
-			msg += " | validation_url: " + validationURL
-		}
-		s.handleAuthError(ctx, account, msg)
-		return true
-
-	case forbiddenTypeViolation:
-		// 违规封号: 永久禁用，需人工处理
-		msg := buildForbiddenErrorMessage(
-			"Account violation (403):",
-			upstreamMsg,
-			responseBody,
-			"terms of service violation",
-		)
-		s.handleAuthError(ctx, account, msg)
-		return true
-
-	default:
-		// 通用 403: 保持原有行为
-		msg := buildForbiddenErrorMessage(
-			"Access forbidden (403):",
-			upstreamMsg,
-			responseBody,
-			"account may be suspended or lack permissions",
-		)
-		s.handleAuthError(ctx, account, msg)
-		return true
-	}
 }
 
 // handleCustomErrorCode 处理自定义错误码，停止账号调度
@@ -1243,18 +783,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
-		case PlatformGemini, PlatformAntigravity:
-			// 尝试解析 Gemini 格式（用于其他平台）
-			if resetAt := ParseGeminiRateLimitResetTime(responseBody); resetAt != nil {
-				resetTime := time.Unix(*resetAt, 0)
-				s.notifyAccountSchedulingBlocked(account, resetTime, "429")
-				if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetTime); err != nil {
-					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
-					return
-				}
-				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
-				return
-			}
+
 		}
 
 		// Anthropic 平台：没有限流重置时间的 429 可能是非真实限流（如 Extra usage required），
@@ -2039,9 +1568,6 @@ func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) 
 	if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
 		return err
 	}
-	if err := s.accountRepo.ClearAntigravityQuotaScopes(ctx, accountID); err != nil {
-		return err
-	}
 	if err := s.accountRepo.ClearModelRateLimits(ctx, accountID); err != nil {
 		return err
 	}
@@ -2137,8 +1663,7 @@ func hasRecoverableRuntimeState(account *Account) bool {
 	if len(account.Extra) == 0 {
 		return false
 	}
-	return hasNonEmptyMapValue(account.Extra, "model_rate_limits") ||
-		hasNonEmptyMapValue(account.Extra, "antigravity_quota_scopes")
+	return hasNonEmptyMapValue(account.Extra, "model_rate_limits")
 }
 
 func hasNonEmptyMapValue(extra map[string]any, key string) bool {
@@ -2474,12 +1999,7 @@ func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Acc
 	if account == nil || modelKey == "" {
 		return modelKey
 	}
-	if account.Platform == PlatformAntigravity {
-		if resolved := strings.TrimSpace(resolveFinalAntigravityModelKey(ctx, account, modelKey)); resolved != "" {
-			return resolved
-		}
-		return modelKey
-	}
+
 	if mapped := strings.TrimSpace(account.GetMappedModel(modelKey)); mapped != "" {
 		return mapped
 	}
@@ -2560,7 +2080,7 @@ func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Ac
 	// 401 首次命中可临时不可调度（给 token 刷新窗口）；
 	// 若历史上已因 401 进入过临时不可调度，则本次应升级为 error（返回 false 交由默认错误逻辑处理）。
 	// Antigravity 跳过：其 401 由 applyErrorPolicy 的 temp_unschedulable_rules 自行控制，无需升级逻辑。
-	if statusCode == http.StatusUnauthorized && account.Platform != PlatformAntigravity {
+	if statusCode == http.StatusUnauthorized {
 		reason := account.TempUnschedulableReason
 		// 缓存可能没有 reason，从 DB 回退读取
 		if reason == "" {

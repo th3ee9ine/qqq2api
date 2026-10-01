@@ -13,7 +13,7 @@ import (
 
 func TestAccountHandlerBulkUpdateForwardsExpectedProxyID(t *testing.T) {
 	adminSvc := &stubAdminService{}
-	router := setupAccountMixedChannelRouter(adminSvc)
+	router := setupAccountMutationRouter(adminSvc)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/bulk-update", bytes.NewBufferString(`{"account_ids":[11,12],"proxy_id":0,"expected_proxy_id":7}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp := httptest.NewRecorder()

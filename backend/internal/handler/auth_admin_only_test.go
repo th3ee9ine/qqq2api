@@ -17,7 +17,7 @@ import (
 func TestAuthHandlerAllowsOnlyAdministratorInteractiveLogin(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Default.AdminEmail = "admin@example.com"
-	handler := &AuthHandler{authService: service.NewAuthService(nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)}
+	handler := &AuthHandler{authService: service.NewAuthService(nil, nil, cfg, nil, nil)}
 
 	require.NoError(t, handler.ensureBackendModeAllowsUser(context.Background(), &service.User{
 		Email:  "ADMIN@example.com",
@@ -41,9 +41,6 @@ func TestAuthHandlerAllowsOnlyAdministratorInteractiveLogin(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, infraerrors.Code(err))
 	require.Equal(t, "ADMIN_ONLY_MODE", infraerrors.Reason(err))
 
-	err = handler.ensureBackendModeAllowsNewUserLogin(context.Background())
-	require.Equal(t, http.StatusForbidden, infraerrors.Code(err))
-	require.Equal(t, "ADMIN_ONLY_MODE", infraerrors.Reason(err))
 }
 
 func TestAuthHandlerLogoutAcceptsEmptyBody(t *testing.T) {

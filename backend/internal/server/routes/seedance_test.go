@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/th3ee9ine/qqq2api/internal/service"
 	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 func TestSeedanceNativeRoutes(t *testing.T) {
@@ -26,7 +26,7 @@ func TestSeedanceNativeRoutes(t *testing.T) {
 }
 
 func TestSeedanceRejectsOtherPlatforms(t *testing.T) {
-	for _, platform := range []string{service.PlatformGrok, service.PlatformAnthropic, service.PlatformGemini} {
+	for _, platform := range []string{service.PlatformGrok, service.PlatformAnthropic, "gemini"} {
 		w := httptest.NewRecorder()
 		newGatewayRoutesTestRouter(platform).ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v3/contents/generations/tasks", strings.NewReader(`{"model":"seedance","content":[{}]}`)))
 		require.Equal(t, http.StatusForbidden, w.Code)

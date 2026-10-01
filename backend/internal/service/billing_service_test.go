@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"log"
 	"math"
+	"os"
 	"strings"
 	"testing"
 
@@ -1917,7 +1918,7 @@ func TestAstraUltrafastPricingUsesSixTimesStandard(t *testing.T) {
 	catalog := &PricingService{}
 	catalog.pricingData, err = catalog.parsePricingData(data)
 	require.NoError(t, err)
-	for _, svc := range []*BillingService{newTestBillingService(), NewBillingService(&config.Config{}, &PricingService{}), NewBillingService(&config.Config{}, catalog)} {
+	for source, svc := range map[string]*BillingService{"fallback": newTestBillingService(), "empty-catalog": NewBillingService(&config.Config{}, &PricingService{}), "catalog": NewBillingService(&config.Config{}, catalog)} {
 		for _, model := range []string{"gpt-6-astra", "gpt-6", "openai/gpt-6-astra"} {
 			for _, n := range []int{271999, 272000, 272001} {
 				tokens := UsageTokens{InputTokens: n - 3000, CacheReadTokens: 2000, CacheCreationTokens: 1000, OutputTokens: 500}

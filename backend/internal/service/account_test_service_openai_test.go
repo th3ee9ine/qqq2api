@@ -62,7 +62,7 @@ func newTestContext() (*gin.Context, *httptest.ResponseRecorder) {
 }
 
 type openAIAccountTestRepo struct {
-	mockAccountRepoForGemini
+	mockGatewayAccountRepo
 	updatedExtra       map[string]any
 	bulkUpdatedIDs     []int64
 	bulkUpdatedPayload AccountBulkUpdate
@@ -202,7 +202,7 @@ func TestAccountTestService_OpenAIShadowUsesParentCredentialsAndShadowModel(t *t
 	}
 
 	repo := &openAIAccountTestRepo{
-		mockAccountRepoForGemini: mockAccountRepoForGemini{
+		mockGatewayAccountRepo: mockGatewayAccountRepo{
 			accountsByID: map[int64]*Account{
 				parentID: parent,
 				200:      shadow,

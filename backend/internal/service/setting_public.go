@@ -155,107 +155,13 @@ func (s *SettingService) GetFrontendURL(ctx context.Context) string {
 
 // GetPublicSettings 获取公开设置（无需登录）
 func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings, error) {
-	keys := []string{
-		SettingKeyRegistrationEnabled,
-		SettingKeyEmailVerifyEnabled,
-		SettingKeyForceEmailOnThirdPartySignup,
-		SettingKeyRegistrationEmailSuffixWhitelist,
-		SettingKeyRegistrationEmailDomainQuotaEnabled,
-		SettingKeyPromoCodeEnabled,
-		SettingKeyPasswordResetEnabled,
-		SettingKeyInvitationCodeEnabled,
-		SettingKeyTotpEnabled,
-		SettingKeyPasskeyEnabled,
-		SettingKeyLoginAgreementEnabled,
-		SettingKeyLoginAgreementMode,
-		SettingKeyLoginAgreementUpdatedAt,
-		SettingKeyLoginAgreementDocuments,
-		SettingKeyTurnstileEnabled,
-		SettingKeyTurnstileSiteKey,
-		SettingKeyTencentCaptchaEnabled,
-		SettingKeyTencentCaptchaAppID,
-		SettingKeyTencentCaptchaRegion,
-		SettingKeyAliyunCaptchaEnabled,
-		SettingKeyAliyunCaptchaSceneID,
-		SettingKeyAliyunCaptchaPrefix,
-		SettingKeyAliyunCaptchaRegion,
-		SettingKeyAPIKeyACLTrustForwardedIP,
-		SettingKeySiteName,
-		SettingKeySiteLogo,
-		SettingKeySiteSubtitle,
-		SettingKeyAPIBaseURL,
-		SettingKeyContactInfo,
-		SettingKeyDocURL,
-		SettingKeyHomeContent,
-		SettingKeyCompactHomeEnabled,
-		SettingKeyHideCcsImportButton,
-		SettingKeyPurchaseSubscriptionEnabled,
-		SettingKeyPurchaseSubscriptionURL,
-		SettingKeyTableDefaultPageSize,
-		SettingKeyTablePageSizeOptions,
-		SettingKeyCustomMenuItems,
-		SettingKeyCustomEndpoints,
-		SettingKeyLinuxDoConnectEnabled,
-		SettingKeyDingTalkConnectEnabled,
-		SettingKeyWeChatConnectEnabled,
-		SettingKeyWeChatConnectAppID,
-		SettingKeyWeChatConnectAppSecret,
-		SettingKeyWeChatConnectOpenAppID,
-		SettingKeyWeChatConnectOpenAppSecret,
-		SettingKeyWeChatConnectMPAppID,
-		SettingKeyWeChatConnectMPAppSecret,
-		SettingKeyWeChatConnectMobileAppID,
-		SettingKeyWeChatConnectMobileAppSecret,
-		SettingKeyWeChatConnectOpenEnabled,
-		SettingKeyWeChatConnectMPEnabled,
-		SettingKeyWeChatConnectMobileEnabled,
-		SettingKeyWeChatConnectMode,
-		SettingKeyWeChatConnectScopes,
-		SettingKeyWeChatConnectRedirectURL,
-		SettingKeyWeChatConnectFrontendRedirectURL,
-		SettingKeyBackendModeEnabled,
-		SettingPaymentEnabled,
-		SettingBalancePayDisabled,
-		SettingKeyOIDCConnectEnabled,
-		SettingKeyOIDCConnectProviderName,
-		SettingKeyGitHubOAuthEnabled,
-		SettingKeyGitHubOAuthClientID,
-		SettingKeyGitHubOAuthClientSecret,
-		SettingKeyGoogleOAuthEnabled,
-		SettingKeyGoogleOAuthClientID,
-		SettingKeyGoogleOAuthClientSecret,
-		SettingKeyBalanceLowNotifyEnabled,
-		SettingKeyBalanceLowNotifyThreshold,
-		SettingKeyBalanceLowNotifyRechargeURL,
-		SettingKeyAccountQuotaNotifyEnabled,
-		SettingKeyChannelMonitorEnabled,
-		SettingKeyChannelMonitorMode,
-		SettingKeyChannelMonitorDefaultIntervalSeconds,
-		SettingKeyChannelMonitorHideThroughput,
-		SettingKeyChannelMonitorShowQuota,
-		SettingKeyChannelMonitorHideUserRanking,
-		SettingKeyAvailableChannelsEnabled,
-		SettingKeySubscriptionEnabled,
-		SettingKeyModelPlazaEnabled,
-		SettingKeyModelPlazaRequireAuth,
-		SettingKeyPluginManagementEnabled,
-		SettingKeyAffiliateEnabled,
-		SettingKeyRiskControlEnabled,
-		SettingKeyAllowUserViewErrorRequests,
-	}
+	keys := []string{SettingKeyTableDefaultPageSize, SettingKeyTablePageSizeOptions, SettingKeyLoginAgreementUpdatedAt, SettingKeyTotpEnabled, SettingKeyLoginAgreementMode, SettingKeyTurnstileEnabled, SettingKeyTurnstileSiteKey, SettingKeyTencentCaptchaEnabled, SettingKeyTencentCaptchaAppID, SettingKeyTencentCaptchaRegion, SettingKeyAliyunCaptchaEnabled, SettingKeyAliyunCaptchaSceneID, SettingKeyAliyunCaptchaPrefix, SettingKeyAliyunCaptchaRegion, SettingKeySiteName, SettingKeySiteLogo, SettingKeySiteSubtitle, SettingKeyAPIBaseURL, SettingKeyContactInfo, SettingKeyDocURL, SettingKeyHomeContent, SettingKeyCompactHomeEnabled, SettingKeyHideCcsImportButton, SettingKeyBackendModeEnabled, SettingKeyChannelMonitorMode, SettingKeyChannelMonitorDefaultIntervalSeconds, SettingKeyPluginManagementEnabled, SettingKeyRiskControlEnabled}
 
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
 	if err != nil {
 		return nil, fmt.Errorf("get public settings: %w", err)
 	}
 
-	oidcProviderName := strings.TrimSpace(settings[SettingKeyOIDCConnectProviderName])
-	if oidcProviderName == "" && s.cfg != nil {
-		oidcProviderName = strings.TrimSpace(s.cfg.OIDC.ProviderName)
-	}
-	if oidcProviderName == "" {
-		oidcProviderName = "OIDC"
-	}
 	tableDefaultPageSize, tablePageSizeOptions := parseTablePreferences(
 		settings[SettingKeyTableDefaultPageSize],
 		settings[SettingKeyTablePageSizeOptions],
@@ -269,61 +175,41 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 	// product surface even when an upgraded database still contains enabled
 	// values for retired user/self-service features.
 	return &PublicSettings{
-		RegistrationEnabled:                 false,
-		EmailVerifyEnabled:                  false,
-		ForceEmailOnThirdPartySignup:        false,
-		RegistrationEmailSuffixWhitelist:    nil,
-		RegistrationEmailDomainQuotaEnabled: false,
-		PromoCodeEnabled:                    false,
-		PasswordResetEnabled:                false,
-		InvitationCodeEnabled:               false,
-		TotpEnabled:                         settings[SettingKeyTotpEnabled] == "true",
-		PasskeyEnabled:                      false,
-		LoginAgreementEnabled:               false,
-		LoginAgreementMode:                  normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
-		LoginAgreementUpdatedAt:             loginAgreementUpdatedAt,
-		LoginAgreementRevision:              buildLoginAgreementRevision(loginAgreementUpdatedAt, nil),
-		LoginAgreementDocuments:             nil,
-		TurnstileEnabled:                    settings[SettingKeyTurnstileEnabled] == "true",
-		TurnstileSiteKey:                    settings[SettingKeyTurnstileSiteKey],
-		TencentCaptchaEnabled:               settings[SettingKeyTencentCaptchaEnabled] == "true",
-		TencentCaptchaAppID:                 settings[SettingKeyTencentCaptchaAppID],
-		TencentCaptchaRegion:                normalizeTencentCaptchaRegion(settings[SettingKeyTencentCaptchaRegion]),
-		AliyunCaptchaEnabled:                settings[SettingKeyAliyunCaptchaEnabled] == "true",
-		AliyunCaptchaSceneID:                settings[SettingKeyAliyunCaptchaSceneID],
-		AliyunCaptchaPrefix:                 settings[SettingKeyAliyunCaptchaPrefix],
-		AliyunCaptchaRegion:                 normalizeAliyunCaptchaRegion(settings[SettingKeyAliyunCaptchaRegion]),
-		SiteName:                            s.getStringOrDefault(settings, SettingKeySiteName, "QQQ2API"),
-		SiteLogo:                            settings[SettingKeySiteLogo],
-		SiteSubtitle:                        s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Claude Code & OpenAI API Gateway"),
-		APIBaseURL:                          settings[SettingKeyAPIBaseURL],
-		ContactInfo:                         settings[SettingKeyContactInfo],
-		DocURL:                              settings[SettingKeyDocURL],
-		HomeContent:                         settings[SettingKeyHomeContent],
-		CompactHomeEnabled:                  settings[SettingKeyCompactHomeEnabled] == "true",
-		HideCcsImportButton:                 settings[SettingKeyHideCcsImportButton] == "true",
-		PurchaseSubscriptionEnabled:         false,
-		PurchaseSubscriptionURL:             "",
-		TableDefaultPageSize:                tableDefaultPageSize,
-		TablePageSizeOptions:                tablePageSizeOptions,
-		CustomMenuItems:                     "",
-		CustomEndpoints:                     "",
-		LinuxDoOAuthEnabled:                 false,
-		DingTalkOAuthEnabled:                false,
-		WeChatOAuthEnabled:                  false,
-		WeChatOAuthOpenEnabled:              false,
-		WeChatOAuthMPEnabled:                false,
-		WeChatOAuthMobileEnabled:            false,
-		BackendModeEnabled:                  settings[SettingKeyBackendModeEnabled] == "true",
-		PaymentEnabled:                      false,
-		OIDCOAuthEnabled:                    false,
-		OIDCOAuthProviderName:               oidcProviderName,
-		GitHubOAuthEnabled:                  false,
-		GoogleOAuthEnabled:                  false,
-		BalanceLowNotifyEnabled:             false,
-		AccountQuotaNotifyEnabled:           false,
-		BalanceLowNotifyThreshold:           0,
-		BalanceLowNotifyRechargeURL:         "",
+
+		TotpEnabled: settings[SettingKeyTotpEnabled] == "true",
+
+		LoginAgreementEnabled:   false,
+		LoginAgreementMode:      normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
+		LoginAgreementUpdatedAt: loginAgreementUpdatedAt,
+		LoginAgreementRevision:  buildLoginAgreementRevision(loginAgreementUpdatedAt, nil),
+		LoginAgreementDocuments: nil,
+		TurnstileEnabled:        settings[SettingKeyTurnstileEnabled] == "true",
+		TurnstileSiteKey:        settings[SettingKeyTurnstileSiteKey],
+		TencentCaptchaEnabled:   settings[SettingKeyTencentCaptchaEnabled] == "true",
+		TencentCaptchaAppID:     settings[SettingKeyTencentCaptchaAppID],
+		TencentCaptchaRegion:    normalizeTencentCaptchaRegion(settings[SettingKeyTencentCaptchaRegion]),
+		AliyunCaptchaEnabled:    settings[SettingKeyAliyunCaptchaEnabled] == "true",
+		AliyunCaptchaSceneID:    settings[SettingKeyAliyunCaptchaSceneID],
+		AliyunCaptchaPrefix:     settings[SettingKeyAliyunCaptchaPrefix],
+		AliyunCaptchaRegion:     normalizeAliyunCaptchaRegion(settings[SettingKeyAliyunCaptchaRegion]),
+		SiteName:                s.getStringOrDefault(settings, SettingKeySiteName, "QQQ2API"),
+		SiteLogo:                settings[SettingKeySiteLogo],
+		SiteSubtitle:            s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Claude Code & OpenAI API Gateway"),
+		APIBaseURL:              settings[SettingKeyAPIBaseURL],
+		ContactInfo:             settings[SettingKeyContactInfo],
+		DocURL:                  settings[SettingKeyDocURL],
+		HomeContent:             settings[SettingKeyHomeContent],
+		CompactHomeEnabled:      settings[SettingKeyCompactHomeEnabled] == "true",
+		HideCcsImportButton:     settings[SettingKeyHideCcsImportButton] == "true",
+
+		TableDefaultPageSize: tableDefaultPageSize,
+		TablePageSizeOptions: tablePageSizeOptions,
+
+		CustomEndpoints: "",
+
+		BackendModeEnabled: settings[SettingKeyBackendModeEnabled] == "true",
+
+		AccountQuotaNotifyEnabled: false,
 
 		ChannelMonitorEnabled:                false,
 		ChannelMonitorMode:                   normalizeChannelMonitorMode(settings[SettingKeyChannelMonitorMode]),
@@ -335,8 +221,6 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		ModelPlazaEnabled:        false,
 		ModelPlazaRequireAuth:    false,
 		PluginManagementEnabled:  settings[SettingKeyPluginManagementEnabled] == "true",
-
-		AffiliateEnabled: false,
 
 		RiskControlEnabled: settings[SettingKeyRiskControlEnabled] == "true",
 
@@ -401,9 +285,6 @@ type ChannelMonitorRuntime struct {
 	// snapshots; otherwise the user handler strips them server-side.
 	// Parsed fail-closed (only literal "true" enables). Admin always sees them.
 	ShowQuota bool
-	// HideUserRanking: when true, user-facing V2 views hide the user ranking tab
-	// and the /users payload. Parsed fail-open (only literal "true" hides it).
-	HideUserRanking bool
 }
 
 // ActiveProbesAllowed reports whether V1 active provider probes may run.
@@ -427,13 +308,13 @@ func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMo
 			HideThroughput:         true,
 		}
 	}
+
 	vals, err := s.settingRepo.GetMultiple(ctx, []string{
 		SettingKeyChannelMonitorEnabled,
 		SettingKeyChannelMonitorMode,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyChannelMonitorHideThroughput,
 		SettingKeyChannelMonitorShowQuota,
-		SettingKeyChannelMonitorHideUserRanking,
 	})
 	if err != nil {
 		return ChannelMonitorRuntime{
@@ -449,7 +330,6 @@ func (s *SettingService) GetChannelMonitorRuntime(ctx context.Context) ChannelMo
 		DefaultIntervalSeconds: parseChannelMonitorInterval(vals[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 		HideThroughput:         !isFalseSettingValue(vals[SettingKeyChannelMonitorHideThroughput]),
 		ShowQuota:              vals[SettingKeyChannelMonitorShowQuota] == "true",
-		HideUserRanking:        isTrueSettingValue(vals[SettingKeyChannelMonitorHideUserRanking]),
 	}
 }
 
@@ -524,65 +404,44 @@ func (s *SettingService) IsUserErrorViewAllowed(ctx context.Context) bool {
 // A unit test diffs this struct's JSON keys against dto.PublicSettings to catch
 // drift automatically (see setting_service_injection_test.go).
 type PublicSettingsInjectionPayload struct {
-	RegistrationEnabled                 bool                     `json:"registration_enabled"`
-	EmailVerifyEnabled                  bool                     `json:"email_verify_enabled"`
-	RegistrationEmailSuffixWhitelist    []string                 `json:"registration_email_suffix_whitelist"`
-	RegistrationEmailDomainQuotaEnabled bool                     `json:"registration_email_domain_quota_enabled"`
-	PromoCodeEnabled                    bool                     `json:"promo_code_enabled"`
-	PasswordResetEnabled                bool                     `json:"password_reset_enabled"`
-	InvitationCodeEnabled               bool                     `json:"invitation_code_enabled"`
-	TotpEnabled                         bool                     `json:"totp_enabled"`
-	PasskeyEnabled                      bool                     `json:"passkey_enabled"`
-	LoginAgreementEnabled               bool                     `json:"login_agreement_enabled"`
-	LoginAgreementMode                  string                   `json:"login_agreement_mode"`
-	LoginAgreementUpdatedAt             string                   `json:"login_agreement_updated_at"`
-	LoginAgreementRevision              string                   `json:"login_agreement_revision"`
-	LoginAgreementDocuments             []LoginAgreementDocument `json:"login_agreement_documents"`
-	TurnstileEnabled                    bool                     `json:"turnstile_enabled"`
-	TurnstileSiteKey                    string                   `json:"turnstile_site_key"`
-	TencentCaptchaEnabled               bool                     `json:"tencent_captcha_enabled"`
-	TencentCaptchaAppID                 string                   `json:"tencent_captcha_app_id"`
-	TencentCaptchaRegion                string                   `json:"tencent_captcha_region"`
-	AliyunCaptchaEnabled                bool                     `json:"aliyun_captcha_enabled"`
-	AliyunCaptchaSceneID                string                   `json:"aliyun_captcha_scene_id"`
-	AliyunCaptchaPrefix                 string                   `json:"aliyun_captcha_prefix"`
-	AliyunCaptchaRegion                 string                   `json:"aliyun_captcha_region"`
-	SiteName                            string                   `json:"site_name"`
-	SiteLogo                            string                   `json:"site_logo"`
-	SiteSubtitle                        string                   `json:"site_subtitle"`
-	APIBaseURL                          string                   `json:"api_base_url"`
-	ContactInfo                         string                   `json:"contact_info"`
-	DocURL                              string                   `json:"doc_url"`
-	HomeContent                         string                   `json:"home_content"`
-	CompactHomeEnabled                  bool                     `json:"compact_home_enabled"`
-	HideCcsImportButton                 bool                     `json:"hide_ccs_import_button"`
-	PurchaseSubscriptionEnabled         bool                     `json:"purchase_subscription_enabled"`
-	PurchaseSubscriptionURL             string                   `json:"purchase_subscription_url"`
-	TableDefaultPageSize                int                      `json:"table_default_page_size"`
-	TablePageSizeOptions                []int                    `json:"table_page_size_options"`
-	CustomMenuItems                     json.RawMessage          `json:"custom_menu_items"`
-	CustomEndpoints                     json.RawMessage          `json:"custom_endpoints"`
-	LinuxDoOAuthEnabled                 bool                     `json:"linuxdo_oauth_enabled"`
-	DingTalkOAuthEnabled                bool                     `json:"dingtalk_oauth_enabled"`
-	WeChatOAuthEnabled                  bool                     `json:"wechat_oauth_enabled"`
-	WeChatOAuthOpenEnabled              bool                     `json:"wechat_oauth_open_enabled"`
-	WeChatOAuthMPEnabled                bool                     `json:"wechat_oauth_mp_enabled"`
-	WeChatOAuthMobileEnabled            bool                     `json:"wechat_oauth_mobile_enabled"`
-	OIDCOAuthEnabled                    bool                     `json:"oidc_oauth_enabled"`
-	OIDCOAuthProviderName               string                   `json:"oidc_oauth_provider_name"`
-	GitHubOAuthEnabled                  bool                     `json:"github_oauth_enabled"`
-	GoogleOAuthEnabled                  bool                     `json:"google_oauth_enabled"`
-	BackendModeEnabled                  bool                     `json:"backend_mode_enabled"`
-	PaymentEnabled                      bool                     `json:"payment_enabled"`
-	PaymentBalanceDisabled              bool                     `json:"payment_balance_disabled"`
-	Version                             string                   `json:"version"`
+	TotpEnabled bool `json:"totp_enabled"`
+
+	LoginAgreementEnabled   bool                     `json:"login_agreement_enabled"`
+	LoginAgreementMode      string                   `json:"login_agreement_mode"`
+	LoginAgreementUpdatedAt string                   `json:"login_agreement_updated_at"`
+	LoginAgreementRevision  string                   `json:"login_agreement_revision"`
+	LoginAgreementDocuments []LoginAgreementDocument `json:"login_agreement_documents"`
+	TurnstileEnabled        bool                     `json:"turnstile_enabled"`
+	TurnstileSiteKey        string                   `json:"turnstile_site_key"`
+	TencentCaptchaEnabled   bool                     `json:"tencent_captcha_enabled"`
+	TencentCaptchaAppID     string                   `json:"tencent_captcha_app_id"`
+	TencentCaptchaRegion    string                   `json:"tencent_captcha_region"`
+	AliyunCaptchaEnabled    bool                     `json:"aliyun_captcha_enabled"`
+	AliyunCaptchaSceneID    string                   `json:"aliyun_captcha_scene_id"`
+	AliyunCaptchaPrefix     string                   `json:"aliyun_captcha_prefix"`
+	AliyunCaptchaRegion     string                   `json:"aliyun_captcha_region"`
+	SiteName                string                   `json:"site_name"`
+	SiteLogo                string                   `json:"site_logo"`
+	SiteSubtitle            string                   `json:"site_subtitle"`
+	APIBaseURL              string                   `json:"api_base_url"`
+	ContactInfo             string                   `json:"contact_info"`
+	DocURL                  string                   `json:"doc_url"`
+	HomeContent             string                   `json:"home_content"`
+	CompactHomeEnabled      bool                     `json:"compact_home_enabled"`
+	HideCcsImportButton     bool                     `json:"hide_ccs_import_button"`
+
+	TableDefaultPageSize int   `json:"table_default_page_size"`
+	TablePageSizeOptions []int `json:"table_page_size_options"`
+
+	CustomEndpoints json.RawMessage `json:"custom_endpoints"`
+
+	BackendModeEnabled bool `json:"backend_mode_enabled"`
+
+	Version string `json:"version"`
 	// 服务器全局时区（IANA 名称与当前 UTC 偏移），高峰时段等服务端本地时间窗口的展示标注用
-	ServerTimezone              string  `json:"server_timezone"`
-	ServerUTCOffset             string  `json:"server_utc_offset"`
-	BalanceLowNotifyEnabled     bool    `json:"balance_low_notify_enabled"`
-	AccountQuotaNotifyEnabled   bool    `json:"account_quota_notify_enabled"`
-	BalanceLowNotifyThreshold   float64 `json:"balance_low_notify_threshold"`
-	BalanceLowNotifyRechargeURL string  `json:"balance_low_notify_recharge_url"`
+	ServerTimezone            string `json:"server_timezone"`
+	ServerUTCOffset           string `json:"server_utc_offset"`
+	AccountQuotaNotifyEnabled bool   `json:"account_quota_notify_enabled"`
 
 	// Feature flags — MUST match the opt-in/opt-out registry in
 	// frontend/src/utils/featureFlags.ts. Missing a field here is the bug
@@ -593,20 +452,16 @@ type PublicSettingsInjectionPayload struct {
 	// ChannelMonitorHideThroughput is public so the user UI can hide RPM/TPM
 	// without waiting for API redaction alone (defense in depth).
 	ChannelMonitorHideThroughput bool `json:"channel_monitor_hide_throughput"`
-	// ChannelMonitorShowQuota gates the user-facing quota/balance display on
-	// monitors; fail-closed (absent/false = hidden). Admin UI always shows it.
-	// ChannelMonitorHideUserRanking hides the user ranking tab and /users payload
-	// from non-admin channel-monitor v2 viewers; default false (visible).
-	ChannelMonitorHideUserRanking bool `json:"channel_monitor_hide_user_ranking"`
-	ChannelMonitorShowQuota       bool `json:"channel_monitor_show_quota"`
-	AvailableChannelsEnabled      bool `json:"available_channels_enabled"`
-	SubscriptionEnabled           bool `json:"subscription_enabled"`
-	ModelPlazaEnabled             bool `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth         bool `json:"model_plaza_require_auth"`
-	PluginManagementEnabled       bool `json:"plugin_management_enabled"`
-	AffiliateEnabled              bool `json:"affiliate_enabled"`
-	RiskControlEnabled            bool `json:"risk_control_enabled"`
-	AllowUserViewErrorRequests    bool `json:"allow_user_view_error_requests"`
+
+	ChannelMonitorShowQuota  bool `json:"channel_monitor_show_quota"`
+	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	ModelPlazaEnabled       bool `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth   bool `json:"model_plaza_require_auth"`
+	PluginManagementEnabled bool `json:"plugin_management_enabled"`
+
+	RiskControlEnabled         bool `json:"risk_control_enabled"`
+	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
 }
 
 // GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection.
@@ -618,116 +473,60 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 	}
 
 	return &PublicSettingsInjectionPayload{
-		RegistrationEnabled:                 settings.RegistrationEnabled,
-		EmailVerifyEnabled:                  settings.EmailVerifyEnabled,
-		RegistrationEmailSuffixWhitelist:    settings.RegistrationEmailSuffixWhitelist,
-		RegistrationEmailDomainQuotaEnabled: settings.RegistrationEmailDomainQuotaEnabled,
-		PromoCodeEnabled:                    settings.PromoCodeEnabled,
-		PasswordResetEnabled:                settings.PasswordResetEnabled,
-		InvitationCodeEnabled:               settings.InvitationCodeEnabled,
-		TotpEnabled:                         settings.TotpEnabled,
-		PasskeyEnabled:                      settings.PasskeyEnabled,
-		LoginAgreementEnabled:               settings.LoginAgreementEnabled,
-		LoginAgreementMode:                  settings.LoginAgreementMode,
-		LoginAgreementUpdatedAt:             settings.LoginAgreementUpdatedAt,
-		LoginAgreementRevision:              settings.LoginAgreementRevision,
-		LoginAgreementDocuments:             settings.LoginAgreementDocuments,
-		TurnstileEnabled:                    settings.TurnstileEnabled,
-		TurnstileSiteKey:                    settings.TurnstileSiteKey,
-		TencentCaptchaEnabled:               settings.TencentCaptchaEnabled,
-		TencentCaptchaAppID:                 settings.TencentCaptchaAppID,
-		TencentCaptchaRegion:                settings.TencentCaptchaRegion,
-		AliyunCaptchaEnabled:                settings.AliyunCaptchaEnabled,
-		AliyunCaptchaSceneID:                settings.AliyunCaptchaSceneID,
-		AliyunCaptchaPrefix:                 settings.AliyunCaptchaPrefix,
-		AliyunCaptchaRegion:                 settings.AliyunCaptchaRegion,
-		SiteName:                            settings.SiteName,
-		SiteLogo:                            settings.SiteLogo,
-		SiteSubtitle:                        settings.SiteSubtitle,
-		APIBaseURL:                          settings.APIBaseURL,
-		ContactInfo:                         settings.ContactInfo,
-		DocURL:                              settings.DocURL,
-		HomeContent:                         settings.HomeContent,
-		CompactHomeEnabled:                  settings.CompactHomeEnabled,
-		HideCcsImportButton:                 settings.HideCcsImportButton,
-		PurchaseSubscriptionEnabled:         settings.PurchaseSubscriptionEnabled,
-		PurchaseSubscriptionURL:             settings.PurchaseSubscriptionURL,
-		TableDefaultPageSize:                settings.TableDefaultPageSize,
-		TablePageSizeOptions:                settings.TablePageSizeOptions,
-		CustomMenuItems:                     filterUserVisibleMenuItems(settings.CustomMenuItems),
-		CustomEndpoints:                     safeRawJSONArray(settings.CustomEndpoints),
-		LinuxDoOAuthEnabled:                 settings.LinuxDoOAuthEnabled,
-		DingTalkOAuthEnabled:                settings.DingTalkOAuthEnabled,
-		WeChatOAuthEnabled:                  settings.WeChatOAuthEnabled,
-		WeChatOAuthOpenEnabled:              settings.WeChatOAuthOpenEnabled,
-		WeChatOAuthMPEnabled:                settings.WeChatOAuthMPEnabled,
-		WeChatOAuthMobileEnabled:            settings.WeChatOAuthMobileEnabled,
-		OIDCOAuthEnabled:                    settings.OIDCOAuthEnabled,
-		OIDCOAuthProviderName:               settings.OIDCOAuthProviderName,
-		GitHubOAuthEnabled:                  settings.GitHubOAuthEnabled,
-		GoogleOAuthEnabled:                  settings.GoogleOAuthEnabled,
-		BackendModeEnabled:                  settings.BackendModeEnabled,
-		PaymentEnabled:                      settings.PaymentEnabled,
-		PaymentBalanceDisabled:              settings.PaymentBalanceDisabled,
-		Version:                             s.version,
-		ServerTimezone:                      timezone.Name(),
-		ServerUTCOffset:                     timezone.UTCOffset(),
-		BalanceLowNotifyEnabled:             settings.BalanceLowNotifyEnabled,
-		AccountQuotaNotifyEnabled:           settings.AccountQuotaNotifyEnabled,
-		BalanceLowNotifyThreshold:           settings.BalanceLowNotifyThreshold,
-		BalanceLowNotifyRechargeURL:         settings.BalanceLowNotifyRechargeURL,
+
+		TotpEnabled: settings.TotpEnabled,
+
+		LoginAgreementEnabled:   settings.LoginAgreementEnabled,
+		LoginAgreementMode:      settings.LoginAgreementMode,
+		LoginAgreementUpdatedAt: settings.LoginAgreementUpdatedAt,
+		LoginAgreementRevision:  settings.LoginAgreementRevision,
+		LoginAgreementDocuments: settings.LoginAgreementDocuments,
+		TurnstileEnabled:        settings.TurnstileEnabled,
+		TurnstileSiteKey:        settings.TurnstileSiteKey,
+		TencentCaptchaEnabled:   settings.TencentCaptchaEnabled,
+		TencentCaptchaAppID:     settings.TencentCaptchaAppID,
+		TencentCaptchaRegion:    settings.TencentCaptchaRegion,
+		AliyunCaptchaEnabled:    settings.AliyunCaptchaEnabled,
+		AliyunCaptchaSceneID:    settings.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:     settings.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:     settings.AliyunCaptchaRegion,
+		SiteName:                settings.SiteName,
+		SiteLogo:                settings.SiteLogo,
+		SiteSubtitle:            settings.SiteSubtitle,
+		APIBaseURL:              settings.APIBaseURL,
+		ContactInfo:             settings.ContactInfo,
+		DocURL:                  settings.DocURL,
+		HomeContent:             settings.HomeContent,
+		CompactHomeEnabled:      settings.CompactHomeEnabled,
+		HideCcsImportButton:     settings.HideCcsImportButton,
+
+		TableDefaultPageSize: settings.TableDefaultPageSize,
+		TablePageSizeOptions: settings.TablePageSizeOptions,
+
+		CustomEndpoints: safeRawJSONArray(settings.CustomEndpoints),
+
+		BackendModeEnabled: settings.BackendModeEnabled,
+
+		Version:                   s.version,
+		ServerTimezone:            timezone.Name(),
+		ServerUTCOffset:           timezone.UTCOffset(),
+		AccountQuotaNotifyEnabled: settings.AccountQuotaNotifyEnabled,
 
 		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
 		ChannelMonitorMode:                   settings.ChannelMonitorMode,
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         settings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              settings.ChannelMonitorShowQuota,
-		ChannelMonitorHideUserRanking:        settings.ChannelMonitorHideUserRanking,
-		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
-		SubscriptionEnabled:                  settings.SubscriptionEnabled,
-		ModelPlazaEnabled:                    settings.ModelPlazaEnabled,
-		ModelPlazaRequireAuth:                settings.ModelPlazaRequireAuth,
-		PluginManagementEnabled:              settings.PluginManagementEnabled,
-		AffiliateEnabled:                     settings.AffiliateEnabled,
-		RiskControlEnabled:                   settings.RiskControlEnabled,
-		AllowUserViewErrorRequests:           settings.AllowUserViewErrorRequests,
+
+		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+
+		ModelPlazaEnabled:       settings.ModelPlazaEnabled,
+		ModelPlazaRequireAuth:   settings.ModelPlazaRequireAuth,
+		PluginManagementEnabled: settings.PluginManagementEnabled,
+
+		RiskControlEnabled:         settings.RiskControlEnabled,
+		AllowUserViewErrorRequests: settings.AllowUserViewErrorRequests,
 	}, nil
-}
-
-// filterUserVisibleMenuItems filters out admin-only menu items from a raw JSON
-// array string, returning only items with visibility != "admin".
-func filterUserVisibleMenuItems(raw string) json.RawMessage {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "[]" {
-		return json.RawMessage("[]")
-	}
-	var items []struct {
-		Visibility string `json:"visibility"`
-	}
-	if err := json.Unmarshal([]byte(raw), &items); err != nil {
-		return json.RawMessage("[]")
-	}
-
-	// Parse full items to preserve all fields
-	var fullItems []json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &fullItems); err != nil {
-		return json.RawMessage("[]")
-	}
-
-	var filtered []json.RawMessage
-	for i, item := range items {
-		if item.Visibility != "admin" {
-			filtered = append(filtered, fullItems[i])
-		}
-	}
-	if len(filtered) == 0 {
-		return json.RawMessage("[]")
-	}
-	result, err := json.Marshal(filtered)
-	if err != nil {
-		return json.RawMessage("[]")
-	}
-	return result
 }
 
 // safeRawJSONArray returns raw as json.RawMessage if it's valid JSON, otherwise "[]".
@@ -743,7 +542,7 @@ func safeRawJSONArray(raw string) json.RawMessage {
 }
 
 // GetFrameSrcOrigins returns deduplicated http(s) origins from home_content URL,
-// purchase_subscription_url, and all custom_menu_items URLs. Used by the router layer for CSP frame-src injection.
+// used by the router layer for CSP frame-src injection.
 func (s *SettingService) GetFrameSrcOrigins(ctx context.Context) ([]string, error) {
 	settings, err := s.GetPublicSettings(ctx)
 	if err != nil {
@@ -765,16 +564,6 @@ func (s *SettingService) GetFrameSrcOrigins(ctx context.Context) ([]string, erro
 	// home content URL (when home_content is set to a URL for iframe embedding)
 	addOrigin(settings.HomeContent)
 
-	// purchase subscription URL
-	if settings.PurchaseSubscriptionEnabled {
-		addOrigin(settings.PurchaseSubscriptionURL)
-	}
-
-	// all custom menu items (including admin-only, since CSP must allow all iframes)
-	for _, item := range parseCustomMenuItemURLs(settings.CustomMenuItems) {
-		addOrigin(item)
-	}
-
 	return origins, nil
 }
 
@@ -793,25 +582,4 @@ func extractOriginFromURL(rawURL string) string {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host
-}
-
-// parseCustomMenuItemURLs extracts URLs from a raw JSON array of custom menu items.
-func parseCustomMenuItemURLs(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "[]" {
-		return nil
-	}
-	var items []struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal([]byte(raw), &items); err != nil {
-		return nil
-	}
-	urls := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.URL != "" {
-			urls = append(urls, item.URL)
-		}
-	}
-	return urls
 }

@@ -433,7 +433,7 @@ describe('admin UsageView request ID column visibility', () => {
       expect.arrayContaining([expect.objectContaining({ key: 'request_id' })]),
     )
 
-    await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
+    await wrapper.get('button[title="common.columnSettings"]').trigger('click')
     const requestIdToggle = wrapper.findAll('button').find((button) => button.text() === 'Request ID')
     expect(requestIdToggle).toBeDefined()
     await requestIdToggle!.trigger('click')
@@ -478,7 +478,7 @@ describe('admin UsageView request ID column visibility', () => {
       expect.arrayContaining([expect.objectContaining({ key: 'upstream_request_id' })]),
     )
 
-    await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
+    await wrapper.get('button[title="common.columnSettings"]').trigger('click')
     const upstreamToggle = wrapper.findAll('button').find((button) => button.text() === 'Upstream ID')
     expect(upstreamToggle).toBeDefined()
     await upstreamToggle!.trigger('click')
@@ -523,7 +523,7 @@ describe('admin UsageView request ID column visibility', () => {
       expect.objectContaining({ key: 'upstream_version' }),
     ]))
 
-    await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
+    await wrapper.get('button[title="common.columnSettings"]').trigger('click')
     const turnStateToggle = wrapper.findAll('button').find((button) => button.text() === 'Upstream Turn State')
     expect(turnStateToggle).toBeDefined()
     await turnStateToggle!.trigger('click')

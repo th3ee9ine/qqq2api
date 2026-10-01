@@ -25,25 +25,8 @@ describe('resolveDocumentTitle', () => {
 })
 
 describe('resolveRouteDocumentTitle', () => {
-  it('自定义页面菜单加载后，使用菜单名称作为标题', () => {
-    const route = {
-      name: 'CustomPage',
-      params: { id: 'scheduler' },
-      meta: {
-        title: 'Custom Page'
-      }
-    }
-
-    expect(resolveRouteDocumentTitle(route, 'EzouAPI')).toBe('Custom Page - EzouAPI')
-    expect(resolveRouteDocumentTitle(route, 'EzouAPI', [
-      {
-        id: 'scheduler',
-        label: '账号调度器',
-        icon_svg: '',
-        url: 'https://example.com',
-        visibility: 'admin',
-        sort_order: 0
-      }
-    ])).toBe('账号调度器 - EzouAPI')
+  it('uses registered route metadata', () => {
+    const route = { name: 'AdminSettings', params: {}, meta: { title: 'Settings' } }
+    expect(resolveRouteDocumentTitle(route, 'QQQ2API')).toBe('Settings - QQQ2API')
   })
 })

@@ -255,12 +255,7 @@ func loadCodexGroupCatalogAccounts(ctx context.Context, repo AccountRepository, 
 		[]string{
 			PlatformAnthropic,
 			PlatformOpenAI,
-			PlatformGemini,
-			PlatformAntigravity,
 			PlatformGrok,
-			PlatformKimi,
-			PlatformZhipu,
-			PlatformMiniMax,
 		},
 		false,
 	)

@@ -105,16 +105,9 @@ func TestOpsScheduledReportLegacyTemplateReceivesSummaryHTML(t *testing.T) {
 	smtpServer := startNotificationEmailTestSMTPServer(t)
 	require.NoError(t, repo.SetMultiple(ctx, smtpServer.settings()))
 
-	emailService := NewEmailService(repo, nil)
-	notificationService := NewNotificationEmailService(repo, emailService)
-	_, err := notificationService.UpdateTemplate(
-		ctx,
-		NotificationEmailEventOpsScheduledReport,
-		"en",
-		"Legacy report {{report_name}}",
-		`<section data-template="legacy">{{report_html}}</section>`,
-	)
-	require.NoError(t, err)
+	emailService := NewEmailService(repo)
+	NewNotificationEmailService(repo, emailService)
+	require.NoError(t, repo.Set(ctx, notificationEmailTemplateKey(NotificationEmailEventOpsScheduledReport, "en"), `{"subject":"Legacy report {{report_name}}","html":"<section data-template=\"legacy\">{{report_html}}</section>"}`))
 
 	svc := &OpsScheduledReportService{
 		opsService:   &OpsService{opsRepo: &opsRepoMock{}},

@@ -19,7 +19,7 @@ func TestOpsServiceRecordErrorBatch_SanitizesAndBatches(t *testing.T) {
 			return int64(len(inputs)), nil
 		},
 	}
-	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	msg := " upstream failed: https://example.com?access_token=secret-value "
 	detail := `{"authorization":"Bearer secret-token"}`
@@ -90,7 +90,7 @@ func TestOpsServiceRecordErrorBatch_DoesNotFallbackToSingleInsertsWhenBatchFails
 			return int64(singleCalls), nil
 		},
 	}
-	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	err := svc.RecordErrorBatch(context.Background(), []*OpsInsertErrorLogInput{
 		{ErrorMessage: "first"},
@@ -111,7 +111,7 @@ func TestOpsServiceRecordErrorPersistsExplicitAccountAuthStatusZero(t *testing.T
 			return 1, nil
 		},
 	}
-	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil)
 	staleStatus := 403
 	staleMessage := "stale inference message"
 	staleDetail := "stale inference detail"

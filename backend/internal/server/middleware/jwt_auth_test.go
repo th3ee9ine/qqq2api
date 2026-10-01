@@ -31,10 +31,6 @@ func (r *stubJWTUserRepo) GetByID(_ context.Context, id int64) (*service.User, e
 	return u, nil
 }
 
-func (r *stubJWTUserRepo) GetUserAvatar(_ context.Context, _ int64) (*service.UserAvatar, error) {
-	return nil, nil
-}
-
 func (r *stubJWTUserRepo) UpdateUserLastActiveAt(_ context.Context, _ int64, _ time.Time) error {
 	return nil
 }
@@ -61,7 +57,7 @@ func newJWTTestEnv(users map[int64]*service.User) (*gin.Engine, *service.AuthSer
 	cfg.Default.AdminEmail = "admin@example.com"
 
 	userRepo := &stubJWTUserRepo{users: users}
-	authSvc := service.NewAuthService(nil, userRepo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authSvc := service.NewAuthService(userRepo, nil, cfg, nil, nil)
 	userSvc := service.NewUserService(userRepo, nil, nil, nil)
 	mw := NewJWTAuthMiddleware(authSvc, userSvc, nil, nil)
 
@@ -163,7 +159,7 @@ func TestJWTAuth_ValidToken_TouchesLastActive(t *testing.T) {
 	cfg.Default.AdminEmail = "admin@example.com"
 
 	userRepo := &stubJWTUserRepo{users: map[int64]*service.User{1: user}}
-	authSvc := service.NewAuthService(nil, userRepo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authSvc := service.NewAuthService(userRepo, nil, cfg, nil, nil)
 	userSvc := service.NewUserService(userRepo, nil, nil, nil)
 	toucher := &recordingActivityToucher{}
 
@@ -255,7 +251,7 @@ func TestJWTAuth_TamperedToken(t *testing.T) {
 func TestJWTAuth_UserLookupErrors(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{JWT: config.JWTConfig{Secret: "test-secret", ExpireHour: 1}}
-	authSvc := service.NewAuthService(nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authSvc := service.NewAuthService(nil, nil, cfg, nil, nil)
 	token, err := authSvc.GenerateToken(context.Background(), &service.User{ID: 1, Role: service.RoleAdmin})
 	require.NoError(t, err)
 

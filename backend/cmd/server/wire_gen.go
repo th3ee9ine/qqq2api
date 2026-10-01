@@ -51,16 +51,13 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	groupRepository := repository.NewGroupRepository(client, db)
 	proxyRepository := repository.NewProxyRepository(client, db)
 	settingService := service.ProvideSettingService(settingRepository, groupRepository, proxyRepository, configConfig)
-	emailCache := repository.NewEmailCache(redisClient)
-	emailService := service.NewEmailService(settingRepository, emailCache)
 	turnstileVerifier := repository.NewTurnstileVerifier()
 	turnstileService := service.NewTurnstileService(settingService, turnstileVerifier)
 	tencentCaptchaVerifier := repository.NewTencentCaptchaVerifier()
 	tencentCaptchaService := service.NewTencentCaptchaService(settingService, tencentCaptchaVerifier)
 	aliyunCaptchaVerifier := repository.NewAliyunCaptchaVerifier()
 	aliyunCaptchaService := service.NewAliyunCaptchaService(settingService, aliyunCaptchaVerifier)
-	emailQueueService := service.ProvideEmailQueueService(emailService)
-	authService := service.ProvideAuthService(client, userRepository, refreshTokenCache, configConfig, settingService, emailService, turnstileService, tencentCaptchaService, aliyunCaptchaService, emailQueueService)
+	authService := service.ProvideAuthService(userRepository, refreshTokenCache, configConfig, settingService, turnstileService, tencentCaptchaService, aliyunCaptchaService)
 	apiKeyRepository := repository.NewAPIKeyRepository(client, db)
 	userSubscriptionRepository := repository.NewUserSubscriptionRepository(client)
 	userGroupRateRepository := repository.NewUserGroupRateRepository(db)
@@ -82,7 +79,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		return nil, err
 	}
 	totpCache := repository.NewTotpCache(redisClient)
-	totpService := service.NewTotpService(userRepository, secretEncryptor, totpCache, settingService, emailService, emailQueueService)
+	totpService := service.NewTotpService(userRepository, secretEncryptor, totpCache, settingService)
 	authHandler := handler.ProvideAuthHandler(configConfig, authService, userService, settingService, totpService)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageLogRepository := repository.NewUsageLogRepository(client, db)
@@ -128,6 +125,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	modelPricingResolver := service.NewModelPricingResolver(channelService, billingService)
 	compositeModelRouteRepository := repository.NewCompositeModelRouteRepository(client)
 	compositeRouteResolver := service.NewCompositeRouteResolver(compositeModelRouteRepository)
+	emailService := service.NewEmailService(settingRepository)
 	notificationEmailService := service.NewNotificationEmailService(settingRepository, emailService)
 	balanceNotifyService := service.ProvideBalanceNotifyService(emailService, settingRepository, accountRepository, notificationEmailService)
 	gatewayService := service.NewGatewayService(accountRepository, groupRepository, usageLogRepository, usageBillingRepository, userRepository, userSubscriptionRepository, userGroupRateRepository, gatewayCache, configConfig, schedulerSnapshotService, concurrencyService, billingService, rateLimitService, billingCacheService, identityService, httpUpstream, deferredService, claudeTokenProvider, sessionLimitCache, rpmCache, digestSessionStore, settingService, tlsFingerprintProfileService, channelService, modelPricingResolver, compositeRouteResolver, balanceNotifyService, serviceUserPlatformQuotaRepository)
@@ -186,7 +184,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	proxyHandler := admin.NewProxyHandler(adminService)
 	gitHubReleaseClient := repository.ProvideGitHubReleaseClient(configConfig)
 	openAICodexVersionSyncService := service.ProvideOpenAICodexVersionSyncService(settingRepository, settingService, gitHubReleaseClient)
-	settingHandler := handler.ProvideAdminSettingHandler(settingService, emailService, turnstileService, aliyunCaptchaService, opsService, notificationEmailService, totpService, userService, openAICodexVersionSyncService)
+	settingHandler := handler.ProvideAdminSettingHandler(settingService, turnstileService, aliyunCaptchaService, opsService, totpService, userService, openAICodexVersionSyncService)
 	opsHandler := admin.NewOpsHandler(opsService)
 	updateCache := repository.NewUpdateCache(redisClient)
 	serviceBuildInfo := provideServiceBuildInfo(buildInfo)
@@ -259,7 +257,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	claudeCodeVersionSyncService := service.ProvideClaudeCodeVersionSyncService(settingRepository, settingService, gitHubReleaseClient)
 	proxyExpiryService := service.ProvideProxyExpiryService(proxyRepository, openAIGatewayService)
 	scheduledTestRunnerService := service.ProvideScheduledTestRunnerService(scheduledTestPlanRepository, scheduledTestService, accountTestService, rateLimitService, configConfig)
-	v := provideCleanupWithSessionCleanup(grokOAuthService, client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, oAuthService, openAIOAuthService, openAIGatewayService, scheduledTestRunnerService, upstreamBillingProbeService, auditLogService, openAIQuotaAutoResetService, openAISessionCleanupService, promptService, pluginManager)
+	v := provideCleanupWithSessionCleanup(grokOAuthService, client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, openAICodexVersionSyncService, claudeCodeVersionSyncService, proxyExpiryService, usageCleanupService, idempotencyCleanupService, pricingService, billingCacheService, usageRecordWorkerPool, oAuthService, openAIOAuthService, openAIGatewayService, scheduledTestRunnerService, upstreamBillingProbeService, auditLogService, openAIQuotaAutoResetService, openAISessionCleanupService, promptService, pluginManager)
 	application := &Application{
 		Server:        httpServer,
 		PromptAudit:   promptService,
@@ -321,7 +319,6 @@ func provideCleanup(
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	pricing *service.PricingService,
-	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	oauth *service.OAuthService,
@@ -357,7 +354,6 @@ func provideCleanup(
 		usageCleanup,
 		idempotencyCleanup,
 		pricing,
-		emailQueue,
 		billingCache,
 		usageRecordWorkerPool,
 		oauth,
@@ -396,7 +392,6 @@ func provideCleanupWithSessionCleanup(
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	pricing *service.PricingService,
-	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	oauth *service.OAuthService,
@@ -556,10 +551,6 @@ func provideCleanupWithSessionCleanup(
 			}},
 			{"PricingService", func() error {
 				pricing.Stop()
-				return nil
-			}},
-			{"EmailQueueService", func() error {
-				emailQueue.Stop()
 				return nil
 			}},
 			{"BillingCacheService", func() error {

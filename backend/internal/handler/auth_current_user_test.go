@@ -15,23 +15,26 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
-func TestAuthHandlerGetCurrentUserReturnsProfileCompatibilityFields(t *testing.T) {
+func TestAuthHandlerGetCurrentUserReturnsAdministratorIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	repo := &userHandlerRepoStub{
 		user: &service.User{
-			ID:       31,
-			Email:    "admin@example.com",
-			Username: "admin",
-			Role:     service.RoleAdmin,
-			Status:   service.StatusActive,
+			ID:                         31,
+			Email:                      "admin@example.com",
+			Username:                   "admin",
+			Role:                       service.RoleAdmin,
+			Status:                     service.StatusActive,
+			BalanceNotifyEnabled:       true,
+			BalanceNotifyThresholdType: "fixed",
+			BalanceNotifyExtraEmails:   []service.NotifyEmailEntry{{Email: "legacy@example.com", Verified: true}},
 		},
 	}
 
 	cfg := &config.Config{}
 	cfg.Default.AdminEmail = "admin@example.com"
 	handler := &AuthHandler{
-		authService: service.NewAuthService(nil, repo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil),
+		authService: service.NewAuthService(repo, nil, cfg, nil, nil),
 		userService: service.NewUserService(repo, nil, nil, nil),
 	}
 
@@ -50,8 +53,15 @@ func TestAuthHandlerGetCurrentUserReturnsProfileCompatibilityFields(t *testing.T
 	}
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
 	require.Equal(t, 0, resp.Code)
-	require.Equal(t, true, resp.Data["email_bound"])
-	require.Equal(t, false, resp.Data["linuxdo_bound"])
+	require.Equal(t, "admin@example.com", resp.Data["email"])
+	for _, field := range []string{
+		"balance_notify_enabled", "balance_notify_threshold_type",
+		"balance_notify_threshold", "balance_notify_extra_emails",
+	} {
+		require.NotContains(t, resp.Data, field)
+	}
+	require.NotContains(t, resp.Data, "email_bound")
+	require.NotContains(t, resp.Data, "linuxdo_bound")
 	require.Equal(t, "admin", resp.Data["role"])
 }
 
@@ -63,7 +73,7 @@ func TestAuthHandlerGetCurrentUserRejectsOtherDatabaseAdministrator(t *testing.T
 	cfg := &config.Config{}
 	cfg.Default.AdminEmail = "admin@example.com"
 	handler := &AuthHandler{
-		authService: service.NewAuthService(nil, repo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil),
+		authService: service.NewAuthService(repo, nil, cfg, nil, nil),
 		userService: service.NewUserService(repo, nil, nil, nil),
 	}
 	recorder := httptest.NewRecorder()

@@ -53,7 +53,7 @@ func (s *duplicateAccountRepoStub) CreateWithAccountGroups(ctx context.Context, 
 	}
 	stored := *account
 	s.accounts[account.ID] = &stored
-	s.mockAccountRepoForGemini.accountsByID[account.ID] = &stored
+	s.mockGatewayAccountRepo.accountsByID[account.ID] = &stored
 	return nil
 }
 

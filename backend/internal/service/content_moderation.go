@@ -76,7 +76,6 @@ const (
 	// session setup payload. Live carries caller-provided instructions instead
 	// of a chat `messages` array.
 	ContentModerationProtocolOpenAILive   = "openai_live"
-	ContentModerationProtocolGemini       = "gemini"
 	ContentModerationProtocolOpenAIImages = "openai_images"
 
 	// ContentModerationEndpointProtocol selects the wire protocol used when

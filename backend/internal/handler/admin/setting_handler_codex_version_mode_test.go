@@ -69,6 +69,6 @@ func TestOmittedSettingKeysIncludesCodexVersionMode(t *testing.T) {
 }
 
 func TestSettingsAuditIncludesCodexVersionMode(t *testing.T) {
-	changed := diffSettings(&service.SystemSettings{OpenAICodexClientVersionMode: "auto"}, &service.SystemSettings{OpenAICodexClientVersionMode: "pinned"}, nil, nil, UpdateSettingsRequest{})
+	changed := diffSettings(&service.SystemSettings{OpenAICodexClientVersionMode: "auto"}, &service.SystemSettings{OpenAICodexClientVersionMode: "pinned"}, UpdateSettingsRequest{})
 	require.Contains(t, changed, "openai_codex_client_version_mode")
 }

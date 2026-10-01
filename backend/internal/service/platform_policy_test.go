@@ -9,11 +9,7 @@ import (
 
 func TestRemovedProviderHasNoBuiltinCapabilities(t *testing.T) {
 	account := &Account{Platform: "deepseek", Type: AccountTypeAPIKey}
-	require.False(t, account.IsCNProvider())
-	require.False(t, account.SupportsNativeCNResponses())
 	require.Empty(t, account.GetOpenAIBaseURL())
-	require.Empty(t, account.GetAnthropicProtocolBaseURL())
-	require.Empty(t, cnBalanceURL(account))
 
 	billing := NewBillingService(nil, nil)
 	for _, model := range []string{"deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"} {

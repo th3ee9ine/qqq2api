@@ -69,7 +69,7 @@ func TestGatewayService_ListSchedulableAccounts_RejectsUnsupportedPlatforms(t *t
 		},
 	}
 
-	rateLimitService := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(accountRepo, &config.Config{}, nil)
 	rateLimitService.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 	svc := &GatewayService{
 		accountRepo:      accountRepo,
@@ -117,7 +117,7 @@ func TestOpenAIGatewayService_ListSchedulableAccounts_FiltersThresholdBlockedAcc
 		},
 	}
 
-	rateLimitService := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(accountRepo, &config.Config{}, nil)
 	rateLimitService.SetSettingService(NewSettingService(settingsRepo, &config.Config{}))
 	svc := &OpenAIGatewayService{
 		accountRepo:      accountRepo,

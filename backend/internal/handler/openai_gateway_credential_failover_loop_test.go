@@ -185,7 +185,7 @@ func newOpenAICredentialFailoverHandler(t *testing.T, failIDs map[int64]bool) (*
 	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 	cfg.Gateway.OpenAIWS.IngressModeDefault = service.OpenAIWSIngressModeHTTPBridge
 	billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
-	rateLimits := service.NewRateLimitService(repo, nil, cfg, nil, nil)
+	rateLimits := service.NewRateLimitService(repo, cfg, nil)
 	gateway := service.NewOpenAIGatewayService(
 		repo, nil, nil, nil, nil, nil, nil, cfg, nil, nil,
 		service.NewBillingService(cfg, nil), rateLimits, billingCache, upstream,

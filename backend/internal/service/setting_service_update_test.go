@@ -4,7 +4,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"math"
 	"strconv"
@@ -12,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/th3ee9ine/qqq2api/internal/config"
-	infraerrors "github.com/th3ee9ine/qqq2api/internal/pkg/errors"
 )
 
 type settingUpdateRepoStub struct {
@@ -137,94 +135,11 @@ func (s *forwardedIPMigrationRepoStub) SetMultiple(_ context.Context, values map
 }
 
 func (s *forwardedIPMigrationRepoStub) GetAll(context.Context) (map[string]string, error) {
-	panic("unexpected GetAll call")
+	return s.values, nil
 }
 
 func (s *forwardedIPMigrationRepoStub) Delete(context.Context, string) error {
 	panic("unexpected Delete call")
-}
-
-type settingAntigravityUARepoStub struct {
-	values map[string]string
-}
-
-func (s *settingAntigravityUARepoStub) Get(ctx context.Context, key string) (*Setting, error) {
-	panic("unexpected Get call")
-}
-
-func (s *settingAntigravityUARepoStub) GetValue(ctx context.Context, key string) (string, error) {
-	if value, ok := s.values[key]; ok {
-		return value, nil
-	}
-	return "", ErrSettingNotFound
-}
-
-func (s *settingAntigravityUARepoStub) Set(ctx context.Context, key, value string) error {
-	panic("unexpected Set call")
-}
-
-func (s *settingAntigravityUARepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
-	panic("unexpected GetMultiple call")
-}
-
-func (s *settingAntigravityUARepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
-	panic("unexpected SetMultiple call")
-}
-
-func (s *settingAntigravityUARepoStub) GetAll(ctx context.Context) (map[string]string, error) {
-	panic("unexpected GetAll call")
-}
-
-func (s *settingAntigravityUARepoStub) Delete(ctx context.Context, key string) error {
-	panic("unexpected Delete call")
-}
-
-type defaultSubGroupReaderStub struct {
-	byID  map[int64]*Group
-	errBy map[int64]error
-	calls []int64
-}
-
-func TestSettingService_AffiliateAdminRechargeSetting(t *testing.T) {
-	t.Run("missing value defaults to disabled", func(t *testing.T) {
-		svc := NewSettingService(&settingGetAllRepoStub{values: map[string]string{}}, &config.Config{})
-
-		settings, err := svc.GetAllSettings(context.Background())
-		require.NoError(t, err)
-		require.False(t, settings.AdminRechargeRebateEnabled)
-	})
-
-	t.Run("explicit value is parsed", func(t *testing.T) {
-		svc := NewSettingService(&settingGetAllRepoStub{values: map[string]string{
-			SettingKeyAffiliateAdminRechargeEnabled: "true",
-		}}, &config.Config{})
-
-		settings, err := svc.GetAllSettings(context.Background())
-		require.NoError(t, err)
-		require.True(t, settings.AdminRechargeRebateEnabled)
-	})
-
-	t.Run("value is persisted", func(t *testing.T) {
-		repo := &settingUpdateRepoStub{}
-		svc := NewSettingService(repo, &config.Config{})
-
-		err := svc.UpdateSettings(context.Background(), &SystemSettings{
-			AdminRechargeRebateEnabled: true,
-		})
-		require.NoError(t, err)
-		require.Equal(t, "true", repo.updates[SettingKeyAffiliateAdminRechargeEnabled])
-	})
-}
-
-func (s *defaultSubGroupReaderStub) GetByID(ctx context.Context, id int64) (*Group, error) {
-	s.calls = append(s.calls, id)
-	if err, ok := s.errBy[id]; ok {
-		return nil, err
-	}
-	if g, ok := s.byID[id]; ok {
-		return g, nil
-	}
-	return nil, ErrGroupNotFound
 }
 
 func TestSettingService_UpdateSettings_PersistsCompactHomeEnabled(t *testing.T) {
@@ -235,144 +150,6 @@ func TestSettingService_UpdateSettings_PersistsCompactHomeEnabled(t *testing.T) 
 
 	require.NoError(t, err)
 	require.Equal(t, "true", repo.updates[SettingKeyCompactHomeEnabled])
-}
-
-func TestSettingService_UpdateSettings_DefaultSubscriptions_ValidGroup(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
-	groupReader := &defaultSubGroupReaderStub{
-		byID: map[int64]*Group{
-			11: {ID: 11, SubscriptionType: SubscriptionTypeSubscription},
-		},
-	}
-	svc := NewSettingService(repo, &config.Config{})
-	svc.SetDefaultSubscriptionGroupReader(groupReader)
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		DefaultSubscriptions: []DefaultSubscriptionSetting{
-			{GroupID: 11, ValidityDays: 30},
-		},
-	})
-	require.NoError(t, err)
-	require.Equal(t, []int64{11}, groupReader.calls)
-
-	raw, ok := repo.updates[SettingKeyDefaultSubscriptions]
-	require.True(t, ok)
-
-	var got []DefaultSubscriptionSetting
-	require.NoError(t, json.Unmarshal([]byte(raw), &got))
-	require.Equal(t, []DefaultSubscriptionSetting{
-		{GroupID: 11, ValidityDays: 30},
-	}, got)
-}
-
-func TestSettingService_UpdateSettings_DefaultSubscriptions_RejectsNonSubscriptionGroup(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
-	groupReader := &defaultSubGroupReaderStub{
-		byID: map[int64]*Group{
-			12: {ID: 12, SubscriptionType: SubscriptionTypeStandard},
-		},
-	}
-	svc := NewSettingService(repo, &config.Config{})
-	svc.SetDefaultSubscriptionGroupReader(groupReader)
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		DefaultSubscriptions: []DefaultSubscriptionSetting{
-			{GroupID: 12, ValidityDays: 7},
-		},
-	})
-	require.Error(t, err)
-	require.Equal(t, "DEFAULT_SUBSCRIPTION_GROUP_INVALID", infraerrors.Reason(err))
-	require.Nil(t, repo.updates)
-}
-
-func TestSettingService_UpdateSettings_DefaultSubscriptions_RejectsNotFoundGroup(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
-	groupReader := &defaultSubGroupReaderStub{
-		errBy: map[int64]error{
-			13: ErrGroupNotFound,
-		},
-	}
-	svc := NewSettingService(repo, &config.Config{})
-	svc.SetDefaultSubscriptionGroupReader(groupReader)
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		DefaultSubscriptions: []DefaultSubscriptionSetting{
-			{GroupID: 13, ValidityDays: 7},
-		},
-	})
-	require.Error(t, err)
-	require.Equal(t, "DEFAULT_SUBSCRIPTION_GROUP_INVALID", infraerrors.Reason(err))
-	require.Equal(t, "13", infraerrors.FromError(err).Metadata["group_id"])
-	require.Nil(t, repo.updates)
-}
-
-func TestSettingService_UpdateSettings_DefaultSubscriptions_RejectsDuplicateGroup(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
-	groupReader := &defaultSubGroupReaderStub{
-		byID: map[int64]*Group{
-			11: {ID: 11, SubscriptionType: SubscriptionTypeSubscription},
-		},
-	}
-	svc := NewSettingService(repo, &config.Config{})
-	svc.SetDefaultSubscriptionGroupReader(groupReader)
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		DefaultSubscriptions: []DefaultSubscriptionSetting{
-			{GroupID: 11, ValidityDays: 30},
-			{GroupID: 11, ValidityDays: 60},
-		},
-	})
-	require.Error(t, err)
-	require.Equal(t, "DEFAULT_SUBSCRIPTION_GROUP_DUPLICATE", infraerrors.Reason(err))
-	require.Equal(t, "11", infraerrors.FromError(err).Metadata["group_id"])
-	require.Nil(t, repo.updates)
-}
-
-func TestSettingService_UpdateSettings_DefaultSubscriptions_RejectsDuplicateGroupWithoutGroupReader(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
-	svc := NewSettingService(repo, &config.Config{})
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		DefaultSubscriptions: []DefaultSubscriptionSetting{
-			{GroupID: 11, ValidityDays: 30},
-			{GroupID: 11, ValidityDays: 60},
-		},
-	})
-	require.Error(t, err)
-	require.Equal(t, "DEFAULT_SUBSCRIPTION_GROUP_DUPLICATE", infraerrors.Reason(err))
-	require.Equal(t, "11", infraerrors.FromError(err).Metadata["group_id"])
-	require.Nil(t, repo.updates)
-}
-
-func TestSettingService_UpdateSettings_RegistrationEmailSuffixWhitelist_Normalized(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
-	svc := NewSettingService(repo, &config.Config{})
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		RegistrationEmailSuffixWhitelist: []string{"example.com", "@EXAMPLE.com", " @foo.bar ", "*.EDU.CN"},
-	})
-	require.NoError(t, err)
-	require.Equal(t, `["@example.com","@foo.bar","*.edu.cn"]`, repo.updates[SettingKeyRegistrationEmailSuffixWhitelist])
-}
-
-func TestSettingService_UpdateSettings_RegistrationEmailSuffixWhitelist_Invalid(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
-	svc := NewSettingService(repo, &config.Config{})
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		RegistrationEmailSuffixWhitelist: []string{"@invalid_domain"},
-	})
-	require.Error(t, err)
-	require.Equal(t, "INVALID_REGISTRATION_EMAIL_SUFFIX_WHITELIST", infraerrors.Reason(err))
-}
-
-func TestParseDefaultSubscriptions_NormalizesValues(t *testing.T) {
-	got := parseDefaultSubscriptions(`[{"group_id":11,"validity_days":30},{"group_id":11,"validity_days":60},{"group_id":0,"validity_days":10},{"group_id":12,"validity_days":99999}]`)
-	require.Equal(t, []DefaultSubscriptionSetting{
-		{GroupID: 11, ValidityDays: 30},
-		{GroupID: 11, ValidityDays: 60},
-		{GroupID: 12, ValidityDays: MaxValidityDays},
-	}, got)
 }
 
 func TestSettingService_UpdateSettings_TablePreferences(t *testing.T) {
@@ -396,7 +173,7 @@ func TestSettingService_UpdateSettings_TablePreferences(t *testing.T) {
 	require.Equal(t, "[20,100]", repo.updates[SettingKeyTablePageSizeOptions])
 }
 
-func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler(t *testing.T) {
+func TestSettingService_UpdateSettings_AdvancedScheduler(t *testing.T) {
 	resetOpenAIAdvancedSchedulerSettingCacheForTest()
 	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
 
@@ -404,10 +181,6 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	svc := NewSettingService(repo, &config.Config{})
 
 	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		PaymentVisibleMethodAlipaySource:                   "alipay",
-		PaymentVisibleMethodWxpaySource:                    "easypay",
-		PaymentVisibleMethodAlipayEnabled:                  true,
-		PaymentVisibleMethodWxpayEnabled:                   false,
 		OpenAILowUpstreamRatePriorityEnabled:               true,
 		OpenAIOAuthSchedulingRateMultiplier:                0.05,
 		OpenAIAdvancedSchedulerEnabled:                     true,
@@ -426,10 +199,6 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 		OpenAIAdvancedSchedulerWeightSessionSticky:         "4",
 	})
 	require.NoError(t, err)
-	require.Equal(t, VisibleMethodSourceOfficialAlipay, repo.updates[SettingPaymentVisibleMethodAlipaySource])
-	require.Equal(t, VisibleMethodSourceEasyPayWechat, repo.updates[SettingPaymentVisibleMethodWxpaySource])
-	require.Equal(t, "true", repo.updates[SettingPaymentVisibleMethodAlipayEnabled])
-	require.Equal(t, "false", repo.updates[SettingPaymentVisibleMethodWxpayEnabled])
 	require.Equal(t, "true", repo.updates[SettingKeyOpenAILowUpstreamRatePriorityEnabled])
 	require.Equal(t, "0.05", repo.updates[SettingKeyOpenAIOAuthSchedulingRateMultiplier])
 	require.Equal(t, "true", repo.updates[openAIAdvancedSchedulerSettingKey])
@@ -813,57 +582,13 @@ func TestSettingService_LoadForwardedClientIPSettingsWriteFailureUsesComputedMod
 	}
 }
 
-func TestSettingService_UpdateSettings_RejectsInvalidPaymentVisibleMethodSource(t *testing.T) {
-	repo := &settingUpdateRepoStub{}
+func TestInitializeSettingsPreservesExistingInstallationWithoutSiteName(t *testing.T) {
+	repo := &forwardedIPMigrationRepoStub{values: map[string]string{
+		"registration_enabled":         "false",
+		SettingKeyGrokDefaultTextModel: "custom-grok",
+	}}
 	svc := NewSettingService(repo, &config.Config{})
-
-	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		PaymentVisibleMethodAlipaySource: "not-a-provider",
-	})
-	require.Error(t, err)
-	require.Equal(t, "INVALID_PAYMENT_VISIBLE_METHOD_SOURCE", infraerrors.Reason(err))
+	require.NoError(t, svc.InitializeDefaultSettings(context.Background()))
+	require.Equal(t, "custom-grok", repo.values[SettingKeyGrokDefaultTextModel])
 	require.Nil(t, repo.updates)
-}
-
-func TestSettingService_PasskeySwitchPersistsAndDefaultsToConfigured(t *testing.T) {
-	cfg := &config.Config{WebAuthn: config.WebAuthnConfig{
-		Enabled:   true,
-		RPID:      "sub3.nebula-spaces.com",
-		RPOrigins: []string{"https://sub3.nebula-spaces.com"},
-	}}
-	runtimeRepo := &forwardedIPMigrationRepoStub{values: map[string]string{}}
-	runtimeService := NewSettingService(runtimeRepo, cfg)
-
-	enabled, err := runtimeService.PasskeyEnabled(context.Background())
-	require.NoError(t, err)
-	require.True(t, enabled)
-
-	updateRepo := &settingUpdateRepoStub{}
-	updateService := NewSettingService(updateRepo, cfg)
-	require.NoError(t, updateService.UpdateSettings(context.Background(), &SystemSettings{
-		PasskeyEnabled: false,
-	}))
-	require.Equal(t, "false", updateRepo.updates[SettingKeyPasskeyEnabled])
-
-	runtimeRepo.values[SettingKeyPasskeyEnabled] = "false"
-	enabled, err = runtimeService.PasskeyEnabled(context.Background())
-	require.NoError(t, err)
-	require.False(t, enabled)
-	publicSettings, err := runtimeService.GetPublicSettings(context.Background())
-	require.NoError(t, err)
-	require.False(t, publicSettings.PasskeyEnabled)
-}
-
-// 移除 WebAuthn 配置后，残留的 passkey_enabled="true" 不得再让 GetAllSettings
-// 报告开关开启：admin 更新门控以此为准，一旦误报为 true 会拒绝所有设置保存，
-// 而此时前端开关处于禁用态，管理员无法在 UI 里自救。
-func TestSettingService_StalePasskeyTrueWithoutConfigReportsDisabled(t *testing.T) {
-	repo := &settingGetAllRepoStub{values: map[string]string{
-		SettingKeyPasskeyEnabled: "true",
-	}}
-	service := NewSettingService(repo, &config.Config{})
-
-	settings, err := service.GetAllSettings(context.Background())
-	require.NoError(t, err)
-	require.False(t, settings.PasskeyEnabled)
 }

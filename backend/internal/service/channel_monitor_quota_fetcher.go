@@ -4,13 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/th3ee9ine/qqq2api/internal/config"
 	"github.com/th3ee9ine/qqq2api/internal/domain"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 	"golang.org/x/sync/singleflight"
@@ -40,16 +38,6 @@ type monitorUsageSource interface {
 	GetUsageForAccount(ctx context.Context, account *Account, force ...bool) (*UsageInfo, error)
 }
 
-// monitorCNQuotaSource 国产 coding plan 滚动窗口额度探测（CNProviderQuotaService 天然满足）。
-type monitorCNQuotaSource interface {
-	QueryUsageForAccount(ctx context.Context, account *Account) (*CNProviderQuotaProbeResult, error)
-}
-
-// monitorCNBalanceSource 国产 payg 余额探测（CNProviderBalanceService 天然满足）。
-type monitorCNBalanceSource interface {
-	QueryBalanceForAccount(ctx context.Context, account *Account) (*CNProviderBalanceResult, error)
-}
-
 // monitorAccountSource 账号加载（AccountRepository 天然满足）。
 type monitorAccountSource interface {
 	GetByID(ctx context.Context, id int64) (*Account, error)
@@ -58,12 +46,9 @@ type monitorAccountSource interface {
 // ChannelMonitorQuotaFetcher 配额抓取器（成功/失败快照均带 TTL 缓存，
 // 同账号并发抓取由 singleflight 合并）。
 type ChannelMonitorQuotaFetcher struct {
-	usage     monitorUsageSource
-	cnQuota   monitorCNQuotaSource
-	cnBalance monitorCNBalanceSource
-	accounts  monitorAccountSource
+	usage    monitorUsageSource
+	accounts monitorAccountSource
 	// balanceThreshold cn_balance 余额告警阈值（与账号停调共用配置，见 monitorBalanceThreshold）。
-	balanceThreshold float64
 
 	mu     sync.Mutex
 	cache  map[int64]monitorQuotaCacheEntry
@@ -79,39 +64,19 @@ type monitorQuotaCacheEntry struct {
 // 参数取具体服务类型以便 wire 直连；单元测试在同包内用 struct 字面量注入 stub。
 func NewChannelMonitorQuotaFetcher(
 	usage *AccountUsageService,
-	cnQuota *CNProviderQuotaService,
-	cnBalance *CNProviderBalanceService,
 	accounts AccountRepository,
-	cfg *config.Config,
 ) *ChannelMonitorQuotaFetcher {
 	f := &ChannelMonitorQuotaFetcher{
-		cache:            make(map[int64]monitorQuotaCacheEntry),
-		balanceThreshold: monitorBalanceThreshold(cfg),
+		cache: make(map[int64]monitorQuotaCacheEntry),
 	}
 	if usage != nil {
 		f.usage = usage
 	}
-	if cnQuota != nil {
-		f.cnQuota = cnQuota
-	}
-	if cnBalance != nil {
-		f.cnBalance = cnBalance
-	}
+
 	if accounts != nil {
 		f.accounts = accounts
 	}
 	return f
-}
-
-// monitorBalanceThreshold 余额告警阈值，与账号停调（CNProviderBalanceCheckService）
-// 共用 gateway.cn_providers.balance_threshold，保证监控 degraded 与调度器停调
-// 口径一致（任一币种达标即健康）。未配置/非正值时回退 viper 默认 0.5（config.go），
-// 避免 0 阈值下「余额=0 也不告警」相对旧 `<=0` 判定的回归。
-func monitorBalanceThreshold(cfg *config.Config) float64 {
-	if cfg != nil && cfg.Gateway.CNProviders.BalanceThreshold > 0 {
-		return cfg.Gateway.CNProviders.BalanceThreshold
-	}
-	return 0.5
 }
 
 // LoadAccount 加载账号（不走缓存）。供 Create/Update 时校验
@@ -225,14 +190,7 @@ func (f *ChannelMonitorQuotaFetcher) fetchUncached(ctx context.Context, accountI
 	// 账号只在路由前加载这一次；已加载的 account 直接传给数据源
 	// （GetUsageForAccount / QueryUsageForAccount / QueryBalanceForAccount），
 	// 下游服务不再各自 GetByID（每次含 proxies/groups 联查）。
-	switch account.Platform {
-	case domain.PlatformKimi, domain.PlatformZhipu, domain.PlatformMiniMax:
-		return quotaErrorSnapshot("retired", "platform is no longer supported", now)
-	case domain.PlatformOpenCodeGo:
-		return quotaErrorSnapshot("retired", "platform is no longer supported", now)
-	default:
-		return f.fetchUsage(ctx, account, now)
-	}
+	return f.fetchUsage(ctx, account, now)
 }
 
 // fetchUsage 海外平台：AccountUsageService.GetUsageForAccount → 快照。
@@ -289,26 +247,9 @@ func usageQuotaTiers(usage *UsageInfo) []domain.MonitorQuotaTier {
 	appendProgressTier(&tiers, "7d-sonnet", "", usage.SevenDaySonnet)
 	appendProgressTier(&tiers, "7d-fable", "", usage.SevenDayFable)
 	appendProgressTier(&tiers, "30d", "", usage.ThirtyDay)
-	// Gemini 多档日配额：同 Window 不同 Label。
-	appendProgressTier(&tiers, "daily", "shared", usage.GeminiSharedDaily)
-	appendProgressTier(&tiers, "daily", "pro", usage.GeminiProDaily)
-	appendProgressTier(&tiers, "daily", "flash", usage.GeminiFlashDaily)
 	// Grok requests/tokens 两个日窗口 + 月度计费窗口。
 	appendQuotaWindowTier(&tiers, "daily", "requests", usage.GrokRequestQuota)
 	appendQuotaWindowTier(&tiers, "daily", "tokens", usage.GrokTokenQuota)
-	// Antigravity per-model 总量额度，Label = 模型名（按名排序保证输出稳定）。
-	for _, model := range sortedQuotaModelNames(usage.AntigravityQuota) {
-		q := usage.AntigravityQuota[model]
-		if q == nil {
-			continue
-		}
-		tiers = append(tiers, domain.MonitorQuotaTier{
-			Window:      "total",
-			Label:       model,
-			UsedPercent: float64(q.Utilization),
-			ResetAt:     q.ResetTime,
-		})
-	}
 	if len(tiers) == 0 {
 		return nil
 	}
@@ -358,108 +299,6 @@ func appendQuotaWindowTier(tiers *[]domain.MonitorQuotaTier, window, label strin
 		tier.ResetAt = time.Unix(*q.ResetUnix, 0).UTC().Format(time.RFC3339)
 	}
 	*tiers = append(*tiers, tier)
-}
-
-func sortedQuotaModelNames(quotas map[string]*AntigravityModelQuota) []string {
-	names := make([]string, 0, len(quotas))
-	for name := range quotas {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// fetchCNQuota 国产 coding plan：CNProviderQuotaService.QueryUsageForAccount → 快照。
-func (f *ChannelMonitorQuotaFetcher) fetchCNQuota(ctx context.Context, account *Account, now time.Time) *domain.MonitorQuotaSnapshot {
-	if f.cnQuota == nil {
-		return quotaErrorSnapshot("cn_quota", "cn quota service is not configured", now)
-	}
-	result, err := f.cnQuota.QueryUsageForAccount(ctx, account)
-	if err != nil {
-		msg := truncateMessage(sanitizeErrorMessage(err.Error()))
-		return &domain.MonitorQuotaSnapshot{
-			Source:            "cn_quota",
-			Success:           false,
-			CredentialInvalid: isCredentialErrorMessage(msg),
-			Error:             msg,
-			FetchedAt:         now,
-		}
-	}
-	snapshot := &domain.MonitorQuotaSnapshot{
-		Source:    "cn_quota",
-		Success:   result.Success,
-		PlanLevel: result.PlanLevel,
-		Error:     result.Error,
-		FetchedAt: now,
-	}
-	// 只有 401/403 判凭据失效（与 fetchCNBalance 口径一致）：CN quota 服务的
-	// CredentialValid 仅在成功路径置 true，若按 `!Success && !CredentialValid`
-	// 推导，500/429/智谱业务错误全会被误判为 failed。
-	if !result.Success && (result.StatusCode == 401 || result.StatusCode == 403) {
-		snapshot.CredentialInvalid = true
-	}
-	if len(result.Tiers) > 0 {
-		snapshot.Tiers = make([]domain.MonitorQuotaTier, 0, len(result.Tiers))
-		for _, t := range result.Tiers {
-			snapshot.Tiers = append(snapshot.Tiers, domain.MonitorQuotaTier{
-				Window:      t.Window,
-				UsedPercent: t.UsedPercent,
-				ResetAt:     t.ResetAt,
-			})
-		}
-	}
-	if !snapshot.Success {
-		snapshot.Error = firstNonEmpty(snapshot.Error, "cn quota probe failed")
-	}
-	return snapshot
-}
-
-// fetchCNBalance 国产 payg：CNProviderBalanceService.QueryBalanceForAccount → 快照。
-func (f *ChannelMonitorQuotaFetcher) fetchCNBalance(ctx context.Context, account *Account, now time.Time) *domain.MonitorQuotaSnapshot {
-	if f.cnBalance == nil {
-		return quotaErrorSnapshot("cn_balance", "cn balance service is not configured", now)
-	}
-	result, err := f.cnBalance.QueryBalanceForAccount(ctx, account)
-	if err != nil {
-		msg := truncateMessage(sanitizeErrorMessage(err.Error()))
-		return &domain.MonitorQuotaSnapshot{
-			Source:            "cn_balance",
-			Success:           false,
-			CredentialInvalid: isCredentialErrorMessage(msg),
-			Error:             msg,
-			FetchedAt:         now,
-		}
-	}
-	snapshot := &domain.MonitorQuotaSnapshot{
-		Source:    "cn_balance",
-		Success:   result.Success,
-		Currency:  result.Currency,
-		Error:     result.Error,
-		FetchedAt: now,
-	}
-	if result.Success {
-		balance := result.Balance
-		snapshot.Balance = &balance
-		// 与账号停调（checkOne）同口径：上游标记不可用或全部币种低于阈值
-		// 才告警，任一币种达标即健康（余额 5 元/阈值 10 元的账号调度器已
-		// 停调，监控不能仍绿灯）。
-		snapshot.BalanceLow = !result.Available || allCNBalancesBelowThreshold(result, f.balanceThreshold)
-	} else if result.StatusCode == 401 || result.StatusCode == 403 {
-		snapshot.CredentialInvalid = true
-	}
-	if len(result.Balances) > 0 {
-		snapshot.Balances = make([]domain.MonitorBalance, 0, len(result.Balances))
-		for _, b := range result.Balances {
-			snapshot.Balances = append(snapshot.Balances, domain.MonitorBalance{
-				Currency: b.Currency,
-				Balance:  b.Balance,
-			})
-		}
-	}
-	if !snapshot.Success {
-		snapshot.Error = firstNonEmpty(snapshot.Error, "cn balance probe failed")
-	}
-	return snapshot
 }
 
 // quotaErrorSnapshot 构造统一错误快照。

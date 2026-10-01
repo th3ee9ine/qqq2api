@@ -182,7 +182,6 @@ const showPassword = ref<boolean>(false)
 const publicSettingsLoaded = ref<boolean>(false)
 
 // Public settings
-const registrationEnabled = ref<boolean>(false)
 const turnstileEnabled = ref<boolean>(false)
 const turnstileSiteKey = ref<string>('')
 const tencentCaptchaEnabled = ref<boolean>(false)
@@ -269,7 +268,6 @@ onMounted(async () => {
 
   try {
     const settings = await getPublicSettings()
-    registrationEnabled.value = settings.registration_enabled === true
     turnstileEnabled.value = settings.turnstile_enabled
     turnstileSiteKey.value = settings.turnstile_site_key || ''
     tencentCaptchaEnabled.value = settings.tencent_captcha_enabled === true
@@ -512,7 +510,7 @@ async function handle2FAVerify(code: string): Promise<void> {
     await router.push(redirectTo)
   } catch (error: unknown) {
     const err = error as { message?: string; response?: { data?: { message?: string } } }
-    const message = err.response?.data?.message || err.message || t('profile.totp.loginFailed')
+    const message = err.response?.data?.message || err.message || t('auth.totp.loginFailed')
 
     if (totpModalRef.value) {
       totpModalRef.value.setError(message)

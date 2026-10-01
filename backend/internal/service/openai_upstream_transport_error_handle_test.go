@@ -19,8 +19,8 @@ import (
 
 // openaiTransportAccountRepoStub records SetTempUnschedulable calls. It embeds the
 // (nil) AccountRepository interface so any other method call would panic — the
-// helper under test must only touch SetTempUnschedulable. tempUnschedCall is shared
-// with antigravity_internal500_penalty_test.go (same package).
+// helper under test must only touch SetTempUnschedulable. tempUnschedCall is
+// provided by shared_gateway_mocks_test.go (same package).
 type openaiTransportAccountRepoStub struct {
 	AccountRepository
 	tempUnschedCalls []tempUnschedCall
@@ -292,69 +292,4 @@ func TestForwardAsRawChatCompletions_RecordsProxyPerAccountAttempt(t *testing.T)
 	}
 	require.Nil(t, events[2].ProxyID)
 	require.Equal(t, opsProxyNameDirect, events[2].ProxyName)
-}
-
-func TestHandleOpenAIUpstreamTransportError_RecordsOllamaActivityOnly(t *testing.T) {
-	deferred := NewDeferredService(nil, nil, time.Second)
-	svc := &OpenAIGatewayService{
-		accountRepo:     &openaiTransportAccountRepoStub{},
-		deferredService: deferred,
-	}
-	ollama := &Account{
-		ID: 501, Name: "ollama-cloud", Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-		Credentials: map[string]any{"api_key": "k-ollama", "base_url": "https://ollama.com"},
-	}
-	other := &Account{
-		ID: 502, Name: "openai-official", Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-		Credentials: map[string]any{"api_key": "k-openai", "base_url": "https://api.openai.com"},
-	}
-	c, _ := newOpenAITransportErrTestContext()
-
-	_ = svc.handleOpenAIUpstreamTransportError(context.Background(), c, ollama, errors.New("connection reset"), false)
-	_ = svc.handleOpenAIUpstreamTransportError(context.Background(), c, other, errors.New("connection reset"), false)
-
-	_, ok := deferred.lastUsedUpdates.Load(int64(501))
-	require.True(t, ok, "Ollama Cloud transport error must schedule last_used activity")
-	_, ok = deferred.lastUsedUpdates.Load(int64(502))
-	require.False(t, ok, "non-Ollama transport error must not schedule Ollama activity")
-}
-
-func TestHandleOpenAIUpstreamTransportError_ContextCanceledSkipsOllamaActivity(t *testing.T) {
-	deferred := NewDeferredService(nil, nil, time.Second)
-	svc := &OpenAIGatewayService{
-		accountRepo:     &openaiTransportAccountRepoStub{},
-		deferredService: deferred,
-	}
-	ollama := &Account{
-		ID: 503, Name: "ollama-canceled", Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-		Credentials: map[string]any{"api_key": "k-ollama", "base_url": "https://ollama.com"},
-	}
-	c, _ := newOpenAITransportErrTestContext()
-
-	err := svc.handleOpenAIUpstreamTransportError(context.Background(), c, ollama, context.Canceled, false)
-
-	require.ErrorIs(t, err, context.Canceled)
-	_, ok := deferred.lastUsedUpdates.Load(int64(503))
-	require.False(t, ok, "context.Canceled is client disconnect before a fault; do not count as Ollama activity")
-}
-
-func TestHandleOpenAIAccountUpstreamError_RecordsOllamaActivityOnly(t *testing.T) {
-	deferred := NewDeferredService(nil, nil, time.Second)
-	svc := &OpenAIGatewayService{deferredService: deferred}
-	ollama := &Account{
-		ID: 504, Name: "ollama-429", Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-		Credentials: map[string]any{"api_key": "k-ollama", "base_url": "https://ollama.com"},
-	}
-	other := &Account{
-		ID: 505, Name: "openai-429", Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-		Credentials: map[string]any{"api_key": "k-openai", "base_url": "https://api.openai.com"},
-	}
-
-	_ = svc.handleOpenAIAccountUpstreamError(context.Background(), ollama, http.StatusTooManyRequests, http.Header{}, []byte(`{"error":{"message":"rate"}}`), "gpt-test")
-	_ = svc.handleOpenAIAccountUpstreamError(context.Background(), other, http.StatusTooManyRequests, http.Header{}, []byte(`{"error":{"message":"rate"}}`), "gpt-test")
-
-	_, ok := deferred.lastUsedUpdates.Load(int64(504))
-	require.True(t, ok, "Ollama Cloud non-2xx must schedule last_used activity")
-	_, ok = deferred.lastUsedUpdates.Load(int64(505))
-	require.False(t, ok, "non-Ollama non-2xx must not schedule Ollama activity")
 }

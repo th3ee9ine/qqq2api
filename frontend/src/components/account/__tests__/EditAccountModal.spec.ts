@@ -2,9 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, listTLSProfilesMock, getWebSearchEmulationConfigMock, authIsSimpleMode, authIsAdmin } = vi.hoisted(() => ({
+const { updateAccountMock, listTLSProfilesMock, getWebSearchEmulationConfigMock, authIsSimpleMode, authIsAdmin } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
-  checkMixedChannelRiskMock: vi.fn(),
   listTLSProfilesMock: vi.fn(),
   getWebSearchEmulationConfigMock: vi.fn(),
   authIsSimpleMode: { value: true },
@@ -34,7 +33,6 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       update: updateAccountMock,
-      checkMixedChannelRisk: checkMixedChannelRiskMock
     },
     settings: {
       getWebSearchEmulationConfig: getWebSearchEmulationConfigMock,
@@ -342,7 +340,6 @@ describe('EditAccountModal', () => {
     account.rate_multiplier = 1.75
     account.upstream_billing_rate_sync_enabled = false
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
 
     const wrapper = mountModal(account)
 
@@ -365,7 +362,6 @@ describe('EditAccountModal', () => {
       upstream_billing_rate_sync_enabled: true
     }
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
 
     const wrapper = mountModal(account)
 
@@ -386,7 +382,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.credentials.model_mapping = { 'gpt-5.2': 'gpt-5.2', 'gpt-latest': 'deepseek-chat' }
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
     expect(wrapper.getComponent(ModelWhitelistSelectorStub).props('modelMappings')).toEqual([
       { from: 'gpt-latest', to: 'deepseek-chat' }
@@ -406,13 +401,12 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.expires_at = new Date('2030-06-15T09:00:00').getTime() / 1000
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
     const input = wrapper.get<HTMLInputElement>('input[type="datetime-local"]')
 
     for (const [label, expected] of [
-      ['payment.oneMonth', '2028-03-29T12:34'],
-      ['payment.oneYear', '2029-02-28T12:34'],
+      ['common.oneMonth', '2028-03-29T12:34'],
+      ['common.oneYear', '2029-02-28T12:34'],
     ]) {
       const button = wrapper.findAll('button').find((candidate) => candidate.text() === label)!
       expect(button.attributes('type')).toBe('button')
@@ -429,9 +423,8 @@ describe('EditAccountModal', () => {
   it('can clear a selected expiry preset before saving the account', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
-    const button = wrapper.findAll('button').find((candidate) => candidate.text() === 'payment.oneYear')!
+    const button = wrapper.findAll('button').find((candidate) => candidate.text() === 'common.oneYear')!
     await button.trigger('click')
     const input = wrapper.get<HTMLInputElement>('input[type="datetime-local"]')
     expect(input.element.value).not.toBe('')
@@ -462,8 +455,6 @@ describe('EditAccountModal', () => {
       { ...inactiveGroup, id: 3, name: 'Unassigned paused group' }
     ]
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account, true)
@@ -491,8 +482,6 @@ describe('EditAccountModal', () => {
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -522,8 +511,6 @@ describe('EditAccountModal', () => {
       'gpt-latest': 'gpt-5.2'
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -544,8 +531,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.proxy_id = 9
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue({ ...account, proxy_id: null })
 
     const wrapper = mountModal(account)
@@ -561,7 +546,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.proxy_id = 9
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
 
     const wrapper = mountModal(account)
     await wrapper.get('[data-testid="edit-auto-assign-proxy"]').setValue(true)
@@ -584,8 +568,6 @@ describe('EditAccountModal', () => {
       }
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -602,7 +584,6 @@ describe('EditAccountModal', () => {
   it('adds an OpenAI model-mapping preset while editing', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
 
     await wrapper.get('[data-testid="edit-model-restriction-mapping"]').trigger('click')
@@ -622,7 +603,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.platform = 'anthropic'
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
     const wrapper = mountModal(account)
 
     await vi.waitFor(() => {
@@ -640,7 +620,6 @@ describe('EditAccountModal', () => {
       tls_fingerprint_profile_id: -1
     }
     updateAccountMock.mockReset().mockResolvedValue(account)
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
 
     const wrapper = mountModal(account)
     await vi.waitFor(() => {
@@ -662,8 +641,6 @@ describe('EditAccountModal', () => {
       openai_long_context_billing_enabled: true
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -684,8 +661,6 @@ describe('EditAccountModal', () => {
       openai_responses_flatten_namespaces: true
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -705,8 +680,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.type = 'oauth'
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -723,8 +696,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.extra = { openai_compact_mode: 'force_on' }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const untouched = mountModal(account)
@@ -748,8 +719,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.extra = { upstream_request_id_header: 'X-Request-ID' }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -765,8 +734,6 @@ describe('EditAccountModal', () => {
   it('writes images_url_to_b64_json into extra when toggled on', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -783,8 +750,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.extra = { images_url_to_b64_json: true }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -810,8 +775,6 @@ describe('EditAccountModal', () => {
   it('defaults legacy OpenAI accounts to long-context billing disabled', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -830,8 +793,6 @@ describe('EditAccountModal', () => {
       openai_long_context_billing_enabled: false
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
     const wrapper = mountModal(account)
 
@@ -851,8 +812,6 @@ describe('EditAccountModal', () => {
       openai_long_context_billing_enabled: false
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -871,8 +830,6 @@ describe('EditAccountModal', () => {
       openai_long_context_billing_enabled: 'false'
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -889,8 +846,6 @@ describe('EditAccountModal', () => {
     authIsSimpleMode.value = false
     const account = buildOpenAISparkShadowAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -918,8 +873,6 @@ describe('EditAccountModal', () => {
       openai_responses_supported: false
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -935,8 +888,6 @@ describe('EditAccountModal', () => {
   it('submits the account upstream billing auto-probe setting', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -956,8 +907,6 @@ describe('EditAccountModal', () => {
   it('enabling rate sync also enables probing and stops submitting a manual rate', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -991,8 +940,6 @@ describe('EditAccountModal', () => {
       upstream_billing_rate_sync_enabled: true
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1021,8 +968,6 @@ describe('EditAccountModal', () => {
       upstream_billing_rate_sync_enabled: true
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1045,8 +990,6 @@ describe('EditAccountModal', () => {
       openai_responses_supported: true
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1063,8 +1006,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.credentials.openai_capabilities = ['chat_completions']
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1086,8 +1027,6 @@ describe('EditAccountModal', () => {
 		auto_pause_7d_threshold: 0.8
 	  }
 	  updateAccountMock.mockReset()
-	  checkMixedChannelRiskMock.mockReset()
-	  checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
 	  updateAccountMock.mockResolvedValue(account)
 
 	  const wrapper = mountModal(account)
@@ -1108,8 +1047,6 @@ describe('EditAccountModal', () => {
 	  // fall back to the global default).
 	  const account = buildAccount()
 	  updateAccountMock.mockReset()
-	  checkMixedChannelRiskMock.mockReset()
-	  checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
 	  updateAccountMock.mockResolvedValue(account)
 
 	  const wrapper = mountModal(account)
@@ -1126,8 +1063,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.credentials.openai_capabilities = ['chat_completions', 'seedance']
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
     const wrapper = mountModal(account)
     expect(wrapper.get<HTMLInputElement>('[data-testid="openai-endpoint-capability-seedance"]').element.checked).toBe(true)
@@ -1138,8 +1073,6 @@ describe('EditAccountModal', () => {
   it('keeps at least one OpenAI APIKey endpoint capability selected', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1180,8 +1113,6 @@ describe('EditAccountModal', () => {
       openai_responses_supported: true
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1210,8 +1141,6 @@ describe('EditAccountModal', () => {
       codex_image_generation_bridge_enabled: true
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1232,8 +1161,6 @@ describe('EditAccountModal', () => {
   it('submits Codex image tool no-injection mode without strip policy', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1252,8 +1179,6 @@ describe('EditAccountModal', () => {
       codex_image_generation_bridge: true
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1275,8 +1200,6 @@ describe('EditAccountModal', () => {
       codex_image_generation_explicit_tool_policy: 'strip'
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1292,8 +1215,6 @@ describe('EditAccountModal', () => {
   it('setup-token account can select and submit OAuth WS mode', async () => {
     const account = buildOpenAISetupTokenAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1315,8 +1236,6 @@ describe('EditAccountModal', () => {
     }
     account.credentials_status = { has_api_key: true }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1334,8 +1253,6 @@ describe('EditAccountModal', () => {
     // 显式确保没有 credentials_status
     expect(account.credentials_status).toBeUndefined()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1354,8 +1271,6 @@ describe('EditAccountModal', () => {
     }
     // 既没有 credentials_status 也没有旧的 api_key
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
 
     const wrapper = mountModal(account)
 
@@ -1375,8 +1290,6 @@ describe('EditAccountModal', () => {
     }
     account.credentials_status = { has_service_account_json: true }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1393,8 +1306,6 @@ describe('EditAccountModal', () => {
     expect(account.credentials_status).toBeUndefined()
     expect(account.credentials.service_account_json).toBeTruthy()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1410,8 +1321,6 @@ describe('EditAccountModal', () => {
       'claude-sonnet-4-5': 'claude-sonnet-4-5'
     }
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1437,8 +1346,6 @@ describe('EditAccountModal', () => {
     }
     // 既没有 credentials_status 也没有旧的 service_account_json
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
 
     const wrapper = mountModal(account)
 
@@ -1450,8 +1357,6 @@ describe('EditAccountModal', () => {
   it('edits Anthropic Bedrock SigV4 fields while preserving redacted secrets', async () => {
     const account = buildBedrockAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1493,8 +1398,6 @@ describe('EditAccountModal', () => {
   it('switches Anthropic Bedrock to API-key mode and serializes the replacement key', async () => {
     const account = buildBedrockAccount()
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1515,8 +1418,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.credentials.account_scheduling_threshold = 80
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1536,8 +1437,6 @@ describe('EditAccountModal', () => {
     const account = buildAccount()
     account.credentials.account_scheduling_threshold = 80
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset()
-    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
     updateAccountMock.mockResolvedValue(account)
 
     const wrapper = mountModal(account)
@@ -1554,7 +1453,6 @@ describe('EditAccountModal OpenAI 自动使用重置卡', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
     updateAccountMock.mockReset()
-    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
   })
 
   it('仅对 OpenAI OAuth 母账号显示，默认关闭且阈值为 100/100', () => {

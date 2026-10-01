@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/th3ee9ine/qqq2api/internal/handler/dto"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
+	"github.com/th3ee9ine/qqq2api/internal/server/middleware"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
@@ -180,4 +181,13 @@ func (h *AccountAdminHandler) requireAccountAdminTarget(c *gin.Context, id int64
 		return false
 	}
 	return true
+}
+
+// getAdminIDFromContext records the authenticated administrator for operator changes.
+func getAdminIDFromContext(c *gin.Context) int64 {
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok {
+		return 0
+	}
+	return subject.UserID
 }

@@ -3,13 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"strings"
 	"time"
 
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
-	"github.com/th3ee9ine/qqq2api/internal/pkg/googleapi"
 	"github.com/th3ee9ine/qqq2api/internal/securityaudit"
 	"github.com/th3ee9ine/qqq2api/internal/service"
 )
@@ -92,33 +90,6 @@ func (h *OpenAIGatewayHandler) anthropicSecurityAuditError(c *gin.Context, decis
 	}
 	c.JSON(securityAuditStatus(decision), gin.H{"type": "error", "error": gin.H{
 		"type": errType, "code": securityAuditErrorCode(decision), "message": securityAuditMessage(decision),
-	}})
-}
-
-func googleSecurityAuditError(c *gin.Context, decision *securityaudit.Decision) {
-	if decision == nil {
-		return
-	}
-	if decision.Legacy != nil && decision.Legacy.Blocked {
-		googleError(c, securityAuditStatus(decision), securityAuditMessage(decision))
-		return
-	}
-	status := securityAuditStatus(decision)
-	googleStatus := googleapi.HTTPStatusToGoogleStatus(status)
-	if status == http.StatusServiceUnavailable {
-		googleStatus = "UNAVAILABLE"
-	}
-	requestID := ""
-	if c != nil && c.Request != nil {
-		requestID = contentModerationRequestID(c.Request.Context())
-	}
-	c.JSON(status, gin.H{"error": gin.H{
-		"code": status, "message": securityAuditMessage(decision), "status": googleStatus,
-		"details": []gin.H{{
-			"@type":  "type.googleapis.com/google.rpc.ErrorInfo",
-			"reason": securityAuditErrorCode(decision), "domain": "sub2api.securityaudit",
-			"metadata": gin.H{"request_id": requestID},
-		}},
 	}})
 }
 

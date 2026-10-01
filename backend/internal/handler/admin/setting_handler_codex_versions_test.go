@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/gin-gonic/gin"
-	"github.com/stretchr/testify/require"
-	"github.com/th3ee9ine/qqq2api/internal/service"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
+	"github.com/th3ee9ine/qqq2api/internal/service"
 )
 
 type codexVersionManagerStub struct {

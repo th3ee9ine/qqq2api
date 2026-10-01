@@ -31,7 +31,6 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       bulkUpdate: vi.fn(),
-      checkMixedChannelRisk: vi.fn()
     }
   }
 }))
@@ -88,7 +87,6 @@ describe('BulkEditAccountModal', () => {
   beforeEach(() => {
     authIsAdmin.value = true
     vi.mocked(adminAPI.accounts.bulkUpdate).mockReset()
-    vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockReset()
     showError.mockReset()
     showSuccess.mockReset()
     translate.mockClear()
@@ -97,9 +95,6 @@ describe('BulkEditAccountModal', () => {
       success: 2,
       failed: 0,
       results: []
-    } as any)
-    vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockResolvedValue({
-      has_risk: false
     } as any)
   })
 

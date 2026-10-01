@@ -233,7 +233,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		result.UpstreamModel,
 		result.Model,
 	)
-	billingModels = s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, billingModels)
 	serviceTier := ""
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
@@ -281,7 +280,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			result.AudioUsage != nil || result.SearchCount > 0,
 	); responseModel != "" && !strings.EqualFold(responseModel, baselineBillingModel) {
 		if identified, responseChannelPriced := s.hasIdentifiedOpenAIResponsePricing(ctx, responseModel, apiKey); identified {
-			responseModels := s.filterCNProviderBillingModelCandidates(ctx, account, apiKey, usageBillingModelCandidates(responseModel))
+			responseModels := usageBillingModelCandidates(responseModel)
 			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(
 				ctx, result, apiKey, responseModels, multiplier, imageMultiplier,
 				videoMultiplier, baseMultiplier, tokens, serviceTier, longContextBillingGate, pricingAt,
@@ -926,36 +925,6 @@ func groupMediaPricingLooksIncomplete(group *Group) bool {
 	}
 	return group.ImagePrice1K == nil && group.ImagePrice2K == nil && group.ImagePrice4K == nil &&
 		group.VideoPrice480P == nil && group.VideoPrice720P == nil && group.VideoPrice1080P == nil
-}
-
-// filterCNProviderBillingModelCandidates 过滤国产供应商（kimi/zhipu）
-// 账号的计费候选模型名：claude-* 候选仅在运营者显式配置了分组/渠道定价时保留。
-//
-// 背景：候选链的兜底候选含客户端请求的原始模型名。CN 上游的 Anthropic 兼容端点
-// 接受 claude-* 模型名但从不真正服务 Claude 模型；若放行，目录里的 Claude 价卡
-// 与 getFallbackPricing 的 "claude"→Sonnet 统一兜底会把 CN 流量按 Claude 原价
-// （数倍～数十倍）静默误计，且 usage 日志显示的正是 claude-* 名，无从察觉。
-// 候选全部落空时走既有的零成本+告警路径（openai_usage.pricing_missing_record_
-// zero_cost），与定价层「未知型号不回退以避免误计价」的既有设计意图一致；
-// 运营者的修复手段是配置账号级 model_mapping（映射到已定价的 CN 模型）或
-// 分组/渠道显式定价。
-func (s *OpenAIGatewayService) filterCNProviderBillingModelCandidates(ctx context.Context, account *Account, apiKey *APIKey, candidates []string) []string {
-	if account == nil || (!account.IsCNProvider() && !account.IsOpenCodeGo()) {
-		return candidates
-	}
-	out := make([]string, 0, len(candidates))
-	for _, candidate := range candidates {
-		trimmed := strings.TrimSpace(candidate)
-		if trimmed == "" {
-			continue
-		}
-		if strings.Contains(strings.ToLower(trimmed), "claude") &&
-			s.resolveOpenAIChannelPricing(ctx, trimmed, apiKey) == nil {
-			continue
-		}
-		out = append(out, candidate)
-	}
-	return out
 }
 
 func (s *OpenAIGatewayService) resolveOpenAIChannelPricing(ctx context.Context, billingModel string, apiKey *APIKey) *ResolvedPricing {

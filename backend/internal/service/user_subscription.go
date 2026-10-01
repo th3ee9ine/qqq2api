@@ -231,3 +231,8 @@ func (s *UserSubscription) CheckAllLimits(group *Group, additionalCost float64) 
 	monthly = s.CheckMonthlyLimit(group, additionalCost)
 	return
 }
+
+// startOfDay preserves calendar-day accounting for historical subscription usage.
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}

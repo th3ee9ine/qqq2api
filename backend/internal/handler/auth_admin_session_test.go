@@ -110,7 +110,7 @@ func TestAuthHandlerRejectsLegacyRefreshTokenForOtherAdministrator(t *testing.T)
 	}}
 	cfg.Default.AdminEmail = otherAdmin.Email
 	repo := &userHandlerRepoStub{user: otherAdmin}
-	authService := service.NewAuthService(nil, repo, nil, cache, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authService := service.NewAuthService(repo, cache, cfg, nil, nil)
 	pair, err := authService.GenerateTokenPair(context.Background(), otherAdmin, "")
 	require.NoError(t, err)
 
@@ -144,7 +144,7 @@ func TestAuthHandlerAdministratorLogin2FA(t *testing.T) {
 		},
 	}
 	repo := &userHandlerRepoStub{user: admin}
-	totpService := service.NewTotpService(repo, adminAuthTotpEncryptor{}, totpCache, nil, nil, nil)
+	totpService := service.NewTotpService(repo, adminAuthTotpEncryptor{}, totpCache, nil)
 	handler := &AuthHandler{
 		authService: newAdminAuthServiceWithRepo(repo, refreshCache),
 		userService: service.NewUserService(repo, nil, nil, nil),
@@ -180,7 +180,7 @@ func TestAuthHandlerRejectsOtherDatabaseAdministratorLogin2FA(t *testing.T) {
 		},
 	}}
 	repo := &userHandlerRepoStub{user: otherAdmin}
-	totpService := service.NewTotpService(repo, adminAuthTotpEncryptor{}, totpCache, nil, nil, nil)
+	totpService := service.NewTotpService(repo, adminAuthTotpEncryptor{}, totpCache, nil)
 	handler := &AuthHandler{
 		authService: newAdminAuthServiceWithRepo(repo, refreshCache),
 		userService: service.NewUserService(repo, nil, nil, nil),
@@ -224,7 +224,7 @@ func newAdminAuthServiceWithRepo(repo service.UserRepository, cache service.Refr
 		RefreshTokenExpireDays: 7,
 	}}
 	cfg.Default.AdminEmail = "admin@example.com"
-	return service.NewAuthService(nil, repo, nil, cache, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	return service.NewAuthService(repo, cache, cfg, nil, nil)
 }
 
 func performAuthJSONRequest(

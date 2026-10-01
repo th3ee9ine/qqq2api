@@ -50,7 +50,7 @@ type APIKeyAuthUserSnapshot struct {
 	Concurrency   int     `json:"concurrency"`
 	AllowedGroups []int64 `json:"allowed_groups,omitempty"`
 
-	// Balance notification fields (required for CheckBalanceAfterDeduction)
+	// Legacy user preference fields are retained for stored auth snapshot compatibility.
 	Email                      string             `json:"email"`
 	Username                   string             `json:"username"`
 	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`

@@ -14,7 +14,7 @@ import (
 
 func TestAccountHandlerCreateForwardsAutoAssignProxy(t *testing.T) {
 	adminSvc := &stubAdminService{}
-	router := setupAccountMixedChannelRouter(adminSvc)
+	router := setupAccountMutationRouter(adminSvc)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts", bytes.NewBufferString(`{
 		"name":"created",
@@ -35,7 +35,7 @@ func TestAccountHandlerCreateForwardsAutoAssignProxy(t *testing.T) {
 
 func TestAccountHandlerUpdateForwardsAutoAssignProxy(t *testing.T) {
 	adminSvc := &stubAdminService{}
-	router := setupAccountMixedChannelRouter(adminSvc)
+	router := setupAccountMutationRouter(adminSvc)
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/accounts/11", bytes.NewBufferString(`{
 		"name":"updated",
@@ -73,7 +73,7 @@ func TestAccountHandlerCreateAndUpdateRejectConflictingProxyModes(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			adminSvc := &stubAdminService{}
-			router := setupAccountMixedChannelRouter(adminSvc)
+			router := setupAccountMutationRouter(adminSvc)
 			req := httptest.NewRequest(tc.method, tc.path, bytes.NewBufferString(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			resp := httptest.NewRecorder()
@@ -89,7 +89,7 @@ func TestAccountHandlerCreateAndUpdateRejectConflictingProxyModes(t *testing.T) 
 
 func TestAccountHandlerBulkUpdateForwardsAutoAssignProxy(t *testing.T) {
 	adminSvc := &stubAdminService{}
-	router := setupAccountMixedChannelRouter(adminSvc)
+	router := setupAccountMutationRouter(adminSvc)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/bulk-update", bytes.NewBufferString(`{
 		"account_ids":[11,12],
@@ -108,7 +108,7 @@ func TestAccountHandlerBulkUpdateForwardsAutoAssignProxy(t *testing.T) {
 
 func TestAccountHandlerBulkUpdateRejectsConflictingProxyModes(t *testing.T) {
 	adminSvc := &stubAdminService{}
-	router := setupAccountMixedChannelRouter(adminSvc)
+	router := setupAccountMutationRouter(adminSvc)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/bulk-update", bytes.NewBufferString(`{
 		"account_ids":[11],
@@ -129,7 +129,7 @@ func TestAccountHandlerBulkUpdateRejectsConflictingProxyModes(t *testing.T) {
 
 func TestAccountHandlerBulkUpdateRejectsNonPositiveAccountID(t *testing.T) {
 	adminSvc := &stubAdminService{}
-	router := setupAccountMixedChannelRouter(adminSvc)
+	router := setupAccountMutationRouter(adminSvc)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/bulk-update", bytes.NewBufferString(`{
 		"account_ids":[11,0],

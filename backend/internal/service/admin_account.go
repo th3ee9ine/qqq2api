@@ -590,13 +590,6 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
-	// 检查混合渠道风险（除非用户已确认）
-	if len(groupIDs) > 0 && !input.SkipMixedChannelCheck {
-		if err := s.checkMixedChannelRisk(ctx, 0, input.Platform, groupIDs); err != nil {
-			return nil, err
-		}
-	}
-
 	// 校验并规范化请求头覆写配置（header 名小写化、格式检查）
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
@@ -658,15 +651,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 				}()
 				s.EnsureOpenAIPrivacy(context.Background(), account)
 			}()
-		case PlatformAntigravity:
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("create_account_antigravity_privacy_panic", "account_id", account.ID, "recover", r)
-					}
-				}()
-				s.EnsureAntigravityPrivacy(context.Background(), account)
-			}()
+
 		}
 	}
 
@@ -798,7 +783,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				"cannot change account type while it has a spark shadow; delete the shadow first")
 		}
 	}
-	wasOveragesEnabled := account.IsOveragesEnabled()
 
 	if input.Name != "" {
 		account.Name = input.Name
@@ -891,17 +875,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
 		account.Extra = normalizedExtra
-		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
-			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
-			// 清除 AICredits 限流 key
-			if rawLimits, ok := account.Extra[modelRateLimitsKey].(map[string]any); ok {
-				delete(rawLimits, creditsExhaustedKey)
-			}
-		}
-		if account.Platform == PlatformAntigravity && !wasOveragesEnabled && account.IsOveragesEnabled() {
-			delete(account.Extra, modelRateLimitsKey)
-			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
-		}
+
 		// 校验并预计算固定时间重置的下次重置时间
 		if err := ValidateQuotaResetConfig(account.Extra); err != nil {
 			return nil, err
@@ -1022,12 +996,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 
-		// 检查混合渠道风险（除非用户已确认）
-		if !input.SkipMixedChannelCheck {
-			if err := s.checkMixedChannelRisk(ctx, account.ID, account.Platform, *input.GroupIDs); err != nil {
-				return nil, err
-			}
-		}
 	}
 
 	runtimeExpiresAtChanged := (runtimeExpiresAtBefore == nil) != (account.ExpiresAt == nil)
@@ -1198,7 +1166,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			*input.ExpectedProxyID <= 0 || *input.ProxyID < 0 || *input.ProxyID == *input.ExpectedProxyID ||
 			input.AutoAssignProxy || input.Name != "" || input.Concurrency != nil || input.Priority != nil ||
 			input.RateMultiplier != nil || input.LoadFactor != nil || input.Status != "" || input.Schedulable != nil ||
-			input.GroupIDs != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProbeEnabled != nil || input.SkipMixedChannelCheck {
+			input.GroupIDs != nil || len(input.Credentials) > 0 || len(input.Extra) > 0 || input.ProbeEnabled != nil {
 			return nil, ErrProxyBindingInputInvalid
 		}
 	}
@@ -1257,8 +1225,6 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if err != nil {
 		return nil, err
 	}
-
-	needMixedChannelCheck := input.GroupIDs != nil && !input.SkipMixedChannelCheck
 
 	// Always resolve targets before any write. Besides the existing credential
 	// guards this enforces the retired-platform boundary for every bulk field,
@@ -1377,29 +1343,6 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_PROXY_INHERITED",
 					"spark shadow account %d proxy is inherited from its parent and cannot be set in bulk; manage it on the parent account", acc.ID)
-			}
-		}
-	}
-
-	// 预加载账号平台信息（混合渠道检查需要）。
-	platformByID := map[int64]string{}
-	if needMixedChannelCheck {
-		for _, account := range cachedTargets {
-			if account != nil {
-				platformByID[account.ID] = account.Platform
-			}
-		}
-	}
-
-	// 预检查混合渠道风险：在任何写操作之前，若发现风险立即返回错误。
-	if needMixedChannelCheck {
-		for _, accountID := range input.AccountIDs {
-			platform := platformByID[accountID]
-			if platform == "" {
-				continue
-			}
-			if err := s.checkMixedChannelRisk(ctx, accountID, platform, *input.GroupIDs); err != nil {
-				return nil, err
 			}
 		}
 	}
@@ -1703,9 +1646,6 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 	if err := s.accountRepo.ClearRateLimit(ctx, id); err != nil {
 		return nil, err
 	}
-	if err := s.accountRepo.ClearAntigravityQuotaScopes(ctx, id); err != nil {
-		return nil, err
-	}
 	if err := s.accountRepo.ClearModelRateLimits(ctx, id); err != nil {
 		return nil, err
 	}
@@ -1932,55 +1872,6 @@ func propagateAccountProxyToShadows(ctx context.Context, repo AccountRepository,
 	return nil
 }
 
-// checkMixedChannelRisk 检查分组中是否存在混合渠道（Antigravity + Anthropic）
-// 如果存在混合，返回错误提示用户确认
-func (s *adminServiceImpl) checkMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error {
-	// 判断当前账号的渠道类型（基于 platform 字段，而不是 type 字段）
-	currentPlatform := getAccountPlatform(currentAccountPlatform)
-	if currentPlatform == "" {
-		// 不是 Antigravity 或 Anthropic，无需检查
-		return nil
-	}
-
-	// 检查每个分组中的其他账号
-	for _, groupID := range groupIDs {
-		accounts, err := s.accountRepo.ListByGroup(ctx, groupID)
-		if err != nil {
-			return fmt.Errorf("get accounts in group %d: %w", groupID, err)
-		}
-
-		// 检查是否存在不同渠道的账号
-		for _, account := range accounts {
-			if currentAccountID > 0 && account.ID == currentAccountID {
-				continue // 跳过当前账号
-			}
-
-			otherPlatform := getAccountPlatform(account.Platform)
-			if otherPlatform == "" {
-				continue // 不是 Antigravity 或 Anthropic，跳过
-			}
-
-			// 检测混合渠道
-			if currentPlatform != otherPlatform {
-				group, _ := s.groupRepo.GetByID(ctx, groupID)
-				groupName := fmt.Sprintf("Group %d", groupID)
-				if group != nil {
-					groupName = group.Name
-				}
-
-				return &MixedChannelError{
-					GroupID:         groupID,
-					GroupName:       groupName,
-					CurrentPlatform: currentPlatform,
-					OtherPlatform:   otherPlatform,
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
 func (s *adminServiceImpl) validateGroupIDsExist(ctx context.Context, groupIDs []int64) error {
 	if len(groupIDs) == 0 {
 		return nil
@@ -2037,36 +1928,6 @@ func (s *adminServiceImpl) ValidateAccountGroupBindings(ctx context.Context, gro
 		}
 	}
 	return nil
-}
-
-// CheckMixedChannelRisk checks whether target groups contain mixed channels for the current account platform.
-func (s *adminServiceImpl) CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error {
-	return s.checkMixedChannelRisk(ctx, currentAccountID, currentAccountPlatform, groupIDs)
-}
-
-// getAccountPlatform 根据账号 platform 判断混合渠道检查用的平台标识
-func getAccountPlatform(accountPlatform string) string {
-	switch strings.ToLower(strings.TrimSpace(accountPlatform)) {
-	case PlatformAntigravity:
-		return "Antigravity"
-	case PlatformAnthropic, "claude":
-		return "Anthropic"
-	default:
-		return ""
-	}
-}
-
-// MixedChannelError 混合渠道错误
-type MixedChannelError struct {
-	GroupID         int64
-	GroupName       string
-	CurrentPlatform string
-	OtherPlatform   string
-}
-
-func (e *MixedChannelError) Error() string {
-	return fmt.Sprintf("mixed_channel_warning: Group '%s' contains both %s and %s accounts. Using mixed channels in the same context may cause thinking block signature validation issues, which will fallback to non-thinking mode for historical messages.",
-		e.GroupName, e.CurrentPlatform, e.OtherPlatform)
 }
 
 func (s *adminServiceImpl) ResetAccountQuota(ctx context.Context, id int64) error {
@@ -2163,14 +2024,4 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 	}
 	account.Extra["privacy_mode"] = mode
 	return mode
-}
-
-// EnsureAntigravityPrivacy is retained for source compatibility only.
-func (s *adminServiceImpl) EnsureAntigravityPrivacy(context.Context, *Account) string {
-	return ""
-}
-
-// ForceAntigravityPrivacy is retained for source compatibility only.
-func (s *adminServiceImpl) ForceAntigravityPrivacy(context.Context, *Account) string {
-	return ""
 }

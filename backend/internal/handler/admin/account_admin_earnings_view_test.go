@@ -72,7 +72,6 @@ func TestAccountAdminUsageInfoResponseProjectsEveryWindowStatsField(t *testing.T
 		Source:                "passive",
 		FiveHour:              &service.UsageProgress{Utilization: 15, ResetsAt: &resetAt, WindowStats: window},
 		SevenDay:              &service.UsageProgress{Utilization: 25, WindowStats: window},
-		GeminiSharedDaily:     &service.UsageProgress{Utilization: 35, WindowStats: window},
 		GrokLocalUsage:        window,
 		GrokLocalUsage24h:     window,
 		GrokLocalUsage7d:      window,

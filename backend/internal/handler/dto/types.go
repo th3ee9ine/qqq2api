@@ -24,12 +24,7 @@ type User struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 	DeletedAt     *time.Time `json:"deleted_at,omitempty"`
 
-	// 余额不足通知
-	BalanceNotifyEnabled       bool               `json:"balance_notify_enabled"`
-	BalanceNotifyThresholdType string             `json:"balance_notify_threshold_type"`
-	BalanceNotifyThreshold     *float64           `json:"balance_notify_threshold"`
-	BalanceNotifyExtraEmails   []NotifyEmailEntry `json:"balance_notify_extra_emails"`
-	TotalRecharged             float64            `json:"total_recharged"`
+	TotalRecharged float64 `json:"total_recharged"`
 
 	// RPMLimit 用户级每分钟请求数上限（0 = 不限制），仅在所用分组未设置 rpm_limit 时作为兜底生效。
 	RPMLimit int `json:"rpm_limit"`
@@ -110,14 +105,11 @@ type Group struct {
 	LongContextPricingEnabled bool     `json:"long_context_pricing_enabled"`
 
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration         bool    `json:"allow_image_generation"`
-	AllowBatchImageGeneration    bool    `json:"allow_batch_image_generation"`
-	ImageRateIndependent         bool    `json:"image_rate_independent"`
-	ImageRateMultiplier          float64 `json:"image_rate_multiplier"`
-	BatchImageDiscountMultiplier float64 `json:"batch_image_discount_multiplier"`
-	BatchImageHoldMultiplier     float64 `json:"batch_image_hold_multiplier"`
-	VideoRateIndependent         bool    `json:"video_rate_independent"`
-	VideoRateMultiplier          float64 `json:"video_rate_multiplier"`
+	AllowImageGeneration bool    `json:"allow_image_generation"`
+	ImageRateIndependent bool    `json:"image_rate_independent"`
+	ImageRateMultiplier  float64 `json:"image_rate_multiplier"`
+	VideoRateIndependent bool    `json:"video_rate_independent"`
+	VideoRateMultiplier  float64 `json:"video_rate_multiplier"`
 	// 高峰时段倍率配置
 	PeakRateEnabled    bool     `json:"peak_rate_enabled"`
 	PeakStart          string   `json:"peak_start"`

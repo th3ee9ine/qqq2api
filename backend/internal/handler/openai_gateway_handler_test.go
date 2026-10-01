@@ -2608,7 +2608,7 @@ func TestOpenAIResponses_APIKeyPassthroughPoolAuthFailureRetriesThenSwitchesToHe
 
 			accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
 			upstream := &openAIHTTPPassthroughAuthFailoverUpstream{statusCode: tt.statusCode}
-			rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+			rateLimitSvc := service.NewRateLimitService(accountRepo, cfg, nil)
 			billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 			t.Cleanup(billingCacheSvc.Stop)
 			gatewaySvc := service.NewOpenAIGatewayService(
@@ -2855,7 +2855,7 @@ func TestOpenAIResponsesWebSocket_FailoverOnUpstreamUsageLimitEvent(t *testing.T
 	cfg.Gateway.MaxAccountSwitches = 3
 
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
-	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+	rateLimitSvc := service.NewRateLimitService(accountRepo, cfg, nil)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	gatewaySvc := service.NewOpenAIGatewayService(
 		accountRepo,
@@ -3035,7 +3035,7 @@ func TestOpenAIResponsesWebSocket_SameAccountRetryKeepsTurnState(t *testing.T) {
 	cfg.Gateway.MaxAccountSwitches = 3
 
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
-	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+	rateLimitSvc := service.NewRateLimitService(accountRepo, cfg, nil)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	gatewaySvc := service.NewOpenAIGatewayService(
 		accountRepo,
@@ -3247,7 +3247,7 @@ func TestOpenAIResponsesWebSocket_FirstOutputTimeoutWithoutDownstreamReusesClien
 	cfg.Gateway.MaxAccountSwitches = 3
 
 	accountRepo := &openAIWSFailoverHandlerAccountRepoStub{accounts: accounts}
-	rateLimitSvc := service.NewRateLimitService(accountRepo, nil, cfg, nil, nil)
+	rateLimitSvc := service.NewRateLimitService(accountRepo, cfg, nil)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	gatewaySvc := service.NewOpenAIGatewayService(
 		accountRepo, nil, nil, nil, nil, nil, nil, cfg, nil, nil,

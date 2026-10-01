@@ -2,7 +2,6 @@
 package dto
 
 import (
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,25 +13,21 @@ func UserFromServiceShallow(u *service.User) *User {
 		return nil
 	}
 	return &User{
-		ID:                         u.ID,
-		Email:                      u.Email,
-		Username:                   u.Username,
-		Role:                       u.Role,
-		Balance:                    u.Balance,
-		FrozenBalance:              u.FrozenBalance,
-		Concurrency:                u.Concurrency,
-		Status:                     u.Status,
-		AllowedGroups:              u.AllowedGroups,
-		LastActiveAt:               u.LastActiveAt,
-		CreatedAt:                  u.CreatedAt,
-		UpdatedAt:                  u.UpdatedAt,
-		BalanceNotifyEnabled:       u.BalanceNotifyEnabled,
-		BalanceNotifyThresholdType: u.BalanceNotifyThresholdType,
-		BalanceNotifyThreshold:     u.BalanceNotifyThreshold,
-		BalanceNotifyExtraEmails:   NotifyEmailEntriesFromService(u.BalanceNotifyExtraEmails),
-		TotalRecharged:             u.TotalRecharged,
-		RPMLimit:                   u.RPMLimit,
-		DeletedAt:                  u.DeletedAt,
+		ID:             u.ID,
+		Email:          u.Email,
+		Username:       u.Username,
+		Role:           u.Role,
+		Balance:        u.Balance,
+		FrozenBalance:  u.FrozenBalance,
+		Concurrency:    u.Concurrency,
+		Status:         u.Status,
+		AllowedGroups:  u.AllowedGroups,
+		LastActiveAt:   u.LastActiveAt,
+		CreatedAt:      u.CreatedAt,
+		UpdatedAt:      u.UpdatedAt,
+		TotalRecharged: u.TotalRecharged,
+		RPMLimit:       u.RPMLimit,
+		DeletedAt:      u.DeletedAt,
 	}
 }
 
@@ -194,11 +189,8 @@ func groupFromServiceBase(g *service.Group) Group {
 		MonthlyLimitUSD:                 g.MonthlyLimitUSD,
 		LongContextPricingEnabled:       g.LongContextPricingEnabled,
 		AllowImageGeneration:            g.AllowImageGeneration,
-		AllowBatchImageGeneration:       g.AllowBatchImageGeneration,
 		ImageRateIndependent:            g.ImageRateIndependent,
 		ImageRateMultiplier:             g.ImageRateMultiplier,
-		BatchImageDiscountMultiplier:    g.BatchImageDiscountMultiplier,
-		BatchImageHoldMultiplier:        g.BatchImageHoldMultiplier,
 		VideoRateIndependent:            g.VideoRateIndependent,
 		VideoRateMultiplier:             g.VideoRateMultiplier,
 		PeakRateEnabled:                 g.PeakRateEnabled,
@@ -668,55 +660,6 @@ func ProxyAccountSummaryFromService(a *service.ProxyAccountSummary) *ProxyAccoun
 	}
 }
 
-func RedeemCodeFromService(rc *service.RedeemCode) *RedeemCode {
-	if rc == nil {
-		return nil
-	}
-	out := redeemCodeFromServiceBase(rc)
-	return &out
-}
-
-// RedeemCodeFromServiceAdmin converts a service RedeemCode to DTO for admin users.
-// It includes notes - user-facing endpoints must not use this.
-func RedeemCodeFromServiceAdmin(rc *service.RedeemCode) *AdminRedeemCode {
-	if rc == nil {
-		return nil
-	}
-	return &AdminRedeemCode{
-		RedeemCode: redeemCodeFromServiceBase(rc),
-		Notes:      rc.Notes,
-	}
-}
-
-func redeemCodeFromServiceBase(rc *service.RedeemCode) RedeemCode {
-	out := RedeemCode{
-		ID:           rc.ID,
-		Code:         rc.Code,
-		Type:         rc.Type,
-		Value:        rc.Value,
-		Status:       rc.Status,
-		UsedBy:       rc.UsedBy,
-		UsedAt:       rc.UsedAt,
-		CreatedAt:    rc.CreatedAt,
-		ExpiresAt:    rc.ExpiresAt,
-		GroupID:      rc.GroupID,
-		ValidityDays: rc.ValidityDays,
-		User:         UserFromServiceShallow(rc.User),
-		Group:        GroupFromServiceShallow(rc.Group),
-	}
-	if rc.IsExpired() {
-		out.Status = service.StatusExpired
-	}
-
-	// For admin_balance/admin_concurrency types, include notes so users can see
-	// why they were charged or credited by admin
-	if (rc.Type == "admin_balance" || rc.Type == "admin_concurrency") && rc.Notes != "" {
-		out.Notes = &rc.Notes
-	}
-
-	return out
-}
-
 // AccountSummaryFromService returns a minimal AccountSummary for usage log display.
 // Only includes ID and Name - no sensitive fields like Credentials, Proxy, etc.
 func AccountSummaryFromService(a *service.Account) *AccountSummary {
@@ -962,60 +905,5 @@ func userSubscriptionFromServiceBase(sub *service.UserSubscription) UserSubscrip
 		RevokedAt:          sub.DeletedAt,
 		User:               UserFromServiceShallow(sub.User),
 		Group:              GroupFromServiceShallow(sub.Group),
-	}
-}
-
-func BulkAssignResultFromService(r *service.BulkAssignResult) *BulkAssignResult {
-	if r == nil {
-		return nil
-	}
-	subs := make([]AdminUserSubscription, 0, len(r.Subscriptions))
-	for i := range r.Subscriptions {
-		subs = append(subs, *UserSubscriptionFromServiceAdmin(&r.Subscriptions[i]))
-	}
-	statuses := make(map[string]string, len(r.Statuses))
-	for userID, status := range r.Statuses {
-		statuses[strconv.FormatInt(userID, 10)] = status
-	}
-	return &BulkAssignResult{
-		SuccessCount:  r.SuccessCount,
-		CreatedCount:  r.CreatedCount,
-		ReusedCount:   r.ReusedCount,
-		FailedCount:   r.FailedCount,
-		Subscriptions: subs,
-		Errors:        r.Errors,
-		Statuses:      statuses,
-	}
-}
-
-func PromoCodeFromService(pc *service.PromoCode) *PromoCode {
-	if pc == nil {
-		return nil
-	}
-	return &PromoCode{
-		ID:          pc.ID,
-		Code:        pc.Code,
-		BonusAmount: pc.BonusAmount,
-		MaxUses:     pc.MaxUses,
-		UsedCount:   pc.UsedCount,
-		Status:      pc.Status,
-		ExpiresAt:   pc.ExpiresAt,
-		Notes:       pc.Notes,
-		CreatedAt:   pc.CreatedAt,
-		UpdatedAt:   pc.UpdatedAt,
-	}
-}
-
-func PromoCodeUsageFromService(u *service.PromoCodeUsage) *PromoCodeUsage {
-	if u == nil {
-		return nil
-	}
-	return &PromoCodeUsage{
-		ID:          u.ID,
-		PromoCodeID: u.PromoCodeID,
-		UserID:      u.UserID,
-		BonusAmount: u.BonusAmount,
-		UsedAt:      u.UsedAt,
-		User:        UserFromServiceShallow(u.User),
 	}
 }

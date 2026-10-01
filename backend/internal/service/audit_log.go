@@ -19,7 +19,6 @@ const (
 	// AuditAuthMethodJWT / AuditAuthMethodAdminAPIKey 与 auth 中间件写入的 auth_method 对齐。
 	AuditAuthMethodJWT         = "jwt"
 	AuditAuthMethodAdminAPIKey = "admin_api_key"
-	AuditAuthMethodPasskey     = "passkey"
 
 	// auditRequestBodyMaxBytes 请求体脱敏后入库的最大长度（字节），超出截断。
 	auditRequestBodyMaxBytes = 16 * 1024
@@ -32,7 +31,6 @@ const (
 const (
 	AuditActionLogin                  = "auth.login"
 	AuditActionLogin2FA               = "auth.login.2fa"
-	AuditActionRegister               = "auth.register"
 	AuditActionTokenRefresh           = "auth.token.refresh"
 	AuditActionSessionBindingMismatch = "auth.session_binding.mismatch"
 	AuditActionStepUpVerify           = "auth.step_up.verify"
@@ -122,10 +120,11 @@ func auditNormalizeBodyKey(key string) string {
 // auditBodySensitiveExactKeys 请求体脱敏的精确匹配键（归一化后）。
 // 除内置清单外，程序化并入两份权威敏感表以防清单漂移：
 //   - SensitiveCredentialKeys：账号 credentials 的敏感子键（session_key / service_account_json 等）
-//   - providerSensitiveConfigFields：支付渠道密钥字段（pkey / privatekey / apiv3key 等）
+//   - historical provider secrets remain redacted in stored audit records.
 var auditBodySensitiveExactKeys = func() map[string]struct{} {
 	builtin := []string{
 		"code", "codes", "pin", "cvv",
+		"pkey", "privatekey", "publickey", "alipaypublickey", "apiv3key", "secretkey", "webhooksecret", "apikey",
 		"authorization", "cookie", "x-api-key",
 		"key",
 		// 字符串值内嵌完整凭证的字段：
@@ -141,11 +140,6 @@ var auditBodySensitiveExactKeys = func() map[string]struct{} {
 	}
 	for _, k := range SensitiveCredentialKeys {
 		set[auditNormalizeBodyKey(k)] = struct{}{}
-	}
-	for _, fields := range providerSensitiveConfigFields {
-		for k := range fields {
-			set[auditNormalizeBodyKey(k)] = struct{}{}
-		}
 	}
 	return set
 }()

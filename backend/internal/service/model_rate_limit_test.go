@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 )
 
 func TestIsModelRateLimited(t *testing.T) {
@@ -107,81 +106,7 @@ func TestIsModelRateLimited(t *testing.T) {
 			requestedModel: "gemini-3-pro-high",
 			expected:       true,
 		},
-		{
-			name: "antigravity platform - gemini-3-pro-preview mapped to gemini-3-pro-high",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						"gemini-3-pro-high": map[string]any{
-							"rate_limit_reset_at": future,
-						},
-					},
-				},
-			},
-			requestedModel: "gemini-3-pro-preview",
-			expected:       true,
-		},
-		{
-			name: "antigravity platform - gemini family rate limit blocks mapped preview",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						antigravityGeminiModelRateLimitKey: map[string]any{
-							"rate_limit_reset_at": future,
-						},
-					},
-				},
-			},
-			requestedModel: "gemini-3-pro-preview",
-			expected:       true,
-		},
-		{
-			name: "antigravity platform - gemini family rate limit does not block claude",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						antigravityGeminiModelRateLimitKey: map[string]any{
-							"rate_limit_reset_at": future,
-						},
-					},
-				},
-			},
-			requestedModel: "claude-sonnet-4-5",
-			expected:       false,
-		},
-		{
-			name: "non-antigravity platform - gemini-3-pro-preview NOT mapped",
-			account: &Account{
-				Platform: PlatformGemini,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						"gemini-3-pro-high": map[string]any{
-							"rate_limit_reset_at": future,
-						},
-					},
-				},
-			},
-			requestedModel: "gemini-3-pro-preview",
-			expected:       false, // gemini 平台不走 antigravity 映射
-		},
-		{
-			name: "antigravity platform - claude-opus-4-5-thinking mapped to opus-4-6-thinking",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						"claude-opus-4-6-thinking": map[string]any{
-							"rate_limit_reset_at": future,
-						},
-					},
-				},
-			},
-			requestedModel: "claude-opus-4-5-thinking",
-			expected:       true,
-		},
+
 		{
 			name: "no scope fallback - claude_sonnet should not match",
 			account: &Account{
@@ -253,27 +178,6 @@ func TestIsModelRateLimited_OpenAIImageGenerationIntentBlocksTextModelImageTool(
 
 	require.False(t, account.isModelRateLimitedWithContext(context.Background(), "gpt-5.4"))
 	require.True(t, account.isModelRateLimitedWithContext(WithOpenAIImageGenerationIntent(context.Background()), "gpt-5.4"))
-}
-
-func TestIsModelRateLimited_Antigravity_ThinkingAffectsModelKey(t *testing.T) {
-	now := time.Now()
-	future := now.Add(10 * time.Minute).Format(time.RFC3339)
-
-	account := &Account{
-		Platform: PlatformAntigravity,
-		Extra: map[string]any{
-			modelRateLimitsKey: map[string]any{
-				"claude-sonnet-4-5-thinking": map[string]any{
-					"rate_limit_reset_at": future,
-				},
-			},
-		},
-	}
-
-	ctx := context.WithValue(context.Background(), ctxkey.ThinkingEnabled, true)
-	if !account.isModelRateLimitedWithContext(ctx, "claude-sonnet-4-5") {
-		t.Errorf("expected model to be rate limited")
-	}
 }
 
 func TestGetModelRateLimitRemainingTime(t *testing.T) {
@@ -368,54 +272,6 @@ func TestGetModelRateLimitRemainingTime(t *testing.T) {
 			minExpected:    0,
 			maxExpected:    0,
 		},
-		{
-			name: "antigravity platform - claude-opus-4-5-thinking mapped to opus-4-6-thinking",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						"claude-opus-4-6-thinking": map[string]any{
-							"rate_limit_reset_at": future5m,
-						},
-					},
-				},
-			},
-			requestedModel: "claude-opus-4-5-thinking",
-			minExpected:    4 * time.Minute,
-			maxExpected:    6 * time.Minute,
-		},
-		{
-			name: "antigravity platform - gemini family rate limit remaining",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						antigravityGeminiModelRateLimitKey: map[string]any{
-							"rate_limit_reset_at": future10m,
-						},
-					},
-				},
-			},
-			requestedModel: "gemini-3-pro-preview",
-			minExpected:    9 * time.Minute,
-			maxExpected:    11 * time.Minute,
-		},
-		{
-			name: "antigravity platform - gemini family remaining ignored for claude",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						antigravityGeminiModelRateLimitKey: map[string]any{
-							"rate_limit_reset_at": future10m,
-						},
-					},
-				},
-			},
-			requestedModel: "claude-sonnet-4-5",
-			minExpected:    0,
-			maxExpected:    0,
-		},
 	}
 
 	for _, tt := range tests {
@@ -429,9 +285,6 @@ func TestGetModelRateLimitRemainingTime(t *testing.T) {
 }
 
 func TestGetRateLimitRemainingTime(t *testing.T) {
-	now := time.Now()
-	future15m := now.Add(15 * time.Minute).Format(time.RFC3339)
-	future5m := now.Add(5 * time.Minute).Format(time.RFC3339)
 
 	tests := []struct {
 		name           string
@@ -443,47 +296,6 @@ func TestGetRateLimitRemainingTime(t *testing.T) {
 		{
 			name:           "nil account",
 			account:        nil,
-			requestedModel: "claude-sonnet-4-5",
-			minExpected:    0,
-			maxExpected:    0,
-		},
-		{
-			name: "model rate limited - 15 minutes",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						"claude-sonnet-4-5": map[string]any{
-							"rate_limit_reset_at": future15m,
-						},
-					},
-				},
-			},
-			requestedModel: "claude-sonnet-4-5",
-			minExpected:    14 * time.Minute,
-			maxExpected:    16 * time.Minute,
-		},
-		{
-			name: "only model rate limited",
-			account: &Account{
-				Platform: PlatformAntigravity,
-				Extra: map[string]any{
-					modelRateLimitsKey: map[string]any{
-						"claude-sonnet-4-5": map[string]any{
-							"rate_limit_reset_at": future5m,
-						},
-					},
-				},
-			},
-			requestedModel: "claude-sonnet-4-5",
-			minExpected:    4 * time.Minute,
-			maxExpected:    6 * time.Minute,
-		},
-		{
-			name: "neither rate limited",
-			account: &Account{
-				Platform: PlatformAntigravity,
-			},
 			requestedModel: "claude-sonnet-4-5",
 			minExpected:    0,
 			maxExpected:    0,

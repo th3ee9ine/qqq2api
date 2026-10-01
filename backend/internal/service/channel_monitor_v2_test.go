@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -11,7 +10,7 @@ import (
 
 type channelMonitorV2RepoStub struct {
 	config serviceChannelMonitorV2ConfigAlias
-	users  *ChannelMonitorV2List[ChannelMonitorV2UserRow]
+
 	matrix *ChannelMonitorV2Matrix
 	errors *ChannelMonitorV2List[ChannelMonitorV2ErrorRow]
 	snap   *ChannelMonitorV2Snapshot
@@ -73,9 +72,7 @@ func (s *channelMonitorV2RepoStub) GetErrors(_ context.Context, _ ChannelMonitor
 	}
 	return nil, nil
 }
-func (s *channelMonitorV2RepoStub) GetUsers(context.Context, ChannelMonitorV2Filter, ChannelMonitorV2Config, bool) (*ChannelMonitorV2List[ChannelMonitorV2UserRow], error) {
-	return s.users, nil
-}
+
 func (s *channelMonitorV2RepoStub) RecomputeRange(context.Context, time.Time, time.Time) error {
 	return nil
 }
@@ -307,68 +304,6 @@ type channelMonitorV2RuntimeStub struct {
 
 func (s channelMonitorV2RuntimeStub) GetChannelMonitorRuntime(context.Context) ChannelMonitorRuntime {
 	return s.rt
-}
-
-func TestChannelMonitorV2UsersHiddenWhenSettingEnabled(t *testing.T) {
-	selfID, otherID := int64(7), int64(9)
-	repo := &channelMonitorV2RepoStub{config: ChannelMonitorV2Config{Enabled: true}, users: &ChannelMonitorV2List[ChannelMonitorV2UserRow]{Items: []ChannelMonitorV2UserRow{
-		{UserID: &otherID, Email: "other@example.com", Username: "other"},
-		{UserID: &selfID, Email: "self@example.com", Username: "self"},
-	}}}
-	svc := NewChannelMonitorV2Service(repo)
-	svc.SetRuntimeReader(channelMonitorV2RuntimeStub{rt: ChannelMonitorRuntime{HideUserRanking: true}})
-
-	hidden, err := svc.Users(context.Background(), ChannelMonitorV2Filter{}, selfID, false)
-	require.NoError(t, err)
-	require.Empty(t, hidden.Items)
-
-	admin, err := svc.Users(context.Background(), ChannelMonitorV2Filter{}, selfID, true)
-	require.NoError(t, err)
-	require.Len(t, admin.Items, 2)
-}
-
-func TestChannelMonitorV2UsersRemovesOtherUserIdentity(t *testing.T) {
-	selfID, otherID := int64(7), int64(9)
-	repo := &channelMonitorV2RepoStub{config: ChannelMonitorV2Config{Enabled: true}, users: &ChannelMonitorV2List[ChannelMonitorV2UserRow]{Items: []ChannelMonitorV2UserRow{
-		{UserID: &otherID, Email: "other@example.com", Username: "other"},
-		{UserID: &selfID, Email: "self@example.com", Username: "self"},
-	}}}
-	result, err := NewChannelMonitorV2Service(repo).Users(context.Background(), ChannelMonitorV2Filter{}, selfID, false)
-	require.NoError(t, err)
-	require.Nil(t, result.Items[0].UserID)
-	require.Empty(t, result.Items[0].Email)
-	require.Equal(t, "Other user #1", result.Items[0].DisplayLabel)
-	require.Equal(t, selfID, *result.Items[1].UserID)
-	require.True(t, result.Items[1].IsSelf)
-	require.Equal(t, "Me", result.Items[1].DisplayLabel)
-}
-
-func TestChannelMonitorV2UsersAppendsSelfWhenMissingFromRanking(t *testing.T) {
-	selfID, otherID := int64(7), int64(9)
-	repo := &channelMonitorV2RepoStub{config: ChannelMonitorV2Config{Enabled: true}, users: &ChannelMonitorV2List[ChannelMonitorV2UserRow]{Items: []ChannelMonitorV2UserRow{
-		{UserID: &otherID, Email: "other@example.com", Username: "other", Metrics: ChannelMonitorV2Metric{RequestCount: 10}},
-	}}}
-	result, err := NewChannelMonitorV2Service(repo).Users(context.Background(), ChannelMonitorV2Filter{}, selfID, false)
-	require.NoError(t, err)
-	require.Len(t, result.Items, 2)
-	self := result.Items[1]
-	require.True(t, self.IsSelf)
-	require.Equal(t, "Me", self.DisplayLabel)
-	require.Equal(t, selfID, *self.UserID)
-	require.Equal(t, 0, self.Rank) // unranked / no traffic in window
-}
-
-func TestChannelMonitorV2TopUsersKeepsSelfOutsideLimit(t *testing.T) {
-	items := make([]ChannelMonitorV2UserRow, 0, 12)
-	for i := 1; i <= 12; i++ {
-		id := int64(i)
-		items = append(items, ChannelMonitorV2UserRow{UserID: &id, Rank: i, DisplayLabel: fmt.Sprintf("u%d", i)})
-	}
-	// self is rank 12 (index 11)
-	out := channelMonitorV2TopUsersWithSelf(items, 11, 10)
-	require.Len(t, out, 11)
-	require.Equal(t, int64(12), *out[10].UserID)
-	require.Equal(t, 12, out[10].Rank)
 }
 
 func TestChannelMonitorV2ReadAPIsRejectDisabledConfig(t *testing.T) {

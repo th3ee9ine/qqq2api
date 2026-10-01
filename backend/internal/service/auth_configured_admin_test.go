@@ -23,7 +23,7 @@ func TestAuthServiceConfiguredAdminUsesConfiguredEmailStrictly(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Default.AdminEmail = "env-admin@example.com"
 	legacyAdmin := &User{ID: 1, Email: "legacy-admin@example.com", Role: RoleAdmin}
-	svc := NewAuthService(nil, &configuredAdminRepo{first: legacyAdmin}, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewAuthService(&configuredAdminRepo{first: legacyAdmin}, nil, cfg, nil, nil)
 
 	require.True(t, svc.IsConfiguredAdmin(context.Background(), &User{
 		ID: 2, Email: "ENV-ADMIN@example.com", Role: RoleAdmin,
@@ -36,7 +36,7 @@ func TestAuthServiceConfiguredAdminUsesConfiguredEmailStrictly(t *testing.T) {
 
 func TestAuthServiceConfiguredAdminLegacyFallbackUsesFirstAdmin(t *testing.T) {
 	legacyAdmin := &User{ID: 1, Email: "legacy-admin@example.com", Role: RoleAdmin}
-	svc := NewAuthService(nil, &configuredAdminRepo{first: legacyAdmin}, nil, nil, &config.Config{}, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewAuthService(&configuredAdminRepo{first: legacyAdmin}, nil, &config.Config{}, nil, nil)
 
 	require.True(t, svc.IsConfiguredAdmin(context.Background(), &User{
 		ID: legacyAdmin.ID, Email: legacyAdmin.Email, Role: RoleAdmin,
@@ -51,7 +51,7 @@ func TestAuthServiceCanAccessAdminPanel(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Default.AdminEmail = "super-admin@example.com"
-	svc := NewAuthService(nil, &configuredAdminRepo{}, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewAuthService(&configuredAdminRepo{}, nil, cfg, nil, nil)
 
 	for _, tt := range []struct {
 		name string

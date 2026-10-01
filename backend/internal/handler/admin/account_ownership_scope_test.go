@@ -35,7 +35,7 @@ func (s *accountOwnershipScopeAdminService) GetAccount(ctx context.Context, id i
 func accountOwnershipScopeRouter(t *testing.T, svc *accountOwnershipScopeAdminService, scoped bool, path string, next *bool) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	h := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	router := gin.New()
 	router.GET("/accounts/data", h.AccountOwnershipScope(), func(c *gin.Context) {
 		*next = true

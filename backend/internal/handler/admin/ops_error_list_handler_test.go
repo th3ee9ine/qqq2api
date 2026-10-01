@@ -37,7 +37,7 @@ func TestGetErrorLogs_IncludeDetailsIsExplicitOptIn(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := &opsErrorListCaptureRepo{}
-			svc := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			svc := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil)
 			h := NewOpsHandler(svc)
 			r := gin.New()
 			r.GET("/errors", h.GetErrorLogs)
@@ -54,7 +54,7 @@ func TestGetErrorLogs_IncludeDetailsIsExplicitOptIn(t *testing.T) {
 func TestGetErrorLogs_LimitsDiagnosticPageSize(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &opsErrorListCaptureRepo{}
-	svc := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil)
 	h := NewOpsHandler(svc)
 	r := gin.New()
 	r.GET("/errors", h.GetErrorLogs)

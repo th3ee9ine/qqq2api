@@ -166,10 +166,6 @@ func (r *contentModerationTestUserRepo) Create(ctx context.Context, user *User) 
 	panic("unexpected Create call")
 }
 
-func (r *contentModerationTestUserRepo) CreateWithEmailAliasGuard(ctx context.Context, user *User) error {
-	panic("unexpected CreateWithEmailAliasGuard call")
-}
-
 func (r *contentModerationTestUserRepo) GetByID(ctx context.Context, id int64) (*User, error) {
 	if r.user == nil {
 		return nil, ErrUserNotFound
@@ -198,18 +194,6 @@ func (r *contentModerationTestUserRepo) Update(ctx context.Context, user *User, 
 
 func (r *contentModerationTestUserRepo) Delete(ctx context.Context, id int64) error {
 	panic("unexpected Delete call")
-}
-
-func (r *contentModerationTestUserRepo) GetUserAvatar(ctx context.Context, userID int64) (*UserAvatar, error) {
-	panic("unexpected GetUserAvatar call")
-}
-
-func (r *contentModerationTestUserRepo) UpsertUserAvatar(ctx context.Context, userID int64, input UpsertUserAvatarInput) (*UserAvatar, error) {
-	panic("unexpected UpsertUserAvatar call")
-}
-
-func (r *contentModerationTestUserRepo) DeleteUserAvatar(ctx context.Context, userID int64) error {
-	panic("unexpected DeleteUserAvatar call")
 }
 
 func (r *contentModerationTestUserRepo) List(ctx context.Context, params pagination.PaginationParams) ([]User, *pagination.PaginationResult, error) {
@@ -267,10 +251,6 @@ func (r *contentModerationTestUserRepo) ExistsByEmail(ctx context.Context, email
 	panic("unexpected ExistsByEmail call")
 }
 
-func (r *contentModerationTestUserRepo) ExistsByEmailAlias(ctx context.Context, email string) (bool, error) {
-	panic("unexpected ExistsByEmailAlias call")
-}
-
 func (r *contentModerationTestUserRepo) RemoveGroupFromAllowedGroups(ctx context.Context, groupID int64) (int64, error) {
 	panic("unexpected RemoveGroupFromAllowedGroups call")
 }
@@ -281,14 +261,6 @@ func (r *contentModerationTestUserRepo) AddGroupToAllowedGroups(ctx context.Cont
 
 func (r *contentModerationTestUserRepo) RemoveGroupFromUserAllowedGroups(ctx context.Context, userID int64, groupID int64) error {
 	panic("unexpected RemoveGroupFromUserAllowedGroups call")
-}
-
-func (r *contentModerationTestUserRepo) ListUserAuthIdentities(ctx context.Context, userID int64) ([]UserAuthIdentityRecord, error) {
-	panic("unexpected ListUserAuthIdentities call")
-}
-
-func (r *contentModerationTestUserRepo) UnbindUserAuthProvider(ctx context.Context, userID int64, provider string) error {
-	panic("unexpected UnbindUserAuthProvider call")
 }
 
 func (r *contentModerationTestUserRepo) UpdateTotpSecret(ctx context.Context, userID int64, encryptedSecret *string) error {

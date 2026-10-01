@@ -31,33 +31,15 @@ func (s *totpVMUserRepoStub) DisableTotp(ctx context.Context, userID int64) erro
 	return nil
 }
 
-type totpVMSettingRepoStub struct {
-	SettingRepository
-	values map[string]string
-}
-
-func (s *totpVMSettingRepoStub) GetValue(ctx context.Context, key string) (string, error) {
-	v, ok := s.values[key]
-	if !ok {
-		return "", errors.New("setting not found")
-	}
-	return v, nil
-}
-
-func newTotpVMService(t *testing.T, user *User, emailVerifyEnabled bool) (*TotpService, *totpVMUserRepoStub) {
+func newTotpVMService(t *testing.T, user *User) (*TotpService, *totpVMUserRepoStub) {
 	t.Helper()
 	userRepo := &totpVMUserRepoStub{user: user}
-	values := map[string]string{}
-	if emailVerifyEnabled {
-		values[SettingKeyEmailVerifyEnabled] = "true"
-	}
-	settingSvc := NewSettingService(&totpVMSettingRepoStub{values: values}, nil)
-	return NewTotpService(userRepo, nil, nil, settingSvc, nil, nil), userRepo
+	return NewTotpService(userRepo, nil, nil, nil), userRepo
 }
 
 func TestGetVerificationMethodAdminAlwaysPassword(t *testing.T) {
 	admin := &User{ID: 1, Email: "admin@example.com", Role: RoleAdmin}
-	svc, _ := newTotpVMService(t, admin, true)
+	svc, _ := newTotpVMService(t, admin)
 
 	method, err := svc.GetVerificationMethod(context.Background(), admin.ID)
 	require.NoError(t, err)
@@ -66,61 +48,38 @@ func TestGetVerificationMethodAdminAlwaysPassword(t *testing.T) {
 
 func TestGetVerificationMethodAccountAdminAlwaysPassword(t *testing.T) {
 	accountAdmin := &User{ID: 3, Email: "operator@example.com", Role: RoleAccountAdmin}
-	svc, _ := newTotpVMService(t, accountAdmin, true)
+	svc, _ := newTotpVMService(t, accountAdmin)
 
 	method, err := svc.GetVerificationMethod(context.Background(), accountAdmin.ID)
 	require.NoError(t, err)
 	require.Equal(t, "password", method.Method)
 }
 
-func TestGetVerificationMethodRegularUserFollowsEmailVerifySetting(t *testing.T) {
-	user := &User{ID: 2, Email: "user@example.com", Role: RoleUser}
-
-	svcEmailOn, _ := newTotpVMService(t, user, true)
-	method, err := svcEmailOn.GetVerificationMethod(context.Background(), user.ID)
-	require.NoError(t, err)
-	require.Equal(t, "email", method.Method)
-
-	svcEmailOff, _ := newTotpVMService(t, user, false)
-	method, err = svcEmailOff.GetVerificationMethod(context.Background(), user.ID)
-	require.NoError(t, err)
-	require.Equal(t, "password", method.Method)
-}
-
-func TestTotpDisableAdminUsesPasswordEvenWithEmailVerifyEnabled(t *testing.T) {
+func TestTotpDisableAdminUsesPassword(t *testing.T) {
 	admin := &User{ID: 1, Email: "admin@example.com", Role: RoleAdmin, TotpEnabled: true}
 	require.NoError(t, admin.SetPassword("correct-password"))
-	svc, userRepo := newTotpVMService(t, admin, true)
+	svc, userRepo := newTotpVMService(t, admin)
 
-	// 缺密码 → 要求密码（而非邮箱验证码）。
-	err := svc.Disable(context.Background(), admin.ID, "", "")
+	// 缺密码时拒绝停用。
+	err := svc.Disable(context.Background(), admin.ID, "")
 	require.ErrorIs(t, err, ErrPasswordRequired)
 
 	// 密码错误 → 拒绝。
-	err = svc.Disable(context.Background(), admin.ID, "", "wrong-password")
+	err = svc.Disable(context.Background(), admin.ID, "wrong-password")
 	require.ErrorIs(t, err, ErrPasswordIncorrect)
 
-	// 密码正确 → 成功停用；全程不需要邮箱验证码（emailService 为 nil，走到邮箱分支会 panic）。
-	err = svc.Disable(context.Background(), admin.ID, "", "correct-password")
+	// 密码正确时成功停用。
+	err = svc.Disable(context.Background(), admin.ID, "correct-password")
 	require.NoError(t, err)
 	require.True(t, userRepo.disableCalled)
 }
 
-func TestTotpDisableAccountAdminUsesPasswordEvenWithEmailVerifyEnabled(t *testing.T) {
+func TestTotpDisableAccountAdminUsesPassword(t *testing.T) {
 	accountAdmin := &User{ID: 3, Email: "operator@example.com", Role: RoleAccountAdmin, TotpEnabled: true}
 	require.NoError(t, accountAdmin.SetPassword("correct-password"))
-	svc, userRepo := newTotpVMService(t, accountAdmin, true)
+	svc, userRepo := newTotpVMService(t, accountAdmin)
 
-	err := svc.Disable(context.Background(), accountAdmin.ID, "", "correct-password")
+	err := svc.Disable(context.Background(), accountAdmin.ID, "correct-password")
 	require.NoError(t, err)
 	require.True(t, userRepo.disableCalled)
-}
-
-func TestTotpDisableRegularUserStillRequiresEmailCode(t *testing.T) {
-	user := &User{ID: 2, Email: "user@example.com", Role: RoleUser, TotpEnabled: true}
-	require.NoError(t, user.SetPassword("whatever"))
-	svc, _ := newTotpVMService(t, user, true)
-
-	err := svc.Disable(context.Background(), user.ID, "", "whatever")
-	require.ErrorIs(t, err, ErrVerifyCodeRequired)
 }

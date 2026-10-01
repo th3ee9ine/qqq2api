@@ -59,9 +59,6 @@ async function mountSidebar({
     concurrency: 0,
     status: 'active',
     allowed_groups: null,
-    balance_notify_enabled: false,
-    balance_notify_threshold: null,
-    balance_notify_extra_emails: [],
     created_at: '2026-09-23',
     updated_at: '2026-09-23'
   }

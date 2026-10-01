@@ -12,7 +12,7 @@
 
 <a href="https://trendshift.io/repositories/21823" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21823" alt="th3ee9ine%2Fqqq2api | Trendshift" width="250" height="55"/></a>
 
-**AI API 网关平台 - 订阅配额分发管理**
+**管理员控制台与多账号 AI API 网关**
 
 [English](README.md) | 中文 | [日本語](README_JA.md)
 
@@ -175,19 +175,20 @@
 
 ## 项目概述
 
-QQQ2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的 API 配额。用户通过平台生成的 API Key 调用上游 AI 服务，平台负责鉴权、计费、负载均衡和请求转发。
+QQQ2API 是管理员控制台和多账号 AI API 网关，管理 Anthropic、OpenAI、Grok 上游账号与系统 API Key，提供鉴权、用量计量、智能调度和协议转发。
 
 ## 核心功能
 
-- **多账号管理** - 支持多种上游账号类型（OAuth、API Key）
-- **API Key 分发** - 为用户生成和管理 API Key
-- **精确计费** - Token 级别的用量追踪和成本计算
-- **智能调度** - 智能账号选择，支持粘性会话
-- **并发控制** - 用户级和账号级并发限制
-- **速率限制** - 可配置的请求和 Token 速率限制
-- **内置支付系统** - 支持 EasyPay 易支付、支付宝官方、微信官方、Stripe，用户自助充值，无需独立部署支付服务（[配置指南](docs/PAYMENT_CN.md)）
-- **管理后台** - Web 界面进行监控和管理
-- **外部系统集成** - 支持通过 iframe 嵌入外部系统（如工单等），扩展管理后台功能
+- **上游账号管理** — 管理 Anthropic、OpenAI、Grok 账号，支持对应 OAuth/API Key 凭据、代理、配额、健康检查和自动刷新。
+- **API Key 与分组** — 系统 Key 的额度、有效期、并发和 IP 限制；分组模型映射、定价和 Composite 路由（[操作指南](docs/COMPOSITE_GROUPS.md)）。
+- **AI API 网关** — Anthropic Messages、OpenAI Responses/Chat Completions、Embeddings、图片生成/编辑，以及平台对应的搜索、视频和语音接口。
+- **调度与可靠性** — 会话粘性、账号故障切换、并发队列、限流冷却和 HTTP/SSE/WebSocket 转发。
+- **用量与运维** — Token 计量、成本计算、请求诊断、账号测试、日志、操作审计、监控和告警。
+- **管理员权限** — 管理员密码与 TOTP 登录；受限账号管理员可维护授权范围内的账号和代理。
+- **内容控制** — 内容风控、提示词审计、本地越狱规则和网关入口策略。
+- **图片对象存储** — 使用 S3 兼容存储支持 OpenAI/Grok 异步图片任务（[说明](docs/ASYNC_IMAGE_TASKS.md)）。数据库备份通过部署工具维护。
+
+面板不提供普通用户注册、第三方面板登录、个人中心、支付、购买套餐、用户订阅、兑换、返利或公告流程。上游账号 OAuth 和上游订阅信息仍属于账号管理功能。
 
 ## 生态项目
 
@@ -195,7 +196,6 @@ QQQ2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 
 | 项目 | 说明 | 功能 |
 |------|------|------|
-| ~~[Sub2ApiPay](https://github.com/touwaeriol/sub2apipay)~~ | ~~自助支付系统~~ | **已内置** — 支付功能已集成到 QQQ2API 中，无需独立部署。详见 [支付配置指南](docs/PAYMENT_CN.md) |
 | [sub2api-mobile](https://github.com/ckken/sub2api-mobile) | 移动端管理控制台 | 跨平台应用（iOS/Android/Web），支持用户管理、账号管理、监控看板、多后端切换；基于 Expo + React Native 构建 |
 
 ## 技术栈

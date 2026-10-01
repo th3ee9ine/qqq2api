@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { adminAPI } from '@/api'
-import type { CustomMenuItem } from '@/types'
 
 export const useAdminSettingsStore = defineStore('adminSettings', () => {
   const loaded = ref(false)
@@ -48,11 +47,6 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
   const opsMonitoringEnabled = ref(readCachedBool('ops_monitoring_enabled_cached', true))
   const opsRealtimeMonitoringEnabled = ref(readCachedBool('ops_realtime_monitoring_enabled_cached', true))
   const opsQueryModeDefault = ref(readCachedString('ops_query_mode_default_cached', 'auto'))
-  // Payment was removed from the streamlined build. Keep this field for
-  // compatibility with any remaining consumers, but never restore a stale
-  // enabled value or fetch the removed payment configuration endpoint.
-  const paymentEnabled = ref(false)
-  const customMenuItems = ref<CustomMenuItem[]>([])
 
   async function fetch(force = false): Promise<void> {
     if (loaded.value && !force) return
@@ -70,10 +64,7 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
       opsQueryModeDefault.value = settings.ops_query_mode_default || 'auto'
       writeCachedString('ops_query_mode_default_cached', opsQueryModeDefault.value)
 
-      customMenuItems.value = Array.isArray(settings.custom_menu_items) ? settings.custom_menu_items : []
 
-      paymentEnabled.value = false
-      writeCachedBool('payment_enabled_cached', paymentEnabled.value)
 
       loaded.value = true
     } catch (err) {
@@ -97,11 +88,6 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
     loaded.value = true
   }
 
-  function setPaymentEnabledLocal(value: boolean) {
-    paymentEnabled.value = value
-    writeCachedBool('payment_enabled_cached', value)
-    loaded.value = true
-  }
 
   function setOpsQueryModeDefaultLocal(value: string) {
     opsQueryModeDefault.value = value || 'auto'
@@ -139,12 +125,9 @@ export const useAdminSettingsStore = defineStore('adminSettings', () => {
     opsMonitoringEnabled,
     opsRealtimeMonitoringEnabled,
     opsQueryModeDefault,
-    paymentEnabled,
-    customMenuItems,
     fetch,
     setOpsMonitoringEnabledLocal,
     setOpsRealtimeMonitoringEnabledLocal,
-    setPaymentEnabledLocal,
     setOpsQueryModeDefaultLocal
   }
 })

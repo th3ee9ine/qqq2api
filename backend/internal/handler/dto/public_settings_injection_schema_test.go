@@ -20,33 +20,20 @@ import (
 // This test compares the two JSON-tag sets and fails if injection is missing
 // any field that dto.PublicSettings exposes. Adding a new feature flag with
 // only a DTO entry will fail this test until the injection struct is updated.
-//
-// Intentional exclusions (fields present on dto.PublicSettings that SSR does
-// not need to inject) are listed in `dtoOnlyFields` below with a reason.
 func TestPublicSettingsInjectionPayload_SchemaDoesNotDrift(t *testing.T) {
 	injection := jsonTags(reflect.TypeOf(service.PublicSettingsInjectionPayload{}))
 	dtoKeys := jsonTags(reflect.TypeOf(PublicSettings{}))
-
-	// Fields that legitimately live only on the DTO. Keep tiny; document each.
-	dtoOnlyFields := map[string]string{
-		// force_email_on_third_party_signup lives on the DTO but is not injected via SSR.
-		"force_email_on_third_party_signup": "auth-source default, not a feature flag",
-	}
 
 	var missing []string
 	for key := range dtoKeys {
 		if _, ok := injection[key]; ok {
 			continue
 		}
-		if _, allowed := dtoOnlyFields[key]; allowed {
-			continue
-		}
 		missing = append(missing, key)
 	}
 	if len(missing) > 0 {
 		t.Fatalf("service.PublicSettingsInjectionPayload is missing JSON fields present on dto.PublicSettings: %s\n"+
-			"add the field to PublicSettingsInjectionPayload (and GetPublicSettingsForInjection), or "+
-			"document the exclusion in dtoOnlyFields with a reason.", strings.Join(missing, ", "))
+			"add the field to PublicSettingsInjectionPayload (and GetPublicSettingsForInjection).", strings.Join(missing, ", "))
 	}
 }
 

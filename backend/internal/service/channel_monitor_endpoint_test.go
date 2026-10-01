@@ -82,8 +82,6 @@ func TestCallProvider_BasePath(t *testing.T) {
 		{"encoded prefix", MonitorProviderAnthropic, "", "/tenant%2Fone/anthropic", "/tenant%2Fone/anthropic/v1/messages"},
 		{"openai chat version", MonitorProviderOpenAI, "", "/relay/v1/", "/relay/v1/chat/completions"},
 		{"openai responses version", MonitorProviderOpenAI, MonitorAPIModeResponses, "/relay/v1", "/relay/v1/responses"},
-		{"gemini version", MonitorProviderGemini, "", "/relay/v1beta", "/relay/v1beta/models/test-model:generateContent"},
-		{"zhipu version", MonitorProviderZhipu, "", "/api/paas/v4", "/api/paas/v4/chat/completions"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, _, status, err := callProvider(context.Background(), tc.provider,

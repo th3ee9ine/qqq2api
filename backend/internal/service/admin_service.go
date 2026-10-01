@@ -12,24 +12,13 @@ import (
 
 // AdminService interface defines admin management operations
 type AdminService interface {
-	// User management
+	// Shared user records used by administrator account management.
 	ListUsers(ctx context.Context, page, pageSize int, filters UserListFilters, sortBy, sortOrder string) ([]User, int64, error)
 	GetUser(ctx context.Context, id int64) (*User, error)
 	GetUserIncludeDeleted(ctx context.Context, id int64) (*User, error)
 	CreateUser(ctx context.Context, input *CreateUserInput) (*User, error)
 	UpdateUser(ctx context.Context, id int64, input *UpdateUserInput) (*User, error)
 	DeleteUser(ctx context.Context, id int64) error
-	UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error)
-	BatchUpdateConcurrency(ctx context.Context, userIDs []int64, value int, mode string) (int, error)
-	BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error)
-	GetUserAPIKeys(ctx context.Context, userID int64, page, pageSize int, sortBy, sortOrder string) ([]APIKey, int64, error)
-	GetUserUsageStats(ctx context.Context, userID int64, period string) (any, error)
-	GetUserRPMStatus(ctx context.Context, userID int64) (*UserRPMStatus, error)
-	// GetUserBalanceHistory returns paginated balance/concurrency change records for a user.
-	// codeType is optional - pass empty string to return all types.
-	// Also returns totalRecharged (sum of all positive balance top-ups).
-	GetUserBalanceHistory(ctx context.Context, userID int64, page, pageSize int, codeType string) ([]RedeemCode, int64, float64, error)
-	BindUserAuthIdentity(ctx context.Context, userID int64, input AdminBindAuthIdentityInput) (*AdminBoundAuthIdentity, error)
 
 	// Group management
 	ListGroups(ctx context.Context, page, pageSize int, platform, status, search string, isExclusive *bool, sortBy, sortOrder string) ([]Group, int64, error)
@@ -98,15 +87,10 @@ type AdminService interface {
 	SetAccountError(ctx context.Context, id int64, errorMsg string) error
 	// EnsureOpenAIPrivacy 检查 OpenAI OAuth 账号 privacy_mode，未设置则尝试关闭训练数据共享并持久化。
 	EnsureOpenAIPrivacy(ctx context.Context, account *Account) string
-	// EnsureAntigravityPrivacy 检查 Antigravity OAuth 账号 privacy_mode，未设置则调用 setUserSettings 并持久化。
-	EnsureAntigravityPrivacy(ctx context.Context, account *Account) string
 	// ForceOpenAIPrivacy 强制重新设置 OpenAI OAuth 账号隐私，无论当前状态。
 	ForceOpenAIPrivacy(ctx context.Context, account *Account) string
-	// ForceAntigravityPrivacy 强制重新设置 Antigravity OAuth 账号隐私，无论当前状态。
-	ForceAntigravityPrivacy(ctx context.Context, account *Account) string
 	SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error)
 	BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error)
-	CheckMixedChannelRisk(ctx context.Context, currentAccountID int64, currentAccountPlatform string, groupIDs []int64) error
 	// RevertAccountProxyFallback 将账号的 proxy_id 切回 proxy_fallback_origin_id，并清空 origin 字段。
 	// 若账号不存在返回 ErrAccountNotFound；若账号存在但不在 fallback 状态，返回 ErrAccountNotInFallback。
 	RevertAccountProxyFallback(ctx context.Context, id int64) error
@@ -131,13 +115,6 @@ type AdminService interface {
 	TestProxy(ctx context.Context, id int64) (*ProxyTestResult, error)
 	CheckProxyQuality(ctx context.Context, id int64) (*ProxyQualityCheckResult, error)
 
-	// Redeem code management
-	ListRedeemCodes(ctx context.Context, page, pageSize int, codeType, status, search string, sortBy, sortOrder string) ([]RedeemCode, int64, error)
-	GetRedeemCode(ctx context.Context, id int64) (*RedeemCode, error)
-	GenerateRedeemCodes(ctx context.Context, input *GenerateRedeemCodesInput) ([]RedeemCode, error)
-	DeleteRedeemCode(ctx context.Context, id int64) error
-	BatchDeleteRedeemCodes(ctx context.Context, ids []int64) (int64, error)
-	ExpireRedeemCode(ctx context.Context, id int64) (*RedeemCode, error)
 	ResetAccountQuota(ctx context.Context, id int64) error
 }
 
@@ -197,44 +174,6 @@ type UpdateUserInput struct {
 	ActorAdminID int64
 }
 
-type AdminBindAuthIdentityInput struct {
-	ProviderType    string
-	ProviderKey     string
-	ProviderSubject string
-	Issuer          *string
-	Metadata        map[string]any
-	Channel         *AdminBindAuthIdentityChannelInput
-}
-
-type AdminBindAuthIdentityChannelInput struct {
-	Channel        string
-	ChannelAppID   string
-	ChannelSubject string
-	Metadata       map[string]any
-}
-
-type AdminBoundAuthIdentity struct {
-	UserID          int64                          `json:"user_id"`
-	ProviderType    string                         `json:"provider_type"`
-	ProviderKey     string                         `json:"provider_key"`
-	ProviderSubject string                         `json:"provider_subject"`
-	VerifiedAt      *time.Time                     `json:"verified_at,omitempty"`
-	Issuer          *string                        `json:"issuer,omitempty"`
-	Metadata        map[string]any                 `json:"metadata"`
-	CreatedAt       time.Time                      `json:"created_at"`
-	UpdatedAt       time.Time                      `json:"updated_at"`
-	Channel         *AdminBoundAuthIdentityChannel `json:"channel,omitempty"`
-}
-
-type AdminBoundAuthIdentityChannel struct {
-	Channel        string         `json:"channel"`
-	ChannelAppID   string         `json:"channel_app_id"`
-	ChannelSubject string         `json:"channel_subject"`
-	Metadata       map[string]any `json:"metadata"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-}
-
 type CreateGroupInput struct {
 	Name                      string
 	Description               string
@@ -247,15 +186,12 @@ type CreateGroupInput struct {
 	MonthlyLimitUSD           *float64 // 月限额 (USD)
 	LongContextPricingEnabled bool
 	ModelPricing              []ChannelModelPricing
-	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration         bool
-	AllowBatchImageGeneration    bool
-	ImageRateIndependent         bool
-	ImageRateMultiplier          *float64
-	BatchImageDiscountMultiplier *float64
-	BatchImageHoldMultiplier     *float64
-	VideoRateIndependent         bool
-	VideoRateMultiplier          *float64
+	// 图片与视频生成计费配置。
+	AllowImageGeneration bool
+	ImageRateIndependent bool
+	ImageRateMultiplier  *float64
+	VideoRateIndependent bool
+	VideoRateMultiplier  *float64
 	// 高峰时段倍率配置（PeakRateMultiplier 为 nil 时按 1.0 处理）
 	PeakRateEnabled    bool
 	PeakStart          string
@@ -329,15 +265,12 @@ type UpdateGroupInput struct {
 	MonthlyLimitUSD           *float64 // 月限额 (USD)
 	LongContextPricingEnabled *bool
 	ModelPricing              *[]ChannelModelPricing
-	// 图片生成计费配置（仅 antigravity 平台使用）
-	AllowImageGeneration         *bool
-	AllowBatchImageGeneration    *bool
-	ImageRateIndependent         *bool
-	ImageRateMultiplier          *float64
-	BatchImageDiscountMultiplier *float64
-	BatchImageHoldMultiplier     *float64
-	VideoRateIndependent         *bool
-	VideoRateMultiplier          *float64
+	// 图片与视频生成计费配置。
+	AllowImageGeneration *bool
+	ImageRateIndependent *bool
+	ImageRateMultiplier  *float64
+	VideoRateIndependent *bool
+	VideoRateMultiplier  *float64
 	// 高峰时段倍率配置（nil 表示不修改）
 	PeakRateEnabled    *bool
 	PeakStart          *string
@@ -563,15 +496,6 @@ type UpdateProxyInput struct {
 	MaxAccounts    *int
 }
 
-type GenerateRedeemCodesInput struct {
-	Count        int
-	Type         string
-	Value        float64
-	GroupID      *int64 // 订阅类型专用：关联的分组ID
-	ValidityDays int    // 订阅类型专用：有效天数
-	ExpiresAt    *time.Time
-}
-
 type ProxyBatchDeleteResult struct {
 	DeletedIDs []int64                   `json:"deleted_ids"`
 	Skipped    []ProxyBatchDeleteSkipped `json:"skipped"`
@@ -704,7 +628,6 @@ type adminServiceImpl struct {
 	accountBillingRepo   AccountBillingSettingsRepository
 	proxyRepo            ProxyRepository
 	apiKeyRepo           APIKeyRepository
-	redeemCodeRepo       RedeemCodeRepository
 	userGroupRateRepo    UserGroupRateRepository
 	userRPMCache         UserRPMCache
 	billingCacheService  *BillingCacheService
@@ -713,11 +636,9 @@ type adminServiceImpl struct {
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	entClient            *dbent.Client // 用于开启数据库事务
 	settingService       *SettingService
-	defaultSubAssigner   DefaultSubscriptionAssigner
 	userSubRepo          UserSubscriptionRepository
 	privacyClientFactory PrivacyClientFactory
 	runtimeBlocker       AccountRuntimeBlocker
-	affiliateService     adminRechargeAffiliateAccruer
 	compositeRouteRepo   CompositeModelRouteRepository
 	compositeResolver    *CompositeRouteResolver
 	// 分组平台变更后用来失效渠道缓存；可为 nil（缓存会在 TTL 到期后自然重建）
@@ -728,10 +649,6 @@ type adminServiceImpl struct {
 // 窄接口，避免 admin 服务依赖整个 ChannelService——与 APIKeyAuthCacheInvalidator 同一思路。
 type ChannelCacheInvalidator interface {
 	InvalidateCache()
-}
-
-type adminRechargeAffiliateAccruer interface {
-	AccrueInviteRebate(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64) (float64, error)
 }
 
 type userGroupRateBatchReader interface {
@@ -746,7 +663,6 @@ func NewAdminService(
 	accountRepo AdminAccountRepository,
 	proxyRepo ProxyRepository,
 	apiKeyRepo APIKeyRepository,
-	redeemCodeRepo RedeemCodeRepository,
 	userGroupRateRepo UserGroupRateRepository,
 	userRPMCache UserRPMCache,
 	billingCacheService *BillingCacheService,
@@ -755,11 +671,9 @@ func NewAdminService(
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	entClient *dbent.Client,
 	settingService *SettingService,
-	defaultSubAssigner DefaultSubscriptionAssigner,
 	userSubRepo UserSubscriptionRepository,
 	privacyClientFactory PrivacyClientFactory,
 	runtimeBlocker AccountRuntimeBlocker,
-	affiliateService *AffiliateService,
 	compositeRouteRepo CompositeModelRouteRepository,
 	compositeResolver *CompositeRouteResolver,
 	channelCacheInvalidator ChannelCacheInvalidator,
@@ -775,7 +689,6 @@ func NewAdminService(
 		accountBillingRepo:   accountRepo,
 		proxyRepo:            proxyRepo,
 		apiKeyRepo:           apiKeyRepo,
-		redeemCodeRepo:       redeemCodeRepo,
 		userGroupRateRepo:    userGroupRateRepo,
 		userRPMCache:         userRPMCache,
 		billingCacheService:  billingCacheService,
@@ -784,11 +697,9 @@ func NewAdminService(
 		authCacheInvalidator: authCacheInvalidator,
 		entClient:            entClient,
 		settingService:       settingService,
-		defaultSubAssigner:   defaultSubAssigner,
 		userSubRepo:          userSubRepo,
 		privacyClientFactory: privacyClientFactory,
 		runtimeBlocker:       runtimeBlocker,
-		affiliateService:     affiliateService,
 		compositeRouteRepo:   compositeRouteRepo,
 		compositeResolver:    compositeResolver,
 

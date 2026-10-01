@@ -210,22 +210,7 @@ func ProvideAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 ) *AccountHandler {
-	handler := NewAccountHandler(
-		adminService,
-		oauthService,
-		openaiOAuthService,
-		nil,
-		nil,
-		grokOAuthService,
-		rateLimitService,
-		accountUsageService,
-		accountTestService,
-		concurrencyService,
-		crsSyncService,
-		sessionLimitCache,
-		rpmCache,
-		tokenCacheInvalidator,
-	)
+	handler := NewAccountHandler(adminService, oauthService, openaiOAuthService, grokOAuthService, rateLimitService, accountUsageService, accountTestService, concurrencyService, crsSyncService, sessionLimitCache, rpmCache, tokenCacheInvalidator)
 	handler.cfg = cfg
 	if grokQuotaService != nil {
 		handler.grokImportProber = grokQuotaService

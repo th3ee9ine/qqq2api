@@ -6,7 +6,7 @@ This directory contains all Pinia stores for the QQQ2API frontend application.
 
 ### 1. Auth Store (`auth.ts`)
 
-Manages user authentication state, login/logout, and token persistence.
+Manages administrator authentication, login/logout, TOTP, and token persistence.
 
 **State:**
 
@@ -20,7 +20,6 @@ Manages user authentication state, login/logout, and token persistence.
 **Actions:**
 
 - `login(credentials)` - Authenticate user with username/password
-- `register(userData)` - Register new user account
 - `logout()` - Clear authentication and logout
 - `checkAuth()` - Restore session from localStorage
 - `refreshUser()` - Fetch latest user data from server
@@ -70,7 +69,7 @@ authStore.checkAuth()
 
 // Login
 try {
-  await authStore.login({ username: 'user', password: 'pass' })
+  await authStore.login({ email: 'admin@example.com', password: 'pass' })
   console.log('Logged in:', authStore.user)
 } catch (error) {
   console.error('Login failed:', error)

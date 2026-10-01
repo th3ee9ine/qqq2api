@@ -18,7 +18,7 @@ func TestCodexVersionSettingsRoutesRequireAdministrator(t *testing.T) {
 		t.Run(role, func(t *testing.T) {
 			router := gin.New()
 			group := router.Group("/api/v1/admin", func(c *gin.Context) { c.Set(string(middleware.ContextKeyUserRole), role); c.Next() })
-			h := &handler.Handlers{Admin: &handler.AdminHandlers{Setting: adminhandler.NewSettingHandler(nil, nil, nil, nil, nil, nil, nil)}}
+			h := &handler.Handlers{Admin: &handler.AdminHandlers{Setting: adminhandler.NewSettingHandler(nil, nil, nil)}}
 			registerSettingsRoutes(group, h, middleware.StepUpAuthMiddleware(func(c *gin.Context) { c.Next() }))
 			for _, tc := range []struct{ method, path string }{{http.MethodGet, "/settings/openai-codex/versions"}, {http.MethodPost, "/settings/openai-codex/sync"}} {
 				rec := httptest.NewRecorder()

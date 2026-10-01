@@ -5,7 +5,7 @@ import { useI18n } from 'vue-i18n'
 import Toast from '@/components/common/Toast.vue'
 import NavigationProgress from '@/components/common/NavigationProgress.vue'
 import { resolveRouteDocumentTitle } from '@/router/title'
-import { useAppStore, useAuthStore, useAdminSettingsStore } from '@/stores'
+import { useAppStore } from '@/stores'
 import { getSetupStatus } from '@/api/setup'
 import { updateFavicon } from '@/utils/branding'
 
@@ -13,15 +13,9 @@ const router = useRouter()
 const route = useRoute()
 const { locale } = useI18n()
 const appStore = useAppStore()
-const authStore = useAuthStore()
-const adminSettingsStore = useAdminSettingsStore()
 
 function updateDocumentTitle() {
-  const customMenuItems = [
-    ...(appStore.cachedPublicSettings?.custom_menu_items ?? []),
-    ...(authStore.isAdmin ? adminSettingsStore.customMenuItems : []),
-  ]
-  document.title = resolveRouteDocumentTitle(route, appStore.siteName, customMenuItems)
+  document.title = resolveRouteDocumentTitle(route, appStore.siteName)
 }
 
 // Watch for site settings changes and update favicon/title
@@ -42,9 +36,6 @@ watch(
     () => route.meta.titleKey,
     () => locale.value,
     () => appStore.siteName,
-    () => appStore.cachedPublicSettings?.custom_menu_items,
-    () => authStore.isAdmin,
-    () => adminSettingsStore.customMenuItems,
   ],
   updateDocumentTitle,
   { deep: true }

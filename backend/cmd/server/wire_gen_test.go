@@ -93,7 +93,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 	claudeCodeVersionSyncSvc := service.NewClaudeCodeVersionSyncService(nil, nil, nil, time.Second)
 	proxyExpirySvc := service.NewProxyExpiryService(nil, time.Second)
 	pricingSvc := service.NewPricingService(cfg, nil)
-	emailQueueSvc := service.NewEmailQueueService(nil, 1)
 	billingCacheSvc := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	idempotencyCleanupSvc := service.NewIdempotencyCleanupService(nil, cfg)
 	schedulerSnapshotSvc := service.NewSchedulerSnapshotService(nil, nil, nil, nil, cfg)
@@ -122,7 +121,6 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		&service.UsageCleanupService{},
 		idempotencyCleanupSvc,
 		pricingSvc,
-		emailQueueSvc,
 		billingCacheSvc,
 		&service.UsageRecordWorkerPool{},
 		oauthSvc,

@@ -6,7 +6,6 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useAppStore } from '@/stores/app'
-import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { useNavigationLoadingState } from '@/composables/useNavigationLoading'
 import { useRoutePrefetch } from '@/composables/useRoutePrefetch'
 import { getSetupStatus } from '@/api/setup'
@@ -388,12 +387,7 @@ router.beforeEach(async (to, _from, next) => {
 
   // Set page title
   const appStore = useAppStore()
-  const adminSettingsStore = useAdminSettingsStore()
-  const customMenuItems = [
-    ...(appStore.cachedPublicSettings?.custom_menu_items ?? []),
-    ...(authStore.isAdmin ? adminSettingsStore.customMenuItems : []),
-  ]
-  document.title = resolveRouteDocumentTitle(to, appStore.siteName, customMenuItems)
+  document.title = resolveRouteDocumentTitle(to, appStore.siteName)
 
   // Check if route requires authentication
   const requiresAuth = to.meta.requiresAuth !== false // Default to true
@@ -421,7 +415,7 @@ router.beforeEach(async (to, _from, next) => {
 
   // If route doesn't require auth, allow access
   if (!requiresAuth) {
-    // If already authenticated and trying to access login/register, redirect to appropriate dashboard
+    // If already authenticated and trying to access login, redirect to appropriate dashboard
     if (authStore.isAuthenticated && to.path === '/login') {
       // A stale legacy non-admin token must not expose a panel route. Leave the
       // login form reachable so the administrator can sign in again.
@@ -467,10 +461,8 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
-  // 公共设置可能尚未加载（App.vue 的 onMounted 异步拉取晚于首次导航，且纯静态部署
-  // 无 __APP_CONFIG__ 注入）。此时 cachedPublicSettings 为空会把 payment/risk_control
-  // 误判为“未启用”而错误拦截，故这里先确保设置加载完成。
-  if ((to.meta.requiresPayment || to.meta.requiresRiskControl || to.meta.requiresSubscription) && !appStore.publicSettingsLoaded) {
+  // Fetch feature settings before evaluating access to risk control pages.
+  if (to.meta.requiresRiskControl && !appStore.publicSettingsLoaded) {
     try {
       await appStore.fetchPublicSettings()
     } catch (error) {
@@ -480,14 +472,6 @@ router.beforeEach(async (to, _from, next) => {
 
   // Only an explicit value from successfully loaded settings can disable a route.
   // A transient settings failure is unknown state, not a confirmed feature toggle.
-  if (
-    to.meta.requiresPayment &&
-    appStore.publicSettingsLoaded &&
-    appStore.cachedPublicSettings?.payment_enabled === false
-  ) {
-    next('/admin/dashboard')
-    return
-  }
 
   if (
     to.meta.requiresRiskControl &&
@@ -498,46 +482,8 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
-  // 订阅功能是 opt-out 开关：只有显式 false 才拦截「我的订阅」页直达。
-  if (
-    to.meta.requiresSubscription &&
-    appStore.publicSettingsLoaded &&
-    appStore.cachedPublicSettings?.subscription_enabled === false
-  ) {
-    next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
-    return
-  }
 
-  // 简易模式下限制访问某些页面
-  if (authStore.isSimpleMode) {
-    const restrictedPaths = [
-      '/admin/subscriptions',
-      '/admin/redeem',
-      '/subscriptions',
-      '/redeem'
-    ]
 
-    if (restrictedPaths.some((path) => to.path.startsWith(path))) {
-      // 简易模式下访问受限页面,重定向到仪表板
-      next('/admin/dashboard')
-      return
-    }
-  }
-
-  // Backend mode: authenticated panel operators may use their permitted routes.
-  if (appStore.backendModeEnabled) {
-    if (authStore.isAuthenticated && authStore.isPanelOperator) {
-      next()
-      return
-    }
-    const isAllowed = isBackendModePublicRouteAllowed(to.path)
-    if (!isAllowed) {
-      next('/login')
-      return
-    }
-  }
-
-  // All checks passed, allow navigation
   next()
 })
 

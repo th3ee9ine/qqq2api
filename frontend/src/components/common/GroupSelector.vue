@@ -1,7 +1,7 @@
 <template>
   <div>
     <label class="input-label">
-      {{ t('admin.users.groups') }}
+      {{ t('common.groups') }}
       <span class="font-normal text-gray-400">{{ t('common.selectedCount', { count: modelValue.length }) }}</span>
     </label>
     <div
@@ -42,7 +42,6 @@
         <GroupBadge
           :name="group.name"
           :platform="group.platform"
-          :subscription-type="group.subscription_type || undefined"
           :rate-multiplier="authStore.isAccountAdmin || group.rate_multiplier == null ? undefined : group.rate_multiplier"
           class="min-w-0 flex-1"
         />

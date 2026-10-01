@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/th3ee9ine/qqq2api/internal/config"
 )
 
 func TestAdminService_CreateUser_Success(t *testing.T) {
@@ -43,56 +42,6 @@ func TestAdminService_CreateUser_Success(t *testing.T) {
 	require.Equal(t, user, repo.created[0])
 }
 
-func TestAdminService_CreateUser_UsesDefaultBalanceWhenBalanceOmitted(t *testing.T) {
-	repo := &userRepoStub{nextID: 11}
-	cfg := &config.Config{
-		Default: config.DefaultConfig{
-			UserBalance: 0,
-		},
-	}
-	settingService := NewSettingService(&settingRepoStub{values: map[string]string{
-		SettingKeyDefaultBalance: "0.02",
-	}}, cfg)
-	svc := &adminServiceImpl{userRepo: repo, settingService: settingService}
-
-	user, err := svc.CreateUser(context.Background(), &CreateUserInput{
-		Email:    "default-balance@test.com",
-		Password: "strong-pass",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, user)
-	require.Equal(t, 0.02, user.Balance)
-	require.Len(t, repo.created, 1)
-	require.Equal(t, 0.02, repo.created[0].Balance)
-}
-
-func TestAdminService_CreateUser_ExplicitZeroBalanceOverridesDefault(t *testing.T) {
-	repo := &userRepoStub{nextID: 12}
-	cfg := &config.Config{
-		Default: config.DefaultConfig{
-			UserBalance: 0,
-		},
-	}
-	settingService := NewSettingService(&settingRepoStub{values: map[string]string{
-		SettingKeyDefaultBalance: "0.02",
-	}}, cfg)
-	svc := &adminServiceImpl{userRepo: repo, settingService: settingService}
-	balance := 0.0
-
-	user, err := svc.CreateUser(context.Background(), &CreateUserInput{
-		Email:    "zero-balance@test.com",
-		Password: "strong-pass",
-		Balance:  &balance,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, user)
-	require.Equal(t, 0.0, user.Balance)
-	require.Len(t, repo.created, 1)
-	require.Equal(t, 0.0, repo.created[0].Balance)
-}
-
 func TestAdminService_CreateUser_EmailExists(t *testing.T) {
 	repo := &userRepoStub{createErr: ErrEmailExists}
 	svc := &adminServiceImpl{userRepo: repo}
@@ -116,64 +65,4 @@ func TestAdminService_CreateUser_CreateError(t *testing.T) {
 	})
 	require.ErrorIs(t, err, createErr)
 	require.Empty(t, repo.created)
-}
-
-func TestAdminService_CreateUser_AssignsDefaultSubscriptions(t *testing.T) {
-	repo := &userRepoStub{nextID: 21}
-	assigner := &defaultSubscriptionAssignerStub{}
-	cfg := &config.Config{
-		Default: config.DefaultConfig{
-			UserBalance:     0,
-			UserConcurrency: 1,
-		},
-	}
-	settingService := NewSettingService(&settingRepoStub{values: map[string]string{
-		SettingKeyDefaultSubscriptions: `[{"group_id":5,"validity_days":30}]`,
-	}}, cfg)
-	svc := &adminServiceImpl{
-		userRepo:           repo,
-		settingService:     settingService,
-		defaultSubAssigner: assigner,
-	}
-
-	_, err := svc.CreateUser(context.Background(), &CreateUserInput{
-		Email:    "new-user@test.com",
-		Password: "password",
-	})
-	require.NoError(t, err)
-	require.Len(t, assigner.calls, 1)
-	require.Equal(t, int64(21), assigner.calls[0].UserID)
-	require.Equal(t, int64(5), assigner.calls[0].GroupID)
-	require.Equal(t, 30, assigner.calls[0].ValidityDays)
-}
-
-func TestAdminService_CreateUser_AccountAdminSkipsDefaultSubscriptions(t *testing.T) {
-	repo := &userRepoStub{nextID: 22}
-	assigner := &defaultSubscriptionAssignerStub{}
-	cfg := &config.Config{
-		Default: config.DefaultConfig{
-			UserBalance:     0,
-			UserConcurrency: 1,
-		},
-	}
-	settingService := NewSettingService(&settingRepoStub{values: map[string]string{
-		SettingKeyDefaultSubscriptions: `[{"group_id":5,"validity_days":30}]`,
-	}}, cfg)
-	svc := &adminServiceImpl{
-		userRepo:           repo,
-		settingService:     settingService,
-		defaultSubAssigner: assigner,
-	}
-
-	user, err := svc.CreateUser(context.Background(), &CreateUserInput{
-		Email:    "account-admin@test.com",
-		Password: "password",
-		Role:     RoleAccountAdmin,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, user)
-	require.Equal(t, RoleAccountAdmin, user.Role)
-	require.Len(t, repo.created, 1)
-	require.Empty(t, assigner.calls, "account administrators must not receive billable default subscriptions")
 }

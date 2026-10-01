@@ -244,7 +244,7 @@ func ProvideGatewayHandler(
 	settingService *service.SettingService,
 	coordinator *securityaudit.Coordinator,
 ) *GatewayHandler {
-	h := NewGatewayHandler(gatewayService, openAIGatewayService, nil, nil,
+	h := NewGatewayHandler(gatewayService, openAIGatewayService,
 		userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool,
 		errorPassthroughService, contentModerationService, userMsgQueueService, cfg, settingService)
 	h.securityAuditCoordinator = coordinator
@@ -290,7 +290,7 @@ func ProvideAuthHandler(
 	settingService *service.SettingService,
 	totpService *service.TotpService,
 ) *AuthHandler {
-	return NewAuthHandler(cfg, authService, userService, settingService, nil, nil, totpService, nil)
+	return NewAuthHandler(cfg, authService, userService, settingService, totpService)
 }
 
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService
@@ -306,9 +306,8 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 }
 
 // ProvideAdminSettingHandler creates admin.SettingHandler with notification template APIs.
-func ProvideAdminSettingHandler(settingService *service.SettingService, emailService *service.EmailService, turnstileService *service.TurnstileService, aliyunCaptchaService *service.AliyunCaptchaService, opsService *service.OpsService, notificationEmailService *service.NotificationEmailService, totpService *service.TotpService, userService *service.UserService, codexVersionSyncService *service.OpenAICodexVersionSyncService) *admin.SettingHandler {
-	h := admin.NewSettingHandler(settingService, emailService, turnstileService, opsService, nil, nil, nil)
-	h.SetNotificationEmailService(notificationEmailService)
+func ProvideAdminSettingHandler(settingService *service.SettingService, turnstileService *service.TurnstileService, aliyunCaptchaService *service.AliyunCaptchaService, opsService *service.OpsService, totpService *service.TotpService, userService *service.UserService, codexVersionSyncService *service.OpenAICodexVersionSyncService) *admin.SettingHandler {
+	h := admin.NewSettingHandler(settingService, turnstileService, opsService)
 	h.SetAliyunCaptchaService(aliyunCaptchaService)
 	h.SetStepUpDeps(totpService, userService)
 	h.SetCodexVersionSyncService(codexVersionSyncService)

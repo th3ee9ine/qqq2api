@@ -24,7 +24,7 @@ func TestResourceDeleteRoutesRejectAccountAdministrators(t *testing.T) {
 	})
 
 	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{
-		Account:     adminhandler.NewAccountHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
+		Account:     adminhandler.NewAccountHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		OAuth:       adminhandler.NewOAuthHandler(nil),
 		OpenAIOAuth: adminhandler.NewOpenAIOAuthHandler(nil, nil, nil, nil),
 		Proxy:       adminhandler.NewProxyHandler(nil),

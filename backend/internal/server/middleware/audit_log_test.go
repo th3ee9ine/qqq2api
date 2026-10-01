@@ -145,12 +145,6 @@ func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing
 	}
 }
 
-func TestPasskeyLoginAuditUsesCanonicalLoginActionAndOmitsCredentialBody(t *testing.T) {
-	route := "POST /api/v1/auth/passkey/login/finish"
-	require.Equal(t, service.AuditActionLogin, auditActionOverrides[route])
-	require.Contains(t, auditBodyOmittedRoutes, route)
-}
-
 // Turn-State 代理池 URL 可内嵌用户名和密码，整个设置正文必须从审计库排除。
 // 路由级省略为主防线，避免 URL 嵌入凭证依赖通用 JSON 字段脱敏。
 func TestCodexTurnStateSettingsRouteOmitsProxyPoolCredentials(t *testing.T) {

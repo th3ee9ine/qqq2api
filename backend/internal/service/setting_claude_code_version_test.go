@@ -26,7 +26,7 @@ func TestGetClaudeCodeClientVersionPriority(t *testing.T) {
 		{name: "未配置时回退", want: claude.CLIVersion()},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := &authSourceDefaultsRepoStub{values: map[string]string{
+			repo := &memorySettingRepoStub{values: map[string]string{
 				SettingKeyClaudeCodeClientVersion:       tt.manual,
 				SettingKeyClaudeCodeClientVersionSynced: tt.synced,
 			}}
@@ -38,7 +38,7 @@ func TestGetClaudeCodeClientVersionPriority(t *testing.T) {
 
 func TestUpdateSettingsClaudeCodeVersionTakesEffectImmediately(t *testing.T) {
 	ctx := context.Background()
-	repo := &authSourceDefaultsRepoStub{values: map[string]string{
+	repo := &memorySettingRepoStub{values: map[string]string{
 		SettingKeyClaudeCodeClientVersionSynced: "2.1.281",
 	}}
 	svc := NewSettingService(repo, &config.Config{})

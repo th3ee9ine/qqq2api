@@ -1501,16 +1501,6 @@
     </template>
   </BaseDialog>
 
-  <ConfirmDialog
-    :show="showMixedChannelWarning"
-    :title="t('admin.accounts.mixedChannelWarningTitle')"
-    :message="mixedChannelWarningMessage"
-    :confirm-text="t('common.confirm')"
-    :cancel-text="t('common.cancel')"
-    :danger="true"
-    @confirm="handleMixedChannelConfirm"
-    @cancel="handleMixedChannelCancel"
-  />
 </template>
 
 <script setup lang="ts">
@@ -1530,7 +1520,6 @@ import type {
   OpenAIResponsesMode
 } from '@/types'
 import BaseDialog from '@/components/common/BaseDialog.vue'
-import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
 import GroupSelector from '@/components/common/GroupSelector.vue'
@@ -1714,9 +1703,6 @@ const enableRpmLimit = ref(false)
 
 // State - field values
 const submitting = ref(false)
-const showMixedChannelWarning = ref(false)
-const mixedChannelWarningMessage = ref('')
-const pendingUpdatesForConfirm = ref<BulkUpdateAccountFields | null>(null)
 const baseUrl = ref('')
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
@@ -2201,45 +2187,7 @@ const buildUpdatePayload = (): BulkUpdateAccountFields | null => {
   return Object.keys(updates).length > 0 ? updates : null
 }
 
-const mixedChannelConfirmed = ref(false)
-
-// 是否需要预检查：改了分组 + 全是 Anthropic 平台
-// 多平台混合的情况由 submitBulkUpdate 的 409 catch 兜底
-const canPreCheck = () =>
-  enableGroups.value &&
-  groupIds.value.length > 0 &&
-  targetSelectedPlatforms.value.length === 1 &&
-  targetSelectedPlatforms.value[0] === 'anthropic'
-
-const handleClose = () => {
-  showMixedChannelWarning.value = false
-  mixedChannelWarningMessage.value = ''
-  pendingUpdatesForConfirm.value = null
-  mixedChannelConfirmed.value = false
-  emit('close')
-}
-
-// 预检查：提交前调接口检测，有风险就弹窗阻止，返回 false 表示需要用户确认
-const preCheckMixedChannelRisk = async (built: BulkUpdateAccountFields): Promise<boolean> => {
-  if (!canPreCheck()) return true
-  if (mixedChannelConfirmed.value) return true
-
-  try {
-    const result = await adminAPI.accounts.checkMixedChannelRisk({
-      platform: targetSelectedPlatforms.value[0],
-      group_ids: groupIds.value
-    })
-    if (!result.has_risk) return true
-
-    pendingUpdatesForConfirm.value = built
-    mixedChannelWarningMessage.value = result.message || t('admin.accounts.bulkEdit.failed')
-    showMixedChannelWarning.value = true
-    return false
-  } catch (error: any) {
-    appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
-    return false
-  }
-}
+const handleClose = () => emit('close')
 
 const handleSubmit = async () => {
   if (hasRetiredTargetPlatform.value) {
@@ -2314,17 +2262,10 @@ const handleSubmit = async () => {
     return
   }
 
-  const canContinue = await preCheckMixedChannelRisk(built)
-  if (!canContinue) return
-
   await submitBulkUpdate(built)
 }
 
-const submitBulkUpdate = async (baseUpdates: BulkUpdateAccountFields) => {
-  // 无论是预检查确认还是 409 兜底确认，只要 mixedChannelConfirmed 为 true 就带上 flag
-  const updates = mixedChannelConfirmed.value
-    ? { ...baseUpdates, confirm_mixed_channel_risk: true }
-    : baseUpdates
+const submitBulkUpdate = async (updates: BulkUpdateAccountFields) => {
 
   submitting.value = true
 
@@ -2358,17 +2299,11 @@ const submitBulkUpdate = async (baseUpdates: BulkUpdateAccountFields) => {
     }
 
     if (success > 0) {
-      pendingUpdatesForConfirm.value = null
       emit('updated')
       handleClose()
     }
   } catch (error: any) {
-    // 兜底：多平台混合场景下，预检查跳过，由后端 409 触发确认框
-    if (error.status === 409 && error.error === 'mixed_channel_warning') {
-      pendingUpdatesForConfirm.value = baseUpdates
-      mixedChannelWarningMessage.value = error.message
-      showMixedChannelWarning.value = true
-    } else if (error.reason === 'UPSTREAM_BILLING_RATE_SYNC_BULK_CONFLICT') {
+    if (error.reason === 'UPSTREAM_BILLING_RATE_SYNC_BULK_CONFLICT') {
       appStore.showError(t('admin.accounts.bulkEdit.rateSyncConflict', {
         count: error.metadata?.count ?? 1
       }))
@@ -2383,19 +2318,6 @@ const submitBulkUpdate = async (baseUpdates: BulkUpdateAccountFields) => {
   } finally {
     submitting.value = false
   }
-}
-
-const handleMixedChannelConfirm = async () => {
-  showMixedChannelWarning.value = false
-  mixedChannelConfirmed.value = true
-  if (pendingUpdatesForConfirm.value) {
-    await submitBulkUpdate(pendingUpdatesForConfirm.value)
-  }
-}
-
-const handleMixedChannelCancel = () => {
-  showMixedChannelWarning.value = false
-  pendingUpdatesForConfirm.value = null
 }
 
 // Reset form when modal closes
@@ -2468,11 +2390,6 @@ watch(
       bulkRpmStickyBuffer.value = null
       userMsgQueueMode.value = null
 
-      // Reset mixed channel warning state
-      showMixedChannelWarning.value = false
-      mixedChannelWarningMessage.value = ''
-      pendingUpdatesForConfirm.value = null
-      mixedChannelConfirmed.value = false
     }
   }
 )

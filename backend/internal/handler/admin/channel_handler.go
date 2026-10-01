@@ -635,11 +635,9 @@ func (h *ChannelHandler) GetModelDefaultPricing(c *gin.Context) {
 // platformToLiteLLMProvider maps a channel platform name to the corresponding
 // LiteLLM provider string used as the key in the pricing catalog.
 var platformToLiteLLMProvider = map[string]string{
-	service.PlatformAnthropic:   "anthropic",
-	service.PlatformOpenAI:      "openai",
-	service.PlatformGemini:      "gemini",
-	service.PlatformAntigravity: "anthropic",
-	service.PlatformGrok:        "xai",
+	service.PlatformAnthropic: "anthropic",
+	service.PlatformOpenAI:    "openai",
+	service.PlatformGrok:      "xai",
 }
 
 // SyncPricingModels 返回 LiteLLM 定价目录中指定平台的最新模型列表

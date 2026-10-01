@@ -279,17 +279,6 @@ type ChannelMonitorV2ErrorDetail struct {
 	Count              int64  `json:"count"`
 }
 
-type ChannelMonitorV2UserRow struct {
-	UserID       *int64                 `json:"user_id,omitempty"`
-	Rank         int                    `json:"rank"`
-	Email        string                 `json:"email,omitempty"`
-	Username     string                 `json:"username,omitempty"`
-	DisplayLabel string                 `json:"display_label"`
-	IsSelf       bool                   `json:"is_self"`
-	CanDrilldown bool                   `json:"can_drilldown"`
-	Metrics      ChannelMonitorV2Metric `json:"metrics"`
-}
-
 type ChannelMonitorV2List[T any] struct {
 	Coverage ChannelMonitorV2Coverage `json:"coverage"`
 	Items    []T                      `json:"items"`
@@ -305,7 +294,7 @@ type ChannelMonitorV2Repository interface {
 	// GetErrors loads category rates. When includeAdmin is false, implementations
 	// must omit error Details (no ops_error_logs sample scan) for privacy.
 	GetErrors(ctx context.Context, filter ChannelMonitorV2Filter, config ChannelMonitorV2Config, includeAdmin bool) (*ChannelMonitorV2List[ChannelMonitorV2ErrorRow], error)
-	GetUsers(ctx context.Context, filter ChannelMonitorV2Filter, config ChannelMonitorV2Config, includeAdmin bool) (*ChannelMonitorV2List[ChannelMonitorV2UserRow], error)
+
 	// GetAggregationWatermark loads durable backfill / coverage cursors for the
 	// passive aggregator (and bootstrap progress). Missing row → zero value, nil error.
 	GetAggregationWatermark(ctx context.Context) (*ChannelMonitorV2AggregationWatermark, error)
@@ -403,18 +392,6 @@ func (s *ChannelMonitorV2Service) hideThroughputForViewer(ctx context.Context, a
 		return true
 	}
 	return s.settings.GetChannelMonitorRuntime(ctx).HideThroughput
-}
-
-func (s *ChannelMonitorV2Service) hideUserRankingForViewer(ctx context.Context, admin bool) bool {
-	if admin {
-		return false
-	}
-	// Missing reader keeps the current ranking tab visible. Unlike throughput,
-	// ranking is already public and must stay on until an operator turns it off.
-	if s == nil || s.settings == nil {
-		return false
-	}
-	return s.settings.GetChannelMonitorRuntime(ctx).HideUserRanking
 }
 
 func (s *ChannelMonitorV2Service) GetConfig(ctx context.Context) (*ChannelMonitorV2Config, error) {
@@ -657,94 +634,6 @@ func redactChannelMonitorV2Metric(m *ChannelMonitorV2Metric, hideThroughput bool
 		m.RPM = 0
 		m.TPM = 0
 	}
-}
-
-func (s *ChannelMonitorV2Service) Users(ctx context.Context, filter ChannelMonitorV2Filter, viewerID int64, admin bool) (*ChannelMonitorV2List[ChannelMonitorV2UserRow], error) {
-	cfg, err := s.getEnabledConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if s.hideUserRankingForViewer(ctx, admin) {
-		return &ChannelMonitorV2List[ChannelMonitorV2UserRow]{Items: []ChannelMonitorV2UserRow{}}, nil
-	}
-	result, err := s.repo.GetUsers(ctx, filter, *cfg, admin)
-	if err != nil {
-		return nil, err
-	}
-	if result == nil {
-		result = &ChannelMonitorV2List[ChannelMonitorV2UserRow]{}
-	}
-	selfIndex := -1
-	for i := range result.Items {
-		result.Items[i].Rank = i + 1
-		if result.Items[i].UserID != nil && *result.Items[i].UserID == viewerID {
-			selfIndex = i
-			result.Items[i].IsSelf = true
-		}
-	}
-	// Viewer with no traffic in this window is still shown (and highlighted) so
-	// ranking always answers "where am I?" — not only when already in the top list.
-	if selfIndex < 0 && viewerID > 0 {
-		id := viewerID
-		selfRow := ChannelMonitorV2UserRow{
-			UserID:       &id,
-			Rank:         0, // unranked / no traffic in window
-			IsSelf:       true,
-			CanDrilldown: true,
-			DisplayLabel: "Me",
-			Metrics:      ChannelMonitorV2Metric{},
-		}
-		result.Items = append(result.Items, selfRow)
-		selfIndex = len(result.Items) - 1
-	}
-	result.Items = channelMonitorV2TopUsersWithSelf(result.Items, selfIndex, 10)
-	hideTP := s.hideThroughputForViewer(ctx, admin)
-	if admin {
-		// Keep identity for admin; still mark self for UI highlight.
-		for i := range result.Items {
-			if result.Items[i].UserID != nil && *result.Items[i].UserID == viewerID {
-				result.Items[i].IsSelf = true
-				if result.Items[i].DisplayLabel == "" || result.Items[i].DisplayLabel == "Me" {
-					// Prefer real label when available from repo.
-					if result.Items[i].Username != "" {
-						result.Items[i].DisplayLabel = result.Items[i].Username
-					} else if result.Items[i].Email != "" {
-						result.Items[i].DisplayLabel = result.Items[i].Email
-					} else {
-						result.Items[i].DisplayLabel = "Me"
-					}
-				}
-			}
-		}
-		return result, nil
-	}
-	for i := range result.Items {
-		redactChannelMonitorV2Metric(&result.Items[i].Metrics, hideTP)
-	}
-	for i := range result.Items {
-		row := &result.Items[i]
-		if row.UserID != nil && *row.UserID == viewerID {
-			row.IsSelf, row.CanDrilldown, row.DisplayLabel = true, true, "Me"
-			continue
-		}
-		row.UserID, row.Email, row.Username, row.CanDrilldown = nil, "", "", false
-		row.DisplayLabel = fmt.Sprintf("Other user #%d", i+1)
-	}
-	return result, nil
-}
-
-func channelMonitorV2TopUsersWithSelf(items []ChannelMonitorV2UserRow, selfIndex int, limit int) []ChannelMonitorV2UserRow {
-	if limit <= 0 {
-		return items
-	}
-	if len(items) <= limit {
-		return items
-	}
-	out := append([]ChannelMonitorV2UserRow(nil), items[:limit]...)
-	if selfIndex >= limit && selfIndex < len(items) {
-		out = append(out, items[selfIndex])
-	}
-	return out
 }
 
 func normalizeChannelMonitorV2Config(cfg *ChannelMonitorV2Config) error {

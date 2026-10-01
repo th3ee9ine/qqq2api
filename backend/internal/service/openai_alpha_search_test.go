@@ -470,7 +470,7 @@ func TestForwardAlphaSearchUnauthorizedDoesNotMarkAccountError(t *testing.T) {
 		cfg:              cfg,
 		httpUpstream:     upstream,
 		accountRepo:      repo,
-		rateLimitService: NewRateLimitService(repo, nil, cfg, nil, nil),
+		rateLimitService: NewRateLimitService(repo, cfg, nil),
 	}
 	account := &Account{
 		ID:          44,
@@ -513,7 +513,7 @@ func TestForwardAlphaSearchPATResponsesFallbackUnauthorizedDoesNotMarkAccountErr
 		cfg:              cfg,
 		httpUpstream:     upstream,
 		accountRepo:      repo,
-		rateLimitService: NewRateLimitService(repo, nil, cfg, nil, nil),
+		rateLimitService: NewRateLimitService(repo, cfg, nil),
 	}
 	account := &Account{
 		ID:          46,
@@ -563,7 +563,7 @@ func TestForwardAlphaSearchAPIKeyEndpointNotFoundFailsOver(t *testing.T) {
 		cfg:              cfg,
 		httpUpstream:     upstream,
 		accountRepo:      repo,
-		rateLimitService: NewRateLimitService(repo, nil, cfg, nil, nil),
+		rateLimitService: NewRateLimitService(repo, cfg, nil),
 	}
 	account := &Account{
 		ID:       9,

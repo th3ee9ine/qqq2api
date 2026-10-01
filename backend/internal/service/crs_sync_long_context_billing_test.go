@@ -165,7 +165,7 @@ func TestCRSSyncSkipsRetiredGeminiCollections(t *testing.T) {
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
-	syncService := NewCRSSyncService(repo, nil, nil, nil, nil, cfg)
+	syncService := NewCRSSyncService(repo, nil, nil, nil, cfg)
 	result, err := syncService.SyncFromCRS(context.Background(), SyncFromCRSInput{
 		BaseURL:  server.URL,
 		Username: "admin",
@@ -214,7 +214,7 @@ func runCRSOpenAILongContextSync(t *testing.T, repo AccountRepository, source cr
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
-	service := NewCRSSyncService(repo, nil, nil, nil, nil, cfg)
+	service := NewCRSSyncService(repo, nil, nil, nil, cfg)
 	result, err := service.SyncFromCRS(context.Background(), SyncFromCRSInput{
 		BaseURL:  server.URL,
 		Username: "admin",

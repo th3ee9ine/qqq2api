@@ -26,7 +26,6 @@ vi.mock('@/api/admin', () => ({
       update: updateAccountMock,
       getGrokMediaEligibility: getEligibilityMock,
       updateGrokMediaEligibility: updateEligibilityMock,
-      checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false })
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),

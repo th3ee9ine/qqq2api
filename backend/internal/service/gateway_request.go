@@ -12,7 +12,6 @@ import (
 	"unsafe"
 
 	"github.com/th3ee9ine/qqq2api/internal/domain"
-	"github.com/th3ee9ine/qqq2api/internal/pkg/antigravity"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/claude"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
@@ -140,13 +139,7 @@ func setGatewayRequestRanges(parsed *ParsedRequest, protocol string, jsonStr str
 		return
 	}
 	switch protocol {
-	case domain.PlatformGemini:
-		if sysParts := gjson.Get(jsonStr, "systemInstruction.parts"); sysParts.Exists() && sysParts.IsArray() {
-			parsed.systemRange = rangeFromResult(sysParts)
-		}
-		if contents := gjson.Get(jsonStr, "contents"); contents.Exists() && contents.IsArray() {
-			parsed.messagesRange = rangeFromResult(contents)
-		}
+
 	default:
 		if sys := gjson.Get(jsonStr, "system"); sys.Exists() {
 			parsed.HasSystem = true
@@ -1445,7 +1438,7 @@ func filterThinkingBlocksInternal(body []byte, alwaysThinking bool) []byte {
 				// only keep thinking blocks with valid signatures
 				if thinkingEnabled && role == "assistant" {
 					signature, _ := blockMap["signature"].(string)
-					if signature != "" && signature != antigravity.DummyThoughtSignature {
+					if signature != "" && signature != "skip_thought_signature_validator" {
 						newContent = append(newContent, block)
 						continue
 					}

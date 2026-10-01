@@ -101,43 +101,6 @@ func TestCalculateOpenAI429ResetTime_NoCodexHeaders(t *testing.T) {
 	}
 }
 
-func TestParseOpenAIRateLimitResetTime_OpenCodeGoUsageLimit(t *testing.T) {
-	tests := []struct {
-		name string
-		body string
-		want time.Duration
-	}{
-		{
-			name: "days",
-			body: `{"type":"error","error":{"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 2 days."}}`,
-			want: 48 * time.Hour,
-		},
-		{
-			name: "hours",
-			body: `{"type":"error","error":{"type":"GoUsageLimitError","message":"Weekly usage limit reached. Resets in 18 hours."}}`,
-			want: 18 * time.Hour,
-		},
-		{
-			name: "hours and minutes",
-			body: `{"type":"error","error":{"type":"GoUsageLimitError","message":"5-hour usage limit reached. Resets in 4hr 59min."}}`,
-			want: 4*time.Hour + 59*time.Minute,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			before := time.Now()
-			resetAt := parseOpenAIRateLimitResetTime([]byte(tt.body))
-			after := time.Now()
-
-			require.NotNil(t, resetAt)
-			actual := time.Unix(*resetAt, 0)
-			require.False(t, actual.Before(before.Add(tt.want).Truncate(time.Second)))
-			require.False(t, actual.After(after.Add(tt.want)))
-		})
-	}
-}
-
 func TestParseOpenAIRateLimitResetTime_DoesNotParseUnknownErrorMessage(t *testing.T) {
 	body := []byte(`{"error":{"type":"rate_limit_error","message":"Resets in 2 days."}}`)
 
@@ -175,7 +138,7 @@ func TestCalculateOpenAI429ResetTime_ReversedWindowOrder(t *testing.T) {
 }
 
 type openAI429SnapshotRepo struct {
-	mockAccountRepoForGemini
+	mockGatewayAccountRepo
 	rateLimitedID      int64
 	updatedExtra       map[string]any
 	bulkUpdatedIDs     []int64
@@ -200,7 +163,7 @@ func (r *openAI429SnapshotRepo) BulkUpdate(_ context.Context, ids []int64, updat
 
 func TestHandle429_OpenAIPersistsCodexSnapshotImmediately(t *testing.T) {
 	repo := &openAI429SnapshotRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{ID: 123, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 
 	headers := http.Header{}
@@ -229,7 +192,7 @@ func TestHandle429_OpenAIPersistsCodexSnapshotImmediately(t *testing.T) {
 
 func TestHandle429_OpenAISyncsObservedPlanType(t *testing.T) {
 	repo := &openAI429SnapshotRepo{}
-	svc := NewRateLimitService(repo, nil, nil, nil, nil)
+	svc := NewRateLimitService(repo, nil, nil)
 	account := &Account{
 		ID:          124,
 		Platform:    PlatformOpenAI,
@@ -260,7 +223,7 @@ func TestHandle429_SkipsSparkShadow(t *testing.T) {
 
 	parentID := int64(900)
 	shadowRepo := &openAI429SnapshotRepo{}
-	shadowSvc := NewRateLimitService(shadowRepo, nil, nil, nil, nil)
+	shadowSvc := NewRateLimitService(shadowRepo, nil, nil)
 	shadow := &Account{
 		ID:              901,
 		Platform:        PlatformOpenAI,
@@ -276,7 +239,7 @@ func TestHandle429_SkipsSparkShadow(t *testing.T) {
 
 	// 反向对照:普通 OpenAI OAuth 账号仍按 global 429 限流。
 	normalRepo := &openAI429SnapshotRepo{}
-	normalSvc := NewRateLimitService(normalRepo, nil, nil, nil, nil)
+	normalSvc := NewRateLimitService(normalRepo, nil, nil)
 	normal := &Account{ID: 902, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 
 	normalSvc.handle429(context.Background(), normal, headers, nil)
@@ -356,7 +319,7 @@ func TestNormalizedCodexLimits_OnlyPrimaryData(t *testing.T) {
 
 func TestRateLimitService_HandleUpstreamError_403PreservesOriginalUpstreamMessage(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, &config.Config{}, nil)
 	account := &Account{
 		ID:       201,
 		Platform: PlatformOpenAI,
@@ -379,7 +342,7 @@ func TestRateLimitService_HandleUpstreamError_403PreservesOriginalUpstreamMessag
 
 func TestRateLimitService_HandleUpstreamError_403FallsBackToRawBody(t *testing.T) {
 	repo := &rateLimitAccountRepoStub{}
-	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service := NewRateLimitService(repo, &config.Config{}, nil)
 	account := &Account{
 		ID:       202,
 		Platform: PlatformOpenAI,

@@ -109,7 +109,7 @@ func TestOpsSystemLogIdentityRedactionIsRecursiveAndNonMutating(t *testing.T) {
 	repo := &opsRepoMock{ListSystemLogsFn: func(context.Context, *OpsSystemLogFilter) (*OpsSystemLogList, error) {
 		return &OpsSystemLogList{Logs: []*OpsSystemLog{{UserID: &userID, Extra: extra}}}, nil
 	}}
-	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	result, err := svc.ListSystemLogs(context.Background(), nil)
 	require.NoError(t, err)
@@ -143,7 +143,7 @@ func TestOpsAlertPayloadsDropUserIdentityDimensions(t *testing.T) {
 		"actor_user_id": int64(99),
 	}}
 	repo := &opsIdentityOutputRepo{rules: []*OpsAlertRule{rule}, events: []*OpsAlertEvent{event}}
-	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewOpsService(repo, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	rules, err := svc.ListAlertRules(context.Background())
 	require.NoError(t, err)

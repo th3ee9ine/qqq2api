@@ -164,7 +164,7 @@ func TestSettingServiceSerializesWriteAndCacheRefreshAcrossUpdateEntrypoints(t *
 	secondDone := make(chan error, 1)
 	go func() {
 		close(secondStarted)
-		secondDone <- svc.UpdateSettingsWithAuthSourceDefaults(context.Background(), secondSettings, nil)
+		secondDone <- svc.UpdateSettingsOmitting(context.Background(), secondSettings, nil)
 	}()
 	<-secondStarted
 

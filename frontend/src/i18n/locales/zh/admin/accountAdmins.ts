@@ -1,5 +1,6 @@
 export default {
   accountAdmins: {
+    roles: { admin: '超级管理员', account_admin: '账号管理员' },
     eyebrow: '管理后台',
     title: '账号管理员',
     description: '管理可在授权范围内操作账号的受限管理员。',

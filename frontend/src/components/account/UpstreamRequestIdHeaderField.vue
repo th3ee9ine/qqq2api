@@ -20,8 +20,6 @@ interface HeaderExample {
 const OFFICIAL_REQUEST_ID_HEADERS: Record<string, { platform: string; header: string }> = {
   openai: { platform: 'OpenAI', header: 'x-request-id' },
   anthropic: { platform: 'Anthropic', header: 'request-id' },
-  gemini: { platform: 'Gemini', header: 'x-goog-request-id' },
-  antigravity: { platform: 'Antigravity', header: 'x-goog-request-id' },
   grok: { platform: 'Grok', header: 'xai-request-id' }
 }
 

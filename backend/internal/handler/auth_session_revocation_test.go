@@ -35,7 +35,7 @@ func TestAuthHandlerRevokeAllSessionsInvalidatesAccessTokens(t *testing.T) {
 			ExpireHour: 1,
 		},
 	}
-	authService := service.NewAuthService(nil, repo, nil, refreshTokenCache, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authService := service.NewAuthService(repo, refreshTokenCache, cfg, nil, nil)
 	cfg.Default.AdminEmail = "admin@example.com"
 	handler := &AuthHandler{
 		authService: authService,
@@ -76,7 +76,7 @@ func TestAuthHandlerRevokeAllSessionsRejectsOtherDatabaseAdministrator(t *testin
 	refreshTokenCache := &userHandlerRefreshTokenCacheStub{}
 	cfg := &config.Config{JWT: config.JWTConfig{Secret: "test-secret", ExpireHour: 1}}
 	cfg.Default.AdminEmail = "admin@example.com"
-	authService := service.NewAuthService(nil, repo, nil, refreshTokenCache, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authService := service.NewAuthService(repo, refreshTokenCache, cfg, nil, nil)
 	handler := &AuthHandler{
 		authService: authService,
 		userService: service.NewUserService(repo, nil, nil, nil),

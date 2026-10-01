@@ -760,8 +760,7 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 	}
 	// 根据状态码选择封禁策略
 	switch failoverErr.StatusCode {
-	case http.StatusBadRequest:
-		tempUnscheduleGoogleConfigError(ctx, s.accountRepo, accountID, "[handler]")
+
 	case http.StatusBadGateway:
 		tempUnscheduleEmptyResponse(ctx, s.accountRepo, accountID, "[handler]")
 	}
@@ -1016,24 +1015,6 @@ func (s *GatewayService) GetCachedSessionAccountID(ctx context.Context, groupID 
 		return 0, err
 	}
 	return accountID, nil
-}
-
-// FindGeminiSession 查找 Gemini 会话（基于内容摘要链的 Fallback 匹配）
-// 返回最长匹配的会话信息（uuid, accountID）
-func (s *GatewayService) FindGeminiSession(_ context.Context, groupID int64, prefixHash, digestChain string) (uuid string, accountID int64, matchedChain string, found bool) {
-	if digestChain == "" || s.digestStore == nil {
-		return "", 0, "", false
-	}
-	return s.digestStore.Find(groupID, prefixHash, digestChain)
-}
-
-// SaveGeminiSession 保存 Gemini 会话。oldDigestChain 为 Find 返回的 matchedChain，用于删旧 key。
-func (s *GatewayService) SaveGeminiSession(_ context.Context, groupID int64, prefixHash, digestChain, uuid string, accountID int64, oldDigestChain string) error {
-	if digestChain == "" || s.digestStore == nil {
-		return nil
-	}
-	s.digestStore.Save(groupID, prefixHash, digestChain, uuid, accountID, oldDigestChain)
-	return nil
 }
 
 // FindAnthropicSession 查找 Anthropic 会话（基于内容摘要链的 Fallback 匹配）

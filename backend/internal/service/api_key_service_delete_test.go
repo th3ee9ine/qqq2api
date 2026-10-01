@@ -319,7 +319,7 @@ func (s *apiKeyCacheStub) SubscribeAuthCacheInvalidation(ctx context.Context, ha
 }
 
 // Global API Keys are not protected by the legacy owner column. The caller ID
-// is retained only as the administrator's technical cache subject.
+// does not alter which key cache entry is invalidated.
 func TestApiKeyService_Delete_IgnoresLegacyOwner(t *testing.T) {
 	repo := &apiKeyRepoStub{
 		apiKey: &APIKey{ID: 10, UserID: 1, Key: "k"},
@@ -330,12 +330,11 @@ func TestApiKeyService_Delete_IgnoresLegacyOwner(t *testing.T) {
 	err := svc.Delete(context.Background(), 10, 2)
 	require.NoError(t, err)
 	require.Equal(t, []int64{10}, repo.deletedIDs)
-	require.Equal(t, []int64{2}, cache.invalidated)
 	require.Equal(t, []string{svc.authCacheKey("k")}, cache.deleteAuthKeys)
 }
 
 // TestApiKeyService_Delete_Success covers the normal global deletion path and
-// cache invalidation for the administrator's technical subject.
+// cache invalidation for the deleted API key.
 func TestApiKeyService_Delete_Success(t *testing.T) {
 	repo := &apiKeyRepoStub{
 		apiKey: &APIKey{ID: 42, UserID: 7, Key: "k"},

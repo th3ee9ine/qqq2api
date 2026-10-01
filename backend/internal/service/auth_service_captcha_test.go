@@ -19,7 +19,7 @@ func newAuthServiceForCaptchaRepoTest(repo *settingRepoStub, required bool, turn
 	settingService := NewSettingService(repo, cfg)
 	turnstileService := NewTurnstileService(settingService, turnstileVerifier)
 	tencentService := NewTencentCaptchaService(settingService, tencentVerifier)
-	svc := NewAuthService(nil, &userRepoStub{}, nil, nil, cfg, settingService, nil, turnstileService, nil, nil, nil, nil, nil)
+	svc := NewAuthService(&userRepoStub{}, nil, cfg, settingService, turnstileService)
 	svc.SetTencentCaptchaService(tencentService)
 	return svc
 }
@@ -34,7 +34,7 @@ func newAuthServiceForCaptchaTest(settings map[string]string, required bool, tur
 	if turnstileVerifier != nil {
 		turnstileService = NewTurnstileService(settingService, turnstileVerifier)
 	}
-	svc := NewAuthService(nil, &userRepoStub{}, nil, nil, cfg, settingService, nil, turnstileService, nil, nil, nil, nil, nil)
+	svc := NewAuthService(&userRepoStub{}, nil, cfg, settingService, turnstileService)
 	if tencentVerifier != nil {
 		svc.SetTencentCaptchaService(NewTencentCaptchaService(settingService, tencentVerifier))
 	}
@@ -95,18 +95,6 @@ func TestVerifyCaptchaRequiredModeAcceptsCompleteTencentProvider(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestVerifyCaptchaForRegisterSkipsDuplicateTencentTicketAfterEmailCode(t *testing.T) {
-	settings := tencentCaptchaSettings()
-	settings[SettingKeyEmailVerifyEnabled] = "true"
-	verifier := &tencentCaptchaVerifierStub{response: &TencentCaptchaVerifyResponse{CaptchaCode: 1}}
-	svc := newAuthServiceForCaptchaTest(settings, true, nil, verifier)
-
-	err := svc.VerifyCaptchaForRegister(context.Background(), CaptchaProof{}, "203.0.113.10", "123456")
-
-	require.NoError(t, err)
-	require.Zero(t, verifier.calls)
-}
-
 func TestVerifyCaptchaFailsClosedWhenProviderSettingsCannotBeRead(t *testing.T) {
 	repo := &settingRepoStub{err: errors.New("settings unavailable")}
 	svc := newAuthServiceForCaptchaRepoTest(repo, false, &turnstileVerifierSpy{}, &tencentCaptchaVerifierStub{})
@@ -148,41 +136,4 @@ func TestVerifyCaptchaRejectsEnabledTencentProviderWithIncompleteCredentials(t *
 	require.ErrorIs(t, err, ErrTencentCaptchaNotConfigured)
 	require.Equal(t, 1, repo.getMultipleCalls)
 	require.Zero(t, verifier.calls)
-}
-
-func TestVerifyActionCaptchaIfEnabledVerifiesTencentProof(t *testing.T) {
-	verifier := &tencentCaptchaVerifierStub{response: &TencentCaptchaVerifyResponse{CaptchaCode: 1}}
-	svc := newAuthServiceForCaptchaTest(tencentCaptchaSettings(), false, nil, verifier)
-
-	err := svc.VerifyActionCaptchaIfEnabled(context.Background(), CaptchaProof{
-		TencentTicket:  "ticket",
-		TencentRandstr: "@rand",
-	}, "203.0.113.10")
-
-	require.NoError(t, err)
-	require.Equal(t, 1, verifier.calls)
-	require.Equal(t, TencentCaptchaProof{Ticket: "ticket", Randstr: "@rand"}, verifier.proof)
-}
-
-func TestVerifyActionCaptchaIfEnabledDoesNotExpandTurnstileCoverage(t *testing.T) {
-	settings := map[string]string{
-		SettingKeyTurnstileEnabled:   "true",
-		SettingKeyTurnstileSecretKey: "turnstile-secret",
-	}
-	turnstileVerifier := &turnstileVerifierSpy{}
-	svc := newAuthServiceForCaptchaTest(settings, false, turnstileVerifier, nil)
-
-	err := svc.VerifyActionCaptchaIfEnabled(context.Background(), CaptchaProof{}, "203.0.113.10")
-
-	require.NoError(t, err)
-	require.Zero(t, turnstileVerifier.called)
-}
-
-func TestVerifyActionCaptchaIfEnabledFailsClosedOnSettingReadError(t *testing.T) {
-	repo := &settingRepoStub{err: errors.New("settings unavailable")}
-	svc := newAuthServiceForCaptchaRepoTest(repo, false, &turnstileVerifierSpy{}, &tencentCaptchaVerifierStub{})
-
-	err := svc.VerifyActionCaptchaIfEnabled(context.Background(), CaptchaProof{}, "203.0.113.10")
-
-	require.ErrorIs(t, err, ErrServiceUnavailable)
 }

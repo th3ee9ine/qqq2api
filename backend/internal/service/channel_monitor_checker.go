@@ -187,23 +187,6 @@ var providerAdapters = map[string]providerAdapter{
 		},
 		extractText: extractAnthropicMonitorText,
 	},
-	MonitorProviderGemini: {
-		// Gemini 把 model 名写在 URL path 上：/v1beta/models/{model}:generateContent
-		buildPath: func(model string) string { return fmt.Sprintf(providerGeminiPathTemplate, model) },
-		buildBody: func(_, prompt string) ([]byte, error) {
-			return json.Marshal(map[string]any{
-				"contents": []map[string]any{
-					{"role": "user", "parts": []map[string]any{{"text": prompt}}},
-				},
-				"generationConfig": map[string]any{"maxOutputTokens": monitorChallengeMaxTokens},
-			})
-		},
-		// 使用 x-goog-api-key header 而不是 ?key= query，避免 *url.Error 把 key 回填到错误日志。
-		buildHeaders: func(apiKey string) map[string]string {
-			return map[string]string{"x-goog-api-key": apiKey}
-		},
-		textPath: "candidates.0.content.parts.0.text",
-	},
 }
 
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
@@ -450,7 +433,6 @@ var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderOpenAI + ":" + MonitorAPIModeResponses:       {"model": true, "instructions": true, "input": true, "stream": true},
 	MonitorProviderGrok:      {"model": true, "messages": true, "stream": true},
 	MonitorProviderAnthropic: {"model": true, "messages": true},
-	MonitorProviderGemini:    {"contents": true},
 }
 
 func checkAPIMode(opts *CheckOptions) string {

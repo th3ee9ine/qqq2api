@@ -21,7 +21,7 @@ func TestAdminAuthJWTValidatesTokenVersion(t *testing.T) {
 
 	cfg := &config.Config{JWT: config.JWTConfig{Secret: "test-secret", ExpireHour: 1}}
 	cfg.Default.AdminEmail = "admin@example.com"
-	authService := service.NewAuthService(nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authService := service.NewAuthService(nil, nil, cfg, nil, nil)
 
 	admin := &service.User{
 		ID:           1,
@@ -132,7 +132,7 @@ func TestAdminAuthJWTRejectsOtherDatabaseAdministrator(t *testing.T) {
 		ID: 2, Email: "other-admin@example.com", Role: service.RoleAdmin,
 		Status: service.StatusActive, TokenVersion: 1,
 	}
-	authService := service.NewAuthService(nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authService := service.NewAuthService(nil, nil, cfg, nil, nil)
 	userRepo := &stubUserRepo{getByID: func(context.Context, int64) (*service.User, error) {
 		clone := *otherAdmin
 		return &clone, nil
@@ -168,7 +168,7 @@ func TestAdminAuthAPIKeyResolvesConfiguredAdministratorByEmail(t *testing.T) {
 		return &clone, nil
 	}}
 	userService := service.NewUserService(userRepo, nil, nil, nil)
-	authService := service.NewAuthService(nil, userRepo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	authService := service.NewAuthService(userRepo, nil, cfg, nil, nil)
 	settingService := service.NewSettingService(fakeSettingRepo{values: map[string]string{
 		service.SettingKeyAdminAPIKey: "admin-api-key",
 	}}, cfg)
@@ -199,10 +199,6 @@ func (s *stubUserRepo) Create(ctx context.Context, user *service.User) error {
 	panic("unexpected Create call")
 }
 
-func (s *stubUserRepo) CreateWithEmailAliasGuard(ctx context.Context, user *service.User) error {
-	panic("unexpected CreateWithEmailAliasGuard call")
-}
-
 func (s *stubUserRepo) GetByID(ctx context.Context, id int64) (*service.User, error) {
 	if s.getByID == nil {
 		panic("GetByID not stubbed")
@@ -227,18 +223,6 @@ func (s *stubUserRepo) Update(ctx context.Context, user *service.User, fields se
 
 func (s *stubUserRepo) Delete(ctx context.Context, id int64) error {
 	panic("unexpected Delete call")
-}
-
-func (s *stubUserRepo) GetUserAvatar(ctx context.Context, userID int64) (*service.UserAvatar, error) {
-	return nil, nil
-}
-
-func (s *stubUserRepo) UpsertUserAvatar(ctx context.Context, userID int64, input service.UpsertUserAvatarInput) (*service.UserAvatar, error) {
-	panic("unexpected UpsertUserAvatar call")
-}
-
-func (s *stubUserRepo) DeleteUserAvatar(ctx context.Context, userID int64) error {
-	panic("unexpected DeleteUserAvatar call")
 }
 
 func (s *stubUserRepo) List(ctx context.Context, params pagination.PaginationParams) ([]service.User, *pagination.PaginationResult, error) {
@@ -291,10 +275,6 @@ func (s *stubUserRepo) ExistsByEmail(ctx context.Context, email string) (bool, e
 	panic("unexpected ExistsByEmail call")
 }
 
-func (s *stubUserRepo) ExistsByEmailAlias(ctx context.Context, email string) (bool, error) {
-	panic("unexpected ExistsByEmailAlias call")
-}
-
 func (s *stubUserRepo) RemoveGroupFromAllowedGroups(ctx context.Context, groupID int64) (int64, error) {
 	panic("unexpected RemoveGroupFromAllowedGroups call")
 }
@@ -305,14 +285,6 @@ func (s *stubUserRepo) RemoveGroupFromUserAllowedGroups(ctx context.Context, use
 
 func (s *stubUserRepo) AddGroupToAllowedGroups(ctx context.Context, userID int64, groupID int64) error {
 	panic("unexpected AddGroupToAllowedGroups call")
-}
-
-func (s *stubUserRepo) ListUserAuthIdentities(ctx context.Context, userID int64) ([]service.UserAuthIdentityRecord, error) {
-	panic("unexpected ListUserAuthIdentities call")
-}
-
-func (s *stubUserRepo) UnbindUserAuthProvider(context.Context, int64, string) error {
-	panic("unexpected UnbindUserAuthProvider call")
 }
 
 func (s *stubUserRepo) UpdateTotpSecret(ctx context.Context, userID int64, encryptedSecret *string) error {

@@ -23,7 +23,7 @@ func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.
 		{file: "gateway_handler.go", function: "Messages", auditToken: "checkSecurityAudit"},
 		{file: "gateway_handler_chat_completions.go", function: "ChatCompletions", auditToken: "checkSecurityAudit"},
 		{file: "gateway_handler_responses.go", function: "Responses", auditToken: "checkSecurityAudit"},
-		{file: "gemini_v1beta_handler.go", function: "GeminiV1BetaModels", auditToken: "checkSecurityAudit"},
+
 		{file: "openai_gateway_handler.go", function: "Responses", auditToken: "checkSecurityAudit"},
 		{file: "openai_gateway_handler.go", function: "Messages", auditToken: "checkSecurityAudit"},
 		{file: "openai_chat_completions.go", function: "ChatCompletions", auditToken: "checkSecurityAudit"},
@@ -34,7 +34,6 @@ func TestPromptAuditGatePrecedesAccountBillingAndUpstreamSideEffects(t *testing.
 		{file: "openai_embeddings.go", function: "Embeddings", auditToken: "checkSecurityAudit"},
 		{file: "openai_alpha_search.go", function: "AlphaSearch", auditToken: "checkSecurityAudit"},
 		{file: "image_task_handler.go", function: "Submit", auditToken: "checkSecurityAuditBeforeSubmit"},
-		{file: "batch_image_handler.go", function: "Submit", auditToken: "checkSecurityAuditBeforeSubmit"},
 	}
 	sideEffectTokens := []string{
 		"CheckBillingEligibility(", "SelectAccount", ".Forward", "acquireResponsesUserSlot(",

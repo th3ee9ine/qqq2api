@@ -56,19 +56,19 @@ func aliyunTestConfig() AliyunCaptchaConfig {
 func newAliyunAuthServiceForTest(cfg *config.Config, settings map[string]string, aliyunSpy *aliyunVerifierSpy) *AuthService {
 	settingService := NewSettingService(&settingPublicRepoStub{values: settings}, cfg)
 	authService := NewAuthService(
-		nil, // entClient
+		// entClient
 		nil, // userRepo
-		nil, // redeemRepo
+		// redeemRepo
 		nil, // refreshTokenCache
 		cfg,
 		settingService,
-		nil, // emailService
+		// emailService
 		NewTurnstileService(settingService, &turnstileVerifierSpy{}),
-		nil, // emailQueueService
-		nil, // promoService
-		nil, // defaultSubAssigner
-		nil, // affiliateService
-		nil, // userPlatformQuotaRepo
+		// emailQueueService
+		// promoService
+		// defaultSubAssigner
+		// affiliateService
+		// userPlatformQuotaRepo
 	)
 	authService.SetAliyunCaptchaService(NewAliyunCaptchaService(settingService, aliyunSpy))
 	return authService
@@ -209,29 +209,4 @@ func TestAuthServiceVerifyCaptchaRequiredModeWithAliyun(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 1, spy.called)
-}
-
-func TestAuthServiceVerifyActionCaptchaIfEnabledDispatchesAliyun(t *testing.T) {
-	spy := &aliyunVerifierSpy{}
-	authService := newAliyunAuthServiceForTest(&config.Config{}, aliyunEnabledSettings(), spy)
-
-	err := authService.VerifyActionCaptchaIfEnabled(context.Background(), CaptchaProof{TurnstileToken: "captcha-verify-param"}, "127.0.0.1")
-
-	require.NoError(t, err)
-	require.Equal(t, 1, spy.called)
-	require.Equal(t, "captcha-verify-param", spy.lastParam)
-}
-
-func TestAuthServiceVerifyActionCaptchaIfEnabledSkipsWhenOnlyTurnstile(t *testing.T) {
-	spy := &aliyunVerifierSpy{}
-	authService := newAliyunAuthServiceForTest(&config.Config{}, map[string]string{
-		SettingKeyTurnstileEnabled:   "true",
-		SettingKeyTurnstileSecretKey: "secret",
-	}, spy)
-
-	// Turnstile 不扩大既有覆盖：扩展入口不拦截
-	err := authService.VerifyActionCaptchaIfEnabled(context.Background(), CaptchaProof{}, "127.0.0.1")
-
-	require.NoError(t, err)
-	require.Zero(t, spy.called)
 }

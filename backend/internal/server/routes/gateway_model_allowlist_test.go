@@ -35,7 +35,7 @@ func newGatewayRoutesTestRouterWithGroup(group *service.Group) *gin.Engine {
 			c.Next()
 		}),
 		nil,
-		nil,
+
 		nil,
 		nil,
 		nil,

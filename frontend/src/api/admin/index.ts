@@ -16,8 +16,6 @@ import errorPassthroughAPI from './errorPassthrough'
 import apiKeysAPI from './apiKeys'
 import scheduledTestsAPI from './scheduledTests'
 import tlsFingerprintProfileAPI from './tlsFingerprintProfile'
-import adminPaymentAPI from './payment'
-import affiliatesAPI from './affiliates'
 import riskControlAPI from './riskControl'
 import auditAPI from './audit'
 import imageStorageAPI from './imageStorage'
@@ -42,8 +40,6 @@ export const adminAPI = {
   apiKeys: apiKeysAPI,
   scheduledTests: scheduledTestsAPI,
   tlsFingerprintProfiles: tlsFingerprintProfileAPI,
-  payment: adminPaymentAPI,
-  affiliates: affiliatesAPI,
   riskControl: riskControlAPI,
   audit: auditAPI,
   imageStorage: imageStorageAPI,
@@ -66,8 +62,6 @@ export {
   apiKeysAPI,
   scheduledTestsAPI,
   tlsFingerprintProfileAPI,
-  adminPaymentAPI,
-  affiliatesAPI,
   riskControlAPI,
   auditAPI,
   imageStorageAPI,

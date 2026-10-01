@@ -29,9 +29,7 @@ const appStore = vi.hoisted(() => ({
   backendModeEnabled: false,
   publicSettingsLoaded: false,
   cachedPublicSettings: null as null | {
-    payment_enabled?: boolean
     risk_control_enabled?: boolean
-    custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
 }))

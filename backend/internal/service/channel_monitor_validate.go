@@ -14,11 +14,9 @@ import (
 //
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
 var monitorProviders = map[string]struct{}{
-	MonitorProviderOpenAI:      {},
-	MonitorProviderAnthropic:   {},
-	MonitorProviderGemini:      {},
-	MonitorProviderGrok:        {},
-	MonitorProviderAntigravity: {},
+	MonitorProviderOpenAI:    {},
+	MonitorProviderAnthropic: {},
+	MonitorProviderGrok:      {},
 }
 
 // probeCapableProviders 支持探活（probe / quota_probe）的 provider。
@@ -28,7 +26,6 @@ var monitorProviders = map[string]struct{}{
 var probeCapableProviders = map[string]struct{}{
 	MonitorProviderOpenAI:    {},
 	MonitorProviderAnthropic: {},
-	MonitorProviderGemini:    {},
 	MonitorProviderGrok:      {},
 }
 
@@ -208,11 +205,11 @@ func normalizeMonitorPrimaryModel(provider, checkMode, model string) string {
 //   - openai：OAuth（API-Key 型无 usage 通道）
 //   - gemini/grok/antigravity：本地统计/值通道降级，不会永久 error，放行
 func monitorAccountQuotaCapability(account *Account) error {
+	if account == nil || !IsActiveAccountPlatform(account.Platform) {
+		return ErrChannelMonitorAccountNotSupportable
+	}
 	switch account.Platform {
-	case PlatformOpenCodeGo:
-		return ErrChannelMonitorAccountNotSupportable
-	case PlatformKimi, PlatformZhipu, PlatformMiniMax:
-		return ErrChannelMonitorAccountNotSupportable
+
 	case PlatformAnthropic:
 		if account.Type == AccountTypeOAuth || account.Type == AccountTypeSetupToken {
 			return nil

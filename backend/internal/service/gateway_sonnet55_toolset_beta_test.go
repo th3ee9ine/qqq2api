@@ -103,16 +103,4 @@ func TestSonnet55ToolsetBetaFilteredAfterAccountOverrideAndOnVertex(t *testing.T
 	require.False(t, containsBetaToken(vertexHeader, claude.BetaFineGrainedToolStreaming))
 	require.True(t, containsBetaToken(vertexHeader, claude.BetaContext1M))
 
-	nativeAccount := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
-		Credentials: map[string]any{
-			credKeyHeaderOverrideEnabled: true,
-			credKeyHeaderOverrides:       map[string]any{"anthropic-beta": claude.BetaFineGrainedToolStreaming + ",context-1m-2025-08-07"},
-		}}
-	native := &OpenAIGatewayService{}
-	nativeReq, _, err := native.buildNativeAnthropicUpstreamRequest(context.Background(), c, nativeAccount, body,
-		"key", "https://api.anthropic.com/v1/messages")
-	require.NoError(t, err)
-	nativeHeader := getHeaderRaw(nativeReq.Header, "anthropic-beta")
-	require.False(t, containsBetaToken(nativeHeader, claude.BetaFineGrainedToolStreaming))
-	require.True(t, containsBetaToken(nativeHeader, claude.BetaContext1M))
 }

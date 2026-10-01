@@ -37,7 +37,7 @@ func newOpenAI403TestHarness(t *testing.T, accountID int64, counts ...int64) *op
 	repo := &rateLimitAccountRepoStub{}
 	counter := &countingOpenAI403CounterCache{openAI403CounterCacheStub: openAI403CounterCacheStub{counts: counts}}
 	blocker := &runtimeBlockRecorder{}
-	svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	svc := NewRateLimitService(repo, &config.Config{}, nil)
 	svc.SetOpenAI403CounterCache(counter)
 	svc.SetAccountRuntimeBlocker(blocker)
 	return &openAI403TestHarness{
@@ -138,7 +138,7 @@ func TestHandleUpstreamError_HTML403OnOtherPlatformsUnchanged(t *testing.T) {
 	for _, platform := range []string{PlatformAnthropic, PlatformGemini} {
 		t.Run(platform, func(t *testing.T) {
 			repo := &rateLimitAccountRepoStub{}
-			svc := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+			svc := NewRateLimitService(repo, &config.Config{}, nil)
 			account := &Account{ID: 506, Platform: platform, Type: AccountTypeAPIKey}
 
 			shouldDisable := svc.HandleUpstreamError(

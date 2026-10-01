@@ -1,5 +1,7 @@
 # sub2api v0.2.8 选择性同步与平台退役记录
 
+> 历史同步记录：以下内容描述对应日期的合并结果，不代表当前功能。当前版本以 README 的管理员控制台和 Anthropic/OpenAI/Grok 平台清单为准；普通用户业务、支付/订阅、第三方面板登录及数据库备份管理子系统已移除。历史迁移和验证记录保留用于追溯。
+
 日期：2026-09-25
 定制分支：`codex/sync-sub2api-v0.2.8-20260924`
 回滚分支：`backup-before-v0.2.8-sync-20260924`
@@ -37,7 +39,7 @@
 - reasoning effort 计费倍率、Claude Code 客户端版本自动同步，以及简易模式的可选 API Key 消费窗口和可选默认分组创建。
 - TypeSafe 独立内容审计配置档。
 - Codex 积分/付费积分快照、推荐邀请管理；推荐邀请的 HTTP 传输已隔离到 repository adapter，发送不重试，响应错误脱敏，未知发送结果 fail closed。
-- 月度备份归档、独立保留策略、S3/PostgreSQL 服务接线、管理后台页面和 step-up 保护；继承已有 S3 密钥时重新加密保存。
+- 历史上曾同步数据库备份管理子系统；该子系统现已移除，数据库备份由部署工具维护。
 - 滚动日志保留策略和本轮涉及的 OpenAI WS/HTTP、调度、流式、网关、代理、审核、Grok、Codex 及前端交互修复。
 
 本轮继续保留 QQQ2API 的模块路径 `github.com/th3ee9ine/qqq2api`、平台退役边界、日志脱敏、定制调度与权限策略；没有重新引入 OpenCode Go、Ollama Cloud 专属集成、Kimi、Zhipu 或 MiniMax，也没有直接快进上游分支或使用批量 `--theirs` 解决冲突。

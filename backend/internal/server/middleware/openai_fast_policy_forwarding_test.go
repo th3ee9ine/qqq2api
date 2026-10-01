@@ -87,7 +87,7 @@ func TestAPIKeyAuthForwardsSystemWideOpenAIFastPolicyIgnoringLegacyUserIDs(t *te
 	}
 
 	router := gin.New()
-	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.Use(gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, cfg)))
 	router.POST("/v1/responses", func(c *gin.Context) {
 		body, readErr := io.ReadAll(c.Request.Body)
 		if readErr != nil {

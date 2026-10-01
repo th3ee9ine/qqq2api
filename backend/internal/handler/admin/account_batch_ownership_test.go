@@ -41,7 +41,7 @@ func TestRequireExplicitAccountOwnershipRejectsMixedIDsAtomically(t *testing.T) 
 		stubAdminService: newStubAdminService(),
 		accountsByID:     map[int64]*service.Account{owned.ID: owned},
 	}
-	h := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -67,7 +67,7 @@ func TestRequireExplicitAccountOwnershipAcceptsOwnedIDsAndNamespacesStatsCache(t
 		stubAdminService: newStubAdminService(),
 		accountsByID:     map[int64]*service.Account{owned.ID: owned},
 	}
-	h := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	h := NewAccountHandler(svc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

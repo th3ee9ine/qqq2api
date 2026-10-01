@@ -51,7 +51,6 @@ vi.mock('@/api/admin', () => ({
     accounts: {
       create: createAccountMock,
       probeUpstreamBilling: probeUpstreamBillingMock,
-      checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
       exchangeCode: exchangeCodeMock,
@@ -347,8 +346,8 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     const input = wrapper.get<HTMLInputElement>('input[type="datetime-local"]')
 
     for (const [label, expected] of [
-      ['payment.oneMonth', '2026-02-28T12:34'],
-      ['payment.oneYear', '2027-01-31T12:34'],
+      ['common.oneMonth', '2026-02-28T12:34'],
+      ['common.oneYear', '2027-01-31T12:34'],
     ]) {
       const button = wrapper.findAll('button').find((candidate) => candidate.text() === label)!
       expect(button.attributes('type')).toBe('button')
@@ -369,7 +368,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     await selectButtonByText(wrapper, 'API Key')
     await wrapper.get('form#create-account-form input[type="text"]').setValue('custom expiry account')
     await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
-    await selectButtonByText(wrapper, 'payment.oneMonth')
+    await selectButtonByText(wrapper, 'common.oneMonth')
     await wrapper.get('input[type="datetime-local"]').setValue('2030-04-15T09:20')
 
     await wrapper.get('form#create-account-form').trigger('submit.prevent')

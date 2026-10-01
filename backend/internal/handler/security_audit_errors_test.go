@@ -109,32 +109,6 @@ func TestPromptGuardOpenAIAndClaudeErrorEnvelopesGolden(t *testing.T) {
 	}
 }
 
-func TestPromptGuardGeminiErrorEnvelopeGolden(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	for _, kind := range []securityaudit.DecisionKind{securityaudit.DecisionBlock, securityaudit.DecisionUnavailable, securityaudit.DecisionInvalid} {
-		decision := promptGuardDecision(kind)
-		c, recorder := securityAuditErrorTestContext(t)
-		googleSecurityAuditError(c, decision)
-		require.Equal(t, decision.HTTPStatus, recorder.Code)
-		payload := decodeErrorJSON(t, recorder)
-		errorObject := requireObject(t, payload["error"])
-		require.Equal(t, float64(decision.HTTPStatus), errorObject["code"], "Gemini code must remain numeric")
-		if decision.HTTPStatus == http.StatusForbidden {
-			require.Equal(t, "PERMISSION_DENIED", errorObject["status"])
-		} else {
-			require.Equal(t, "UNAVAILABLE", errorObject["status"])
-		}
-		details := requireArray(t, errorObject["details"])
-		require.Len(t, details, 1)
-		errorInfo := requireObject(t, details[0])
-		require.Equal(t, "type.googleapis.com/google.rpc.ErrorInfo", errorInfo["@type"])
-		require.Equal(t, decision.ErrorCode, errorInfo["reason"])
-		require.Equal(t, "sub2api.securityaudit", errorInfo["domain"])
-		metadata := requireObject(t, errorInfo["metadata"])
-		require.Equal(t, map[string]any{"request_id": "request-error-golden"}, metadata)
-	}
-}
-
 func TestPromptGuardWebSocketCloseMappingGolden(t *testing.T) {
 	require.Equal(t, int64(4403), int64(securityAuditWSCloseStatus(promptGuardDecision(securityaudit.DecisionBlock))))
 	require.Equal(t, securityaudit.ErrorCodeBlocked, securityAuditWSCloseReason(promptGuardDecision(securityaudit.DecisionBlock)))

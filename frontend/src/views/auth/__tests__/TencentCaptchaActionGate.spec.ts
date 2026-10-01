@@ -83,10 +83,6 @@ describe('Tencent captcha action gate', () => {
       tencent_captcha_enabled: true,
       tencent_captcha_app_id: 'tencent-app-id',
       backend_mode_enabled: false,
-      password_reset_enabled: false,
-      passkey_enabled: false,
-      github_oauth_enabled: false,
-      google_oauth_enabled: false
     })
     loginMock.mockResolvedValue({})
     verifyActionMock.mockResolvedValue({ token: 'ticket-1', randstr: '@rand-1' })

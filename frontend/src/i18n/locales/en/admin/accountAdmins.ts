@@ -1,5 +1,6 @@
 export default {
   accountAdmins: {
+    roles: { admin: 'Administrator', account_admin: 'Account administrator' },
     eyebrow: 'Administration',
     title: 'Account Administrators',
     description: 'Manage restricted administrators who can operate assigned accounts.',

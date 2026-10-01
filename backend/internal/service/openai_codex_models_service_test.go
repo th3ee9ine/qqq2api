@@ -1027,10 +1027,7 @@ func TestBuildCodexModelsManifestForGroupLoadsAccountsOnce(t *testing.T) {
 	require.NotNil(t, repo.groupID)
 	require.Equal(t, groupID, *repo.groupID)
 	require.False(t, repo.includeGrouped)
-	require.Contains(t, repo.platforms, PlatformOpenAI)
-	require.Contains(t, repo.platforms, PlatformGrok)
-	require.Contains(t, repo.platforms, PlatformMiniMax)
-	require.NotContains(t, repo.platforms, PlatformComposite)
+	require.ElementsMatch(t, []string{PlatformAnthropic, PlatformOpenAI, PlatformGrok}, repo.platforms)
 }
 
 func TestBuildCodexModelsManifestForGroupUsesFallbackWhenTextOnlyPlatformHasNoSnapshot(t *testing.T) {
@@ -3210,7 +3207,7 @@ func (r *codexModelsAccountStateRepo) SetRateLimited(_ context.Context, _ int64,
 }
 
 func newCodexModels401TestService(repo AccountRepository) *OpenAIGatewayService {
-	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	rateLimitService := NewRateLimitService(repo, &config.Config{}, nil)
 	s := &OpenAIGatewayService{rateLimitService: rateLimitService}
 	rateLimitService.SetAccountRuntimeBlocker(s)
 	return s
@@ -3334,7 +3331,7 @@ func TestFetchCodexModelsManifestAPIKey401KeepsNoFailoverAndNoDisable(t *testing
 
 	repo := &codexModelsAccountStateRepo{}
 	s := newCodexModelsAPIKeyTestService(upstream)
-	s.rateLimitService = NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	s.rateLimitService = NewRateLimitService(repo, &config.Config{}, nil)
 
 	_, err := s.FetchCodexModelsManifest(
 		context.Background(),

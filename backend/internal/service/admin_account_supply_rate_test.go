@@ -54,7 +54,7 @@ func (s *supplyRateUserRepoStub) Update(ctx context.Context, user *User, fields 
 	return nil
 }
 
-func (s *supplyRateUserRepoStub) WithUserProfileIdentityTx(ctx context.Context, fn func(context.Context) error) error {
+func (s *supplyRateUserRepoStub) WithUserAdminTx(ctx context.Context, fn func(context.Context) error) error {
 	txCtx := context.WithValue(ctx, supplyRateTxContextKey{}, true)
 	if err := fn(txCtx); err != nil {
 		s.rolledBack = true

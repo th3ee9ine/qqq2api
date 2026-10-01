@@ -12,7 +12,7 @@
 
 <a href="https://trendshift.io/repositories/21823" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21823" alt="th3ee9ine%2Fqqq2api | Trendshift" width="250" height="55"/></a>
 
-**AI API Gateway Platform for Subscription Quota Distribution**
+**Administrator Console and Multi-Account AI API Gateway**
 
 English | [中文](README_CN.md) | [日本語](README_JA.md)
 
@@ -172,20 +172,20 @@ Please read the following carefully before using this project:
 
 ## Overview
 
-QQQ2API is an AI API gateway platform designed to distribute and manage API quotas from AI product subscriptions. Users can access upstream AI services through platform-generated API Keys, while the platform handles authentication, billing, load balancing, and request forwarding.
+QQQ2API is an administrator console and multi-account AI API gateway. It manages Anthropic, OpenAI, and Grok upstream accounts, distributes system API keys, and handles authentication, metering, scheduling, and protocol forwarding.
 
 ## Features
 
-- **Multi-Account Management** - Support multiple upstream account types (OAuth, API Key)
-- **API Key Distribution** - Generate and manage API Keys for users
-- **Precise Billing** - Token-level usage tracking and cost calculation
-- **Smart Scheduling** - Intelligent account selection with sticky sessions
-- **Concurrency Control** - Per-user and per-account concurrency limits
-- **Rate Limiting** - Configurable request and token rate limits
-- **Built-in Payment System** - Supports EasyPay, Alipay, WeChat Pay, and Stripe for user self-service top-up, no separate payment service needed ([Configuration Guide](docs/PAYMENT.md))
-- **Admin Dashboard** - Web interface for monitoring and management
-- **Composite Groups** - Admin routing layer that resolves requested models to concrete providers for multi-provider groups ([Operator Guide](docs/COMPOSITE_GROUPS.md))
-- **External System Integration** - Embed external systems (e.g. ticketing) via iframe to extend the admin dashboard
+- **Upstream accounts** — Manage Anthropic, OpenAI, and Grok accounts, supported OAuth/API Key credentials, proxies, quotas, health checks, and automatic credential refresh.
+- **API keys and groups** — Create system API keys with quota, expiry, concurrency, and IP controls; configure group model mappings, pricing, and Composite routing ([Operator Guide](docs/COMPOSITE_GROUPS.md)).
+- **AI gateway** — Anthropic Messages, OpenAI Responses/Chat Completions, embeddings, image generation/editing, and platform-specific search, video, and voice endpoints.
+- **Scheduling and reliability** — Sticky sessions, account failover, concurrency queues, rate-limit cooldowns, and HTTP/SSE/WebSocket forwarding.
+- **Usage and operations** — Token metering, cost calculation, request diagnostics, account testing, logs, audit records, monitoring, and alerts.
+- **Administrator access** — Password and TOTP login for administrators, with restricted account administrators for delegated account/proxy operations.
+- **Content controls** — Content moderation, prompt auditing, local jailbreak rules, and gateway admission policies.
+- **Image storage** — S3-compatible storage for asynchronous OpenAI/Grok image tasks ([Guide](docs/ASYNC_IMAGE_TASKS.md)). Database backups are managed through deployment tooling.
+
+The panel has no end-user registration, third-party panel login, self-service profile, payment, purchase, subscription, redemption, referral, or announcement workflow. Upstream account OAuth and upstream subscription information remain part of account management.
 
 ## Ecosystem
 
@@ -193,7 +193,6 @@ Community projects that extend or integrate with QQQ2API:
 
 | Project | Description | Features |
 |---------|-------------|----------|
-| ~~[Sub2ApiPay](https://github.com/touwaeriol/sub2apipay)~~ | ~~Self-service payment system~~ | **Now Built-in** — Payment is now integrated into QQQ2API, no separate deployment needed. See [Payment Configuration Guide](docs/PAYMENT.md) |
 | [sub2api-mobile](https://github.com/ckken/sub2api-mobile) | Mobile admin console | Cross-platform app (iOS/Android/Web) for user management, account management, monitoring dashboard, and multi-backend switching; built with Expo + React Native |
 
 ## Tech Stack

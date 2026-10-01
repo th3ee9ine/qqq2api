@@ -19,7 +19,7 @@ func TestGetReliabilityStatusReturnsTurnStateOnlyNoStoreProjection(t *testing.T)
 	cfg := &config.Config{Ops: config.OpsConfig{Enabled: false}}
 	cfg.Gateway.OpenAIWS.Enabled = true
 	cfg.Gateway.OpenAIWS.OAuthEnabled = true
-	svc := service.NewOpsService(nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewOpsService(nil, nil, cfg, nil, nil, nil, nil, nil, nil)
 	handler := NewOpsHandler(svc)
 	router := gin.New()
 	router.GET("/status", handler.GetReliabilityStatus)
@@ -85,7 +85,7 @@ func TestWriteReliabilityStatusErrorReturnsGatewayTimeoutForInternalDeadline(t *
 func TestCodexTurnStateRuntimeSettingsHandlersDefaultAndPersistCompleteSnapshot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newTestSettingRepo()
-	svc := service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil)
 	handler := NewOpsHandler(svc)
 	router := gin.New()
 	router.GET("/turn-state-settings", handler.GetCodexTurnStateRuntimeSettings)
@@ -126,7 +126,7 @@ func TestCodexTurnStateRuntimeSettingsHandlersDefaultAndPersistCompleteSnapshot(
 func TestCodexTurnStateRuntimeSettingsHandlersUpdateHarvestPolicy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newTestSettingRepo()
-	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil))
 	router := gin.New()
 	router.GET("/turn-state-settings", handler.GetCodexTurnStateRuntimeSettings)
 	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
@@ -168,7 +168,7 @@ func TestCodexTurnStateRuntimeSettingsHandlersNeverEchoProxyCredentials(t *testi
 	repo.values[service.SettingKeyCodexTurnStateProxyPool] = `[
   "http://collector-user:collector-pass@proxy.example.com:8080"
 ]`
-	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil))
 	router := gin.New()
 	router.GET("/turn-state-settings", handler.GetCodexTurnStateRuntimeSettings)
 	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
@@ -193,7 +193,7 @@ func TestCodexTurnStateRuntimeSettingsHandlersNeverEchoProxyCredentials(t *testi
 
 func TestUpdateCodexTurnStateRuntimeSettingsRequiresBothBooleanFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	handler := NewOpsHandler(service.NewOpsService(nil, newTestSettingRepo(), nil, nil, nil, nil, nil, nil, nil, nil, nil))
+	handler := NewOpsHandler(service.NewOpsService(nil, newTestSettingRepo(), nil, nil, nil, nil, nil, nil, nil))
 	router := gin.New()
 	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
 
@@ -213,7 +213,7 @@ func TestUpdateCodexTurnStateRuntimeSettingsRequiresBothBooleanFields(t *testing
 func TestUpdateCodexTurnStateRuntimeSettingsProxyPoolValidationAndClear(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := newTestSettingRepo()
-	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil, nil, nil))
+	handler := NewOpsHandler(service.NewOpsService(nil, repo, nil, nil, nil, nil, nil, nil, nil))
 	router := gin.New()
 	router.PUT("/turn-state-settings", handler.UpdateCodexTurnStateRuntimeSettings)
 

@@ -626,9 +626,7 @@ func (s *UpstreamBillingProbeService) probeLoadedAccount(ctx context.Context, ac
 		return s.persistProbeFailure(ctx, account, intervalMinutes, now, 0, "missing_api_key", 0)
 	}
 	baseURL := account.GetCredential("base_url")
-	if account.IsCNProvider() && account.IsAdaptiveAPIProtocol() {
-		baseURL = account.GetCNProtocolBaseURL(APIProtocolChatCompletions)
-	}
+
 	if upstreamBillingProbeTargetIsOfficialAPI(baseURL) {
 		// base_url 为空或指向官方 API 根域（前端创建时会把空值
 		// 填成官方默认域，且提供官方区域预设）⇒必无

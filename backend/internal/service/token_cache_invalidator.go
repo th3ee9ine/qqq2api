@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"strconv"
-	"strings"
 )
 
 type TokenCacheInvalidator interface {
@@ -33,19 +32,7 @@ func (c *CompositeTokenCacheInvalidator) InvalidateToken(ctx context.Context, ac
 	accountIDKey := "account:" + strconv.FormatInt(account.ID, 10)
 
 	switch account.Platform {
-	case PlatformGemini:
-		// Gemini 可能有两种缓存键：project_id 或 account_id
-		// 首次获取 token 时可能没有 project_id，之后自动检测到 project_id 后会使用新 key
-		// 刷新时需要同时删除两种可能的 key，确保不会遗留旧缓存
-		keysToDelete = append(keysToDelete, GeminiTokenCacheKey(account))
-		keysToDelete = append(keysToDelete, "gemini:"+accountIDKey)
-	case PlatformAntigravity:
-		// Antigravity 可能有两种缓存键：旧版基于 project_id，新版基于 account_id
-		// 显式清理旧版可能残留的 project 缓存键，同时清理当前基于 account 的缓存键
-		if projectID := strings.TrimSpace(account.GetCredential("project_id")); projectID != "" {
-			keysToDelete = append(keysToDelete, "ag:"+projectID)
-		}
-		keysToDelete = append(keysToDelete, AntigravityTokenCacheKey(account))
+
 	case PlatformOpenAI:
 		keysToDelete = append(keysToDelete, OpenAITokenCacheKey(account))
 	case PlatformGrok:

@@ -104,7 +104,6 @@ func provideCleanup(
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	pricing *service.PricingService,
-	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	oauth *service.OAuthService,
@@ -140,7 +139,6 @@ func provideCleanup(
 		usageCleanup,
 		idempotencyCleanup,
 		pricing,
-		emailQueue,
 		billingCache,
 		usageRecordWorkerPool,
 		oauth,
@@ -179,7 +177,6 @@ func provideCleanupWithSessionCleanup(
 	usageCleanup *service.UsageCleanupService,
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	pricing *service.PricingService,
-	emailQueue *service.EmailQueueService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	oauth *service.OAuthService,
@@ -340,10 +337,6 @@ func provideCleanupWithSessionCleanup(
 			}},
 			{"PricingService", func() error {
 				pricing.Stop()
-				return nil
-			}},
-			{"EmailQueueService", func() error {
-				emailQueue.Stop()
 				return nil
 			}},
 			{"BillingCacheService", func() error {

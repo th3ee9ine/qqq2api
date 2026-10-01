@@ -12,23 +12,17 @@ func firstNonEmpty(values ...string) string {
 }
 
 type SystemSettings struct {
-	RegistrationEnabled                 bool
-	EmailVerifyEnabled                  bool
-	RegistrationEmailSuffixWhitelist    []string
-	RegistrationEmailDomainQuotaEnabled bool // 白名单非空时放行非白名单域名限量注册（默认关闭）
-	PromoCodeEnabled                    bool
-	PasswordResetEnabled                bool
-	FrontendURL                         string
-	InvitationCodeEnabled               bool
-	TotpEnabled                         bool // TOTP 双因素认证
-	PasskeyEnabled                      bool // Passkey 登录
-	SessionBindingEnabled               bool // 会话 IP/UA 绑定（变更即失效）
-	StepUpEnabled                       bool // 敏感操作 step-up 2FA 门控
-	AuditLogRetentionDays               int  // 审计日志保留天数（<=0 永久保留）
-	LoginAgreementEnabled               bool
-	LoginAgreementMode                  string
-	LoginAgreementUpdatedAt             string
-	LoginAgreementDocuments             []LoginAgreementDocument
+	FrontendURL string
+
+	TotpEnabled bool // TOTP 双因素认证
+
+	SessionBindingEnabled   bool // 会话 IP/UA 绑定（变更即失效）
+	StepUpEnabled           bool // 敏感操作 step-up 2FA 门控
+	AuditLogRetentionDays   int  // 审计日志保留天数（<=0 永久保留）
+	LoginAgreementEnabled   bool
+	LoginAgreementMode      string
+	LoginAgreementUpdatedAt string
+	LoginAgreementDocuments []LoginAgreementDocument
 
 	SMTPHost               string
 	SMTPPort               int
@@ -62,134 +56,30 @@ type SystemSettings struct {
 	APIKeyACLTrustForwardedIP              bool
 	ForwardedClientIPHeaders               []string
 
-	// LinuxDo Connect OAuth 登录
-	LinuxDoConnectEnabled                bool
-	LinuxDoConnectClientID               string
-	LinuxDoConnectClientSecret           string
-	LinuxDoConnectClientSecretConfigured bool
-	LinuxDoConnectRedirectURL            string
+	SiteName            string
+	SiteLogo            string
+	SiteSubtitle        string
+	APIBaseURL          string
+	ContactInfo         string
+	DocURL              string
+	HomeContent         string
+	CompactHomeEnabled  bool
+	HideCcsImportButton bool
 
-	// DingTalk Connect OAuth 登录
-	DingTalkConnectEnabled                 bool
-	DingTalkConnectClientID                string
-	DingTalkConnectClientSecret            string
-	DingTalkConnectClientSecretConfigured  bool
-	DingTalkConnectRedirectURL             string
-	DingTalkConnectCorpRestrictionPolicy   string
-	DingTalkConnectInternalCorpID          string
-	DingTalkConnectBypassRegistration      bool
-	DingTalkConnectSyncCorpEmail           bool
-	DingTalkConnectSyncDisplayName         bool
-	DingTalkConnectSyncDept                bool
-	DingTalkConnectSyncCorpEmailAttrKey    string
-	DingTalkConnectSyncDisplayNameAttrKey  string
-	DingTalkConnectSyncDeptAttrKey         string
-	DingTalkConnectSyncCorpEmailAttrName   string
-	DingTalkConnectSyncDisplayNameAttrName string
-	DingTalkConnectSyncDeptAttrName        string
+	TableDefaultPageSize int
+	TablePageSizeOptions []int
 
-	// WeChat Connect OAuth 登录
-	WeChatConnectEnabled                   bool
-	WeChatConnectAppID                     string
-	WeChatConnectAppSecret                 string
-	WeChatConnectAppSecretConfigured       bool
-	WeChatConnectOpenAppID                 string
-	WeChatConnectOpenAppSecret             string
-	WeChatConnectOpenAppSecretConfigured   bool
-	WeChatConnectMPAppID                   string
-	WeChatConnectMPAppSecret               string
-	WeChatConnectMPAppSecretConfigured     bool
-	WeChatConnectMobileAppID               string
-	WeChatConnectMobileAppSecret           string
-	WeChatConnectMobileAppSecretConfigured bool
-	WeChatConnectOpenEnabled               bool
-	WeChatConnectMPEnabled                 bool
-	WeChatConnectMobileEnabled             bool
-	WeChatConnectMode                      string
-	WeChatConnectScopes                    string
-	WeChatConnectRedirectURL               string
-	WeChatConnectFrontendRedirectURL       string
+	CustomEndpoints string // JSON array of custom endpoints
 
-	// Generic OIDC OAuth 登录
-	OIDCConnectEnabled                bool
-	OIDCConnectProviderName           string
-	OIDCConnectClientID               string
-	OIDCConnectClientSecret           string
-	OIDCConnectClientSecretConfigured bool
-	OIDCConnectIssuerURL              string
-	OIDCConnectDiscoveryURL           string
-	OIDCConnectAuthorizeURL           string
-	OIDCConnectTokenURL               string
-	OIDCConnectUserInfoURL            string
-	OIDCConnectJWKSURL                string
-	OIDCConnectScopes                 string
-	OIDCConnectRedirectURL            string
-	OIDCConnectFrontendRedirectURL    string
-	OIDCConnectTokenAuthMethod        string
-	OIDCConnectUsePKCE                bool
-	OIDCConnectValidateIDToken        bool
-	OIDCConnectAllowedSigningAlgs     string
-	OIDCConnectClockSkewSeconds       int
-	OIDCConnectRequireEmailVerified   bool
-	OIDCConnectUserInfoEmailPath      string
-	OIDCConnectUserInfoIDPath         string
-	OIDCConnectUserInfoUsernamePath   string
-
-	// GitHub / Google 邮箱快捷登录
-	GitHubOAuthEnabled                bool
-	GitHubOAuthClientID               string
-	GitHubOAuthClientSecret           string
-	GitHubOAuthClientSecretConfigured bool
-	GitHubOAuthRedirectURL            string
-	GitHubOAuthFrontendRedirectURL    string
-	GoogleOAuthEnabled                bool
-	GoogleOAuthClientID               string
-	GoogleOAuthClientSecret           string
-	GoogleOAuthClientSecretConfigured bool
-	GoogleOAuthRedirectURL            string
-	GoogleOAuthFrontendRedirectURL    string
-
-	SiteName                    string
-	SiteLogo                    string
-	SiteSubtitle                string
-	APIBaseURL                  string
-	ContactInfo                 string
-	DocURL                      string
-	HomeContent                 string
-	CompactHomeEnabled          bool
-	HideCcsImportButton         bool
-	PurchaseSubscriptionEnabled bool
-	PurchaseSubscriptionURL     string
-	TableDefaultPageSize        int
-	TablePageSizeOptions        []int
-	CustomMenuItems             string // JSON array of custom menu items
-	CustomEndpoints             string // JSON array of custom endpoints
-
-	DefaultConcurrency           int
-	DefaultBalance               float64
-	RiskControlEnabled           bool
-	CyberSessionBlockEnabled     bool
-	CyberPolicyUserAllowlist     string
-	CyberSessionBlockTTLSeconds  int
-	AffiliateEnabled             bool
-	AffiliateRebateRate          float64
-	AffiliateRebateFreezeHours   int
-	AffiliateRebateDurationDays  int
-	AffiliateRebatePerInviteeCap float64
-	AdminRechargeRebateEnabled   bool
-	DefaultUserRPMLimit          int
-	DefaultSubscriptions         []DefaultSubscriptionSetting
+	RiskControlEnabled          bool
+	CyberSessionBlockEnabled    bool
+	CyberPolicyUserAllowlist    string
+	CyberSessionBlockTTLSeconds int
 
 	// Model fallback configuration
-	EnableModelFallback      bool   `json:"enable_model_fallback"`
-	FallbackModelAnthropic   string `json:"fallback_model_anthropic"`
-	FallbackModelOpenAI      string `json:"fallback_model_openai"`
-	FallbackModelGemini      string `json:"-"`
-	FallbackModelAntigravity string `json:"-"`
-
-	// Historical Gemini identity-patch fields are retained for stored-setting compatibility.
-	EnableIdentityPatch bool   `json:"-"`
-	IdentityPatchPrompt string `json:"-"`
+	EnableModelFallback    bool   `json:"enable_model_fallback"`
+	FallbackModelAnthropic string `json:"fallback_model_anthropic"`
+	FallbackModelOpenAI    string `json:"fallback_model_openai"`
 
 	// Ops monitoring (vNext)
 	OpsMonitoringEnabled         bool
@@ -203,7 +93,6 @@ type SystemSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput         bool   `json:"channel_monitor_hide_throughput"`
 	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
-	ChannelMonitorHideUserRanking        bool   `json:"channel_monitor_hide_user_ranking"`
 
 	// Grok model mapping policy (admin settings; empty mapping falls back to these).
 	GrokDefaultTextModel           string `json:"grok_default_text_model"`
@@ -212,12 +101,6 @@ type SystemSettings struct {
 
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
-
-	// Subscription feature switch: gates the whole user-facing subscription surface
-	// (sidebar entries, purchase-page subscription tab, header progress badge,
-	// usage billing-type filter, /subscriptions route). Pairs with PaymentBalanceDisabled
-	// to form the admin-facing "site billing mode" selector.
-	SubscriptionEnabled bool `json:"subscription_enabled"`
 
 	// Model Plaza feature (public group/model pricing showcase)
 	ModelPlazaEnabled       bool   `json:"model_plaza_enabled"`
@@ -246,7 +129,7 @@ type SystemSettings struct {
 	EnableAnthropicCacheTTL1hInjection     bool   // 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
 	EnableClientDatelineNormalization      bool   // 是否对 Anthropic OAuth/SetupToken 请求体做客户端 dateline 归一化（默认 true）
 	RewriteMessageCacheControl             bool   // 是否改写 messages[*].content[*].cache_control（默认 false）
-	AntigravityUserAgentVersion            string // Antigravity 上游 User-Agent 版本号；空值使用配置/默认值
+
 	OpenAICodexOriginator                  string // OpenAI Codex 上游 Originator 覆写；空值从最终 User-Agent 推导
 	OpenAICodexUserAgent                   string // OpenAI Codex 上游完整 User-Agent；首段 engine 由统一身份版本重建，尾部 app build 独立
 	OpenAICodexClientVersion               string // Codex 统一身份版本；auto 热修复下限或 pinned 精确值
@@ -268,12 +151,6 @@ type SystemSettings struct {
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool // 是否启用 web search 模拟
-
-	// Payment visible method routing
-	PaymentVisibleMethodAlipaySource  string
-	PaymentVisibleMethodWxpaySource   string
-	PaymentVisibleMethodAlipayEnabled bool
-	PaymentVisibleMethodWxpayEnabled  bool
 
 	// OpenAI 账号调度
 	OpenAILowUpstreamRatePriorityEnabled                   bool
@@ -304,20 +181,9 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse string
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string
 
-	// 余额不足提醒
-	BalanceLowNotifyEnabled     bool
-	BalanceLowNotifyThreshold   float64
-	BalanceLowNotifyRechargeURL string
-
-	// 订阅到期提醒
-	SubscriptionExpiryNotifyEnabled bool
-
 	// 账号限额通知
 	AccountQuotaNotifyEnabled bool
 	AccountQuotaNotifyEmails  []NotifyEmailEntry
-
-	// 系统全局默认平台配额（key = platform，nil/缺省 = 不限制）
-	DefaultPlatformQuotas map[string]*DefaultPlatformQuotaSetting `json:"default_platform_quotas"`
 
 	// 系统全局账号自动停调阈值（key = platform，100 = disabled）
 	AccountSchedulingThresholds map[string]int `json:"account_scheduling_thresholds"`
@@ -326,72 +192,43 @@ type SystemSettings struct {
 	AllowUserViewErrorRequests bool
 }
 
-type DefaultSubscriptionSetting struct {
-	GroupID      int64 `json:"group_id"`
-	ValidityDays int   `json:"validity_days"`
-}
-
 type PublicSettings struct {
-	RegistrationEnabled                 bool
-	EmailVerifyEnabled                  bool
-	ForceEmailOnThirdPartySignup        bool
-	RegistrationEmailSuffixWhitelist    []string
-	RegistrationEmailDomainQuotaEnabled bool
-	PromoCodeEnabled                    bool
-	PasswordResetEnabled                bool
-	InvitationCodeEnabled               bool
-	TotpEnabled                         bool // TOTP 双因素认证
-	PasskeyEnabled                      bool
-	LoginAgreementEnabled               bool
-	LoginAgreementMode                  string
-	LoginAgreementUpdatedAt             string
-	LoginAgreementRevision              string
-	LoginAgreementDocuments             []LoginAgreementDocument
-	TurnstileEnabled                    bool
-	TurnstileSiteKey                    string
-	TencentCaptchaEnabled               bool
-	TencentCaptchaAppID                 string
-	TencentCaptchaRegion                string
-	AliyunCaptchaEnabled                bool
-	AliyunCaptchaSceneID                string
-	AliyunCaptchaPrefix                 string
-	AliyunCaptchaRegion                 string
-	SiteName                            string
-	SiteLogo                            string
-	SiteSubtitle                        string
-	APIBaseURL                          string
-	ContactInfo                         string
-	DocURL                              string
-	HomeContent                         string
-	CompactHomeEnabled                  bool
-	HideCcsImportButton                 bool
+	TotpEnabled bool // TOTP 双因素认证
 
-	PurchaseSubscriptionEnabled bool
-	PurchaseSubscriptionURL     string
-	TableDefaultPageSize        int
-	TablePageSizeOptions        []int
-	CustomMenuItems             string // JSON array of custom menu items
-	CustomEndpoints             string // JSON array of custom endpoints
+	LoginAgreementEnabled   bool
+	LoginAgreementMode      string
+	LoginAgreementUpdatedAt string
+	LoginAgreementRevision  string
+	LoginAgreementDocuments []LoginAgreementDocument
+	TurnstileEnabled        bool
+	TurnstileSiteKey        string
+	TencentCaptchaEnabled   bool
+	TencentCaptchaAppID     string
+	TencentCaptchaRegion    string
+	AliyunCaptchaEnabled    bool
+	AliyunCaptchaSceneID    string
+	AliyunCaptchaPrefix     string
+	AliyunCaptchaRegion     string
+	SiteName                string
+	SiteLogo                string
+	SiteSubtitle            string
+	APIBaseURL              string
+	ContactInfo             string
+	DocURL                  string
+	HomeContent             string
+	CompactHomeEnabled      bool
+	HideCcsImportButton     bool
 
-	LinuxDoOAuthEnabled      bool
-	DingTalkOAuthEnabled     bool
-	WeChatOAuthEnabled       bool
-	WeChatOAuthOpenEnabled   bool
-	WeChatOAuthMPEnabled     bool
-	WeChatOAuthMobileEnabled bool
-	BackendModeEnabled       bool
-	PaymentEnabled           bool
-	PaymentBalanceDisabled   bool
-	OIDCOAuthEnabled         bool
-	OIDCOAuthProviderName    string
-	GitHubOAuthEnabled       bool
-	GoogleOAuthEnabled       bool
-	Version                  string
+	TableDefaultPageSize int
+	TablePageSizeOptions []int
 
-	BalanceLowNotifyEnabled     bool
-	AccountQuotaNotifyEnabled   bool
-	BalanceLowNotifyThreshold   float64
-	BalanceLowNotifyRechargeURL string
+	CustomEndpoints string // JSON array of custom endpoints
+
+	BackendModeEnabled bool
+
+	Version string
+
+	AccountQuotaNotifyEnabled bool
 
 	// Channel Monitor feature
 	ChannelMonitorEnabled                bool   `json:"channel_monitor_enabled"`
@@ -399,7 +236,6 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput         bool   `json:"channel_monitor_hide_throughput"`
 	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
-	ChannelMonitorHideUserRanking        bool   `json:"channel_monitor_hide_user_ranking"`
 
 	// Grok model mapping policy (admin settings).
 	GrokDefaultTextModel           string `json:"grok_default_text_model"`
@@ -409,16 +245,10 @@ type PublicSettings struct {
 	// Available Channels feature (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
-	// Subscription feature switch (see SystemSettings.SubscriptionEnabled)
-	SubscriptionEnabled bool `json:"subscription_enabled"`
-
 	// Model Plaza feature (public group/model pricing showcase)
 	ModelPlazaEnabled       bool `json:"model_plaza_enabled"`
 	ModelPlazaRequireAuth   bool `json:"model_plaza_require_auth"`
 	PluginManagementEnabled bool `json:"plugin_management_enabled"`
-
-	// Affiliate (邀请返利) feature toggle
-	AffiliateEnabled bool `json:"affiliate_enabled"`
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
@@ -431,66 +261,6 @@ type LoginAgreementDocument struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	ContentMD string `json:"content_md"`
-}
-
-type WeChatConnectOAuthConfig struct {
-	Enabled             bool
-	LegacyAppID         string
-	LegacyAppSecret     string
-	OpenAppID           string
-	OpenAppSecret       string
-	MPAppID             string
-	MPAppSecret         string
-	MobileAppID         string
-	MobileAppSecret     string
-	OpenEnabled         bool
-	MPEnabled           bool
-	MobileEnabled       bool
-	Mode                string
-	Scopes              string
-	RedirectURL         string
-	FrontendRedirectURL string
-}
-
-func (cfg WeChatConnectOAuthConfig) SupportsMode(mode string) bool {
-	switch normalizeWeChatConnectModeSetting(mode) {
-	case "mp":
-		return cfg.MPEnabled
-	case "mobile":
-		return cfg.MobileEnabled
-	default:
-		return cfg.OpenEnabled
-	}
-}
-
-func (cfg WeChatConnectOAuthConfig) ScopeForMode(mode string) string {
-	switch normalizeWeChatConnectModeSetting(mode) {
-	case "mp":
-		return normalizeWeChatConnectScopeSetting(cfg.Scopes, "mp")
-	case "mobile":
-		return ""
-	}
-	return defaultWeChatConnectScopeForMode("open")
-}
-
-func (cfg WeChatConnectOAuthConfig) AppIDForMode(mode string) string {
-	switch normalizeWeChatConnectModeSetting(mode) {
-	case "mp":
-		return strings.TrimSpace(firstNonEmpty(cfg.MPAppID, cfg.LegacyAppID))
-	case "mobile":
-		return strings.TrimSpace(firstNonEmpty(cfg.MobileAppID, cfg.LegacyAppID))
-	}
-	return strings.TrimSpace(firstNonEmpty(cfg.OpenAppID, cfg.LegacyAppID))
-}
-
-func (cfg WeChatConnectOAuthConfig) AppSecretForMode(mode string) string {
-	switch normalizeWeChatConnectModeSetting(mode) {
-	case "mp":
-		return strings.TrimSpace(firstNonEmpty(cfg.MPAppSecret, cfg.LegacyAppSecret))
-	case "mobile":
-		return strings.TrimSpace(firstNonEmpty(cfg.MobileAppSecret, cfg.LegacyAppSecret))
-	}
-	return strings.TrimSpace(firstNonEmpty(cfg.OpenAppSecret, cfg.LegacyAppSecret))
 }
 
 // StreamTimeoutSettings 流超时处理配置（仅控制超时后的处理方式，超时判定由网关配置控制）

@@ -21,7 +21,7 @@ type modelNotFoundRateLimitCall struct {
 }
 
 type modelNotFoundAccountRepoStub struct {
-	mockAccountRepoForGemini
+	mockGatewayAccountRepo
 	tempCalls           int
 	modelRateLimitCalls []modelNotFoundRateLimitCall
 	modelRateLimitErr   error
