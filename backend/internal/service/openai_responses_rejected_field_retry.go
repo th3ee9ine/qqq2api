@@ -27,6 +27,10 @@ var (
 	openAIResponsesCacheModelRejectionPattern     = regexp.MustCompile(`(?i)["']?(prompt_cache_breakpoint|input\[\d+\]\.prompt_cache_breakpoint)["']?\s+is\s+not\s+supported\s+on\s+this\s+model\b`)
 	openAIResponsesToolParametersParamPattern     = regexp.MustCompile(`(?i)^(?:tools|input)\[\d+\](?:\.tools\[\d+\])*(?:\.function)?\.parameters$`)
 	openAIResponsesMissingSchemaTypePattern       = regexp.MustCompile(`(?i)\bgot\s+["']?type\s*:\s*["']?none["']?`)
+	// Capture the complete rejected path, not a suffix of a nested parameter.
+	// Options value errors (for example an invalid ttl) must remain client errors.
+	openAIResponsesCacheOptionsModelParamPattern = regexp.MustCompile(`(?i)(?:^|[\s"'(])([a-z_][a-z0-9_.\[\]-]*)["']?\s+is\s+not\s+supported\s+on\s+this\s+model\b`)
+	openAIResponsesCacheOptionsFieldParamPattern = regexp.MustCompile(`(?i)(?:unknown|unsupported)[ _-]+parameter\s*(?::|=|is)?\s*["']?([a-z_][a-z0-9_.\[\]-]*)`)
 )
 
 type openAIResponsesRejectedFieldRetryState struct {
@@ -119,6 +123,13 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 	code := strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(responseBody)))
 	message := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(responseBody)))
 	param := strings.ToLower(strings.TrimSpace(gjson.GetBytes(responseBody, "error.param").String()))
+	if isOpenAIPromptCacheOptionsCapabilityRejection(code, message, param) && gjson.GetBytes(body, "prompt_cache_options").Exists() {
+		retryBody, err := sjson.DeleteBytes(body, "prompt_cache_options")
+		if err != nil {
+			return nil, "", false, fmt.Errorf("delete rejected prompt_cache_options: %w", err)
+		}
+		return retryBody, "prompt_cache_options parameter rejection", true, nil
+	}
 	if code == "invalid_function_parameters" &&
 		openAIResponsesToolParametersParamPattern.MatchString(param) &&
 		openAIResponsesMissingSchemaTypePattern.MatchString(message) {
@@ -194,6 +205,29 @@ func normalizeOpenAIResponsesRejectedFieldRetryBody(statusCode int, body, respon
 		return removeOpenAIResponsesRejectedReasoningContentAtIndex(body, index)
 	}
 	return nil, "", false, nil
+}
+
+// isOpenAIPromptCacheOptionsCapabilityRejection only accepts evidence that the
+// upstream does not implement this field. In particular, invalid_parameter on
+// its own may mean a malformed mode/ttl and must not silently disable caching.
+// Do not guess model support from an alias or apply a global unsupported list:
+// newer models and compatible upstreams accept these options unchanged.
+func isOpenAIPromptCacheOptionsCapabilityRejection(code, message, param string) bool {
+	const field = "prompt_cache_options"
+	if param != "" && param != field {
+		return false
+	}
+	explicitMessage := false
+	for _, pattern := range []*regexp.Regexp{openAIResponsesCacheOptionsModelParamPattern, openAIResponsesCacheOptionsFieldParamPattern} {
+		for _, match := range pattern.FindAllStringSubmatch(message, -1) {
+			// An unquoted parameter may be followed by a sentence-ending period.
+			if strings.TrimSuffix(match[1], ".") != field {
+				return false
+			}
+			explicitMessage = true
+		}
+	}
+	return explicitMessage || param == field && (code == "unknown_parameter" || code == "unsupported_parameter")
 }
 
 func isExplicitOpenAIResponsesFieldRejection(code, message string) bool {

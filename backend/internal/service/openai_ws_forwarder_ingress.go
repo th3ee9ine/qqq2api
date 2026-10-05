@@ -37,6 +37,16 @@ func openAIWSRejectedFieldRetryHTTPStatus(message []byte) int {
 			return status
 		}
 	}
+	// Some WS upstreams omit status/type and only send the rejected parameter.
+	// Infer 400 only for this explicit capability rejection; never override an
+	// explicit status (notably 429/5xx) or turn options value errors into retries.
+	if isOpenAIPromptCacheOptionsCapabilityRejection(
+		strings.ToLower(strings.TrimSpace(extractUpstreamErrorCode(message))),
+		strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(message))),
+		strings.ToLower(strings.TrimSpace(gjson.GetBytes(message, "error.param").String())),
+	) {
+		return http.StatusBadRequest
+	}
 	return openAIWSErrorHTTPStatus(message)
 }
 

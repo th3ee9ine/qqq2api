@@ -518,6 +518,92 @@ func TestOpenAIResponsesRejectedFieldRetryStateAllowsPromptCacheBreakpointVarian
 	require.False(t, state.Allow(retryBody))
 }
 
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyPromptCacheOptions(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","prompt_cache_options":{"mode":"explicit","ttl":"30m"},"prompt_cache_key":"keep-key","prompt_cache_breakpoint":{"mode":"explicit"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"keep input","prompt_cache_breakpoint":{"mode":"explicit"}}]}],"reasoning":{"effort":"high"},"tools":[{"type":"function","name":"keep_tool","parameters":{"type":"object"}}]}`)
+	want := `{"model":"gpt-5.4","prompt_cache_key":"keep-key","prompt_cache_breakpoint":{"mode":"explicit"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"keep input","prompt_cache_breakpoint":{"mode":"explicit"}}]}],"reasoning":{"effort":"high"},"tools":[{"type":"function","name":"keep_tool","parameters":{"type":"object"}}]}`
+	tests := []struct {
+		name      string
+		errorJSON string
+	}{
+		{"model rejection with param", `{"error":{"code":"invalid_parameter","param":"prompt_cache_options","message":"prompt_cache_options is not supported on this model"}}`},
+		{"model rejection without param", `{"error":{"message":"prompt_cache_options is not supported on this model"}}`},
+		{"quoted model rejection", `{"error":{"type":"invalid_request_error","message":"The parameter 'prompt_cache_options' is not supported on this model."}}`},
+		{"unknown field with param", `{"error":{"code":"unknown_parameter","param":"prompt_cache_options","message":"Unrecognized field"}}`},
+		{"unsupported field with param", `{"error":{"code":"unsupported_parameter","param":"prompt_cache_options"}}`},
+		{"unknown field without param", `{"error":{"message":"Unknown parameter: 'prompt_cache_options'."}}`},
+		{"unsupported field without param", `{"error":{"message":"Unsupported parameter: prompt_cache_options."}}`},
+		{"case insensitive", `{"error":{"code":"INVALID_PARAMETER","param":"PROMPT_CACHE_OPTIONS","message":"PROMPT_CACHE_OPTIONS is not supported on this model"}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := string(body)
+			retryBody, reason, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, body, []byte(tt.errorJSON))
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.Equal(t, "prompt_cache_options parameter rejection", reason)
+			require.JSONEq(t, want, string(retryBody))
+			require.Equal(t, original, string(body), "keep the canonical request available for failover")
+			state := newOpenAIResponsesRejectedFieldRetryState(body)
+			require.True(t, state.Allow(retryBody))
+			require.False(t, state.Allow(retryBody))
+			_, _, changed, err = normalizeOpenAIResponsesRejectedFieldRetryBody(http.StatusBadRequest, retryBody, []byte(tt.errorJSON))
+			require.NoError(t, err)
+			require.False(t, changed, "the same rejection must not cause another retry")
+		})
+	}
+}
+
+func TestNormalizeOpenAIResponsesRejectedFieldRetryBodyPreservesUnrejectedPromptCacheOptions(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		errorJSON string
+	}{
+		{"success", 200, `{"error":{"message":"prompt_cache_options is not supported on this model"}}`},
+		{"rate limit", 429, `{"error":{"message":"prompt_cache_options is not supported on this model"}}`},
+		{"server error", 500, `{"error":{"message":"prompt_cache_options is not supported on this model"}}`},
+		{"invalid options value", 400, `{"error":{"code":"invalid_parameter","param":"prompt_cache_options","message":"ttl must be 30m"}}`},
+		{"invalid mode", 400, `{"error":{"code":"invalid_value","param":"prompt_cache_options.mode","message":"Unsupported value: 'bad'"}}`},
+		{"only mentioned", 400, `{"error":{"message":"Invalid input; configure prompt_cache_options for caching"}}`},
+		{"nested field unsupported", 400, `{"error":{"message":"Unsupported parameter: prompt_cache_options.ttl"}}`},
+		{"nested field model rejection", 400, `{"error":{"message":"input[0].prompt_cache_options is not supported on this model"}}`},
+		{"similar field model rejection", 400, `{"error":{"message":"other_prompt_cache_options is not supported on this model"}}`},
+		{"similar field unsupported", 400, `{"error":{"message":"Unknown parameter: prompt_cache_options_extra"}}`},
+		{"param disagrees", 400, `{"error":{"code":"invalid_parameter","param":"tools","message":"prompt_cache_options is not supported on this model"}}`},
+		{"message disagrees", 400, `{"error":{"code":"unsupported_parameter","param":"prompt_cache_options","message":"Unsupported parameter: tools"}}`},
+		{"nested message disagrees", 400, `{"error":{"code":"unsupported_parameter","param":"prompt_cache_options","message":"prompt_cache_options.ttl is not supported on this model"}}`},
+		{"ambiguous message targets", 400, `{"error":{"message":"prompt_cache_options is not supported on this model; Unsupported parameter: tools"}}`},
+	}
+	body := []byte(`{"prompt_cache_options":{"mode":"implicit","ttl":"30m"},"input":"keep"}`)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			retryBody, _, changed, err := normalizeOpenAIResponsesRejectedFieldRetryBody(tt.status, body, []byte(tt.errorJSON))
+			require.NoError(t, err)
+			require.False(t, changed)
+			require.Nil(t, retryBody)
+		})
+	}
+}
+
+func TestOpenAIWSRejectedFieldRetryHTTPStatusPromptCacheOptions(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		body string
+		want int
+	}{
+		{"model rejection no status", `{"type":"error","error":{"code":"invalid_parameter","param":"prompt_cache_options","message":"prompt_cache_options is not supported on this model"}}`, 400},
+		{"unsupported no status", `{"type":"error","error":{"code":"unsupported_parameter","param":"prompt_cache_options"}}`, 400},
+		{"unknown no status", `{"type":"error","error":{"code":"unknown_parameter","param":"prompt_cache_options"}}`, 400},
+		{"explicit rate limit", `{"type":"error","status":429,"error":{"message":"prompt_cache_options is not supported on this model"}}`, 429},
+		{"explicit server error", `{"type":"error","error":{"status_code":503,"message":"prompt_cache_options is not supported on this model"}}`, 503},
+		{"invalid value no status", `{"type":"error","error":{"code":"invalid_parameter","param":"prompt_cache_options","message":"Invalid ttl"}}`, 502},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, openAIWSRejectedFieldRetryHTTPStatus([]byte(tt.body)))
+		})
+	}
+}
+
 func TestOpenAIGatewayService_APIKeyStripsAllIndexedNamespacesBeforeFirstForward(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","stream":false,"input":[{"type":"function_call","name":"first","namespace":"remove-first","arguments":"{}"},{"type":"custom_tool_call","name":"second","namespace":"remove-second","input":"{}"}]}`)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
