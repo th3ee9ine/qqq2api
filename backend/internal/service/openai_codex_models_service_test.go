@@ -345,11 +345,15 @@ func TestNewConfiguredCodexModelDescriptorUsesProviderMetadataAndSafeFallback(t 
 	require.Equal(t, "GPT-6 Astra", gpt6Astra.DisplayName)
 	require.True(t, strings.HasPrefix(strings.TrimSpace(gpt6Astra.ModelMessages.InstructionsTemplate), "You are Codex, an agent based on GPT-6."))
 	require.NotNil(t, gpt6Astra.DefaultReasoningLevel)
-	require.Equal(t, "medium", *gpt6Astra.DefaultReasoningLevel)
+	require.Equal(t, "low", *gpt6Astra.DefaultReasoningLevel)
 	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, effortsFromConfiguredCodexLevels(gpt6Astra.SupportedReasoningLevels))
 	require.NotNil(t, gpt6Astra.MultiAgentReasoningEffort)
 	require.Equal(t, "xhigh", *gpt6Astra.MultiAgentReasoningEffort)
 	require.Equal(t, "v2", gpt6Astra.MultiAgentVersion)
+	require.True(t, gpt6Astra.SupportsReasoningEffortUpdates,
+		"Astra must advertise Codex reasoning configuration updates")
+	require.True(t, gpt6Astra.SupportsReasoningSummaries,
+		"Astra must advertise upstream reasoning summaries")
 	require.NotContains(t, gpt6Astra.SupportedReasoningLevels, configuredCodexReasoningLevel{Effort: "none"})
 	require.True(t, configuredCodexSupportsPriorityServiceTier("gpt-6-astra"))
 	require.Equal(t, []configuredCodexServiceTier{{
@@ -413,13 +417,17 @@ func TestBuildCodexModelsManifestUsesGPT6AstraInstructions(t *testing.T) {
 
 	var manifest struct {
 		Models []struct {
-			ModelMessages struct {
+			SupportsReasoningEffortUpdates bool `json:"supports_reasoning_effort_updates"`
+			SupportsReasoningSummaries     bool `json:"supports_reasoning_summaries"`
+			ModelMessages                  struct {
 				InstructionsTemplate string `json:"instructions_template"`
 			} `json:"model_messages"`
 		} `json:"models"`
 	}
 	require.NoError(t, json.Unmarshal(body, &manifest))
 	require.Len(t, manifest.Models, 1)
+	require.True(t, manifest.Models[0].SupportsReasoningEffortUpdates)
+	require.True(t, manifest.Models[0].SupportsReasoningSummaries)
 	require.True(t, strings.HasPrefix(
 		strings.TrimSpace(manifest.Models[0].ModelMessages.InstructionsTemplate),
 		"You are Codex, an agent based on GPT-6.",
@@ -2088,6 +2096,21 @@ func TestCompleteAPIKeyCodexModelsManifestForClientPreservesProviderMetadata(t *
 	var envelope map[string]any
 	require.NoError(t, json.Unmarshal(manifest.Body, &envelope))
 	require.Equal(t, map[string]any{"source": "upstream"}, envelope["metadata"])
+}
+
+func TestCompleteAPIKeyCodexModelsManifestForClientAdvertisesAstraReasoningCapabilities(t *testing.T) {
+	t.Parallel()
+
+	svc := &OpenAIGatewayService{}
+	manifest := &OpenAIModelsResponse{Body: []byte(`{"models":[{"slug":"gpt-6-astra"}]}`)}
+	account := newCodexModelsAPIKeyTestAccount("https://upstream.example/v1")
+
+	require.NoError(t, svc.CompleteAPIKeyCodexModelsManifestForClient(manifest, account))
+	models := decodeCodexManifestModels(t, manifest.Body)
+	require.Len(t, models, 1)
+	require.Equal(t, true, models[0]["supports_reasoning_effort_updates"])
+	require.Equal(t, true, models[0]["supports_reasoning_summaries"])
+	require.Equal(t, []string{"low", "medium", "high", "xhigh", "max", "ultra"}, effortsFromManifestModel(t, models[0]))
 }
 
 func TestCompleteAPIKeyCodexModelsManifestForClientUsesKnownGPTImageFallback(t *testing.T) {

@@ -389,6 +389,8 @@ type configuredCodexModelDescriptor struct {
 	IncludePluginUsageInstructions    bool                            `json:"include_plugin_usage_instructions"`
 	IncludeAppsUsageInstructions      bool                            `json:"include_apps_usage_instructions"`
 	SupportsReasoningSummaryParameter bool                            `json:"supports_reasoning_summary_parameter"`
+	SupportsReasoningEffortUpdates    bool                            `json:"supports_reasoning_effort_updates"`
+	SupportsReasoningSummaries        bool                            `json:"supports_reasoning_summaries"`
 	DefaultReasoningSummary           string                          `json:"default_reasoning_summary"`
 	SupportVerbosity                  bool                            `json:"support_verbosity"`
 	DefaultVerbosity                  *string                         `json:"default_verbosity"`
@@ -500,11 +502,21 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 				descriptor.MaxContextWindow = configuredCodexGPT56MaxContext
 			}
 			if isOpenAIGPT6AstraModel(modelID) {
+				// Match the official Codex catalog. This is also the fallback when a
+				// client has not selected an explicit effort yet.
+				defaultReasoningLevel := "low"
+				descriptor.DefaultReasoningLevel = &defaultReasoningLevel
 				// Codex resolves the Ultra workflow to this effort before inference.
 				// openai/codex a9896da3: codex-rs/models-manager/models.json.
 				multiAgentEffort := "xhigh"
 				descriptor.MultiAgentReasoningEffort = &multiAgentEffort
 				descriptor.MultiAgentVersion = "v2"
+				// The official Astra catalog sets this to true.  Without it the
+				// Codex client treats effort overrides as unsupported and skips the
+				// Max Thinking configuration update, which leaves the request at
+				// the model's default reasoning level.
+				descriptor.SupportsReasoningEffortUpdates = true
+				descriptor.SupportsReasoningSummaries = true
 				descriptor.ContextWindow = configuredCodexGPT6AstraContext
 				descriptor.MaxContextWindow = configuredCodexGPT6AstraContext
 			}
@@ -2335,7 +2347,12 @@ func completeAPIKeyCodexModelsManifestMetadata(body []byte, completeAll bool, ac
 
 		completeDescriptor := completeAll
 		forceOfficialImage := officialOpenAI && isOpenAICodexImageInputModel(slug)
-		if !completeDescriptor && !forceOfficialImage {
+		// Official API-key Astra supports changing the reasoning effort after
+		// model selection. A stale native catalog can explicitly advertise either
+		// capability as false; correct that model-level metadata at the official
+		// OpenAI boundary so Codex does not silently skip Max Thinking updates.
+		forceOfficialAstraReasoningCapabilities := officialOpenAI && isOpenAIGPT6AstraModel(slug)
+		if !completeDescriptor && !forceOfficialImage && !forceOfficialAstraReasoningCapabilities {
 			continue
 		}
 
@@ -2383,6 +2400,14 @@ func completeAPIKeyCodexModelsManifestMetadata(body []byte, completeAll bool, ac
 			if !bytes.Equal(bytes.TrimSpace(model["supports_image_detail_original"]), imageDetailOriginal) {
 				model["supports_image_detail_original"] = imageDetailOriginal
 				modelChanged = true
+			}
+		}
+		if forceOfficialAstraReasoningCapabilities {
+			for _, field := range []string{"supports_reasoning_effort_updates", "supports_reasoning_summaries"} {
+				if !bytes.Equal(bytes.TrimSpace(model[field]), []byte("true")) {
+					model[field] = json.RawMessage("true")
+					modelChanged = true
+				}
 			}
 		}
 		if !modelChanged {
