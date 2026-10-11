@@ -6,6 +6,7 @@ describe('GroupsView Composite route options', () => {
     expect(CONCRETE_PLATFORM_OPTIONS.map((option) => option.value)).toEqual([
       'anthropic',
       'openai',
+      'grok',
     ])
   })
 })

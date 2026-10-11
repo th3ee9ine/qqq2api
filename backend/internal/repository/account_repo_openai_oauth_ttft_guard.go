@@ -20,36 +20,53 @@ import (
 const openAIOAuthTTFTRFC3339Pattern = `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$`
 
 // openAIOAuthTTFTTimestampValidSQL validates both the wire shape and the
-// actual PostgreSQL timestamp value.  A regular expression alone accepts
+// actual PostgreSQL timestamp value. A regular expression alone accepts
 // values such as 2026-02-31T00:00:00Z; a direct ::timestamptz cast of those
-// imported values would abort the entire scheduler query.  pg_input_is_valid
-// is available on the PostgreSQL versions supported by this project and
-// returns false instead of raising for malformed input.
+// imported values would abort the entire scheduler query. JSONPath datetime
+// conversion with silent errors works on PostgreSQL 15; normalizing Z to an
+// explicit offset also supports that version's narrower ISO-8601 parser.
 func openAIOAuthTTFTTimestampValidSQL(expr string) string {
+	expr = "regexp_replace(" + expr + ", '^[[:space:]]+|[[:space:]]+$', '', 'g')"
+	// JSONPath on PostgreSQL 15 accepts at most microsecond precision, while
+	// RFC3339 and timestamptz accept nanoseconds. Fractional seconds cannot
+	// affect calendar validity, so omit them only for this validation step.
+	calendarExpr := "regexp_replace(" + expr + ", '\\.[0-9]+', '')"
 	return "(" + expr + " ~ '" + openAIOAuthTTFTRFC3339Pattern + "'" +
-		" AND pg_input_is_valid(" + expr + ", 'timestamptz'))"
+		" AND COALESCE(jsonb_path_exists(to_jsonb(regexp_replace(" + calendarExpr +
+		", 'Z$', '+00:00')), 'strict $.datetime()', '{}'::jsonb, true), FALSE))"
 }
 
 func openAIOAuthTTFTGuardStateValidSQL(extraExpr string) string {
 	state := "(" + extraExpr + " -> '" + service.OpenAIOAuthTTFTGuardStateExtraKey + "')"
 	pausedAt := state + " ->> 'paused_at'"
 	nextProbeAt := state + " ->> 'next_probe_at'"
-	return "jsonb_typeof(" + state + ") = 'object'" +
+	lease := state + " -> 'probe_lease_until'"
+	// JSON extraction returns SQL NULL for absent keys. Without COALESCE,
+	// NOT(valid_state) is also NULL and excludes every normal account from
+	// both scheduling and its first pause. Keep this predicate two-valued and
+	// match ParseOpenAIOAuthTTFTGuardState's required model and optional lease.
+	return "COALESCE((jsonb_typeof(" + state + ") = 'object'" +
 		" AND " + openAIOAuthTTFTTimestampValidSQL(pausedAt) +
-		" AND " + openAIOAuthTTFTTimestampValidSQL(nextProbeAt)
+		" AND " + openAIOAuthTTFTTimestampValidSQL(nextProbeAt) +
+		" AND jsonb_typeof(" + state + " -> 'model') = 'string'" +
+		" AND (" + state + " ->> 'model') ~ '[^[:space:]]'" +
+		" AND (" + lease + " IS NULL OR " + lease + " = 'null'::jsonb OR " +
+		openAIOAuthTTFTTimestampValidSQL(state+" ->> 'probe_lease_until'") + ")), FALSE)"
 }
 
 // openAIOAuthTTFTGuardSQL is shared by Ent predicates and raw scheduler
-// projections. A valid persisted guard state always removes an account from
-// normal scheduling, regardless of whether its probe deadline has elapsed.
-func openAIOAuthTTFTGuardSQL(extraExpr string) string {
-	return "NOT (" + openAIOAuthTTFTGuardStateValidSQL(extraExpr) + ")"
+// projections. A valid persisted guard state always removes a non-shadow
+// OpenAI OAuth account from scheduling, even after its probe deadline elapses.
+func openAIOAuthTTFTGuardSQL(extraExpr, platformExpr, typeExpr, parentExpr string) string {
+	return "NOT (" + platformExpr + " = 'openai' AND " + typeExpr +
+		" IN ('oauth', 'setup-token') AND " + parentExpr + " IS NULL AND " +
+		openAIOAuthTTFTGuardStateValidSQL(extraExpr) + ")"
 }
 
 func openAIOAuthTTFTGuardPredicate() predicate.Account {
 	return predicate.Account(func(s *entsql.Selector) {
 		s.Where(entsql.P(func(b *entsql.Builder) {
-			b.WriteString(openAIOAuthTTFTGuardSQL(s.C("extra")))
+			b.WriteString(openAIOAuthTTFTGuardSQL(s.C("extra"), s.C("platform"), s.C("type"), s.C("parent_account_id")))
 		}))
 	})
 }

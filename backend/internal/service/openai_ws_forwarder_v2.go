@@ -417,6 +417,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	responseID := ""
 	responseAffinityBound := false
 	bindResponseAffinity := func(refresh bool) error {
+		// A health probe never exposes its response ID to a client and has no
+		// continuation owner. Avoid public affinity writes and connection pins.
+		if isOpenAIOAuthTTFTProbeContext(ctx) {
+			return nil
+		}
 		if responseAffinityBound && !refresh {
 			return nil
 		}
@@ -483,7 +488,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	upstreamReadCtx := ctx
 	upstreamReadDetached := false
 	clientRequestCanceled := func() bool {
-		return ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+		// Recovery probes have no downstream client whose usage needs draining.
+		// Their timeout/shutdown cancellation must stop the upstream read.
+		return ctx != nil && !isOpenAIOAuthTTFTProbeContext(ctx) && errors.Is(ctx.Err(), context.Canceled)
 	}
 	markClientDisconnected := func(cause string) {
 		if clientDisconnected {

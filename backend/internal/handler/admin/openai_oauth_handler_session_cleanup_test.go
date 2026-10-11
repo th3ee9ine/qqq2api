@@ -564,11 +564,15 @@ func TestOpenAISessionCleanupBatchAllowsOwnedAccountForScopedAdministrator(t *te
 	}
 	client := &cleanupHandlerSessionClient{list: &service.OpenAIAccountSessionList{
 		CurrentKnown: true,
-		Sessions:     []service.OpenAIAccountSession{{ID: "old", CanRevoke: true}},
+		Sessions: []service.OpenAIAccountSession{
+			{ID: "current", Current: true, CanRevoke: true},
+			{ID: "old", CanRevoke: true},
+		},
 	}}
+	repo := &cleanupHandlerSessionRepo{account: account}
 	handler := &OpenAIOAuthHandler{
 		adminService:   admin,
-		sessionCleanup: service.NewOpenAISessionCleanupService(&cleanupHandlerSessionRepo{account: account}, client, nil),
+		sessionCleanup: service.NewOpenAISessionCleanupService(repo, client, nil),
 	}
 
 	ctx := context.WithValue(context.Background(), ctxkey.AccountAdminID, ownerID)
@@ -582,7 +586,18 @@ func TestOpenAISessionCleanupBatchAllowsOwnedAccountForScopedAdministrator(t *te
 	)
 
 	require.Equal(t, http.StatusOK, status)
-	require.Equal(t, http.StatusOK, envelope.Code)
+	require.Zero(t, envelope.Code, "successful API envelopes use code 0")
+	var result openAISessionCleanupBatchResult
+	require.NoError(t, json.Unmarshal(envelope.Data, &result))
+	require.Equal(t, 1, result.RequestedCount)
+	require.Equal(t, 1, result.SuccessCount)
+	require.Zero(t, result.FailedCount)
+	require.Empty(t, result.Failures)
+	require.Equal(t, []string{"old"}, client.revokedIDs(), "the current session must be preserved")
+	state := service.DecodeOpenAISessionCleanupState(repo.lastState()[service.OpenAISessionCleanupStateExtraKey])
+	require.NotNil(t, state)
+	require.Equal(t, service.OpenAISessionCleanupStatusSuccess, state.Status)
+	require.Equal(t, 1, state.RevokedCount)
 	client.mu.Lock()
 	require.Equal(t, 1, client.listCalls)
 	client.mu.Unlock()

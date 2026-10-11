@@ -985,7 +985,7 @@ var (
 	groupAccountAvailableSQL = `a.deleted_at IS NULL
 				AND a.status = 'active'
 				AND a.schedulable = true
-				AND ` + openAIOAuthTTFTGuardSQL("COALESCE(a.extra, '{}'::jsonb)") + `
+				AND ` + openAIOAuthTTFTGuardSQL("COALESCE(a.extra, '{}'::jsonb)", "a.platform", "a.type", "a.parent_account_id") + `
 				AND (a.expires_at IS NULL OR a.expires_at > NOW() OR a.auto_pause_on_expired = FALSE)
 				AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= NOW())
 				AND (a.overload_until IS NULL OR a.overload_until <= NOW())
@@ -995,7 +995,7 @@ var (
 	groupAccountTemporarilyLimitedSQL = `a.deleted_at IS NULL
 				AND a.status = 'active'
 				AND a.schedulable = true
-				AND ` + openAIOAuthTTFTGuardSQL("COALESCE(a.extra, '{}'::jsonb)") + `
+				AND ` + openAIOAuthTTFTGuardSQL("COALESCE(a.extra, '{}'::jsonb)", "a.platform", "a.type", "a.parent_account_id") + `
 				AND (a.expires_at IS NULL OR a.expires_at > NOW() OR a.auto_pause_on_expired = FALSE)
 				AND (
 					a.rate_limit_reset_at > NOW() OR

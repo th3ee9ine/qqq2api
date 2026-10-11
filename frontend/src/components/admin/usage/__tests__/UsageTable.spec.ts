@@ -110,7 +110,7 @@ const DataTableStub = {
   props: ['data'],
   template: `
     <div>
-      <div v-for="row in data" :key="row.request_id">
+      <div v-for="row in data" :key="row.request_id" :data-testid="'usage-row-' + row.request_id">
         <slot name="cell-model" :row="row" :value="row.model" />
         <slot name="cell-reasoning_effort" :row="row" :value="row.reasoning_effort" />
         <slot name="cell-billing_mode" :row="row" />
@@ -119,8 +119,8 @@ const DataTableStub = {
         <slot name="cell-request_id" :row="row" />
         <slot name="cell-upstream_request_id" :row="row" />
         <slot name="cell-upstream_turn_state" :row="row" />
-        <slot name="cell-upstream_user_agent" :row="row" />
-        <slot name="cell-user_agent" :row="row" />
+        <span data-testid="upstream-user-agent-cell"><slot name="cell-upstream_user_agent" :row="row" /></span>
+        <span data-testid="user-agent-cell"><slot name="cell-user_agent" :row="row" /></span>
       </div>
     </div>
   `,
@@ -848,6 +848,12 @@ describe('admin UsageTable upstream request diagnostics', () => {
       {
         ...baseImageRow,
         request_id: 'identity-empty',
+        upstream_user_agent: '',
+        user_agent: '',
+      },
+      {
+        ...baseImageRow,
+        request_id: 'identity-historical',
         upstream_user_agent: null,
         user_agent: null,
       },
@@ -861,8 +867,10 @@ describe('admin UsageTable upstream request diagnostics', () => {
     expect(wrapper.html()).not.toContain(upstreamUserAgent)
     expect(wrapper.html()).not.toContain(downstreamUserAgent)
     expect(wrapper.html()).not.toContain('not-rendered-version')
-    expect(wrapper.text()).toContain('Not sent')
-    expect(wrapper.text()).toContain('Not recorded')
+    expect(wrapper.get('[data-testid="usage-row-identity-empty"] [data-testid="upstream-user-agent-cell"]').text()).toBe('Not sent')
+    expect(wrapper.get('[data-testid="usage-row-identity-historical"] [data-testid="upstream-user-agent-cell"]').text()).toBe('Not recorded')
+    expect(wrapper.get('[data-testid="usage-row-identity-empty"] [data-testid="user-agent-cell"]').text()).toBe('-')
+    expect(wrapper.get('[data-testid="usage-row-identity-historical"] [data-testid="user-agent-cell"]').text()).toBe('-')
 
     const cases = [
       ['upstream-user-agent-summary', upstreamUserAgent, 'Upstream User-Agent details'],

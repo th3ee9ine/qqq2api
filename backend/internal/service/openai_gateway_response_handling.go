@@ -1519,10 +1519,9 @@ func (s *OpenAIGatewayService) BindOpenAIHTTPResponseOwner(
 }
 
 func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *gin.Context, account *Account, responseID string) error {
-	// The admin debugger pins one selected account and owns a separate session
-	// store. Do not seed the public API's response-affinity cache with synthetic
-	// API-key identities or make later ordinary traffic depend on debug runs.
-	if DebugWorkbenchTraceFromContext(ctx) != nil {
+	// Debug runs and health probes have no authenticated public API owner.
+	// Do not seed public response affinity with their synthetic requests.
+	if DebugWorkbenchTraceFromContext(ctx) != nil || isOpenAIOAuthTTFTProbeContext(ctx) {
 		return nil
 	}
 	if s == nil || account == nil || account.ID <= 0 {

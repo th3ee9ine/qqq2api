@@ -437,9 +437,14 @@ func TestOpenAIRefreshQuota_CreditsPersistIndependently(t *testing.T) {
 			quota.creditsCacheErr = tc.creditsErr
 			status, envelope := performOpenAIQuotaRefreshRequest(t, &OpenAIOAuthHandler{quotaService: quota})
 			require.Equal(t, http.StatusOK, status)
+			require.Zero(t, envelope.Code)
 			require.Equal(t, tc.resetErr == nil, envelope.Data.CachePersisted)
 			require.Equal(t, tc.creditsErr == nil, envelope.Data.CreditsCachePersisted)
-			require.Equal(t, quota.queryResult.Credits, envelope.Data.Credits)
+			// Validate the HTTP contract, not decoder-private presence flags or
+			// the pointer/string representation normalized by UnmarshalJSON.
+			creditsJSON, err := json.Marshal(envelope.Data.Credits)
+			require.NoError(t, err)
+			require.JSONEq(t, `{"has_credits":true,"unlimited":false,"balance":"1250.75"}`, string(creditsJSON))
 			require.Equal(t, quota.queryResult, quota.cachedCreditsUsage)
 			require.Equal(t, 1, quota.creditsCacheCalls)
 			require.Zero(t, quota.resetCalls)

@@ -8,16 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 const (
-	// The recovery probe is deliberately bounded more tightly than a normal
-	// user request.  It is only a health check and must not hold a scheduler
-	// recovery worker indefinitely.
-	openAIOAuthTTFTProbeTimeout = 30 * time.Second
 	// Compatibility alias for package-local callers that validate the default
 	// threshold without loading persisted settings.
 	openAIOAuthTTFTProbeMaxMillis = openAIOAuthTTFTSlowThresholdMillis
@@ -30,6 +25,16 @@ var (
 	errOpenAIOAuthTTFTProbeNotTerminal    = errors.New("openai oauth ttft probe did not reach a successful terminal event")
 	errOpenAIOAuthTTFTProbeTooSlow        = errors.New("openai oauth ttft probe exceeded the first-token threshold")
 )
+
+type openAIOAuthTTFTProbeContextKey struct{}
+
+func isOpenAIOAuthTTFTProbeContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	probe, _ := ctx.Value(openAIOAuthTTFTProbeContextKey{}).(bool)
+	return probe
+}
 
 func validateOpenAIOAuthTTFTProbeResult(result *OpenAIForwardResult, thresholdMillis ...int) error {
 	if result == nil {
@@ -133,7 +138,7 @@ func (s *OpenAIGatewayService) ProbeOpenAIOAuthTTFT(ctx context.Context, account
 	}
 	thresholdMillis := openAIOAuthTTFTProbeMaxMillis
 	if len(thresholdSeconds) > 0 && thresholdSeconds[0] > 0 {
-		thresholdMillis = thresholdSeconds[0] * 1000
+		thresholdMillis = openAIOAuthTTFTThresholdMillis(&OpenAIOAuthTTFTGuardSettings{FirstTokenThresholdSeconds: thresholdSeconds[0]})
 	} else if s.settingService != nil {
 		settings, settingsErr := s.settingService.GetOpenAIOAuthTTFTGuardSettings(ctx)
 		if settingsErr != nil {
@@ -141,8 +146,12 @@ func (s *OpenAIGatewayService) ProbeOpenAIOAuthTTFT(ctx context.Context, account
 		}
 		thresholdMillis = openAIOAuthTTFTThresholdMillis(settings)
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, openAIOAuthTTFTProbeTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, openAIOAuthTTFTProbeTimeoutForThreshold(thresholdMillis/1000))
 	defer cancel()
+	// Normal streaming requests detach from the downstream lifetime so they
+	// can drain usage. Recovery probes have no client and must preserve their
+	// deadline and worker-shutdown cancellation through the actual transport.
+	probeCtx = context.WithValue(probeCtx, openAIOAuthTTFTProbeContextKey{}, true)
 
 	payload, err := json.Marshal(map[string]any{
 		"model": model,

@@ -32,7 +32,8 @@ function renderModal(platform: GroupPlatform = 'openai') {
 }
 
 function responseFor(models: unknown[]) {
-  return { ok: true, json: async () => ({ models }) }
+  // The API reads the raw response body to measure the manifest's UTF-8 size.
+  return { ok: true, status: 200, text: async () => JSON.stringify({ models }) }
 }
 
 describe('UseKeyModal Codex catalog', () => {
@@ -54,7 +55,7 @@ describe('UseKeyModal Codex catalog', () => {
     await flushPromises()
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://example.com/v1/models?client_version=0.147.0',
+      'https://example.com/v1/models?client_version=0.158.0',
       expect.objectContaining({ headers: { Accept: 'application/json', Authorization: 'Bearer sk-current-key' } })
     )
     expect(wrapper.get('[data-testid="codex-model-catalog"]').text()).toContain('modelsCount 1')
@@ -104,6 +105,7 @@ describe('UseKeyModal Codex catalog', () => {
     expect(wrapper.find('pre code').text()).toContain('model_reasoning_effort = "xhigh"')
     await wrapper.get('[data-testid="codex-model-catalog-fetch"]').trigger('click')
     await flushPromises()
+    expect(wrapper.get('[data-testid="codex-model-catalog"]').text()).toContain('modelsCount 1')
     expect(wrapper.find('pre code').text()).not.toContain('model_reasoning_effort')
     expect(wrapper.find('[data-testid="codex-model-catalog-download"]').exists()).toBe(true)
   })
@@ -121,6 +123,10 @@ describe('UseKeyModal Codex catalog', () => {
     expect(oldSignal.aborted).toBe(true)
     await wrapper.get('[data-testid="codex-model-catalog-fetch"]').trigger('click')
     await flushPromises()
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://next.example.com/v1/models?client_version=0.158.0',
+      expect.objectContaining({ headers: { Accept: 'application/json', Authorization: 'Bearer sk-next-key' } })
+    )
     resolveOld(responseFor([{ slug: 'stale-key-model' }]))
     await flushPromises()
     expect(wrapper.find('pre code').text()).toContain('model = "new-key-model"')

@@ -1286,12 +1286,6 @@ func (s *BillingService) GetModelPricingWithChannel(model string, channelPricing
 	if channelPricing.MaxReasoningEffortMultiplier != nil {
 		pricing.MaxReasoningEffortMultiplier = channelPricing.MaxReasoningEffortMultiplier
 	}
-	if channelPricing.ImageOutputPrice != nil {
-		pricing.ImageOutputPricePerToken = *channelPricing.ImageOutputPrice
-	} else {
-		pricing.ImageOutputPricePerToken = 0
-	}
-	pricing.ImageOutputPriceExplicit = true
 	applyChannelImagePriceOverrides(channelPricing, pricing)
 	return pricing, nil
 }
@@ -1706,6 +1700,11 @@ func (s *BillingService) applyModelSpecificPricingPolicy(model string, pricing *
 		return pricing
 	}
 	cloned := *pricing
+	if isOpenAIGPT6AstraModel(normalized) {
+		// Astra Ultrafast costs 6x Standard, independently of Fast/priority
+		// catalog prices and operator-configured Fast multipliers.
+		cloned.UltrafastMultiplier = 6.0
+	}
 	if needsMaxReasoningEffortMultiplier {
 		cloned.MaxReasoningEffortMultiplier = defaultMaxReasoningEffortMultiplier(model)
 	}

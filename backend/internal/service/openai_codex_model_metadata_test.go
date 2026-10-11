@@ -714,7 +714,7 @@ func TestCodexAliasFailoverMappingHonorsModelRouting(t *testing.T) {
 			levels,
 			"routed alias must keep a movable reasoning slider",
 		)
-		require.Equal(t, "medium", def)
+		require.Equal(t, "low", def, "routed Astra alias must preserve the catalog default reasoning level")
 		require.Contains(t, modalities, "image")
 	})
 

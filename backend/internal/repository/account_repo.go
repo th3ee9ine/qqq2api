@@ -2633,7 +2633,7 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND a.deleted_at IS NULL
 			AND a.status = $2
 			AND a.schedulable = TRUE
-			AND ` + openAIOAuthTTFTGuardSQL("COALESCE(a.extra, '{}'::jsonb)") + `
+			AND ` + openAIOAuthTTFTGuardSQL("COALESCE(a.extra, '{}'::jsonb)", "a.platform", "a.type", "a.parent_account_id") + `
 			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3)
 			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)

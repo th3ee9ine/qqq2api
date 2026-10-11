@@ -441,8 +441,9 @@ func detachUpstreamContext(ctx context.Context) (context.Context, context.Cancel
 	if ctx == nil {
 		return context.Background(), func() {}
 	}
-	// Debug runs are explicitly bounded and must stop on cancellation.
-	if DebugWorkbenchTraceFromContext(ctx) != nil {
+	// Debug runs and automatic recovery probes are explicitly bounded and
+	// must stop on cancellation. Normal user streams still detach for billing.
+	if DebugWorkbenchTraceFromContext(ctx) != nil || isOpenAIOAuthTTFTProbeContext(ctx) {
 		return ctx, func() {}
 	}
 	return context.WithoutCancel(ctx), func() {}

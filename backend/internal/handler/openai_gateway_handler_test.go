@@ -1023,12 +1023,24 @@ func TestOpenAIResponses_AcceptsHTTPContinuationPreviousResponseIDBeforeRouting(
 		Concurrency: 1,
 	})
 
-	h := newOpenAIHandlerForPreviousResponseIDValidation(t, nil)
+	// Stop at user admission so this validation test does not require a live
+	// original-account binding for strict HTTP continuation routing.
+	userAdmissionReached := false
+	cache := &concurrencyCacheMock{
+		acquireUserSlotFn: func(ctx context.Context, userID int64, maxConcurrency int, requestID string) (bool, error) {
+			userAdmissionReached = true
+			return false, errors.New("user slot unavailable")
+		},
+	}
+	h := newOpenAIHandlerForPreviousResponseIDValidation(t, cache)
 	require.NoError(t, h.gatewayService.BindOpenAIHTTPResponseOwner(context.Background(), groupID, "resp_123456", 1, 101))
 	h.Responses(c)
 
-	require.NotEqual(t, http.StatusBadRequest, w.Code)
+	require.True(t, userAdmissionReached, "owned HTTP continuation should pass validation before routing")
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Equal(t, "api_error", gjson.GetBytes(w.Body.Bytes(), "error.type").String())
 	require.NotContains(t, w.Body.String(), "Responses WebSocket v2")
+	require.NotContains(t, w.Body.String(), "previous_response_id is not available")
 }
 
 func TestOpenAIResponses_RejectsHTTPContinuationOwnedByAnotherUser(t *testing.T) {
@@ -3521,6 +3533,7 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		apiKeyService:       &service.APIKeyService{},
 		concurrencyHelper:   NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Second),
 	}
+	h.compositeResolver = tc.compositeResolver
 
 	apiKey := &service.APIKey{
 		ID:      1801,
@@ -3574,8 +3587,8 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 		require.Error(t, readErr, "first frame should have been rejected with a close")
 		var closeErr coderws.CloseError
 		require.ErrorAs(t, readErr, &closeErr)
-		require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
-		require.Contains(t, closeErr.Reason, "not available for this group")
+		require.Equal(t, tc.closeStatus, closeErr.Code)
+		require.Contains(t, closeErr.Reason, tc.closeReason)
 		_ = clientConn.CloseNow()
 		return openAIResponsesWSUsageLogResult{}
 	}
@@ -3611,8 +3624,8 @@ func runOpenAIResponsesWebSocketUsageLogCase(t *testing.T, tc openAIResponsesWSU
 			require.Error(t, readErr, "second turn should have been rejected with a close")
 			var closeErr coderws.CloseError
 			require.ErrorAs(t, readErr, &closeErr)
-			require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
-			require.Contains(t, closeErr.Reason, "not available for this group")
+			require.Equal(t, tc.closeStatus, closeErr.Code)
+			require.Contains(t, closeErr.Reason, tc.closeReason)
 			_ = clientConn.CloseNow()
 			return openAIResponsesWSUsageLogResult{}
 		}

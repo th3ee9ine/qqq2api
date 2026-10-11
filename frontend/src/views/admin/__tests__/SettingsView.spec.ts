@@ -12,6 +12,8 @@ const {
   getWebSearchEmulationConfig,
   updateWebSearchEmulationConfig,
   getAdminApiKey,
+  getOpenAIOAuthTTFTGuardSettings,
+  updateOpenAIOAuthTTFTGuardSettings,
   getImageStorageConfig,
   updateImageStorageConfig,
   testImageStorageConnection,
@@ -43,6 +45,8 @@ const {
   getWebSearchEmulationConfig: vi.fn(),
   updateWebSearchEmulationConfig: vi.fn(),
   getAdminApiKey: vi.fn(),
+  getOpenAIOAuthTTFTGuardSettings: vi.fn(),
+  updateOpenAIOAuthTTFTGuardSettings: vi.fn(),
   getImageStorageConfig: vi.fn(),
   updateImageStorageConfig: vi.fn(),
   testImageStorageConnection: vi.fn(),
@@ -89,6 +93,8 @@ vi.mock("@/api", () => ({
       getWebSearchEmulationConfig,
       updateWebSearchEmulationConfig,
       getAdminApiKey,
+      getOpenAIOAuthTTFTGuardSettings,
+      updateOpenAIOAuthTTFTGuardSettings,
       getOverloadCooldownSettings,
       getRateLimit429CooldownSettings,
       updateRateLimit429CooldownSettings,
@@ -503,6 +509,8 @@ describe("admin SettingsView", () => {
     getWebSearchEmulationConfig.mockReset();
     updateWebSearchEmulationConfig.mockReset();
     getAdminApiKey.mockReset();
+    getOpenAIOAuthTTFTGuardSettings.mockReset();
+    updateOpenAIOAuthTTFTGuardSettings.mockReset();
     getImageStorageConfig.mockReset();
     updateImageStorageConfig.mockReset();
     testImageStorageConnection.mockReset();
@@ -543,6 +551,12 @@ describe("admin SettingsView", () => {
       exists: false,
       masked_key: "",
     });
+    getOpenAIOAuthTTFTGuardSettings.mockResolvedValue({
+      enabled: false,
+      recovery_interval_minutes: 30,
+      first_token_threshold_seconds: 15,
+    });
+    updateOpenAIOAuthTTFTGuardSettings.mockImplementation(async (payload) => payload);
     const imageStorageConfig = {
       enabled: true,
       endpoint: "https://s3.example.com",
@@ -704,6 +718,141 @@ describe("admin SettingsView", () => {
       openai_codex_originator: "custom-client",
       min_claude_code_version: "2.1.0",
     }));
+    wrapper.unmount();
+  });
+
+  it("keeps the TTFT guard in the GPT tab and defaults it to disabled", async () => {
+    const wrapper = mountView();
+    document.body.appendChild(wrapper.element);
+    await flushPromises();
+
+    const card = wrapper.get('[data-testid="openai-oauth-ttft-guard-card"]');
+    expect(card.isVisible()).toBe(false);
+
+    await openGatewayTab(wrapper);
+    expect(card.isVisible()).toBe(false);
+
+    await openGPTTab(wrapper);
+    expect(card.isVisible()).toBe(true);
+    expect(getOpenAIOAuthTTFTGuardSettings).toHaveBeenCalledOnce();
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-toggle"]').element as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(card.find('[data-testid="openai-oauth-ttft-guard-threshold"]').exists()).toBe(false);
+    expect(card.find('[data-testid="openai-oauth-ttft-guard-recovery-interval"]').exists()).toBe(false);
+    await card.get('[data-testid="openai-oauth-ttft-guard-save"]').trigger("click");
+    await flushPromises();
+    expect(updateOpenAIOAuthTTFTGuardSettings).toHaveBeenCalledWith({
+      enabled: false,
+      recovery_interval_minutes: 30,
+      first_token_threshold_seconds: 15,
+    });
+    expect(updateSettings).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("loads, edits, and saves the TTFT threshold and recovery interval", async () => {
+    getOpenAIOAuthTTFTGuardSettings.mockResolvedValueOnce({
+      enabled: true,
+      recovery_interval_minutes: 45,
+      first_token_threshold_seconds: 22,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGPTTab(wrapper);
+
+    const card = wrapper.get('[data-testid="openai-oauth-ttft-guard-card"]');
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-toggle"]').element as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-threshold"]').element as HTMLInputElement).value,
+    ).toBe("22");
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-recovery-interval"]').element as HTMLInputElement).value,
+    ).toBe("45");
+
+    await card.get('[data-testid="openai-oauth-ttft-guard-threshold"]').setValue("30");
+    await card.get('[data-testid="openai-oauth-ttft-guard-recovery-interval"]').setValue("60");
+    await card.get('[data-testid="openai-oauth-ttft-guard-toggle"]').setValue(false);
+    expect(card.find('[data-testid="openai-oauth-ttft-guard-threshold"]').exists()).toBe(false);
+    await card.get('[data-testid="openai-oauth-ttft-guard-toggle"]').setValue(true);
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-threshold"]').element as HTMLInputElement).value,
+    ).toBe("30");
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-recovery-interval"]').element as HTMLInputElement).value,
+    ).toBe("60");
+    await card.get('[data-testid="openai-oauth-ttft-guard-save"]').trigger("click");
+    await flushPromises();
+
+    expect(updateOpenAIOAuthTTFTGuardSettings).toHaveBeenCalledWith({
+      enabled: true,
+      recovery_interval_minutes: 60,
+      first_token_threshold_seconds: 30,
+    });
+    expect(showSuccess).toHaveBeenCalledWith("admin.settings.openaiOauthTTFTGuard.saved");
+    expect(updateSettings).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("keeps disabled defaults available when loading the TTFT guard fails", async () => {
+    getOpenAIOAuthTTFTGuardSettings.mockRejectedValueOnce(new Error("settings unavailable"));
+    const wrapper = mountView();
+    await flushPromises();
+    await openGPTTab(wrapper);
+
+    const card = wrapper.get('[data-testid="openai-oauth-ttft-guard-card"]');
+    const toggle = card.get('[data-testid="openai-oauth-ttft-guard-toggle"]');
+    expect((toggle.element as HTMLInputElement).checked).toBe(false);
+    await toggle.setValue(true);
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-threshold"]').element as HTMLInputElement).value,
+    ).toBe("15");
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-recovery-interval"]').element as HTMLInputElement).value,
+    ).toBe("30");
+    expect(card.get('[data-testid="openai-oauth-ttft-guard-save"]').attributes("disabled")).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it("preserves TTFT edits after a save error and allows retrying", async () => {
+    let rejectSave!: (error: Error) => void;
+    updateOpenAIOAuthTTFTGuardSettings.mockReturnValueOnce(
+      new Promise((_, reject) => { rejectSave = reject; }),
+    );
+    const wrapper = mountView();
+    await flushPromises();
+    await openGPTTab(wrapper);
+    const card = wrapper.get('[data-testid="openai-oauth-ttft-guard-card"]');
+    await card.get('[data-testid="openai-oauth-ttft-guard-toggle"]').setValue(true);
+    await card.get('[data-testid="openai-oauth-ttft-guard-threshold"]').setValue("25");
+    await card.get('[data-testid="openai-oauth-ttft-guard-recovery-interval"]').setValue("40");
+    const saveButton = card.get('[data-testid="openai-oauth-ttft-guard-save"]');
+    await saveButton.trigger("click");
+    expect(saveButton.attributes("disabled")).toBeDefined();
+    expect(saveButton.text()).toContain("common.saving");
+    rejectSave(new Error("settings rejected"));
+    await flushPromises();
+
+    expect(showError).toHaveBeenCalledWith("error");
+    expect(showSuccess).not.toHaveBeenCalled();
+    expect(saveButton.attributes("disabled")).toBeUndefined();
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-threshold"]').element as HTMLInputElement).value,
+    ).toBe("25");
+    expect(
+      (card.get('[data-testid="openai-oauth-ttft-guard-recovery-interval"]').element as HTMLInputElement).value,
+    ).toBe("40");
+    await saveButton.trigger("click");
+    await flushPromises();
+    expect(updateOpenAIOAuthTTFTGuardSettings).toHaveBeenCalledTimes(2);
+    expect(updateOpenAIOAuthTTFTGuardSettings).toHaveBeenLastCalledWith({
+      enabled: true,
+      recovery_interval_minutes: 40,
+      first_token_threshold_seconds: 25,
+    });
+    expect(showSuccess).toHaveBeenCalledWith("admin.settings.openaiOauthTTFTGuard.saved");
     wrapper.unmount();
   });
 

@@ -29,7 +29,11 @@ func NewGatewayCache(rdb *redis.Client) service.GatewayCache {
 
 var openAIOAuthTTFTStreakIncrScript = redis.NewScript(`
 local count = redis.call('INCR', KEYS[1])
-redis.call('EXPIRE', KEYS[1], ARGV[1])
+if tonumber(ARGV[1]) > 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+else
+  redis.call('PERSIST', KEYS[1])
+end
 return count
 `)
 
@@ -38,8 +42,9 @@ func openAIOAuthTTFTStreakKey(accountID int64) string {
 }
 
 // IncrementOpenAIOAuthTTFTStreak updates the per-account consecutive slow
-// invocation count atomically. Refreshing the TTL on every increment keeps a
-// burst of calls together while allowing an abandoned streak to disappear.
+// invocation count atomically. A nonpositive TTL preserves consecutive history
+// across idle periods; only a new observation/reset should break that streak.
+// Positive TTLs remain available for callers that explicitly want expiry.
 func (c *gatewayCache) IncrementOpenAIOAuthTTFTStreak(ctx context.Context, accountID int64, ttl time.Duration) (int64, error) {
 	if c == nil || c.rdb == nil {
 		return 0, errors.New("gateway cache unavailable")
@@ -47,11 +52,8 @@ func (c *gatewayCache) IncrementOpenAIOAuthTTFTStreak(ctx context.Context, accou
 	if accountID <= 0 {
 		return 0, errors.New("invalid OpenAI OAuth TTFT account id")
 	}
-	if ttl <= 0 {
-		ttl = 30 * time.Minute
-	}
 	seconds := int64(ttl / time.Second)
-	if seconds < 1 {
+	if ttl > 0 && seconds < 1 {
 		seconds = 1
 	}
 	value, err := openAIOAuthTTFTStreakIncrScript.Run(ctx, c.rdb, []string{openAIOAuthTTFTStreakKey(accountID)}, seconds).Int64()

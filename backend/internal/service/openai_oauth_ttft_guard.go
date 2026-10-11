@@ -15,13 +15,21 @@ import (
 const (
 	// Kept as a compatibility alias for package-local tests and diagnostics.
 	// Runtime decisions use the value loaded from OpenAIOAuthTTFTGuardSettings.
-	openAIOAuthTTFTSlowThresholdMillis  = OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds * 1000
-	openAIOAuthTTFTSlowStreakThreshold  = 5
+	openAIOAuthTTFTSlowThresholdMillis = OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds * 1000
+	openAIOAuthTTFTSlowStreakThreshold = 5
+	// A recovery probe must be allowed to wait through the configured first-token
+	// threshold and still receive the terminal event. Keep the default timeout
+	// compatible with the original 30-second probe while deriving longer values
+	// from the configured threshold (which may be as high as 300 seconds).
+	openAIOAuthTTFTProbeCompletionGrace = 10 * time.Second
+	openAIOAuthTTFTRecoveryOuterGrace   = 5 * time.Second
+	openAIOAuthTTFTProbeLeaseGrace      = 30 * time.Second
+	openAIOAuthTTFTProbeDefaultTimeout  = 30 * time.Second
 	openAIOAuthTTFTProbeLeaseDuration   = 2 * time.Minute
 	openAIOAuthTTFTRecoveryPollInterval = 30 * time.Second
 )
 
-func openAIOAuthTTFTThresholdMillis(settings *OpenAIOAuthTTFTGuardSettings) int {
+func openAIOAuthTTFTThresholdSeconds(settings *OpenAIOAuthTTFTGuardSettings) int {
 	seconds := OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds
 	if settings != nil && settings.FirstTokenThresholdSeconds >= OpenAIOAuthTTFTGuardMinFirstTokenThresholdSeconds {
 		seconds = settings.FirstTokenThresholdSeconds
@@ -29,7 +37,33 @@ func openAIOAuthTTFTThresholdMillis(settings *OpenAIOAuthTTFTGuardSettings) int 
 	if seconds > OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds {
 		seconds = OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds
 	}
-	return seconds * 1000
+	return seconds
+}
+
+func openAIOAuthTTFTThresholdMillis(settings *OpenAIOAuthTTFTGuardSettings) int {
+	return openAIOAuthTTFTThresholdSeconds(settings) * 1000
+}
+
+func openAIOAuthTTFTProbeTimeoutForThreshold(thresholdSeconds int) time.Duration {
+	if thresholdSeconds < OpenAIOAuthTTFTGuardMinFirstTokenThresholdSeconds {
+		thresholdSeconds = OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds
+	}
+	if thresholdSeconds > OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds {
+		thresholdSeconds = OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds
+	}
+	timeout := time.Duration(thresholdSeconds)*time.Second + openAIOAuthTTFTProbeCompletionGrace
+	if timeout < openAIOAuthTTFTProbeDefaultTimeout {
+		return openAIOAuthTTFTProbeDefaultTimeout
+	}
+	return timeout
+}
+
+func openAIOAuthTTFTProbeLeaseDurationForThreshold(thresholdSeconds int) time.Duration {
+	lease := openAIOAuthTTFTProbeTimeoutForThreshold(thresholdSeconds) + openAIOAuthTTFTProbeLeaseGrace
+	if lease < openAIOAuthTTFTProbeLeaseDuration {
+		return openAIOAuthTTFTProbeLeaseDuration
+	}
+	return lease
 }
 
 type openAIOAuthTTFTStreak struct {
@@ -80,10 +114,23 @@ func (s *OpenAIGatewayService) startOpenAIOAuthTTFTGuardWorker() {
 }
 
 func (s *OpenAIGatewayService) runOpenAIOAuthTTFTRecoveryOnce() {
-	ctx, cancel := context.WithTimeout(context.Background(), openAIOAuthTTFTProbeTimeout+5*time.Second)
+	// Bound settings loading as well as the probe. RunOpenAIOAuthTTFTRecovery
+	// applies the tighter timeout from the settings snapshot it actually uses.
+	ctx, cancel := context.WithTimeout(context.Background(), openAIOAuthTTFTProbeTimeoutForThreshold(OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds)+openAIOAuthTTFTRecoveryOuterGrace)
 	defer cancel()
+	if s != nil && s.openAIOAuthTTFTGuardStop != nil {
+		go func() {
+			select {
+			case <-s.openAIOAuthTTFTGuardStop:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 	if err := s.RunOpenAIOAuthTTFTRecovery(ctx); err != nil {
-		slog.Warn("openai_oauth_ttft_guard_recovery_failed", "error", err)
+		if !errors.Is(err, context.Canceled) {
+			slog.Warn("openai_oauth_ttft_guard_recovery_failed", "error", err)
+		}
 	}
 }
 
@@ -148,11 +195,15 @@ func (s *OpenAIGatewayService) ObserveOpenAIOAuthTTFT(account *Account, model st
 
 	streak := s.openAIOAuthTTFTStreak(account.ID)
 	streak.mu.Lock()
+	// Keep local observation, distributed update, and trigger consumption in
+	// the same per-account order. Unlocking between them lets a concurrent
+	// fast observation be overwritten by an older slow observation, or lets a
+	// consumed trigger erase slow observations already counted by another call.
+	defer streak.mu.Unlock()
 	if firstTokenMs == nil || *firstTokenMs <= openAIOAuthTTFTThresholdMillis(settings) {
 		streak.count = 0
 		streak.model = ""
 		streak.lastAt = time.Now()
-		streak.mu.Unlock()
 		s.resetDistributedOpenAIOAuthTTFTStreak(account.ID)
 		return
 	}
@@ -161,10 +212,11 @@ func (s *OpenAIGatewayService) ObserveOpenAIOAuthTTFT(account *Account, model st
 	streak.lastAt = time.Now()
 	localCount := streak.count
 	triggerModel := streak.model
-	streak.mu.Unlock()
 	count := int64(localCount)
 	if distributed, ok := s.cache.(OpenAIOAuthTTFTStreakCache); ok && distributed != nil {
-		value, err := distributed.IncrementOpenAIOAuthTTFTStreak(context.Background(), account.ID, 30*time.Minute)
+		// The rule counts consecutive actual calls, regardless of idle time.
+		// Recovery timing must not expire the preceding slow-call history.
+		value, err := distributed.IncrementOpenAIOAuthTTFTStreak(context.Background(), account.ID, 0)
 		if err != nil {
 			slog.Warn("openai_oauth_ttft_guard_streak_cache_failed", "account_id", account.ID, "error", err)
 		} else {
@@ -177,7 +229,9 @@ func (s *OpenAIGatewayService) ObserveOpenAIOAuthTTFT(account *Account, model st
 	// Consume this five-sample trigger before the database write. If the write
 	// races with another pause, the repository returns false and future actual
 	// calls can form a fresh streak without repeatedly writing the same state.
-	s.resetOpenAIOAuthTTFTStreak(account.ID)
+	streak.count = 0
+	streak.model = ""
+	streak.lastAt = time.Now()
 	s.resetDistributedOpenAIOAuthTTFTStreak(account.ID)
 	now := time.Now()
 	next := now.Add(time.Duration(settings.RecoveryIntervalMinutes) * time.Minute)
@@ -270,6 +324,8 @@ func (s *OpenAIGatewayService) RunOpenAIOAuthTTFTRecovery(ctx context.Context) e
 			settings = loaded
 		}
 	}
+	// Turning the guard off stops new pauses; existing pauses still need a
+	// recovery probe so that disabling the feature cannot strand an account.
 	if settings == nil {
 		return nil
 	}
@@ -278,7 +334,10 @@ func (s *OpenAIGatewayService) RunOpenAIOAuthTTFTRecovery(ctx context.Context) e
 		return nil
 	}
 	now := time.Now()
-	leaseUntil := now.Add(openAIOAuthTTFTProbeLeaseDuration)
+	thresholdSeconds := openAIOAuthTTFTThresholdSeconds(settings)
+	ctx, cancel := context.WithTimeout(ctx, openAIOAuthTTFTProbeTimeoutForThreshold(thresholdSeconds)+openAIOAuthTTFTRecoveryOuterGrace)
+	defer cancel()
+	leaseUntil := now.Add(openAIOAuthTTFTProbeLeaseDurationForThreshold(thresholdSeconds))
 	token, err := newOpenAIOAuthTTFTProbeToken()
 	if err != nil {
 		return err
@@ -289,21 +348,28 @@ func (s *OpenAIGatewayService) RunOpenAIOAuthTTFTRecovery(ctx context.Context) e
 	}
 	state, valid := ParseOpenAIOAuthTTFTGuardState(account.Extra)
 	if !valid || strings.TrimSpace(state.Model) == "" {
-		_, finishErr := repo.FinishOpenAIOAuthTTFTProbe(ctx, account.ID, token, false, now.Add(time.Duration(settings.RecoveryIntervalMinutes)*time.Minute))
+		_, finishErr := repo.FinishOpenAIOAuthTTFTProbe(ctx, account.ID, token, false, time.Now().Add(time.Duration(settings.RecoveryIntervalMinutes)*time.Minute))
 		if err == nil {
 			err = finishErr
 		}
 		return err
 	}
-	_, probeErr := s.ProbeOpenAIOAuthTTFT(ctx, account, state.Model, settings.FirstTokenThresholdSeconds)
+	_, probeErr := s.ProbeOpenAIOAuthTTFT(ctx, account, state.Model, thresholdSeconds)
 	recovered := probeErr == nil
-	next := now.Add(time.Duration(settings.RecoveryIntervalMinutes) * time.Minute)
-	_, finishErr := repo.FinishOpenAIOAuthTTFTProbe(ctx, account.ID, token, recovered, next)
+	next := time.Now().Add(time.Duration(settings.RecoveryIntervalMinutes) * time.Minute)
+	// Even if shutdown or the caller cancels the probe, release its lease and
+	// persist the next recovery deadline using a short independent cleanup.
+	finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), openAIOAuthTTFTRecoveryOuterGrace)
+	defer finishCancel()
+	_, finishErr := repo.FinishOpenAIOAuthTTFTProbe(finishCtx, account.ID, token, recovered, next)
 	if finishErr != nil {
 		return finishErr
 	}
 	if probeErr != nil && !errors.Is(probeErr, context.Canceled) && !errors.Is(probeErr, context.DeadlineExceeded) {
 		slog.Warn("openai_oauth_ttft_guard_probe_failed", "account_id", account.ID, "error", probeErr, "next_probe_at", next.UTC())
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	return nil
 }
