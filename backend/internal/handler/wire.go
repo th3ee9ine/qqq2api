@@ -48,6 +48,7 @@ func ProvideDebugAccountHandler(
 		rateLimitService, accountUsageService, accountTestService, concurrencyService,
 		crsSyncService, sessionLimitCache, rpmCache, tokenCacheInvalidator)
 	h.SetDebugWorkbenchService(service.NewDebugWorkbenchService(gateway, adminService))
+	h.SetOpenAIOAuthTTFTHistoryReader(gateway)
 	h.SetClaudeResetCreditService(claudeResetCredits)
 	return h
 }

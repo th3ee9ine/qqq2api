@@ -919,6 +919,8 @@ export interface Account {
   current_window_cost?: number | null // 当前窗口费用
   active_sessions?: number | null // 当前活跃会话数
   current_rpm?: number | null // 当前分钟 RPM 计数
+  // Present only while the OpenAI OAuth TTFT guard is enabled for this account.
+  openai_oauth_ttft?: OpenAIOAuthTTFTHistory
 
   // 影子账号关系（spark 维度影子）
   parent_account_id?: number | null
@@ -934,6 +936,18 @@ export interface Account {
 // The admin account list may return this compact shape when lite=1. Detail
 // operations still use Account from /admin/accounts/:id.
 export type AccountListItem = Omit<Account, 'groups'>
+
+export interface OpenAIOAuthTTFTRequest {
+  first_token_ms: number | null
+  observed_at: string
+  model: string
+}
+
+export interface OpenAIOAuthTTFTHistory {
+  threshold_ms: number
+  /** Most recent actual requests first, up to five entries. */
+  recent_requests: OpenAIOAuthTTFTRequest[]
+}
 
 /** Active ChatGPT device/browser session returned for an OpenAI OAuth account. */
 export interface OpenAIAccountSession {

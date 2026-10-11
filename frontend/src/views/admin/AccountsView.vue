@@ -291,12 +291,13 @@
             <AccountCapacityCell :account="row" />
           </template>
           <template #cell-status="{ row }">
-            <div class="flex items-center gap-1.5">
+            <div class="flex flex-col items-start gap-1.5">
               <AccountStatusIndicator
                 :account="row"
                 :temp-unsched-action-enabled="isSupportedAccount(row)"
                 @show-temp-unsched="handleShowTempUnsched"
               />
+              <AccountTTFTHistory :history="row.openai_oauth_ttft" />
             </div>
           </template>
           <template #cell-schedulable="{ row }">
@@ -554,6 +555,7 @@ import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActions
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
+import AccountTTFTHistory from '@/components/account/AccountTTFTHistory.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
@@ -1569,6 +1571,7 @@ const shouldReplaceAutoRefreshRow = (current: Account, next: Account) => {
     current.rate_limit_reset_at !== next.rate_limit_reset_at ||
     current.overload_until !== next.overload_until ||
     current.temp_unschedulable_until !== next.temp_unschedulable_until ||
+    JSON.stringify(current.openai_oauth_ttft) !== JSON.stringify(next.openai_oauth_ttft) ||
     buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next)
   )
 }

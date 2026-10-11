@@ -2,6 +2,15 @@ export default {
     accounts: {
       title: 'Account Management',
       description: 'Manage AI platform accounts and credentials',
+      ttftHistory: {
+        label: 'Last 5 TTFTs',
+        empty: 'No requests yet',
+        unmeasured: 'Not measured',
+        seconds: '{value}s',
+        details: 'First-token latency of the last 5 requests',
+        newestFirst: 'Requests are recorded while protection is enabled, newest first.',
+        threshold: 'Requests over {value}s are highlighted in red.'
+      },
       createAccount: 'Create Account',
       autoRefresh: 'Auto Refresh',
       enableAutoRefresh: 'Enable auto refresh',

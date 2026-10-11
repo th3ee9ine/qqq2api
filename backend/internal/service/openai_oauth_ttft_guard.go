@@ -67,10 +67,11 @@ func openAIOAuthTTFTProbeLeaseDurationForThreshold(thresholdSeconds int) time.Du
 }
 
 type openAIOAuthTTFTStreak struct {
-	mu     sync.Mutex
-	count  int
-	model  string
-	lastAt time.Time
+	mu      sync.Mutex
+	count   int
+	model   string
+	lastAt  time.Time
+	history []OpenAIOAuthTTFTObservation
 }
 
 type openAIOAuthTTFTStreakKey struct {
@@ -166,14 +167,6 @@ func (s *OpenAIGatewayService) ObserveOpenAIOAuthTTFT(account *Account, model st
 		return
 	}
 	model = strings.TrimSpace(model)
-	if model == "" {
-		// A first-token measurement without a model cannot be used for a
-		// recovery probe. Treat it as an unusable observation rather than
-		// persisting a guard state that could never recover.
-		s.resetOpenAIOAuthTTFTStreak(account.ID)
-		s.resetDistributedOpenAIOAuthTTFTStreak(account.ID)
-		return
-	}
 	settings := DefaultOpenAIOAuthTTFTGuardSettings()
 	if s.settingService != nil {
 		loaded, err := s.settingService.GetOpenAIOAuthTTFTGuardSettings(context.Background())
@@ -200,7 +193,10 @@ func (s *OpenAIGatewayService) ObserveOpenAIOAuthTTFT(account *Account, model st
 	// fast observation be overwritten by an older slow observation, or lets a
 	// consumed trigger erase slow observations already counted by another call.
 	defer streak.mu.Unlock()
-	if firstTokenMs == nil || *firstTokenMs <= openAIOAuthTTFTThresholdMillis(settings) {
+	s.recordOpenAIOAuthTTFTHistoryLocked(streak, account.ID, model, firstTokenMs)
+	// A missing model cannot supply a recovery probe, but the actual request
+	// remains useful in the visible history and must break the slow streak.
+	if model == "" || firstTokenMs == nil || *firstTokenMs <= openAIOAuthTTFTThresholdMillis(settings) {
 		streak.count = 0
 		streak.model = ""
 		streak.lastAt = time.Now()

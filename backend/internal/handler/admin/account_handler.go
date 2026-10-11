@@ -48,23 +48,24 @@ func NewOAuthHandler(oauthService *service.OAuthService) *OAuthHandler {
 
 // AccountHandler handles admin account management
 type AccountHandler struct {
-	claudeResetCredits    claudeResetReader
-	adminService          service.AdminService
-	oauthService          *service.OAuthService
-	openaiOAuthService    *service.OpenAIOAuthService
-	grokOAuthService      service.GrokOAuthTokenService
-	rateLimitService      *service.RateLimitService
-	accountUsageService   *service.AccountUsageService
-	accountTestService    *service.AccountTestService
-	debugWorkbench        *service.DebugWorkbenchService
-	concurrencyService    *service.ConcurrencyService
-	crsSyncService        *service.CRSSyncService
-	sessionLimitCache     service.SessionLimitCache
-	rpmCache              service.RPMCache
-	tokenCacheInvalidator service.TokenCacheInvalidator
-	grokImportProber      grokImportProber
-	upstreamBillingProbe  *service.UpstreamBillingProbeService
-	cfg                   *config.Config
+	claudeResetCredits     claudeResetReader
+	adminService           service.AdminService
+	oauthService           *service.OAuthService
+	openaiOAuthService     *service.OpenAIOAuthService
+	grokOAuthService       service.GrokOAuthTokenService
+	rateLimitService       *service.RateLimitService
+	accountUsageService    *service.AccountUsageService
+	accountTestService     *service.AccountTestService
+	debugWorkbench         *service.DebugWorkbenchService
+	concurrencyService     *service.ConcurrencyService
+	crsSyncService         *service.CRSSyncService
+	sessionLimitCache      service.SessionLimitCache
+	rpmCache               service.RPMCache
+	tokenCacheInvalidator  service.TokenCacheInvalidator
+	grokImportProber       grokImportProber
+	upstreamBillingProbe   *service.UpstreamBillingProbeService
+	openAIOAuthTTFTHistory OpenAIOAuthTTFTHistoryReader
+	cfg                    *config.Config
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -180,10 +181,11 @@ type BulkUpdateAccountFilters struct {
 // AccountWithConcurrency extends Account with real-time concurrency info
 type AccountWithConcurrency struct {
 	*dto.Account
-	simpleMode         bool                         `json:"-"`
-	CurrentConcurrency int                          `json:"current_concurrency"`
-	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
-	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
+	simpleMode         bool                            `json:"-"`
+	CurrentConcurrency int                             `json:"current_concurrency"`
+	SchedulerScore     *AccountSchedulerScore          `json:"scheduler_score,omitempty"`
+	SchedulerScores    []AccountSchedulerGroupScore    `json:"scheduler_scores,omitempty"`
+	OpenAIOAuthTTFT    *service.OpenAIOAuthTTFTHistory `json:"openai_oauth_ttft,omitempty"`
 	// 以下字段仅对 Anthropic OAuth/SetupToken 账号有效，且仅在启用相应功能时返回
 	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"` // 当前窗口费用
 	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
@@ -195,12 +197,13 @@ type AccountWithConcurrency struct {
 // so groups/account_groups never appear in the list payload.
 type AccountListItemWithConcurrency struct {
 	*dto.AccountListItem
-	CurrentConcurrency int                          `json:"current_concurrency"`
-	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
-	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
-	CurrentWindowCost  *float64                     `json:"current_window_cost,omitempty"`
-	ActiveSessions     *int                         `json:"active_sessions,omitempty"`
-	CurrentRPM         *int                         `json:"current_rpm,omitempty"`
+	CurrentConcurrency int                             `json:"current_concurrency"`
+	SchedulerScore     *AccountSchedulerScore          `json:"scheduler_score,omitempty"`
+	SchedulerScores    []AccountSchedulerGroupScore    `json:"scheduler_scores,omitempty"`
+	CurrentWindowCost  *float64                        `json:"current_window_cost,omitempty"`
+	ActiveSessions     *int                            `json:"active_sessions,omitempty"`
+	CurrentRPM         *int                            `json:"current_rpm,omitempty"`
+	OpenAIOAuthTTFT    *service.OpenAIOAuthTTFTHistory `json:"openai_oauth_ttft,omitempty"`
 }
 
 type simpleModeGroupReference struct {
@@ -349,6 +352,7 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 	if account == nil {
 		return item
 	}
+	item.OpenAIOAuthTTFT = h.readOpenAIOAuthTTFTHistory(ctx, []service.Account{*account})[account.ID]
 
 	if h.concurrencyService != nil {
 		if counts, err := h.concurrencyService.GetAccountConcurrencyBatch(ctx, []int64{account.ID}); err == nil {
@@ -656,6 +660,9 @@ func (h *AccountHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	// ListAccounts has already applied owner scope and pagination. Read history
+	// only for these returned accounts, never for the wider scheduler score pool.
+	ttftHistory := h.readOpenAIOAuthTTFTHistory(c.Request.Context(), accounts)
 	// Get current concurrency counts for all accounts
 	accountIDs := make([]int64, len(accounts))
 	for i, acc := range accounts {
@@ -770,6 +777,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],
+			OpenAIOAuthTTFT:    ttftHistory[acc.ID],
 		}
 
 		// 添加窗口费用（仅当启用时）
@@ -810,6 +818,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 				CurrentWindowCost:  item.CurrentWindowCost,
 				ActiveSessions:     item.ActiveSessions,
 				CurrentRPM:         item.CurrentRPM,
+				OpenAIOAuthTTFT:    item.OpenAIOAuthTTFT,
 			}
 		}
 		etag := buildAccountsListETag(compact, total, page, pageSize, platform, accountType, status, search, true)

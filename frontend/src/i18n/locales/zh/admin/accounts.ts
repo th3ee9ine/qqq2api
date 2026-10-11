@@ -2,6 +2,15 @@ export default {
     accounts: {
       title: '账号管理',
       description: '管理 AI 平台账号和 Cookie',
+      ttftHistory: {
+        label: '近 5 次首字',
+        empty: '暂无请求',
+        unmeasured: '未测得',
+        seconds: '{value}秒',
+        details: '最近 5 次请求首字耗时',
+        newestFirst: '仅记录启用保护后的请求，最新请求在前。',
+        threshold: '超过 {value} 秒的请求标红。'
+      },
       createAccount: '添加账号',
       autoRefresh: '自动刷新',
       enableAutoRefresh: '启用自动刷新',
