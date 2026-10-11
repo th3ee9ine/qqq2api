@@ -814,6 +814,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if err == nil && result != nil && result.FirstTokenMs != nil {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
+		// Observe each actual GPT text attempt before failover handling. A
+		// partial result is still a real invocation; a missing TTFT resets the
+		// consecutive-slow streak. Explicit image Responses are excluded.
+		if !imageIntent && !legacyCompact && !nativeV2 && (result == nil || result.ImageCount <= 0) {
+			var firstTokenMs *int
+			if result != nil {
+				firstTokenMs = result.FirstTokenMs
+			}
+			h.gatewayService.ObserveOpenAIOAuthTTFT(
+				account,
+				openAIAccountScheduleModel(c, account, forwardModel, legacyCompact, result),
+				firstTokenMs,
+			)
+		}
 		// #5148 对齐：错误返回携带的部分 result（流中断前上游已计量的 usage）照常
 		// 入账；failover 错误恒定 result=nil，不会重复计费。
 		submitResponsesUsage := func(res *service.OpenAIForwardResult) {
@@ -1402,6 +1416,20 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, responseLatencyMs)
 		if err == nil && result != nil && result.FirstTokenMs != nil {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
+		}
+		// Messages is a text compatibility endpoint. Observe this attempt once,
+		// including partial/error results, while leaving image output outside the
+		// GPT text account guard.
+		if result == nil || result.ImageCount <= 0 {
+			var firstTokenMs *int
+			if result != nil {
+				firstTokenMs = result.FirstTokenMs
+			}
+			h.gatewayService.ObserveOpenAIOAuthTTFT(
+				account,
+				openAIAccountScheduleModel(c, account, currentRoutingModel, false, result),
+				firstTokenMs,
+			)
 		}
 		// Forward 与错误一起返回的部分结果：流中断/客户端断开排水前上游已计量的
 		// usage 照常入账，避免上游已产生消耗的请求完全漏记（#5148，对齐 anthropic
@@ -3073,6 +3101,20 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					cyberMarked && !h.cyberPolicyLogOnly(c, apiKey),
 					turnErr,
 				)
+				// Each websocket turn is one actual GPT text invocation. Record it
+				// exactly once even when no first token was observed; image turns do
+				// not participate in the text account guard.
+				if !imageIntent && (result == nil || result.ImageCount <= 0) {
+					var firstTokenMs *int
+					if result != nil {
+						firstTokenMs = result.FirstTokenMs
+					}
+					model := turnUpstreamModel
+					if model == "" {
+						model = turnRequestedModel
+					}
+					h.gatewayService.ObserveOpenAIOAuthTTFT(account, model, firstTokenMs)
+				}
 				if turnErr != nil {
 					if result == nil || result.ImageCount <= 0 {
 						return

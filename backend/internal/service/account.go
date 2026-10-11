@@ -184,6 +184,9 @@ func (a *Account) IsSchedulable() bool {
 	if a == nil || !IsActiveAccountPlatform(a.Platform) || !a.IsActive() || !a.Schedulable {
 		return false
 	}
+	if a.IsOpenAIOAuthTTFTPaused() {
+		return false
+	}
 	now := time.Now()
 	if a.AutoPauseOnExpired && a.ExpiresAt != nil && !now.Before(*a.ExpiresAt) {
 		return false

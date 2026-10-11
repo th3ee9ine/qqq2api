@@ -50,6 +50,50 @@ func (h *SettingHandler) DeleteAdminAPIKey(c *gin.Context) {
 	response.Success(c, gin.H{"message": "Admin API key deleted"})
 }
 
+// GetOpenAIOAuthTTFTGuardSettings returns the OpenAI OAuth first-token latency
+// guard policy. The trigger remains fixed at five consecutive samples over 15s;
+// this endpoint exposes the feature switch and recovery probe interval.
+// GET /api/v1/admin/settings/openai-oauth-ttft-guard
+func (h *SettingHandler) GetOpenAIOAuthTTFTGuardSettings(c *gin.Context) {
+	settings, err := h.settingService.GetOpenAIOAuthTTFTGuardSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.OpenAIOAuthTTFTGuardSettings{
+		Enabled:                 settings.Enabled,
+		RecoveryIntervalMinutes: settings.RecoveryIntervalMinutes,
+	})
+}
+
+type UpdateOpenAIOAuthTTFTGuardSettingsRequest struct {
+	Enabled                 bool `json:"enabled"`
+	RecoveryIntervalMinutes int  `json:"recovery_interval_minutes"`
+}
+
+// UpdateOpenAIOAuthTTFTGuardSettings persists the OpenAI OAuth first-token
+// latency guard policy.
+// PUT /api/v1/admin/settings/openai-oauth-ttft-guard
+func (h *SettingHandler) UpdateOpenAIOAuthTTFTGuardSettings(c *gin.Context) {
+	var req UpdateOpenAIOAuthTTFTGuardSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	settings := &service.OpenAIOAuthTTFTGuardSettings{
+		Enabled:                 req.Enabled,
+		RecoveryIntervalMinutes: req.RecoveryIntervalMinutes,
+	}
+	if err := h.settingService.SetOpenAIOAuthTTFTGuardSettings(c.Request.Context(), settings); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.OpenAIOAuthTTFTGuardSettings{
+		Enabled:                 settings.Enabled,
+		RecoveryIntervalMinutes: settings.RecoveryIntervalMinutes,
+	})
+}
+
 // GetOverloadCooldownSettings 获取529过载冷却配置
 // GET /api/v1/admin/settings/overload-cooldown
 func (h *SettingHandler) GetOverloadCooldownSettings(c *gin.Context) {

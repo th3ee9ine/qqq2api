@@ -980,11 +980,12 @@ type groupAccountCounts struct {
 	RateLimited int64
 }
 
-const (
+var (
 	// 分组页的"可用"账号数必须与账号仓储的 ListSchedulableByGroupID 过滤口径一致。
 	groupAccountAvailableSQL = `a.deleted_at IS NULL
 				AND a.status = 'active'
 				AND a.schedulable = true
+				AND ` + openAIOAuthTTFTGuardSQL("COALESCE(a.extra, '{}'::jsonb)") + `
 				AND (a.expires_at IS NULL OR a.expires_at > NOW() OR a.auto_pause_on_expired = FALSE)
 				AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= NOW())
 				AND (a.overload_until IS NULL OR a.overload_until <= NOW())
@@ -994,6 +995,7 @@ const (
 	groupAccountTemporarilyLimitedSQL = `a.deleted_at IS NULL
 				AND a.status = 'active'
 				AND a.schedulable = true
+				AND ` + openAIOAuthTTFTGuardSQL("COALESCE(a.extra, '{}'::jsonb)") + `
 				AND (a.expires_at IS NULL OR a.expires_at > NOW() OR a.auto_pause_on_expired = FALSE)
 				AND (
 					a.rate_limit_reset_at > NOW() OR

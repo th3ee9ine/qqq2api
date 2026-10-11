@@ -511,11 +511,15 @@ type OpenAIGatewayService struct {
 	openaiWSStateStoreOnce         sync.Once
 	openaiSchedulerOnce            sync.Once
 	openAIOAuthAdmissionOnce       sync.Once
+	openAIOAuthTTFTGuardWorkerOnce sync.Once
+	openAIOAuthTTFTGuardStopOnce   sync.Once
 	openaiProxyStreamCircuitOnce   sync.Once
 	openaiWSPassthroughDialerOnce  sync.Once
 	openaiModelTransientOnce       sync.Once
 	agentIdentityTaskMu            sync.Mutex
 	openaiWSPool                   *openAIWSConnPool
+	openAIOAuthTTFTGuardStop       chan struct{}
+	openAIOAuthTTFTGuardWG         sync.WaitGroup
 	openaiWSStateStore             OpenAIWSStateStore
 	openaiScheduler                OpenAIAccountScheduler
 	openAIOAuthAdmission           *openAIOAuthAdmissionController
@@ -655,6 +659,7 @@ func NewOpenAIGatewayService(
 	if openAITokenProvider != nil {
 		openAITokenProvider.SetAccountRuntimeBlocker(svc)
 	}
+	svc.startOpenAIOAuthTTFTGuardWorker()
 	svc.logOpenAIWSModeBootstrap()
 	return svc
 }
@@ -771,6 +776,7 @@ func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
 	if s == nil {
 		return
 	}
+	s.stopOpenAIOAuthTTFTGuardWorker()
 	if s.openaiWSPool != nil {
 		s.openaiWSPool.Close()
 	}

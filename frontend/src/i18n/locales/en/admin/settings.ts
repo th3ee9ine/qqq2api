@@ -482,6 +482,17 @@ export default {
         saved: 'Overload cooldown settings saved',
         saveFailed: 'Failed to save overload cooldown settings'
       },
+      openaiOauthTTFTGuard: {
+        title: 'OpenAI OAuth TTFT Guard',
+        description: 'Automatically pause an OpenAI subscription account after five consecutive requests take more than 15 seconds to receive the first token.',
+        enabled: 'Enable TTFT guard',
+        enabledHint: 'Paused accounts are tested again after the recovery interval and resume only when the test first token arrives within 15 seconds.',
+        recoveryInterval: 'Recovery test interval (minutes)',
+        recoveryIntervalHint: 'How long a paused account waits before a recovery test (1–10080 minutes).',
+        fixedRules: 'Fixed rules: 5 consecutive actual calls over 15 seconds pause the account; a recovery test at or under 15 seconds resumes it.',
+        saved: 'OpenAI OAuth TTFT guard settings saved',
+        saveFailed: 'Failed to save OpenAI OAuth TTFT guard settings'
+      },
       rateLimit429Cooldown: {
         title: '429 Default Cooldown',
         description: 'Configure the default account cooldown when upstream returns 429 without an explicit reset time',

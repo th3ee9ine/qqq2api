@@ -17,6 +17,7 @@ import (
 const stickySessionPrefix = "sticky_session:"
 const openAIResponsesSessionWindowPrefix = "openai_responses_session_window:"
 const liveCallPrefix = "live:call:"
+const openAIOAuthTTFTStreakPrefix = "openai_oauth_ttft_streak:account:"
 
 type gatewayCache struct {
 	rdb *redis.Client
@@ -24,6 +25,50 @@ type gatewayCache struct {
 
 func NewGatewayCache(rdb *redis.Client) service.GatewayCache {
 	return &gatewayCache{rdb: rdb}
+}
+
+var openAIOAuthTTFTStreakIncrScript = redis.NewScript(`
+local count = redis.call('INCR', KEYS[1])
+redis.call('EXPIRE', KEYS[1], ARGV[1])
+return count
+`)
+
+func openAIOAuthTTFTStreakKey(accountID int64) string {
+	return fmt.Sprintf("%s%d", openAIOAuthTTFTStreakPrefix, accountID)
+}
+
+// IncrementOpenAIOAuthTTFTStreak updates the per-account consecutive slow
+// invocation count atomically. Refreshing the TTL on every increment keeps a
+// burst of calls together while allowing an abandoned streak to disappear.
+func (c *gatewayCache) IncrementOpenAIOAuthTTFTStreak(ctx context.Context, accountID int64, ttl time.Duration) (int64, error) {
+	if c == nil || c.rdb == nil {
+		return 0, errors.New("gateway cache unavailable")
+	}
+	if accountID <= 0 {
+		return 0, errors.New("invalid OpenAI OAuth TTFT account id")
+	}
+	if ttl <= 0 {
+		ttl = 30 * time.Minute
+	}
+	seconds := int64(ttl / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	value, err := openAIOAuthTTFTStreakIncrScript.Run(ctx, c.rdb, []string{openAIOAuthTTFTStreakKey(accountID)}, seconds).Int64()
+	if err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func (c *gatewayCache) ResetOpenAIOAuthTTFTStreak(ctx context.Context, accountID int64) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("gateway cache unavailable")
+	}
+	if accountID <= 0 {
+		return errors.New("invalid OpenAI OAuth TTFT account id")
+	}
+	return c.rdb.Del(ctx, openAIOAuthTTFTStreakKey(accountID)).Err()
 }
 
 // buildSessionKey 构建 session key，包含 groupID 实现分组隔离
@@ -226,6 +271,7 @@ func (c *gatewayCache) ReleaseGrokVideoBilled(ctx context.Context, key string) e
 // Compile-time assertion: gatewayCache must implement CyberSessionBlockStore.
 var _ service.CyberSessionBlockStore = (*gatewayCache)(nil)
 var _ service.LiveCallStore = (*gatewayCache)(nil)
+var _ service.OpenAIOAuthTTFTStreakCache = (*gatewayCache)(nil)
 
 const reasoningContentPrefix = "reasoning_content:"
 

@@ -480,6 +480,17 @@ export default {
         saved: '过载冷却设置保存成功',
         saveFailed: '保存过载冷却设置失败'
       },
+      openaiOauthTTFTGuard: {
+        title: 'OpenAI 订阅账号首字耗时保护',
+        description: '最近连续 5 次实际调用首字耗时均超过 15 秒时，自动暂停 OpenAI 订阅账号的调用。',
+        enabled: '启用首字耗时保护',
+        enabledHint: '暂停账号会在恢复间隔后重新测试，只有测试首字耗时不超过 15 秒才恢复调用。',
+        recoveryInterval: '恢复测试间隔（分钟）',
+        recoveryIntervalHint: '暂停账号等待多久进行恢复测试（1–10080 分钟）。',
+        fixedRules: '固定规则：连续 5 次实际调用超过 15 秒暂停；恢复测试不超过 15 秒后恢复调用。',
+        saved: 'OpenAI 订阅账号首字耗时保护设置已保存',
+        saveFailed: '保存 OpenAI 订阅账号首字耗时保护设置失败'
+      },
       rateLimit429Cooldown: {
         title: '429 默认回避',
         description: '配置上游返回 429 且没有明确重置时间时的默认账号回避策略',

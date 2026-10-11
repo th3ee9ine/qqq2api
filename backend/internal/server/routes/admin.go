@@ -448,6 +448,9 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		// 529过载冷却配置
 		adminSettings.GET("/overload-cooldown", h.Admin.Setting.GetOverloadCooldownSettings)
 		adminSettings.PUT("/overload-cooldown", h.Admin.Setting.UpdateOverloadCooldownSettings)
+		// OpenAI OAuth first-token latency guard configuration
+		adminSettings.GET("/openai-oauth-ttft-guard", h.Admin.Setting.GetOpenAIOAuthTTFTGuardSettings)
+		adminSettings.PUT("/openai-oauth-ttft-guard", h.Admin.Setting.UpdateOpenAIOAuthTTFTGuardSettings)
 		// 429默认回避配置
 		adminSettings.GET("/rate-limit-429-cooldown", h.Admin.Setting.GetRateLimit429CooldownSettings)
 		adminSettings.PUT("/rate-limit-429-cooldown", h.Admin.Setting.UpdateRateLimit429CooldownSettings)

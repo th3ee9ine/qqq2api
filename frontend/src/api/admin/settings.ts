@@ -445,6 +445,30 @@ export async function updateOverloadCooldownSettings(
   return data;
 }
 
+// ==================== OpenAI OAuth TTFT Guard Settings ====================
+
+export interface OpenAIOAuthTTFTGuardSettings {
+  enabled: boolean;
+  recovery_interval_minutes: number;
+}
+
+export async function getOpenAIOAuthTTFTGuardSettings(): Promise<OpenAIOAuthTTFTGuardSettings> {
+  const { data } = await apiClient.get<OpenAIOAuthTTFTGuardSettings>(
+    "/admin/settings/openai-oauth-ttft-guard",
+  );
+  return data;
+}
+
+export async function updateOpenAIOAuthTTFTGuardSettings(
+  settings: OpenAIOAuthTTFTGuardSettings,
+): Promise<OpenAIOAuthTTFTGuardSettings> {
+  const { data } = await apiClient.put<OpenAIOAuthTTFTGuardSettings>(
+    "/admin/settings/openai-oauth-ttft-guard",
+    settings,
+  );
+  return data;
+}
+
 // ==================== 429 Rate Limit Cooldown Settings ====================
 
 export interface RateLimit429CooldownSettings {
@@ -764,6 +788,8 @@ export const settingsAPI = {
   deleteAdminApiKey,
   getOverloadCooldownSettings,
   updateOverloadCooldownSettings,
+  getOpenAIOAuthTTFTGuardSettings,
+  updateOpenAIOAuthTTFTGuardSettings,
   getRateLimit429CooldownSettings,
   updateRateLimit429CooldownSettings,
   getPanelRateLimitSettings,

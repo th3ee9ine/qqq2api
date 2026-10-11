@@ -269,6 +269,12 @@ type OpenAIImagesOAuthUnavailableCooldownSettings struct {
 	CooldownMinutes int `json:"cooldown_minutes"`
 }
 
+// OpenAIOAuthTTFTGuardSettings controls the OpenAI OAuth first-token latency guard.
+type OpenAIOAuthTTFTGuardSettings struct {
+	Enabled                 bool `json:"enabled"`
+	RecoveryIntervalMinutes int  `json:"recovery_interval_minutes"`
+}
+
 // PanelRateLimitSettings 面板 API 限流配置 DTO
 type PanelRateLimitSettings struct {
 	Enabled     bool `json:"enabled"`

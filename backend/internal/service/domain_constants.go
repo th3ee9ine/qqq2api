@@ -347,6 +347,9 @@ const (
 	SettingKeyOpenAIImagesOAuthUnavailableCooldownSettings = "openai_images_oauth_unavailable_cooldown_settings"
 	// SettingKeyOpenAIAPIKeyHealthBreakerSettings stores the opt-in OpenAI pool API-key breaker config.
 	SettingKeyOpenAIAPIKeyHealthBreakerSettings = "openai_apikey_health_breaker_settings"
+	// SettingKeyOpenAIOAuthTTFTGuardSettings stores the OpenAI OAuth first-token
+	// latency guard switch and recovery probe interval.
+	SettingKeyOpenAIOAuthTTFTGuardSettings = "openai_oauth_ttft_guard_settings"
 
 	// =========================
 	// Stream Timeout Handling

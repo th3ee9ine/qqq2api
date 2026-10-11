@@ -266,6 +266,16 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if err == nil && result != nil && result.FirstTokenMs != nil {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
+		// Count each real Chat Completions attempt, including partial streams
+		// returned with an error. Image results are excluded from the GPT text
+		// account guard.
+		if result == nil || result.ImageCount <= 0 {
+			var firstTokenMs *int
+			if result != nil {
+				firstTokenMs = result.FirstTokenMs
+			}
+			h.gatewayService.ObserveOpenAIOAuthTTFT(account, openAIAccountScheduleModel(c, account, reqModel, false, result), firstTokenMs)
+		}
 		// #5148 对齐：错误返回携带的部分 result（流中断前上游已计量的 usage）照常
 		// 入账；failover 错误恒定 result=nil，不会重复计费。
 		submitChatUsage := func(res *service.OpenAIForwardResult) {

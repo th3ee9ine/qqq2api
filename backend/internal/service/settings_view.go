@@ -375,6 +375,22 @@ type OpenAIAPIKeyHealthBreakerSettings struct {
 	CooldownMinutes  int  `json:"cooldown_minutes"`
 }
 
+// OpenAIOAuthTTFTGuardSettings controls automatic pausing of OpenAI OAuth
+// accounts whose recent first-token latency stays above the fixed 15-second
+// threshold. The guard owns the five-sample trigger and probe rules; this
+// setting controls the feature switch and recovery probe interval.
+type OpenAIOAuthTTFTGuardSettings struct {
+	Enabled                 bool `json:"enabled"`
+	RecoveryIntervalMinutes int  `json:"recovery_interval_minutes"`
+}
+
+func DefaultOpenAIOAuthTTFTGuardSettings() *OpenAIOAuthTTFTGuardSettings {
+	return &OpenAIOAuthTTFTGuardSettings{
+		Enabled:                 true,
+		RecoveryIntervalMinutes: 30,
+	}
+}
+
 func DefaultOpenAIAPIKeyHealthBreakerSettings() *OpenAIAPIKeyHealthBreakerSettings {
 	return &OpenAIAPIKeyHealthBreakerSettings{
 		Enabled:          false,
