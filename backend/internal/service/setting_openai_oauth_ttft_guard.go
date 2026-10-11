@@ -10,9 +10,12 @@ import (
 )
 
 const (
-	openAIOAuthTTFTGuardSettingsCacheTTL   = 30 * time.Second
-	OpenAIOAuthTTFTGuardMinRecoveryMinutes = 1
-	OpenAIOAuthTTFTGuardMaxRecoveryMinutes = 10080
+	openAIOAuthTTFTGuardSettingsCacheTTL                  = 30 * time.Second
+	OpenAIOAuthTTFTGuardMinRecoveryMinutes                = 1
+	OpenAIOAuthTTFTGuardMaxRecoveryMinutes                = 10080
+	OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds = 15
+	OpenAIOAuthTTFTGuardMinFirstTokenThresholdSeconds     = 1
+	OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds     = 300
 )
 
 type cachedOpenAIOAuthTTFTGuardSettings struct {
@@ -29,6 +32,15 @@ func normalizeOpenAIOAuthTTFTGuardSettings(settings *OpenAIOAuthTTFTGuardSetting
 		result.RecoveryIntervalMinutes = OpenAIOAuthTTFTGuardMinRecoveryMinutes
 	} else if result.RecoveryIntervalMinutes > OpenAIOAuthTTFTGuardMaxRecoveryMinutes {
 		result.RecoveryIntervalMinutes = OpenAIOAuthTTFTGuardMaxRecoveryMinutes
+	}
+	if result.FirstTokenThresholdSeconds == 0 {
+		// Settings written before this field was introduced decode to zero. Keep
+		// those persisted policies at the original 15-second behavior.
+		result.FirstTokenThresholdSeconds = OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds
+	} else if result.FirstTokenThresholdSeconds < OpenAIOAuthTTFTGuardMinFirstTokenThresholdSeconds {
+		result.FirstTokenThresholdSeconds = OpenAIOAuthTTFTGuardMinFirstTokenThresholdSeconds
+	} else if result.FirstTokenThresholdSeconds > OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds {
+		result.FirstTokenThresholdSeconds = OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds
 	}
 	return &result
 }
@@ -74,6 +86,14 @@ func (s *SettingService) SetOpenAIOAuthTTFTGuardSettings(ctx context.Context, se
 	}
 	if settings.RecoveryIntervalMinutes < OpenAIOAuthTTFTGuardMinRecoveryMinutes || settings.RecoveryIntervalMinutes > OpenAIOAuthTTFTGuardMaxRecoveryMinutes {
 		return fmt.Errorf("recovery_interval_minutes must be between %d-%d", OpenAIOAuthTTFTGuardMinRecoveryMinutes, OpenAIOAuthTTFTGuardMaxRecoveryMinutes)
+	}
+	if settings.FirstTokenThresholdSeconds == 0 {
+		// Older clients may send the pre-threshold payload. Treat the omitted
+		// field as the original default instead of rejecting the whole update.
+		settings.FirstTokenThresholdSeconds = OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds
+	}
+	if settings.FirstTokenThresholdSeconds < OpenAIOAuthTTFTGuardMinFirstTokenThresholdSeconds || settings.FirstTokenThresholdSeconds > OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds {
+		return fmt.Errorf("first_token_threshold_seconds must be between %d-%d", OpenAIOAuthTTFTGuardMinFirstTokenThresholdSeconds, OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds)
 	}
 	data, err := json.Marshal(settings)
 	if err != nil {

@@ -38,3 +38,14 @@ func TestValidateOpenAIOAuthTTFTProbeResult(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateOpenAIOAuthTTFTProbeResultUsesConfiguredThreshold(t *testing.T) {
+	latency := 20_001
+	result := &OpenAIForwardResult{FirstTokenMs: &latency}
+	if err := validateOpenAIOAuthTTFTProbeResult(result, 20_000); !errors.Is(err, errOpenAIOAuthTTFTProbeTooSlow) {
+		t.Fatalf("validate configured threshold error = %v, want %v", err, errOpenAIOAuthTTFTProbeTooSlow)
+	}
+	if err := validateOpenAIOAuthTTFTProbeResult(result, 21_000); err != nil {
+		t.Fatalf("validate configured threshold: unexpected error: %v", err)
+	}
+}

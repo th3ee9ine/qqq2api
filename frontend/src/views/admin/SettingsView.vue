@@ -348,6 +348,23 @@
                     <label
                       class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
                     >
+                      {{ t("admin.settings.openaiOauthTTFTGuard.firstTokenThreshold") }}
+                    </label>
+                    <input
+                      v-model.number="openAIOAuthTTFTGuardForm.first_token_threshold_seconds"
+                      type="number"
+                      min="1"
+                      max="300"
+                      class="input w-32"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.openaiOauthTTFTGuard.firstTokenThresholdHint") }}
+                    </p>
+                  </div>
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
                       {{ t("admin.settings.openaiOauthTTFTGuard.recoveryInterval") }}
                     </label>
                     <input
@@ -4666,8 +4683,9 @@ const overloadCooldownForm = reactive({
 const openAIOAuthTTFTGuardLoading = ref(true);
 const openAIOAuthTTFTGuardSaving = ref(false);
 const openAIOAuthTTFTGuardForm = reactive({
-  enabled: true,
+  enabled: false,
   recovery_interval_minutes: 30,
+  first_token_threshold_seconds: 15,
 });
 
 // Rate Limit Cooldown (429) 状态
@@ -6680,6 +6698,7 @@ async function saveOpenAIOAuthTTFTGuardSettings() {
     const updated = await adminAPI.settings.updateOpenAIOAuthTTFTGuardSettings({
       enabled: openAIOAuthTTFTGuardForm.enabled,
       recovery_interval_minutes: openAIOAuthTTFTGuardForm.recovery_interval_minutes,
+      first_token_threshold_seconds: openAIOAuthTTFTGuardForm.first_token_threshold_seconds,
     });
     Object.assign(openAIOAuthTTFTGuardForm, updated);
     appStore.showSuccess(t("admin.settings.openaiOauthTTFTGuard.saved"));

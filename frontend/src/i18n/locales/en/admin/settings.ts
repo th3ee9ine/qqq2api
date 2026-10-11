@@ -484,12 +484,14 @@ export default {
       },
       openaiOauthTTFTGuard: {
         title: 'OpenAI OAuth TTFT Guard',
-        description: 'Automatically pause an OpenAI subscription account after five consecutive requests take more than 15 seconds to receive the first token.',
+        description: 'Automatically pause an OpenAI subscription account after five consecutive requests take longer than the configured first-token threshold.',
         enabled: 'Enable TTFT guard',
-        enabledHint: 'Paused accounts are tested again after the recovery interval and resume only when the test first token arrives within 15 seconds.',
+        enabledHint: 'Paused accounts are tested again after the recovery interval and resume only when the test first token arrives within the configured threshold.',
+        firstTokenThreshold: 'First-token threshold (seconds)',
+        firstTokenThresholdHint: 'Five consecutive actual calls above this threshold pause the account; range 1–300 seconds.',
         recoveryInterval: 'Recovery test interval (minutes)',
         recoveryIntervalHint: 'How long a paused account waits before a recovery test (1–10080 minutes).',
-        fixedRules: 'Fixed rules: 5 consecutive actual calls over 15 seconds pause the account; a recovery test at or under 15 seconds resumes it.',
+        fixedRules: 'Rule: 5 consecutive actual calls above the configured threshold pause the account; a recovery test at or under it resumes the account.',
         saved: 'OpenAI OAuth TTFT guard settings saved',
         saveFailed: 'Failed to save OpenAI OAuth TTFT guard settings'
       },

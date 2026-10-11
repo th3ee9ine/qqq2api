@@ -2,12 +2,33 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type ttftGuardSettingRepo struct {
+	SettingRepository
+	value string
+}
+
+func (r *ttftGuardSettingRepo) GetValue(context.Context, string) (string, error) {
+	return r.value, nil
+}
+
+func newEnabledTTFTGuardSettingService(t *testing.T, thresholdSeconds int) *SettingService {
+	t.Helper()
+	value, err := json.Marshal(OpenAIOAuthTTFTGuardSettings{
+		Enabled:                    true,
+		RecoveryIntervalMinutes:    30,
+		FirstTokenThresholdSeconds: thresholdSeconds,
+	})
+	require.NoError(t, err)
+	return NewSettingService(&ttftGuardSettingRepo{value: string(value)}, nil)
+}
 
 type ttftGuardAccountRepoStub struct {
 	AccountRepository
@@ -37,7 +58,7 @@ func (r *ttftGuardAccountRepoStub) FinishOpenAIOAuthTTFTProbe(context.Context, i
 
 func TestObserveOpenAIOAuthTTFTPausesAfterFiveStrictlySlowCalls(t *testing.T) {
 	repo := &ttftGuardAccountRepoStub{changed: true}
-	svc := &OpenAIGatewayService{accountRepo: repo}
+	svc := &OpenAIGatewayService{accountRepo: repo, settingService: newEnabledTTFTGuardSettingService(t, 15)}
 	account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	latency := 15_001
 	for i := 0; i < openAIOAuthTTFTSlowStreakThreshold-1; i++ {
@@ -55,9 +76,22 @@ func TestObserveOpenAIOAuthTTFTPausesAfterFiveStrictlySlowCalls(t *testing.T) {
 	repo.mu.Unlock()
 }
 
-func TestObserveOpenAIOAuthTTFTFastCallBreaksStreakAndSkipsUnsupportedAccounts(t *testing.T) {
+func TestObserveOpenAIOAuthTTFTIsDisabledByDefault(t *testing.T) {
 	repo := &ttftGuardAccountRepoStub{changed: true}
 	svc := &OpenAIGatewayService{accountRepo: repo}
+	account := &Account{ID: 47, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	latency := 15_001
+	for i := 0; i < openAIOAuthTTFTSlowStreakThreshold; i++ {
+		svc.ObserveOpenAIOAuthTTFT(account, "gpt-5.3-codex", &latency)
+	}
+	repo.mu.Lock()
+	require.Zero(t, repo.pauses)
+	repo.mu.Unlock()
+}
+
+func TestObserveOpenAIOAuthTTFTFastCallBreaksStreakAndSkipsUnsupportedAccounts(t *testing.T) {
+	repo := &ttftGuardAccountRepoStub{changed: true}
+	svc := &OpenAIGatewayService{accountRepo: repo, settingService: newEnabledTTFTGuardSettingService(t, 15)}
 	account := &Account{ID: 43, Platform: PlatformOpenAI, Type: AccountTypeSetupToken}
 	slow := 15_001
 	fast := 15_000
@@ -81,5 +115,26 @@ func TestObserveOpenAIOAuthTTFTFastCallBreaksStreakAndSkipsUnsupportedAccounts(t
 	}
 	repo.mu.Lock()
 	require.Zero(t, repo.pauses)
+	repo.mu.Unlock()
+}
+
+func TestObserveOpenAIOAuthTTFTUsesConfiguredThreshold(t *testing.T) {
+	repo := &ttftGuardAccountRepoStub{changed: true}
+	svc := &OpenAIGatewayService{accountRepo: repo, settingService: newEnabledTTFTGuardSettingService(t, 20)}
+	account := &Account{ID: 46, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	nearDefault := 15_001
+	for i := 0; i < openAIOAuthTTFTSlowStreakThreshold; i++ {
+		svc.ObserveOpenAIOAuthTTFT(account, "gpt-5.3-codex", &nearDefault)
+	}
+	repo.mu.Lock()
+	require.Zero(t, repo.pauses)
+	repo.mu.Unlock()
+
+	configuredSlow := 20_001
+	for i := 0; i < openAIOAuthTTFTSlowStreakThreshold; i++ {
+		svc.ObserveOpenAIOAuthTTFT(account, "gpt-5.3-codex", &configuredSlow)
+	}
+	repo.mu.Lock()
+	require.Equal(t, 1, repo.pauses)
 	repo.mu.Unlock()
 }

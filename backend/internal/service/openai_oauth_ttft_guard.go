@@ -13,11 +13,24 @@ import (
 )
 
 const (
-	openAIOAuthTTFTSlowThresholdMillis  = 15_000
+	// Kept as a compatibility alias for package-local tests and diagnostics.
+	// Runtime decisions use the value loaded from OpenAIOAuthTTFTGuardSettings.
+	openAIOAuthTTFTSlowThresholdMillis  = OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds * 1000
 	openAIOAuthTTFTSlowStreakThreshold  = 5
 	openAIOAuthTTFTProbeLeaseDuration   = 2 * time.Minute
 	openAIOAuthTTFTRecoveryPollInterval = 30 * time.Second
 )
+
+func openAIOAuthTTFTThresholdMillis(settings *OpenAIOAuthTTFTGuardSettings) int {
+	seconds := OpenAIOAuthTTFTGuardDefaultFirstTokenThresholdSeconds
+	if settings != nil && settings.FirstTokenThresholdSeconds >= OpenAIOAuthTTFTGuardMinFirstTokenThresholdSeconds {
+		seconds = settings.FirstTokenThresholdSeconds
+	}
+	if seconds > OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds {
+		seconds = OpenAIOAuthTTFTGuardMaxFirstTokenThresholdSeconds
+	}
+	return seconds * 1000
+}
 
 type openAIOAuthTTFTStreak struct {
 	mu     sync.Mutex
@@ -94,7 +107,7 @@ func (s *OpenAIGatewayService) stopOpenAIOAuthTTFTGuardWorker() {
 
 // ObserveOpenAIOAuthTTFT records one actual GPT text invocation. A missing or
 // threshold-compliant first-token measurement breaks the consecutive streak;
-// exactly five measurements strictly above 15 seconds trigger one persistent
+// exactly five measurements strictly above the configured threshold trigger one persistent
 // account pause. The write is delegated to the narrow repository CAS so
 // concurrent gateway requests and multiple instances cannot replace another
 // subsystem's pause state.
@@ -135,7 +148,7 @@ func (s *OpenAIGatewayService) ObserveOpenAIOAuthTTFT(account *Account, model st
 
 	streak := s.openAIOAuthTTFTStreak(account.ID)
 	streak.mu.Lock()
-	if firstTokenMs == nil || *firstTokenMs <= openAIOAuthTTFTSlowThresholdMillis {
+	if firstTokenMs == nil || *firstTokenMs <= openAIOAuthTTFTThresholdMillis(settings) {
 		streak.count = 0
 		streak.model = ""
 		streak.lastAt = time.Now()
@@ -282,7 +295,7 @@ func (s *OpenAIGatewayService) RunOpenAIOAuthTTFTRecovery(ctx context.Context) e
 		}
 		return err
 	}
-	_, probeErr := s.ProbeOpenAIOAuthTTFT(ctx, account, state.Model)
+	_, probeErr := s.ProbeOpenAIOAuthTTFT(ctx, account, state.Model, settings.FirstTokenThresholdSeconds)
 	recovered := probeErr == nil
 	next := now.Add(time.Duration(settings.RecoveryIntervalMinutes) * time.Minute)
 	_, finishErr := repo.FinishOpenAIOAuthTTFTProbe(ctx, account.ID, token, recovered, next)

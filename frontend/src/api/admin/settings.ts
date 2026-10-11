@@ -450,6 +450,7 @@ export async function updateOverloadCooldownSettings(
 export interface OpenAIOAuthTTFTGuardSettings {
   enabled: boolean;
   recovery_interval_minutes: number;
+  first_token_threshold_seconds: number;
 }
 
 export async function getOpenAIOAuthTTFTGuardSettings(): Promise<OpenAIOAuthTTFTGuardSettings> {

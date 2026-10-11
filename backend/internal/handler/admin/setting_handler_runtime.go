@@ -51,8 +51,7 @@ func (h *SettingHandler) DeleteAdminAPIKey(c *gin.Context) {
 }
 
 // GetOpenAIOAuthTTFTGuardSettings returns the OpenAI OAuth first-token latency
-// guard policy. The trigger remains fixed at five consecutive samples over 15s;
-// this endpoint exposes the feature switch and recovery probe interval.
+// guard policy, including the trigger threshold and recovery probe interval.
 // GET /api/v1/admin/settings/openai-oauth-ttft-guard
 func (h *SettingHandler) GetOpenAIOAuthTTFTGuardSettings(c *gin.Context) {
 	settings, err := h.settingService.GetOpenAIOAuthTTFTGuardSettings(c.Request.Context())
@@ -61,14 +60,16 @@ func (h *SettingHandler) GetOpenAIOAuthTTFTGuardSettings(c *gin.Context) {
 		return
 	}
 	response.Success(c, dto.OpenAIOAuthTTFTGuardSettings{
-		Enabled:                 settings.Enabled,
-		RecoveryIntervalMinutes: settings.RecoveryIntervalMinutes,
+		Enabled:                    settings.Enabled,
+		RecoveryIntervalMinutes:    settings.RecoveryIntervalMinutes,
+		FirstTokenThresholdSeconds: settings.FirstTokenThresholdSeconds,
 	})
 }
 
 type UpdateOpenAIOAuthTTFTGuardSettingsRequest struct {
-	Enabled                 bool `json:"enabled"`
-	RecoveryIntervalMinutes int  `json:"recovery_interval_minutes"`
+	Enabled                    bool `json:"enabled"`
+	RecoveryIntervalMinutes    int  `json:"recovery_interval_minutes"`
+	FirstTokenThresholdSeconds int  `json:"first_token_threshold_seconds"`
 }
 
 // UpdateOpenAIOAuthTTFTGuardSettings persists the OpenAI OAuth first-token
@@ -81,16 +82,18 @@ func (h *SettingHandler) UpdateOpenAIOAuthTTFTGuardSettings(c *gin.Context) {
 		return
 	}
 	settings := &service.OpenAIOAuthTTFTGuardSettings{
-		Enabled:                 req.Enabled,
-		RecoveryIntervalMinutes: req.RecoveryIntervalMinutes,
+		Enabled:                    req.Enabled,
+		RecoveryIntervalMinutes:    req.RecoveryIntervalMinutes,
+		FirstTokenThresholdSeconds: req.FirstTokenThresholdSeconds,
 	}
 	if err := h.settingService.SetOpenAIOAuthTTFTGuardSettings(c.Request.Context(), settings); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
 	response.Success(c, dto.OpenAIOAuthTTFTGuardSettings{
-		Enabled:                 settings.Enabled,
-		RecoveryIntervalMinutes: settings.RecoveryIntervalMinutes,
+		Enabled:                    settings.Enabled,
+		RecoveryIntervalMinutes:    settings.RecoveryIntervalMinutes,
+		FirstTokenThresholdSeconds: settings.FirstTokenThresholdSeconds,
 	})
 }
 

@@ -482,12 +482,14 @@ export default {
       },
       openaiOauthTTFTGuard: {
         title: 'OpenAI 订阅账号首字耗时保护',
-        description: '最近连续 5 次实际调用首字耗时均超过 15 秒时，自动暂停 OpenAI 订阅账号的调用。',
+        description: '最近连续 5 次实际调用首字耗时均超过配置阈值时，自动暂停 OpenAI 订阅账号的调用。',
         enabled: '启用首字耗时保护',
-        enabledHint: '暂停账号会在恢复间隔后重新测试，只有测试首字耗时不超过 15 秒才恢复调用。',
+        enabledHint: '暂停账号会在恢复间隔后重新测试，只有测试首字耗时不超过配置阈值才恢复调用。',
+        firstTokenThreshold: '调用首字耗时阈值（秒）',
+        firstTokenThresholdHint: '连续 5 次实际调用超过此阈值会暂停账号；范围 1–300 秒。',
         recoveryInterval: '恢复测试间隔（分钟）',
         recoveryIntervalHint: '暂停账号等待多久进行恢复测试（1–10080 分钟）。',
-        fixedRules: '固定规则：连续 5 次实际调用超过 15 秒暂停；恢复测试不超过 15 秒后恢复调用。',
+        fixedRules: '规则：连续 5 次实际调用超过配置阈值暂停；恢复测试不超过配置阈值后恢复调用。',
         saved: 'OpenAI 订阅账号首字耗时保护设置已保存',
         saveFailed: '保存 OpenAI 订阅账号首字耗时保护设置失败'
       },

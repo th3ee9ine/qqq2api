@@ -15,8 +15,12 @@ describe("admin OpenAI OAuth TTFT guard API", () => {
     put.mockReset();
   });
 
-  it("loads and saves the recovery interval through the dedicated endpoint", async () => {
-    const settings = { enabled: true, recovery_interval_minutes: 30 };
+  it("loads and saves the recovery interval and first-token threshold through the dedicated endpoint", async () => {
+    const settings = {
+      enabled: true,
+      recovery_interval_minutes: 30,
+      first_token_threshold_seconds: 15,
+    };
     get.mockResolvedValue({ data: settings });
     put.mockResolvedValue({ data: settings });
 

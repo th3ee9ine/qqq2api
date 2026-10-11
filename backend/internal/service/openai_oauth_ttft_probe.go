@@ -17,8 +17,10 @@ const (
 	// The recovery probe is deliberately bounded more tightly than a normal
 	// user request.  It is only a health check and must not hold a scheduler
 	// recovery worker indefinitely.
-	openAIOAuthTTFTProbeTimeout   = 30 * time.Second
-	openAIOAuthTTFTProbeMaxMillis = 15_000
+	openAIOAuthTTFTProbeTimeout = 30 * time.Second
+	// Compatibility alias for package-local callers that validate the default
+	// threshold without loading persisted settings.
+	openAIOAuthTTFTProbeMaxMillis = openAIOAuthTTFTSlowThresholdMillis
 )
 
 var (
@@ -29,7 +31,7 @@ var (
 	errOpenAIOAuthTTFTProbeTooSlow        = errors.New("openai oauth ttft probe exceeded the first-token threshold")
 )
 
-func validateOpenAIOAuthTTFTProbeResult(result *OpenAIForwardResult) error {
+func validateOpenAIOAuthTTFTProbeResult(result *OpenAIForwardResult, thresholdMillis ...int) error {
 	if result == nil {
 		return errOpenAIOAuthTTFTProbeNoResult
 	}
@@ -39,7 +41,11 @@ func validateOpenAIOAuthTTFTProbeResult(result *OpenAIForwardResult) error {
 	if !result.SucceededForScheduling() {
 		return errOpenAIOAuthTTFTProbeNotTerminal
 	}
-	if *result.FirstTokenMs > openAIOAuthTTFTProbeMaxMillis {
+	maxMillis := openAIOAuthTTFTProbeMaxMillis
+	if len(thresholdMillis) > 0 && thresholdMillis[0] > 0 {
+		maxMillis = thresholdMillis[0]
+	}
+	if *result.FirstTokenMs > maxMillis {
 		return errOpenAIOAuthTTFTProbeTooSlow
 	}
 	return nil
@@ -106,10 +112,12 @@ func (w *openAIOAuthTTFTProbeResponseWriter) CloseNotify() <-chan bool {
 // that is currently paused.  No scheduler result or streak observation is
 // recorded here.
 //
-// The returned result is useful to callers for diagnostics.  A nil error means
-// the upstream produced a first token within 15 seconds and reached a terminal
-// success state; a non-nil error means the probe must not restore the account.
-func (s *OpenAIGatewayService) ProbeOpenAIOAuthTTFT(ctx context.Context, account *Account, model string) (*OpenAIForwardResult, error) {
+// The returned result is useful to callers for diagnostics. A nil error means
+// the upstream produced a first token within the configured threshold and
+// reached a terminal success state; a non-nil error means the probe must not
+// restore the account. The optional threshold argument is used by the recovery
+// worker so the probe and the trigger observe the same settings snapshot.
+func (s *OpenAIGatewayService) ProbeOpenAIOAuthTTFT(ctx context.Context, account *Account, model string, thresholdSeconds ...int) (*OpenAIForwardResult, error) {
 	if account == nil || !account.IsOpenAIOAuthLike() || account.IsShadow() {
 		return nil, errOpenAIOAuthTTFTProbeInvalidAccount
 	}
@@ -122,6 +130,16 @@ func (s *OpenAIGatewayService) ProbeOpenAIOAuthTTFT(ctx context.Context, account
 	}
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	thresholdMillis := openAIOAuthTTFTProbeMaxMillis
+	if len(thresholdSeconds) > 0 && thresholdSeconds[0] > 0 {
+		thresholdMillis = thresholdSeconds[0] * 1000
+	} else if s.settingService != nil {
+		settings, settingsErr := s.settingService.GetOpenAIOAuthTTFTGuardSettings(ctx)
+		if settingsErr != nil {
+			return nil, fmt.Errorf("load openai oauth ttft probe settings: %w", settingsErr)
+		}
+		thresholdMillis = openAIOAuthTTFTThresholdMillis(settings)
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, openAIOAuthTTFTProbeTimeout)
 	defer cancel()
@@ -170,7 +188,7 @@ func (s *OpenAIGatewayService) ProbeOpenAIOAuthTTFT(ctx context.Context, account
 	if forwardErr != nil {
 		return result, forwardErr
 	}
-	if err := validateOpenAIOAuthTTFTProbeResult(result); err != nil {
+	if err := validateOpenAIOAuthTTFTProbeResult(result, thresholdMillis); err != nil {
 		return result, err
 	}
 	return result, nil
