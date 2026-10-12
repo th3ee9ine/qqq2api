@@ -820,6 +820,45 @@ func TestOpenAIWSConnPool_ForceNewConnSkipsReuse(t *testing.T) {
 	require.Equal(t, 2, dialer.DialCount(), "ForceNewConn=true 时应跳过空闲连接复用并新建连接")
 }
 
+func TestOpenAIWSConnPool_AdaptiveSubscriptionRequestReusesCompatibleConnection(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	cfg.Gateway.OpenAIWS.StoreDisabledConnMode = openAIWSStoreDisabledConnModeAdaptive
+
+	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	account := &Account{
+		ID:          124,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"plan_type": "plus"},
+	}
+	req := openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://example.com/backend-api/codex/responses",
+		Headers: http.Header{"User-Agent": []string{"codex_cli_rs/0.98.0"}},
+	}
+
+	first, err := pool.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	first.Release()
+
+	second, err := pool.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	second.Release()
+
+	require.Equal(t, 1, dialer.DialCount(), "adaptive store=false policy should reuse a compatible idle subscription connection")
+	require.False(t, shouldForceNewConnOnStoreDisabled(openAIWSStoreDisabledConnModeAdaptive, ""))
+	require.True(t, shouldForceNewConnOnStoreDisabled(openAIWSStoreDisabledConnModeAdaptive, "policy_violation"), "a concrete session failure must still force a fresh connection")
+}
+
 func TestOpenAIWSConnPool_AllowPinnedOverflowRespectsDynamicAndHardCaps(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 3

@@ -16,9 +16,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/th3ee9ine/qqq2api/internal/config"
+	"github.com/th3ee9ine/qqq2api/internal/pkg/ctxkey"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/xai"
 	"github.com/tidwall/gjson"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -27,6 +29,8 @@ const (
 	openCodeNativeSessionHeader   = "X-OpenCode-Session"
 	codeBuddyConversationHeader   = "X-Conversation-ID"
 )
+
+const openAIAccountRecheckDBTimeout = 2 * time.Second
 
 var explicitOpenAIHeaderSessionNames = []string{
 	"session-id",
@@ -1709,8 +1713,66 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 		return account
 	}
 
-	latest, err := s.accountRepo.GetByID(ctx, account.ID)
-	if err != nil || latest == nil {
+	// Scheduler snapshots are backed by Redis and deliberately followed by a
+	// fresh repository read so status/group changes take effect without waiting
+	// for the snapshot worker. Under a burst of requests sharing one sticky
+	// subscription account, however, every request used to issue the same
+	// GetByID query concurrently. Collapse only the in-flight read; each caller
+	// below still runs all of the existing group, capability, quota and runtime
+	// checks against the returned account.
+	//
+	// Return an Account value from the flight rather than the repository pointer.
+	// Account eligibility checks lazily populate model/header mapping caches; a
+	// shared pointer would make those per-account caches race under a burst.
+	readCtx, readCancel := context.WithTimeout(context.WithoutCancel(ctx), openAIAccountRecheckDBTimeout)
+	defer readCancel()
+	flightKey := strconv.FormatInt(account.ID, 10)
+	if ownerID, scoped := ctxkey.AccountAdminIDFromContext(ctx); scoped {
+		// GetByID applies this scope in the repository. Keep restricted account
+		// administrators on separate flights so one owner's result can never be
+		// reused for another owner's visibility boundary.
+		flightKey += ":owner:" + strconv.FormatInt(ownerID, 10)
+	}
+	resultCh := s.openaiAccountRecheckSF.DoChan(flightKey, func() (any, error) {
+		latest, err := s.accountRepo.GetByID(readCtx, account.ID)
+		if err != nil || latest == nil {
+			return latest, err
+		}
+		snapshot := *latest
+		// The selected account is used by the forwarding path after the flight
+		// completes. Copy the mutable top-level maps/slices so token refresh or
+		// the TTFT guard cannot race another request that received the same DB
+		// result from this flight.
+		if latest.Credentials != nil {
+			snapshot.Credentials = shallowCopyMap(latest.Credentials)
+		}
+		if latest.Extra != nil {
+			snapshot.Extra = shallowCopyMap(latest.Extra)
+		}
+		snapshot.GroupIDs = append([]int64(nil), latest.GroupIDs...)
+		snapshot.AccountGroups = append([]AccountGroup(nil), latest.AccountGroups...)
+		snapshot.Groups = append([]*Group(nil), latest.Groups...)
+		snapshot.modelMappingCache = nil
+		snapshot.modelMappingCacheReady = false
+		snapshot.headerOverrideCache = nil
+		snapshot.headerOverrideCacheReady = false
+		return snapshot, nil
+	})
+	var result singleflight.Result
+	select {
+	case <-ctx.Done():
+		return nil
+	case result = <-resultCh:
+	}
+	if result.Err != nil {
+		return nil
+	}
+	latestValue, ok := result.Val.(Account)
+	if !ok {
+		return nil
+	}
+	latest := &latestValue
+	if latest == nil {
 		return nil
 	}
 	if !s.openAIAccountMatchesSchedulingGroup(latest, groupID) {

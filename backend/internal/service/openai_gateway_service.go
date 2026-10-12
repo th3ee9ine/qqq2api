@@ -24,6 +24,7 @@ import (
 	"github.com/th3ee9ine/qqq2api/internal/platform/liveattestation"
 	"github.com/th3ee9ine/qqq2api/internal/util/responseheaders"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -525,6 +526,13 @@ type OpenAIGatewayService struct {
 	openAIOAuthAdmission           *openAIOAuthAdmissionController
 	openaiWSPassthroughDialer      openAIWSClientDialer
 	openaiWSSessionPreemptions     openAIWSSessionPreemptRegistry
+	// openaiAccountRecheckSF collapses concurrent scheduler rechecks for the
+	// same account. The scheduler snapshot is intentionally followed by a DB
+	// read to catch status/group changes, but a burst of requests pinned to one
+	// subscription account must not fan out one identical SQL query per request.
+	// The result is still validated independently by each caller after the
+	// shared read, so this does not relax the existing eligibility gates.
+	openaiAccountRecheckSF         singleflight.Group
 	openaiAccountStats             *openAIAccountRuntimeStats
 	openaiModelTransient           *openAIAccountModelTransientState
 	openaiProxyStreamCircuit       *openAIProxyStreamCircuit

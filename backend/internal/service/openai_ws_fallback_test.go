@@ -263,6 +263,9 @@ func TestClassifyOpenAIWSReadFallbackReason(t *testing.T) {
 }
 
 func TestOpenAIWSStoreDisabledConnMode(t *testing.T) {
+	var nilService *OpenAIGatewayService
+	require.Equal(t, openAIWSStoreDisabledConnModeAdaptive, nilService.openAIWSStoreDisabledConnMode())
+
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
 	svc.cfg.Gateway.OpenAIWS.StoreDisabledForceNewConn = true
 	require.Equal(t, openAIWSStoreDisabledConnModeStrict, svc.openAIWSStoreDisabledConnMode())
@@ -279,6 +282,9 @@ func TestShouldForceNewConnOnStoreDisabled(t *testing.T) {
 	require.True(t, shouldForceNewConnOnStoreDisabled(openAIWSStoreDisabledConnModeStrict, ""))
 	require.False(t, shouldForceNewConnOnStoreDisabled(openAIWSStoreDisabledConnModeOff, "policy_violation"))
 
+	// The adaptive default keeps compatible idle connections on the normal
+	// path, but a concrete handshake/session failure still gets a fresh dial.
+	require.False(t, shouldForceNewConnOnStoreDisabled(openAIWSStoreDisabledConnModeAdaptive, ""))
 	require.True(t, shouldForceNewConnOnStoreDisabled(openAIWSStoreDisabledConnModeAdaptive, "policy_violation"))
 	require.True(t, shouldForceNewConnOnStoreDisabled(openAIWSStoreDisabledConnModeAdaptive, "prewarm_message_too_big"))
 	require.False(t, shouldForceNewConnOnStoreDisabled(openAIWSStoreDisabledConnModeAdaptive, "read_event"))

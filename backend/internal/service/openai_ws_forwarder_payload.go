@@ -301,7 +301,8 @@ func (s *OpenAIGatewayService) isOpenAIWSStoreDisabledInRequestRaw(reqBody []byt
 
 func (s *OpenAIGatewayService) openAIWSStoreDisabledConnMode() string {
 	if s == nil || s.cfg == nil {
-		return openAIWSStoreDisabledConnModeStrict
+		// Match the loaded application default for hand-built services and tests.
+		return openAIWSStoreDisabledConnModeAdaptive
 	}
 	mode := strings.ToLower(strings.TrimSpace(s.cfg.Gateway.OpenAIWS.StoreDisabledConnMode))
 	switch mode {

@@ -363,8 +363,9 @@ gateway:
     # ingress 模式收到 previous_response_not_found 时，自动去掉 previous_response_id 重试一次（默认 true）
     ingress_previous_response_recovery_enabled: true
     # store=false 且无可复用会话连接时的策略：
-    # strict=强制新建连接（隔离优先），adaptive=仅在高风险失败后强制新建，off=尽量复用（性能优先）
-    store_disabled_conn_mode: strict
+    # strict=强制新建连接（隔离优先），adaptive=正常复用兼容空闲连接并仅在高风险失败后强制新建，off=尽量复用（性能优先）
+    # 默认 adaptive：降低 store=false 请求在高并发下反复握手造成的首字延迟
+    store_disabled_conn_mode: adaptive
     # store=false 且无可复用会话连接时，是否强制新建连接（默认 true，优先会话隔离）
     # 兼容旧配置：仅在 store_disabled_conn_mode 未配置时生效
     store_disabled_force_new_conn: true
