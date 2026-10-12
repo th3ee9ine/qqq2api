@@ -3492,6 +3492,123 @@ func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates m
 	return nil
 }
 
+// UpdateExtraIfCodexSnapshotNewer atomically merges a Codex quota snapshot only
+// when its timestamp is newer than the value already stored. Quota probes can
+// finish out of order across instances; a plain JSONB merge would let an older
+// response roll back a fresh window. This narrow CAS capability is optional at
+// the service boundary so lightweight repository test doubles remain valid.
+func (r *accountRepository) UpdateExtraIfCodexSnapshotNewer(ctx context.Context, id int64, updates map[string]any, updatedAt time.Time) (bool, error) {
+	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
+	updates = forceScopedAccountAdminSupplyExtra(ctx, updates)
+	if len(updates) == 0 || updatedAt.IsZero() || r == nil || r.sql == nil {
+		return false, nil
+	}
+	payload, err := json.Marshal(updates)
+	if err != nil {
+		return false, err
+	}
+	candidate := updatedAt.UTC()
+	existing, exists, err := r.readCodexSnapshotTimestamp(ctx, id)
+	if err != nil || !exists {
+		return false, err
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		if parsed, ok := parseCodexSnapshotTimestamp(existing); ok && !candidate.After(parsed) {
+			return false, nil
+		}
+
+		applied, err := r.updateCodexSnapshotCAS(ctx, id, string(payload), existing)
+		if err != nil {
+			return false, err
+		}
+		if applied {
+			if dbent.TxFromContext(ctx) == nil {
+				r.syncSchedulerAccountSnapshot(ctx, id)
+			}
+			return true, nil
+		}
+
+		// Another writer changed the timestamp after our read. Re-read and
+		// compare before retrying; a newer snapshot wins. Reuse this read on the
+		// next attempt rather than issuing a second SELECT for the same value.
+		latest, latestExists, readErr := r.readCodexSnapshotTimestamp(ctx, id)
+		if readErr != nil || !latestExists {
+			return false, readErr
+		}
+		if parsed, ok := parseCodexSnapshotTimestamp(latest); ok && !candidate.After(parsed) {
+			return false, nil
+		}
+		existing = latest
+	}
+	return false, nil
+}
+
+func (r *accountRepository) accountSQLExecutor(ctx context.Context) sqlExecutor {
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		return tx.Client()
+	}
+	return r.sql
+}
+
+func (r *accountRepository) readCodexSnapshotTimestamp(ctx context.Context, id int64) (*string, bool, error) {
+	query := `SELECT extra->>'codex_usage_updated_at'
+		FROM accounts
+		WHERE id = $1 AND deleted_at IS NULL`
+	args := []any{id}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	rows, err := r.accountSQLExecutor(ctx).QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return nil, false, rows.Err()
+	}
+	var raw sql.NullString
+	if err := rows.Scan(&raw); err != nil {
+		return nil, false, err
+	}
+	if !raw.Valid {
+		return nil, true, nil
+	}
+	value := raw.String
+	return &value, true, nil
+}
+
+func (r *accountRepository) updateCodexSnapshotCAS(ctx context.Context, id int64, payload string, expected *string) (bool, error) {
+	query := `UPDATE accounts
+		SET extra = COALESCE(extra, '{}'::jsonb) || $1::jsonb, updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL
+		  AND extra->>'codex_usage_updated_at' IS NOT DISTINCT FROM $3`
+	args := []any{payload, id, expected}
+	if ownerClause, ownerArg, scoped := accountAdminSQLScope(ctx, "account_admin_id", len(args)+1); scoped {
+		query += ownerClause
+		args = append(args, ownerArg)
+	}
+	result, err := r.accountSQLExecutor(ctx).ExecContext(ctx, query, args...)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected == 1, err
+}
+
+func parseCodexSnapshotTimestamp(raw *string) (time.Time, bool) {
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return time.Time{}, false
+	}
+	value := strings.TrimSpace(*raw)
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if parsed, err := time.Parse(layout, value); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // UpdateUpstreamBillingProbeSnapshot stores a probe result only while the
 // network identity used by that probe is still current.
 func (r *accountRepository) UpdateUpstreamBillingProbeSnapshot(

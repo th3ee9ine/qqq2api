@@ -142,9 +142,12 @@ func TestMigration236ChecksumCompatibility(t *testing.T) {
 	const name = "236_group_model_allowlist_repair.sql"
 	const releasedChecksum = "0d8fbcd98750be1a58cec45fe2b866031b656ac6286b073ca061f8fa8fdc040e"
 	const forkChecksum = "a67a305b9bff1376ddf911d9b52a474244e9dcef05c61b4cce9915edd0469bce"
+	const repairedChecksum = "95e74d6fbf2eb404f9d82a0a6f8bcc3bc763c6c9f613f6fca51af0e05b9ceb2b"
 
 	require.True(t, isMigrationChecksumCompatible(name, releasedChecksum, forkChecksum))
 	require.True(t, isMigrationChecksumCompatible(name, forkChecksum, releasedChecksum))
+	require.True(t, isMigrationChecksumCompatible(name, forkChecksum, repairedChecksum))
+	require.True(t, isMigrationChecksumCompatible(name, repairedChecksum, forkChecksum))
 	require.False(t, isMigrationChecksumCompatible(name, "unknown-db-checksum", forkChecksum))
 	require.False(t, isMigrationChecksumCompatible(name, releasedChecksum, "unknown-file-checksum"))
 }

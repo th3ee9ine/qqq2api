@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/logger"
@@ -36,6 +37,7 @@ const (
 	// API-key-scoped client WebSocket ingress leases use a shorter TTL than
 	// ordinary request slots, because idle ingress sessions do not hold a turn slot.
 	openAIWSIngressLeaseKeyPrefix  = "concurrency:openai_ws_ingress:api_key:"
+	openAIOAuthAdmissionKeyPrefix  = "concurrency:openai_oauth_admission:account:"
 	openAIWSIngressLeaseTTLSeconds = 60
 	liveLeaseTTLSeconds            = 60
 	// 等待队列计数器格式: concurrency:wait:{userID}
@@ -209,6 +211,25 @@ var (
 		return {1, now}
 	`)
 
+	// refreshSlotScript renews only an existing member. A missing member is
+	// reported to the caller so a request cannot silently recreate a lease that
+	// another request may have acquired after expiry.
+	refreshSlotScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local ttl = tonumber(ARGV[1])
+		local requestID = ARGV[2]
+		local now = tonumber(redis.call('TIME')[1])
+		local expireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, requestID) == false then
+			return {0, now}
+		end
+		redis.call('ZADD', key, now, requestID)
+		redis.call('EXPIRE', key, ttl)
+		return {1, now}
+	`)
+
 	// acquireOpenAIWSIngressLeaseScript atomically reaps crashed members and
 	// acquires or refreshes one API-key-scoped ingress lease using Redis TIME.
 	acquireOpenAIWSIngressLeaseScript = redis.NewScript(`
@@ -249,6 +270,65 @@ var (
 		end
 		redis.call('ZADD', key, now, leaseID)
 		redis.call('EXPIRE', key, ttl)
+		return 1
+	`)
+
+	reserveOpenAIOAuthAdmissionScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local intervalMs = tonumber(ARGV[1])
+		local notBeforeMs = tonumber(ARGV[2])
+		local maxWaitMs = tonumber(ARGV[3])
+		local stateTTL = tonumber(ARGV[4])
+		local nowParts = redis.call('TIME')
+		local now = tonumber(nowParts[1]) * 1000 + math.floor(tonumber(nowParts[2]) / 1000)
+		local current = tonumber(redis.call('GET', key) or '0')
+		local scheduled = now
+		if current > scheduled then scheduled = current end
+		if notBeforeMs > scheduled then scheduled = notBeforeMs end
+		if scheduled > now + maxWaitMs then
+			return {0, scheduled}
+		end
+		redis.call('SET', key, tostring(scheduled + intervalMs), 'PX', math.max(stateTTL, scheduled - now + stateTTL))
+		return {1, scheduled}
+	`)
+
+	deferOpenAIOAuthAdmissionScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local untilMs = tonumber(ARGV[1])
+		local stateTTL = tonumber(ARGV[2])
+		local current = tonumber(redis.call('GET', key) or '0')
+		if untilMs > current then
+			redis.call('SET', key, tostring(untilMs), 'PX', stateTTL)
+		elseif current > 0 then
+			redis.call('PEXPIRE', key, stateTTL)
+		end
+		return 1
+	`)
+
+	// cancelOpenAIOAuthAdmissionScript rolls back only the most recent
+	// reservation. If another instance has already reserved a later slot, the
+	// scalar timeline is left intact; shortening it would let that later request
+	// start before its own interval.
+	cancelOpenAIOAuthAdmissionScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local scheduledMs = tonumber(ARGV[1])
+		local intervalMs = tonumber(ARGV[2])
+		local stateTTL = tonumber(ARGV[3])
+		local expected = scheduledMs + intervalMs
+		local current = tonumber(redis.call('GET', key) or '0')
+		if current ~= expected then
+			return 0
+		end
+		local nowParts = redis.call('TIME')
+		local now = tonumber(nowParts[1]) * 1000 + math.floor(tonumber(nowParts[2]) / 1000)
+		if scheduledMs <= now then
+			redis.call('DEL', key)
+		else
+			redis.call('SET', key, tostring(scheduledMs), 'PX', stateTTL)
+		end
 		return 1
 	`)
 
@@ -417,6 +497,10 @@ func openAIWSIngressLeaseKey(apiKeyID int64) string {
 	return fmt.Sprintf("%s%d", openAIWSIngressLeaseKeyPrefix, apiKeyID)
 }
 
+func openAIOAuthAdmissionKey(accountID int64) string {
+	return fmt.Sprintf("%s%d", openAIOAuthAdmissionKeyPrefix, accountID)
+}
+
 func waitQueueKey(userID int64) string {
 	return fmt.Sprintf("%s%d", waitQueueKeyPrefix, userID)
 }
@@ -432,6 +516,16 @@ func (c *concurrencyCache) redisUnixSeconds(ctx context.Context) (int64, error) 
 		return 0, fmt.Errorf("redis TIME: %w", err)
 	}
 	return now.Unix(), nil
+}
+
+// ConcurrencySlotTTL exposes the configured regular-slot TTL to the service
+// heartbeat. It is intentionally a capability method rather than part of the
+// base service cache interface.
+func (c *concurrencyCache) ConcurrencySlotTTL() time.Duration {
+	if c == nil || c.slotTTLSeconds <= 0 {
+		return 0
+	}
+	return time.Duration(c.slotTTLSeconds) * time.Second
 }
 
 // slotIndexSpec 描述一个活跃索引及其对应的槽位/等待键构造方式。
@@ -642,6 +736,11 @@ func runScriptInt64Pair(ctx context.Context, rdb *redis.Client, script *redis.Sc
 	return first, second, nil
 }
 
+func (c *concurrencyCache) refreshRegularSlot(ctx context.Context, key string, requestID string) (bool, int64, error) {
+	result, now, err := runScriptInt64Pair(ctx, c.rdb, refreshSlotScript, []string{key}, c.slotTTLSeconds, requestID)
+	return result == 1, now, err
+}
+
 // Account slot operations
 
 func (c *concurrencyCache) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
@@ -666,6 +765,14 @@ func (c *concurrencyCache) ReleaseAccountSlot(ctx context.Context, accountID int
 	// 释放后用真实负载刷新索引；若没有槽位和等待计数，会移除索引 member。
 	c.refreshAccountActiveIndex(ctx, accountID)
 	return nil
+}
+
+func (c *concurrencyCache) RefreshAccountSlot(ctx context.Context, accountID int64, requestID string) (bool, error) {
+	owned, now, err := c.refreshRegularSlot(ctx, accountSlotKey(accountID), requestID)
+	if err == nil && owned {
+		c.touchActiveIndexAt(ctx, accountActiveIndexKey, accountID, now+int64(c.slotTTLSeconds))
+	}
+	return owned, err
 }
 
 func (c *concurrencyCache) GetAccountConcurrency(ctx context.Context, accountID int64) (int, error) {
@@ -745,6 +852,14 @@ func (c *concurrencyCache) ReleaseUserSlot(ctx context.Context, userID int64, re
 	return nil
 }
 
+func (c *concurrencyCache) RefreshUserSlot(ctx context.Context, userID int64, requestID string) (bool, error) {
+	owned, now, err := c.refreshRegularSlot(ctx, userSlotKey(userID), requestID)
+	if err == nil && owned {
+		c.touchActiveIndexAt(ctx, userActiveIndexKey, userID, now+int64(c.slotTTLSeconds))
+	}
+	return owned, err
+}
+
 func (c *concurrencyCache) GetUserConcurrency(ctx context.Context, userID int64) (int, error) {
 	key := userSlotKey(userID)
 	// 时间戳在 Lua 脚本内使用 Redis TIME 命令获取
@@ -790,6 +905,62 @@ func (c *concurrencyCache) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64
 	}
 	c.refreshAPIKeyActiveIndex(ctx, apiKeyID)
 	return nil
+}
+
+func (c *concurrencyCache) RefreshAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) (bool, error) {
+	owned, now, err := c.refreshRegularSlot(ctx, apiKeySlotKey(apiKeyID), requestID)
+	if err == nil && owned {
+		c.touchActiveIndexAt(ctx, apiKeyActiveIndexKey, apiKeyID, now+int64(c.slotTTLSeconds))
+	}
+	return owned, err
+}
+
+func (c *concurrencyCache) ReserveOpenAIOAuthAdmission(ctx context.Context, accountID int64, interval time.Duration, notBefore time.Time, maxWait, stateTTL time.Duration) (time.Time, bool, error) {
+	if c == nil || c.rdb == nil || accountID <= 0 || interval <= 0 || maxWait < 0 {
+		return time.Time{}, false, nil
+	}
+	if stateTTL <= 0 {
+		stateTTL = time.Minute
+	}
+	if notBefore.IsZero() {
+		notBefore = notBefore.UTC()
+	}
+	result, err := reserveOpenAIOAuthAdmissionScript.Run(ctx, c.rdb, []string{openAIOAuthAdmissionKey(accountID)},
+		interval.Milliseconds(), notBefore.UnixMilli(), maxWait.Milliseconds(), stateTTL.Milliseconds()).Result()
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	accepted, err := redisScriptInt64At(result, 0)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	scheduledMs, err := redisScriptInt64At(result, 1)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return time.UnixMilli(scheduledMs), accepted == 1, nil
+}
+
+func (c *concurrencyCache) DeferOpenAIOAuthAdmission(ctx context.Context, accountID int64, until time.Time, stateTTL time.Duration) error {
+	if c == nil || c.rdb == nil || accountID <= 0 || until.IsZero() {
+		return nil
+	}
+	if stateTTL <= 0 {
+		stateTTL = time.Minute
+	}
+	_, err := deferOpenAIOAuthAdmissionScript.Run(ctx, c.rdb, []string{openAIOAuthAdmissionKey(accountID)}, until.UnixMilli(), stateTTL.Milliseconds()).Result()
+	return err
+}
+
+func (c *concurrencyCache) CancelOpenAIOAuthAdmission(ctx context.Context, accountID int64, scheduledAt time.Time, interval, stateTTL time.Duration) error {
+	if c == nil || c.rdb == nil || accountID <= 0 || scheduledAt.IsZero() || interval <= 0 {
+		return nil
+	}
+	if stateTTL <= 0 {
+		stateTTL = time.Minute
+	}
+	_, err := cancelOpenAIOAuthAdmissionScript.Run(ctx, c.rdb, []string{openAIOAuthAdmissionKey(accountID)}, scheduledAt.UnixMilli(), interval.Milliseconds(), stateTTL.Milliseconds()).Result()
+	return err
 }
 
 func (c *concurrencyCache) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error) {

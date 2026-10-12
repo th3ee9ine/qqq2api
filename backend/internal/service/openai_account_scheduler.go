@@ -429,7 +429,18 @@ func (s *defaultOpenAIAccountScheduler) Select(
 			decision.SelectedAccountID = selection.Account.ID
 			decision.SelectedAccountType = selection.Account.Type
 			if req.SessionHash != "" {
-				_ = s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, selection.Account.ID)
+				if err := s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, selection.Account.ID); err != nil {
+					if !errors.Is(err, ErrStickySessionClaimConflict) {
+						if selection.ReleaseFunc != nil {
+							selection.ReleaseFunc()
+						}
+						return nil, decision, err
+					}
+					// A previous_response_id is a stronger affinity than the optional
+					// session binding.  Keep the correctly resolved response owner when
+					// another request won the session claim; changing accounts here would
+					// send an unresolvable previous_response_id to a different upstream.
+				}
 			}
 			return selection, decision, nil
 		}
@@ -504,7 +515,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	accountID := req.StickyAccountID
 	clearBinding := func() {
 		if !req.PreserveStickyBinding {
-			_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
+			_ = s.service.deleteStickySessionAccountIDIfOwner(ctx, req.GroupID, sessionHash, accountID)
 		}
 	}
 	if accountID <= 0 {
@@ -1235,7 +1246,27 @@ func (s *defaultOpenAIAccountScheduler) tryAcquireOpenAISelectionOrderWithBudget
 			}
 		}
 		if req.SessionHash != "" && !req.PreserveStickyBinding {
-			_ = s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, fresh.ID)
+			bindErr := s.service.bindOpenAISelectionSticky(ctx, req, fresh.ID)
+			if bindErr != nil {
+				release(result)
+				if errors.Is(bindErr, ErrStickySessionClaimConflict) {
+					stickyReq := req
+					stickyReq.StickyWeighted = false
+					// The request's StickyAccountID was read before the claim
+					// attempt.  A competing request may have replaced that
+					// binding in the meantime, so force the conflict recovery
+					// path to read the current owner instead of trusting the
+					// stale snapshot.
+					stickyReq.StickyAccountID = 0
+					if stickySelection, _, stickyErr := s.selectBySessionHash(ctx, stickyReq); stickyErr != nil {
+						return nil, compactBlocked, stickyErr
+					} else if stickySelection != nil {
+						return stickySelection, compactBlocked, nil
+					}
+					continue
+				}
+				continue
+			}
 		}
 		return attachSelectionProfitGate(ctx, &AccountSelectionResult{
 			Account:     fresh,
@@ -1292,13 +1323,13 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 		account = s.service.recheckSelectedOpenAIAccountFromDB(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
 		if account == nil {
 			if accountID == req.StickyAccountID && strings.TrimSpace(req.SessionHash) != "" {
-				_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, req.SessionHash)
+				_ = s.service.deleteStickySessionAccountIDIfOwner(ctx, req.GroupID, req.SessionHash, accountID)
 			}
 			continue
 		}
 		if !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) {
 			if accountID == req.StickyAccountID && strings.TrimSpace(req.SessionHash) != "" {
-				_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, req.SessionHash)
+				_ = s.service.deleteStickySessionAccountIDIfOwner(ctx, req.GroupID, req.SessionHash, accountID)
 			}
 			continue
 		}
@@ -1326,7 +1357,24 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 		}
 		if result != nil && result.Acquired {
 			if req.SessionHash != "" && !req.PreserveStickyBinding {
-				_ = s.service.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, account.ID)
+				bindErr := s.service.bindOpenAISelectionSticky(ctx, req, account.ID)
+				if bindErr != nil {
+					result.ReleaseFunc()
+					if errors.Is(bindErr, ErrStickySessionClaimConflict) {
+						stickyReq := req
+						stickyReq.StickyWeighted = false
+						// The request's StickyAccountID may be stale after the
+						// atomic claim conflict.  Re-read Redis so the fallback
+						// cannot return an owner that no longer owns the binding.
+						stickyReq.StickyAccountID = 0
+						if stickySelection, _, stickyErr := s.selectBySessionHash(ctx, stickyReq); stickyErr != nil {
+							return nil, stickyErr
+						} else if stickySelection != nil {
+							return stickySelection, nil
+						}
+					}
+					continue
+				}
 			}
 			return attachSelectionProfitGate(ctx, &AccountSelectionResult{
 				Account:     account,

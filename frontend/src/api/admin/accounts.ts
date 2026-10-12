@@ -32,6 +32,29 @@ import type {
   OpenAISessionCleanupUpdateRequest
 } from '@/types'
 
+const openAIQuotaResetOperationKeys = new Map<number, string>()
+
+function openAIQuotaResetStorageKey(id: number): string {
+  return `sub2api:admin:openai-quota-reset:${id}`
+}
+
+function loadOpenAIQuotaResetOperationKey(id: number): string | null {
+  try {
+    return globalThis.sessionStorage?.getItem(openAIQuotaResetStorageKey(id)) ?? null
+  } catch {
+    return null
+  }
+}
+
+function storeOpenAIQuotaResetOperationKey(id: number, key: string | null): void {
+  try {
+    if (key) globalThis.sessionStorage?.setItem(openAIQuotaResetStorageKey(id), key)
+    else globalThis.sessionStorage?.removeItem(openAIQuotaResetStorageKey(id))
+  } catch {
+    // The in-memory key still protects retries while this page is open.
+  }
+}
+
 /**
  * List all accounts with pagination
  * @param page - Page number (default: 1)
@@ -1098,11 +1121,27 @@ export async function sendOpenAIReferralInvite(
  * and invite a retry that spends a second credit.
  */
 export async function resetOpenAIQuota(id: number): Promise<OpenAIQuotaResetResult> {
+  // Reset credits are non-refundable. Keep one operation key across a
+  // transient network failure so a browser retry replays the same upstream
+  // redemption instead of consuming a second credit. The key is cleared only
+  // after a successful response, and survives a page refresh in sessionStorage.
+  let operationKey = openAIQuotaResetOperationKeys.get(id) ?? loadOpenAIQuotaResetOperationKey(id)
+  if (!operationKey) {
+    operationKey = `openai-quota-reset-${id}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+  }
+  openAIQuotaResetOperationKeys.set(id, operationKey)
+  storeOpenAIQuotaResetOperationKey(id, operationKey)
   const { data } = await apiClient.post<OpenAIQuotaResetResult>(
     `/admin/openai/accounts/${id}/reset-quota`,
     undefined,
-    { timeout: 90_000 }
+    { timeout: 90_000, headers: { 'Idempotency-Key': operationKey } }
   )
+  // A delayed response for a previous operation must not clear the retry key
+  // of a newer reset started after another overlapping call succeeded.
+  if (openAIQuotaResetOperationKeys.get(id) === operationKey) {
+    openAIQuotaResetOperationKeys.delete(id)
+    storeOpenAIQuotaResetOperationKey(id, null)
+  }
   return data
 }
 

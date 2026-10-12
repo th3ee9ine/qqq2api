@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"sync"
 	"time"
@@ -360,6 +361,50 @@ func (s *OpenAIGatewayService) WaitForOpenAIOAuthAccountAdmission(ctx context.Co
 	}
 
 	interval := openAIOAuthAdmissionInterval(account, now, controller.policy)
+	if s.concurrencyService != nil {
+		reserveCtx, reserveCancel := context.WithTimeout(ctx, concurrencySlotRefreshTimeout)
+		scheduledAt, accepted, reserveErr := s.concurrencyService.ReserveOpenAIOAuthAdmission(
+			reserveCtx,
+			account.ID,
+			interval,
+			notBefore,
+			controller.policy.maxQueueWait,
+			controller.policy.stateTTL,
+		)
+		reserveCancel()
+		if reserveErr == nil && (accepted || !scheduledAt.IsZero()) {
+			if !accepted {
+				retryAfter := scheduledAt.Sub(now)
+				if retryAfter < interval {
+					retryAfter = interval
+				}
+				return &OpenAIOAuthAdmissionError{Reason: "distributed_queue_full", RetryAfter: retryAfter}
+			}
+			if wait := time.Until(scheduledAt); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-ctx.Done():
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					cancelCtx, cancel := context.WithTimeout(context.Background(), concurrencySlotRefreshTimeout)
+					if err := s.concurrencyService.CancelOpenAIOAuthAdmission(cancelCtx, account.ID, scheduledAt, interval, controller.policy.stateTTL); err != nil {
+						slog.Warn("openai_oauth_distributed_admission_cancel_failed", "account_id", account.ID, "error", err)
+					}
+					cancel()
+					return ctx.Err()
+				case <-timer.C:
+				}
+			}
+			return nil
+		}
+		if reserveErr != nil {
+			slog.Warn("openai_oauth_distributed_admission_fallback", "account_id", account.ID, "error", reserveErr)
+		}
+	}
 	return controller.wait(ctx, account.ID, interval, notBefore)
 }
 
@@ -369,6 +414,13 @@ func (s *OpenAIGatewayService) deferOpenAIOAuthAdmission(accountID int64, until 
 	}
 	if controller := s.getOpenAIOAuthAdmissionController(); controller != nil {
 		controller.deferUntil(accountID, until)
+		if s.concurrencyService != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), concurrencySlotRefreshTimeout)
+			if err := s.concurrencyService.DeferOpenAIOAuthAdmission(ctx, accountID, until, controller.policy.stateTTL); err != nil {
+				slog.Warn("openai_oauth_distributed_admission_defer_failed", "account_id", accountID, "error", err)
+			}
+			cancel()
+		}
 	}
 }
 

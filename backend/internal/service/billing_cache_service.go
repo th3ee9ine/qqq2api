@@ -101,6 +101,16 @@ type subscriptionCacheInvalidationPubSub interface {
 	SubscribeSubscriptionCacheInvalidation(ctx context.Context, handler func(cacheKey string)) error
 }
 
+// subscriptionCacheGenerationStore is an optional capability implemented by
+// the Redis cache. Keeping it out of BillingCache preserves compatibility with
+// existing lightweight mocks while allowing the production cache to reject
+// stale DB snapshots after an invalidation.
+type subscriptionCacheGenerationStore interface {
+	GetSubscriptionCacheGeneration(ctx context.Context, userID, groupID int64) (int64, error)
+	SetSubscriptionCacheIfGeneration(ctx context.Context, userID, groupID int64, expectedGeneration int64, data *SubscriptionCacheData) (bool, error)
+	InvalidateSubscriptionCacheAndBumpGeneration(ctx context.Context, userID, groupID int64) error
+}
+
 // BillingCacheService 计费缓存服务
 // 负责余额和订阅数据的缓存管理，提供高性能的计费资格检查
 type BillingCacheService struct {
@@ -120,6 +130,7 @@ type BillingCacheService struct {
 	cacheWriteMu       sync.RWMutex
 	stopped            atomic.Bool
 	balanceLoadSF      singleflight.Group
+	subscriptionLoadSF singleflight.Group
 	quotaLoadSF        singleflight.Group
 	// 丢弃日志节流计数器（减少高负载下日志噪音）
 	cacheWriteDropFullCount     uint64
@@ -198,7 +209,11 @@ func (s *BillingCacheService) enqueueCacheWrite(task cacheWriteTask) (enqueued b
 	s.cacheWriteMu.RLock()
 	defer s.cacheWriteMu.RUnlock()
 
-	if s.cacheWriteChan == nil {
+	// Stop sets stopped before taking the write lock. Re-check it while holding
+	// the read lock so a caller that observed the old value cannot enqueue new
+	// work during the shutdown hand-off. The lock itself keeps the channel open
+	// until this send completes, preventing a send-on-closed-channel panic.
+	if s.stopped.Load() || s.cacheWriteChan == nil {
 		s.logCacheWriteDrop(task, "closed")
 		return false
 	}
@@ -423,21 +438,85 @@ func (s *BillingCacheService) GetSubscriptionStatus(ctx context.Context, userID,
 		return s.convertFromPortsData(cacheData), nil
 	}
 
-	// 缓存未命中，从数据库读取
+	if generationStore, ok := s.cache.(subscriptionCacheGenerationStore); ok {
+		// Read the generation before joining singleflight. A request that starts
+		// after a completed invalidation must not join a load of the old DB
+		// snapshot that was already in flight before that invalidation.
+		expectedGeneration, generationErr := generationStore.GetSubscriptionCacheGeneration(ctx, userID, groupID)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		loadKey := subscriptionCacheLoadKey(userID, groupID)
+		if generationErr == nil {
+			loadKey += ":" + strconv.FormatInt(expectedGeneration, 10)
+		} else {
+			loadKey += ":unverified"
+		}
+		// A caller that abandons the request should stop waiting, but must not
+		// cancel the shared DB load for the other concurrent callers.
+		resultCh := s.subscriptionLoadSF.DoChan(loadKey, func() (any, error) {
+			loadCtx, cancel := context.WithTimeout(context.Background(), balanceLoadTimeout)
+			defer cancel()
+
+			// Another load may have completed between the caller's cache miss
+			// and registration here. Reuse its result instead of querying DB
+			// again after the previous singleflight call has already finished.
+			if latest, cacheErr := s.cache.GetSubscriptionCache(loadCtx, userID, groupID); cacheErr == nil && latest != nil {
+				return s.convertFromPortsData(latest), nil
+			}
+
+			data, loadErr := s.getSubscriptionFromDB(loadCtx, userID, groupID)
+			if loadErr != nil {
+				return nil, loadErr
+			}
+
+			// A generation read failure must not turn a successful DB read into a
+			// request failure. Skip the fill because its safety cannot be proven.
+			if generationErr == nil {
+				if _, fillErr := generationStore.SetSubscriptionCacheIfGeneration(
+					loadCtx, userID, groupID, expectedGeneration, s.convertToPortsData(data),
+				); fillErr != nil {
+					logger.LegacyPrintf("service.billing_cache", "Warning: conditional subscription cache fill failed for user %d group %d: %v", userID, groupID, fillErr)
+				}
+			} else {
+				logger.LegacyPrintf("service.billing_cache", "Warning: read subscription cache generation failed for user %d group %d: %v", userID, groupID, generationErr)
+			}
+			return data, nil
+		})
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case result := <-resultCh:
+			if result.Err != nil {
+				return nil, result.Err
+			}
+			data, ok := result.Val.(*subscriptionCacheData)
+			if !ok {
+				return nil, fmt.Errorf("unexpected subscription cache load type: %T", result.Val)
+			}
+			dataCopy := *data
+			return &dataCopy, nil
+		}
+	}
+
+	// Compatibility path for cache implementations that do not expose the
+	// generation capability (including existing test doubles).
 	data, err := s.getSubscriptionFromDB(ctx, userID, groupID)
 	if err != nil {
 		return nil, err
 	}
-
-	// 异步建立缓存
 	_ = s.enqueueCacheWrite(cacheWriteTask{
 		kind:             cacheWriteSetSubscription,
 		userID:           userID,
 		groupID:          groupID,
 		subscriptionData: data,
 	})
-
 	return data, nil
+}
+
+func subscriptionCacheLoadKey(userID, groupID int64) string {
+	return strconv.FormatInt(userID, 10) + ":" + strconv.FormatInt(groupID, 10)
 }
 
 func (s *BillingCacheService) convertFromPortsData(data *SubscriptionCacheData) *subscriptionCacheData {
@@ -494,12 +573,28 @@ func (s *BillingCacheService) UpdateSubscriptionUsage(ctx context.Context, userI
 	if s.cache == nil {
 		return nil
 	}
+	if generationStore, ok := s.cache.(subscriptionCacheGenerationStore); ok {
+		return generationStore.InvalidateSubscriptionCacheAndBumpGeneration(ctx, userID, groupID)
+	}
 	return s.cache.UpdateSubscriptionUsage(ctx, userID, groupID, costUSD)
 }
 
-// QueueUpdateSubscriptionUsage 异步更新订阅用量缓存
+// QueueUpdateSubscriptionUsage refreshes the admission snapshot after a DB
+// usage write. Generation-aware caches are invalidated synchronously; legacy
+// cache implementations retain the asynchronous delta update.
 func (s *BillingCacheService) QueueUpdateSubscriptionUsage(userID, groupID int64, costUSD float64) {
 	if s.cache == nil {
+		return
+	}
+	if generationStore, ok := s.cache.(subscriptionCacheGenerationStore); ok {
+		// Usage has already been persisted to the DB before this method is
+		// called. After a successful invalidation, subsequent checks reload the
+		// DB; the generation bump also rejects any older in-flight snapshot.
+		ctx, cancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
+		defer cancel()
+		if err := generationStore.InvalidateSubscriptionCacheAndBumpGeneration(ctx, userID, groupID); err != nil {
+			logger.LegacyPrintf("service.billing_cache", "Warning: invalidate subscription cache after usage failed for user %d group %d: %v", userID, groupID, err)
+		}
 		return
 	}
 	// 队列满时同步回退，确保订阅用量及时更新。
@@ -523,7 +618,13 @@ func (s *BillingCacheService) InvalidateSubscription(ctx context.Context, userID
 	if s.cache == nil {
 		return nil
 	}
-	if err := s.cache.InvalidateSubscriptionCache(ctx, userID, groupID); err != nil {
+	var err error
+	if generationStore, ok := s.cache.(subscriptionCacheGenerationStore); ok {
+		err = generationStore.InvalidateSubscriptionCacheAndBumpGeneration(ctx, userID, groupID)
+	} else {
+		err = s.cache.InvalidateSubscriptionCache(ctx, userID, groupID)
+	}
+	if err != nil {
 		logger.LegacyPrintf("service.billing_cache", "Warning: invalidate subscription cache failed for user %d group %d: %v", userID, groupID, err)
 		return err
 	}
@@ -692,11 +793,22 @@ func (s *BillingCacheService) QueueUpdateAPIKeyRateLimitUsage(apiKeyID int64, co
 	if s.cache == nil {
 		return
 	}
-	s.enqueueCacheWrite(cacheWriteTask{
+	task := cacheWriteTask{
 		kind:     cacheWriteUpdateRateLimitUsage,
 		apiKeyID: apiKeyID,
 		amount:   cost,
-	})
+	}
+	if s.enqueueCacheWrite(task) {
+		return
+	}
+	// Rate-limit usage is an admission-control input. Dropping it when the
+	// asynchronous queue is saturated would allow a high-concurrency burst to
+	// pass a stale Redis limit, so fall back to a bounded synchronous write.
+	ctx, cancel := context.WithTimeout(context.Background(), cacheWriteTimeout)
+	defer cancel()
+	if err := s.cache.UpdateAPIKeyRateLimitUsage(ctx, apiKeyID, cost); err != nil {
+		logger.LegacyPrintf("service.billing_cache", "Warning: synchronous rate limit usage update failed for api key %d: %v", apiKeyID, err)
+	}
 }
 
 // IncrementUserPlatformQuotaUsage 同步累加 user × platform usage 到 Redis 缓存。

@@ -150,9 +150,14 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	} else if p.IsSubscriptionBill {
 		// Subscription usage tracked by ActualCost so group rate multiplier
 		// consumes the quota at the expected speed.
-		if cost.ActualCost > 0 {
+		if cost.ActualCost > 0 && p.Subscription != nil && deps.userSubRepo != nil {
 			if err := deps.userSubRepo.IncrementUsage(billingCtx, p.Subscription.ID, cost.ActualCost); err != nil {
 				slog.Error("increment subscription usage failed", "subscription_id", p.Subscription.ID, "error", err)
+			} else if deps.billingCacheService != nil && p.User != nil && p.Subscription != nil && p.Subscription.GroupID > 0 {
+				// This legacy path predates the unified billing transaction and
+				// therefore does not pass through finalizePostUsageBilling. Keep
+				// the Redis admission snapshot current after the DB increment.
+				deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, p.Subscription.GroupID, cost.ActualCost)
 			}
 		}
 	} else {
@@ -373,6 +378,21 @@ func finalizePostUsageBilling(_ context.Context, p *postUsageBillingParams, deps
 			deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
 		}
 		return
+	}
+
+	// Legacy user-subscription billing has no API key.  Keep its Redis usage
+	// snapshot in step with the successful DB transaction; otherwise a cache hit
+	// can continue authorizing requests against the pre-billing usage for the
+	// whole subscription-cache TTL.  Global API-key billing deliberately carries
+	// no user subscription cost, so the APIKey nil guard is part of the contract.
+	if p.APIKey == nil && p.IsSubscriptionBill && p.Subscription != nil &&
+		p.User != nil && p.Subscription.GroupID > 0 && p.Cost.ActualCost > 0 &&
+		deps.billingCacheService != nil {
+		deps.billingCacheService.QueueUpdateSubscriptionUsage(
+			p.User.ID,
+			p.Subscription.GroupID,
+			p.Cost.ActualCost,
+		)
 	}
 
 	// API keys are system-wide. The transaction deliberately carries neither

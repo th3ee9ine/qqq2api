@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -129,10 +130,21 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Account request admission unavailable")
 			return
 		}
+		var releaseAccountSlot func()
+		if h.concurrencyHelper != nil {
+			releaseAccountSlot, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, account.Concurrency, 2*time.Second, false, nil)
+			if err != nil {
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account concurrency limit reached, please retry later")
+				return
+			}
+		}
 
 		// The client ETag represents the final group-specific body, so fetch the
 		// source manifest before applying local filtering and alias metadata.
 		manifest, err := h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), account, c.Query("client_version"), "")
+		if releaseAccountSlot != nil {
+			releaseAccountSlot()
+		}
 		if err != nil {
 			if c.Request.Context().Err() != nil {
 				return

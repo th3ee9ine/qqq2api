@@ -29,6 +29,12 @@ BEGIN
               AND NOT attisdropped
         ) THEN
             ALTER TABLE groups ADD COLUMN IF NOT EXISTS model_allowlist JSONB NOT NULL DEFAULT '{}'::jsonb;
+            EXECUTE $backfill_after_add$
+                UPDATE groups
+                   SET model_allowlist = models_list_config
+                 WHERE COALESCE(model_allowlist, '{}'::jsonb) = '{}'::jsonb
+                   AND COALESCE(models_list_config, '{}'::jsonb) <> '{}'::jsonb
+            $backfill_after_add$;
         ELSE
             EXECUTE $backfill$
                 UPDATE groups

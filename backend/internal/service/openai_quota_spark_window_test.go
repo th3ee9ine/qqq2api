@@ -180,7 +180,7 @@ func TestBuildCodexPrimaryWindowExtraUpdates(t *testing.T) {
 	updates := buildCodexPrimaryWindowExtraUpdates(usage, now)
 	require.InDelta(t, 0.31, updates["codex_5h_used_percent"], 1e-9)
 	require.InDelta(t, 0.62, updates["codex_7d_used_percent"], 1e-9)
-	require.Equal(t, now.Format(time.RFC3339), updates["codex_usage_updated_at"])
+	require.Equal(t, now.Format(time.RFC3339Nano), updates["codex_usage_updated_at"])
 }
 
 // ── Part C: ResetCredit 影子拒绝 ───────────────────────────────────────────

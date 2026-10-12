@@ -345,34 +345,57 @@ func (s *OpenAIGatewayService) bindOpenAIStickySessionDuringSelection(ctx contex
 	if gatewayProfitControlGateActive(ctx) || preserveOpenAIGuardianParentBinding(ctx, sessionHash) {
 		return nil
 	}
-	return s.BindStickySession(ctx, groupID, sessionHash, accountID)
+	ttl := openaiStickySessionTTL
+	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds > 0 {
+		ttl = time.Duration(s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds) * time.Second
+	}
+	return s.claimStickySessionAccountID(ctx, groupID, sessionHash, accountID, ttl)
+}
+
+func (s *OpenAIGatewayService) bindOpenAISelectionSticky(ctx context.Context, req OpenAIAccountScheduleRequest, accountID int64) error {
+	if req.PreserveStickyBinding || gatewayProfitControlGateActive(ctx) || preserveOpenAIGuardianParentBinding(ctx, req.SessionHash) {
+		return nil
+	}
+	_, failover := req.ExcludedIDs[req.StickyAccountID]
+	if req.StickyWeighted || (req.StickyAccountID > 0 && failover) {
+		return s.replaceStickySessionAccountID(ctx, req.GroupID, req.SessionHash, req.StickyAccountID, accountID, s.openAIWSSessionStickyTTL())
+	}
+	return s.bindOpenAIStickySessionDuringSelection(ctx, req.GroupID, req.SessionHash, accountID)
 }
 
 // BindStickySessionAfterProfitAdmission records the terminally admitted
-// account. Without a profit gate it preserves the pre-existing eager binding
-// behavior at the handler bind points. With a gate it never overwrites a
-// different binding that already exists, so a temporarily ineligible account
-// remains sticky and becomes eligible again automatically after its rate
-// recovers.
+// account. The write is an atomic first-writer claim so a late response from
+// an older request cannot overwrite a newer session owner. With a profit gate,
+// a conflict is deliberately ignored: the request was admitted successfully,
+// while the existing binding remains the owner for subsequent requests.
 func (s *OpenAIGatewayService) BindStickySessionAfterProfitAdmission(ctx context.Context, groupID *int64, sessionHash string, accountID int64) error {
-	if sessionHash == "" || accountID <= 0 {
+	if s == nil || sessionHash == "" || accountID <= 0 {
 		return nil
 	}
 	if preserveOpenAIGuardianParentBinding(ctx, sessionHash) {
 		return nil
 	}
-	if !gatewayProfitControlGateActive(ctx) {
-		return s.BindStickySession(ctx, groupID, sessionHash, accountID)
+	// Legacy adapters do not provide an atomic claim. Preserve the existing
+	// profit-gate behavior for those adapters; production Redis uses Lua below.
+	if _, atomic := s.cache.(openAIStickySessionAtomicCache); !atomic && gatewayProfitControlGateActive(ctx) {
+		existing, err := s.getStickySessionAccountID(ctx, groupID, sessionHash)
+		if (err != nil && !errors.Is(err, ErrStickySessionNotFound)) || (existing > 0 && existing != accountID) {
+			return nil
+		}
 	}
-	existingAccountID, err := s.getStickySessionAccountID(ctx, groupID, sessionHash)
-	if err != nil && !errors.Is(err, ErrStickySessionNotFound) {
-		slog.Warn("profit_control_sticky_binding_read_failed", "group_id", derefGroupID(groupID), "account_id", accountID, "error", err)
+	ttl := openaiStickySessionTTL
+	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds > 0 {
+		ttl = time.Duration(s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds) * time.Second
+	}
+	err := s.claimStickySessionAccountID(ctx, groupID, sessionHash, accountID, ttl)
+	if errors.Is(err, ErrStickySessionClaimConflict) {
 		return nil
 	}
-	if existingAccountID > 0 && existingAccountID != accountID {
+	if err != nil && gatewayProfitControlGateActive(ctx) {
+		slog.Warn("profit_control_sticky_binding_claim_failed", "group_id", derefGroupID(groupID), "account_id", accountID, "error", err)
 		return nil
 	}
-	return s.BindStickySession(ctx, groupID, sessionHash, accountID)
+	return err
 }
 
 // ---- 可观测性：按分组累计计数 + 采样日志（无逐请求输出） ----

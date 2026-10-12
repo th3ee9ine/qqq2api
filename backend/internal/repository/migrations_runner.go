@@ -109,7 +109,7 @@ var migrationChecksumCompatibilityRules = map[string]migrationChecksumCompatibil
 	// 236 gained a compatibility preamble in the custom fork after upstream
 	// databases had already recorded the original migration checksum. Accept
 	// both immutable versions while keeping all other checksum mismatches strict.
-	"236_group_model_allowlist_repair.sql": newMigrationChecksumCompatibilityRule("a67a305b9bff1376ddf911d9b52a474244e9dcef05c61b4cce9915edd0469bce", "0d8fbcd98750be1a58cec45fe2b866031b656ac6286b073ca061f8fa8fdc040e"),
+	"236_group_model_allowlist_repair.sql": newMigrationChecksumCompatibilityRule("95e74d6fbf2eb404f9d82a0a6f8bcc3bc763c6c9f613f6fca51af0e05b9ceb2b", "a67a305b9bff1376ddf911d9b52a474244e9dcef05c61b4cce9915edd0469bce", "0d8fbcd98750be1a58cec45fe2b866031b656ac6286b073ca061f8fa8fdc040e"),
 }
 
 // ApplyMigrations 将嵌入的 SQL 迁移文件应用到指定的数据库。

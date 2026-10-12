@@ -91,6 +91,54 @@ func TestAPIKeyConcurrencyLimitsAreIsolatedByKeyID(t *testing.T) {
 	require.True(t, acquired)
 }
 
+func TestOpenAIOAuthAdmissionReservationIsDistributed(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	cache := NewConcurrencyCache(client, 15, 900)
+	admission, ok := cache.(service.OpenAIOAuthAdmissionCache)
+	require.True(t, ok)
+	ctx := context.Background()
+
+	first, accepted, err := admission.ReserveOpenAIOAuthAdmission(ctx, 501, time.Second, time.Time{}, 0, time.Minute)
+	require.NoError(t, err)
+	require.True(t, accepted)
+
+	second, accepted, err := admission.ReserveOpenAIOAuthAdmission(ctx, 501, time.Second, time.Time{}, 0, time.Minute)
+	require.NoError(t, err)
+	require.False(t, accepted)
+	require.True(t, second.After(first))
+
+	deferredUntil := time.Now().Add(5 * time.Second)
+	require.NoError(t, admission.DeferOpenAIOAuthAdmission(ctx, 501, deferredUntil, time.Minute))
+	third, accepted, err := admission.ReserveOpenAIOAuthAdmission(ctx, 501, time.Second, time.Time{}, 10*time.Second, time.Minute)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	require.GreaterOrEqual(t, third.UnixMilli(), deferredUntil.Add(-time.Second).UnixMilli())
+}
+
+func TestOpenAIOAuthAdmissionCancellationRollsBackLatestReservation(t *testing.T) {
+	redisServer := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	cache := NewConcurrencyCache(client, 15, 900)
+	admission, ok := cache.(service.OpenAIOAuthAdmissionCache)
+	require.True(t, ok)
+	cancelAdmission, ok := cache.(interface {
+		CancelOpenAIOAuthAdmission(context.Context, int64, time.Time, time.Duration, time.Duration) error
+	})
+	require.True(t, ok)
+	ctx := context.Background()
+
+	first, accepted, err := admission.ReserveOpenAIOAuthAdmission(ctx, 777, time.Second, time.Time{}, 0, time.Minute)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	require.NoError(t, cancelAdmission.CancelOpenAIOAuthAdmission(ctx, 777, first, time.Second, time.Minute))
+
+	second, accepted, err := admission.ReserveOpenAIOAuthAdmission(ctx, 777, time.Second, time.Time{}, 0, time.Minute)
+	require.NoError(t, err)
+	require.True(t, accepted)
+	require.LessOrEqual(t, time.Until(second), 200*time.Millisecond)
+}
+
 func TestLiveLeaseExpiresWithoutRefresh(t *testing.T) {
 	redisServer := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})

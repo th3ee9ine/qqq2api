@@ -189,6 +189,35 @@ type trackingConcurrencyCache struct {
 	cleanupPrefix string
 }
 
+type refreshingConcurrencyCacheForTest struct {
+	stubConcurrencyCacheForTest
+	ttl            time.Duration
+	refreshResult  bool
+	refreshErr     error
+	accountRefresh atomic.Int64
+	userRefresh    atomic.Int64
+	apiKeyRefresh  atomic.Int64
+}
+
+func (c *refreshingConcurrencyCacheForTest) ConcurrencySlotTTL() time.Duration {
+	return c.ttl
+}
+
+func (c *refreshingConcurrencyCacheForTest) RefreshAccountSlot(context.Context, int64, string) (bool, error) {
+	c.accountRefresh.Add(1)
+	return c.refreshResult, c.refreshErr
+}
+
+func (c *refreshingConcurrencyCacheForTest) RefreshUserSlot(context.Context, int64, string) (bool, error) {
+	c.userRefresh.Add(1)
+	return c.refreshResult, c.refreshErr
+}
+
+func (c *refreshingConcurrencyCacheForTest) RefreshAPIKeySlot(context.Context, int64, string) (bool, error) {
+	c.apiKeyRefresh.Add(1)
+	return c.refreshResult, c.refreshErr
+}
+
 func (c *trackingConcurrencyCache) CleanupStaleProcessSlots(_ context.Context, prefix string) error {
 	c.cleanupPrefix = prefix
 	return c.cleanupErr
@@ -214,6 +243,61 @@ func TestAcquireAccountSlot_Success(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, result.Acquired)
 	require.NotNil(t, result.ReleaseFunc)
+}
+
+func TestAcquireAccountSlot_HeartbeatRefreshesAndReleaseIsIdempotent(t *testing.T) {
+	cache := &refreshingConcurrencyCacheForTest{
+		stubConcurrencyCacheForTest: stubConcurrencyCacheForTest{acquireResult: true},
+		ttl:                         30 * time.Millisecond,
+		refreshResult:               true,
+	}
+	svc := NewConcurrencyService(cache)
+
+	result, err := svc.AcquireAccountSlot(context.Background(), 7, 1)
+	require.NoError(t, err)
+	require.True(t, result.Acquired)
+	require.Eventually(t, func() bool { return cache.accountRefresh.Load() > 0 }, 500*time.Millisecond, 5*time.Millisecond)
+
+	result.ReleaseFunc()
+	result.ReleaseFunc()
+	require.Equal(t, int64(1), cache.accountRefresh.Load(), "release 后不得继续刷新")
+	require.Len(t, cache.releasedRequestIDs, 1, "释放函数必须幂等")
+}
+
+func TestAcquireUserSlot_HeartbeatStopsWhenLeaseIsLost(t *testing.T) {
+	cache := &refreshingConcurrencyCacheForTest{
+		stubConcurrencyCacheForTest: stubConcurrencyCacheForTest{acquireResult: true},
+		ttl:                         30 * time.Millisecond,
+		refreshResult:               false,
+	}
+	svc := NewConcurrencyService(cache)
+
+	result, err := svc.AcquireUserSlot(context.Background(), 8, 1)
+	require.NoError(t, err)
+	require.True(t, result.Acquired)
+	require.Eventually(t, func() bool { return cache.userRefresh.Load() > 0 }, 500*time.Millisecond, 5*time.Millisecond)
+	refreshes := cache.userRefresh.Load()
+	time.Sleep(80 * time.Millisecond)
+	require.Equal(t, refreshes, cache.userRefresh.Load(), "租约丢失后必须停止心跳")
+
+	result.ReleaseFunc()
+	require.Len(t, cache.releasedRequestIDs, 0, "用户释放记录由专用桩未记录时不应影响测试")
+}
+
+func TestAcquireAPIKeySlot_HeartbeatRefreshesUnlimitedTracking(t *testing.T) {
+	cache := &refreshingConcurrencyCacheForTest{
+		stubConcurrencyCacheForTest: stubConcurrencyCacheForTest{},
+		ttl:                         30 * time.Millisecond,
+		refreshResult:               true,
+	}
+	svc := NewConcurrencyService(cache)
+
+	result, err := svc.AcquireAPIKeySlot(context.Background(), 9, 0)
+	require.NoError(t, err)
+	require.True(t, result.Acquired)
+	require.Eventually(t, func() bool { return cache.apiKeyRefresh.Load() > 0 }, 500*time.Millisecond, 5*time.Millisecond)
+	result.ReleaseFunc()
+	require.Len(t, cache.releasedAPIKeyRequestIDs, 1)
 }
 
 func TestAcquireAccountSlot_Failure(t *testing.T) {

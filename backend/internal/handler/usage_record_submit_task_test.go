@@ -219,3 +219,39 @@ func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_SearchCountUsesMandator
 
 	require.True(t, called.Load(), "search surcharge usage task must be mandatory when async submit is dropped")
 }
+
+func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_TokenUsageUsesMandatoryFallback(t *testing.T) {
+	for _, policy := range []string{"drop", "sample"} {
+		t.Run(policy, func(t *testing.T) {
+			pool := service.NewUsageRecordWorkerPoolWithOptions(service.UsageRecordWorkerPoolOptions{
+				WorkerCount:           1,
+				QueueSize:             1,
+				TaskTimeout:           time.Second,
+				OverflowPolicy:        policy,
+				OverflowSamplePercent: 0,
+				AutoScaleEnabled:      false,
+			})
+			t.Cleanup(pool.Stop)
+			h := &OpenAIGatewayHandler{usageRecordWorkerPool: pool}
+
+			block := make(chan struct{})
+			release := make(chan struct{})
+			pool.Submit(func(ctx context.Context) {
+				close(block)
+				<-release
+			})
+			<-block
+			pool.Submit(func(ctx context.Context) {})
+
+			var called atomic.Bool
+			h.submitOpenAIUsageRecordTask(context.Background(), &service.OpenAIForwardResult{
+				Usage: service.OpenAIUsage{InputTokens: 12, OutputTokens: 8},
+			}, func(ctx context.Context) {
+				called.Store(true)
+			})
+			close(release)
+
+			require.True(t, called.Load(), "token usage task must run synchronously when %s overflow drops it", policy)
+		})
+	}
+}

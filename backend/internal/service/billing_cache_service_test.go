@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 type billingCacheWorkerStub struct {
 	balanceUpdates      int64
 	subscriptionUpdates int64
+	rateLimitUpdates    int64
 }
 
 func (b *billingCacheWorkerStub) GetUserBalance(ctx context.Context, userID int64) (float64, error) {
@@ -61,6 +63,7 @@ func (b *billingCacheWorkerStub) SetAPIKeyRateLimit(ctx context.Context, keyID i
 }
 
 func (b *billingCacheWorkerStub) UpdateAPIKeyRateLimitUsage(ctx context.Context, keyID int64, cost float64) error {
+	atomic.AddInt64(&b.rateLimitUpdates, 1)
 	return nil
 }
 
@@ -129,4 +132,38 @@ func TestBillingCacheServiceEnqueueAfterStopReturnsFalse(t *testing.T) {
 		amount: 1,
 	})
 	require.False(t, enqueued)
+}
+
+func TestBillingCacheServiceRateLimitUsageFallsBackSynchronously(t *testing.T) {
+	cache := &billingCacheWorkerStub{}
+	svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, &config.Config{}, nil)
+	svc.Stop()
+
+	svc.QueueUpdateAPIKeyRateLimitUsage(42, 1.25)
+	require.Equal(t, int64(1), atomic.LoadInt64(&cache.rateLimitUpdates))
+}
+
+func TestBillingCacheServiceConcurrentQueueAndStopDoesNotPanic(t *testing.T) {
+	for iteration := 0; iteration < 10; iteration++ {
+		cache := &billingCacheWorkerStub{}
+		svc := NewBillingCacheService(cache, nil, nil, nil, nil, nil, &config.Config{}, nil)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		for i := 0; i < 16; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				svc.QueueUpdateAPIKeyRateLimitUsage(42, 1.25)
+			}()
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			svc.Stop()
+		}()
+		close(start)
+		wg.Wait()
+	}
 }

@@ -38,6 +38,30 @@ type httpUpstreamRecorder struct {
 	err       error
 }
 
+// blockingOpenAIHeadersUpstream observes the request context while the
+// upstream is still waiting to produce response headers. It models the
+// transport-level wait that must be canceled when the downstream request has
+// already gone away; returning a response immediately would only observe the
+// body-cleanup cancellation after headers had arrived.
+type blockingOpenAIHeadersUpstream struct {
+	requests chan *http.Request
+}
+
+func (u *blockingOpenAIHeadersUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	if u != nil && u.requests != nil {
+		u.requests <- req
+	}
+	if req == nil || req.Context() == nil {
+		return nil, context.Canceled
+	}
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func (u *blockingOpenAIHeadersUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, accountConcurrency)
+}
+
 type passthroughErrReadCloser struct {
 	err error
 }
@@ -772,7 +796,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	require.Contains(t, rec.Body.String(), `"id":"cmp_123"`)
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_UpstreamRequestIgnoresClientCancel(t *testing.T) {
+func TestOpenAIGatewayService_OAuthPassthrough_UpstreamRequestCancelsBeforeHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -783,16 +807,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamRequestIgnoresClientCance
 	cancel()
 
 	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_passthrough_ctx"}},
-		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
-			`data: {"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":1}}}`,
-			"",
-			"data: [DONE]",
-			"",
-		}, "\n"))),
-	}}
+	upstream := &blockingOpenAIHeadersUpstream{requests: make(chan *http.Request, 1)}
 
 	svc := &OpenAIGatewayService{
 		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
@@ -812,10 +827,20 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamRequestIgnoresClientCance
 	}
 
 	result, err := svc.Forward(reqCtx, c, account, originalBody)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.NotNil(t, upstream.lastReq)
-	require.NoError(t, upstream.lastReq.Context().Err())
+	require.Error(t, err)
+	require.Nil(t, result)
+	var upstreamReq *http.Request
+	select {
+	case upstreamReq = <-upstream.requests:
+	case <-time.After(time.Second):
+		t.Fatal("upstream request was not started")
+	}
+	// Passthrough requests detach the client context after the upstream response
+	// headers arrive so usage draining can continue after a downstream
+	// disconnect. Before headers, however, a canceled client must abort the
+	// upstream wait; otherwise a silent upstream can hold an account slot and
+	// tracked transport client indefinitely.
+	require.ErrorIs(t, upstreamReq.Context().Err(), context.Canceled)
 }
 
 func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsGetsDefault(t *testing.T) {
@@ -2395,6 +2420,72 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamClientDisconnectStillCollec
 	require.Equal(t, 11, result.Usage.InputTokens)
 	require.Equal(t, 7, result.Usage.OutputTokens)
 	require.Equal(t, 3, result.Usage.CacheReadInputTokens)
+}
+
+func TestOpenAIGatewayService_PassthroughDisconnectFailedEventReturnsPartialUsageWithoutRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(nil))
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(ctx)
+	c.Request.URL.Path = "/v1/responses/compact"
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
+
+	requestBody := []byte(`{"model":"gpt-5.2","stream":true,"input":[{"type":"text","text":"hi"}]}`)
+	upstreamBody := newPassthroughLifecycleBody(strings.Join([]string{
+		`data: {"type":"response.failed","response":{"id":"resp_failed","status":"failed","error":{"code":"model_not_found","message":"compact model unavailable"},"usage":{"input_tokens":13,"output_tokens":2}}}`,
+		"",
+	}, "\n"))
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"text/event-stream"},
+			"X-Request-Id": []string{"rid-disconnect-failed"},
+		},
+		Body: upstreamBody,
+	}}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			ForceCodexCLI:             false,
+			StreamDataIntervalTimeout: 1,
+		}},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          130,
+		Name:        "apikey-disconnect-failed",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://api.example.test",
+		},
+		Extra:       map[string]any{"openai_passthrough": true},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	cancel()
+	result, err := svc.Forward(ctx, c, account, requestBody)
+
+	require.Error(t, err)
+	require.NotNil(t, result)
+	require.True(t, result.ClientDisconnect)
+	require.Equal(t, 13, result.Usage.InputTokens)
+	require.Equal(t, 2, result.Usage.OutputTokens)
+	var failoverErr *UpstreamFailoverError
+	require.NotErrorAs(t, err, &failoverErr)
+	var compactSignal *openAICompactFallbackSignal
+	require.NotErrorAs(t, err, &compactSignal)
+	require.Len(t, upstream.requests, 1, "a disconnected client must not trigger a replacement upstream request")
+	select {
+	case <-upstreamBody.closed:
+	default:
+		t.Fatal("passthrough did not close the upstream body after disconnect drain")
+	}
 }
 
 func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEndpoint(t *testing.T) {

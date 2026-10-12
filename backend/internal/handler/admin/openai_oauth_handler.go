@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/th3ee9ine/qqq2api/internal/handler/dto"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/response"
@@ -36,6 +37,14 @@ type openAIQuotaService interface {
 	CacheCreditsSnapshot(ctx context.Context, accountID int64, usage *service.OpenAIQuotaUsage) error
 	CachePostResetSnapshot(ctx context.Context, accountID int64, usage *service.OpenAIQuotaUsage) error
 	ResetCredit(ctx context.Context, accountID int64) (*service.OpenAIQuotaResetResult, error)
+}
+
+// openAIQuotaResetIdempotencyService is implemented by the production quota
+// service. It is optional so reduced deployments and existing test doubles
+// remain source-compatible; the handler falls back to ResetCredit when no
+// stable-id method is available.
+type openAIQuotaResetIdempotencyService interface {
+	ResetCreditWithRedeemRequestID(ctx context.Context, accountID int64, redeemRequestID string) (*service.OpenAIQuotaResetResult, error)
 }
 
 type openAIAccountSessionService interface {
@@ -85,6 +94,12 @@ type openAISessionCleanupImmediateRunner interface {
 // the browser aborts a mutation that already succeeded and the operator retries
 // it — spending a second credit.
 const openAIQuotaResetPostProcessTimeout = 8 * time.Second
+
+// The upstream consume endpoint allows up to 20 seconds. Keep the
+// idempotency execution lease long enough for that request plus post-reset
+// bookkeeping; using the shorter post-process timeout here would cancel a
+// still-running consume and unnecessarily turn a slow success into an error.
+const openAIQuotaResetExecutionTimeout = 30 * time.Second
 
 type openAIQuotaResetResponse struct {
 	service.OpenAIQuotaResetResult
@@ -1197,33 +1212,50 @@ func (h *OpenAIOAuthHandler) ResetQuota(c *gin.Context) {
 		response.BadRequest(c, "openai quota service is not enabled")
 		return
 	}
-	result, err := h.quotaService.ResetCredit(c.Request.Context(), accountID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	if result == nil {
-		response.Error(c, http.StatusInternalServerError, "openai quota reset returned an empty result")
-		return
-	}
+	// The consume call is non-refundable. Route it through the shared admin
+	// idempotency coordinator so concurrent/retried requests with the same
+	// Idempotency-Key replay one stored response instead of consuming another
+	// credit. The stable UUID is also sent upstream, covering the failure window
+	// after upstream consumption but before the local response is persisted.
+	idempotencyKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	payload := map[string]any{"account_id": accountID}
+	executeAdminIdempotentJSONWithTimeout(c, "admin.openai.accounts.reset_quota", payload,
+		service.DefaultWriteIdempotencyTTL(), openAIQuotaResetExecutionTimeout,
+		func(ctx context.Context) (any, error) {
+			var (
+				result   *service.OpenAIQuotaResetResult
+				resetErr error
+			)
+			if stableService, ok := h.quotaService.(openAIQuotaResetIdempotencyService); ok && idempotencyKey != "" {
+				redeemRequestID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("qqq2api/openai/reset/"+strconv.FormatInt(accountID, 10)+"/"+idempotencyKey)).String()
+				result, resetErr = stableService.ResetCreditWithRedeemRequestID(ctx, accountID, redeemRequestID)
+			} else {
+				result, resetErr = h.quotaService.ResetCredit(ctx, accountID)
+			}
+			if resetErr != nil {
+				return nil, resetErr
+			}
+			if result == nil {
+				return nil, service.ErrOpenAIQuotaResetEmptyResult
+			}
 
-	resetResponse := openAIQuotaResetResponse{OpenAIQuotaResetResult: *result}
-	postCtx, cancelPost := openAIQuotaResetPostProcessContext(c.Request.Context())
-	defer cancelPost()
-
-	postResult := service.RunOpenAIQuotaResetPostProcess(
-		postCtx,
-		accountID,
-		h.quotaService,
-		h.rateLimitService,
-		h.adminService.GetAccount,
-	)
-	resetResponse.Quota = postResult.Quota
-	resetResponse.CacheRefreshed = postResult.CacheRefreshed
-	resetResponse.AccountStateRecovered = postResult.AccountStateRecovered
-	resetResponse.WarningCode = postResult.WarningCode
-	if postResult.Account != nil {
-		resetResponse.Account = accountAdminAccountResponse(c.Request.Context(), dto.AccountFromService(postResult.Account))
-	}
-	response.Success(c, resetResponse)
+			resetResponse := openAIQuotaResetResponse{OpenAIQuotaResetResult: *result}
+			postCtx, cancelPost := openAIQuotaResetPostProcessContext(ctx)
+			defer cancelPost()
+			postResult := service.RunOpenAIQuotaResetPostProcess(
+				postCtx,
+				accountID,
+				h.quotaService,
+				h.rateLimitService,
+				h.adminService.GetAccount,
+			)
+			resetResponse.Quota = postResult.Quota
+			resetResponse.CacheRefreshed = postResult.CacheRefreshed
+			resetResponse.AccountStateRecovered = postResult.AccountStateRecovered
+			resetResponse.WarningCode = postResult.WarningCode
+			if postResult.Account != nil {
+				resetResponse.Account = accountAdminAccountResponse(ctx, dto.AccountFromService(postResult.Account))
+			}
+			return resetResponse, nil
+		})
 }

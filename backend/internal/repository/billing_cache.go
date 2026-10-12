@@ -15,13 +15,14 @@ import (
 )
 
 const (
-	billingBalanceKeyPrefix   = "billing:balance:"
-	billingSubKeyPrefix       = "billing:sub:"
-	billingRateLimitKeyPrefix = "apikey:rate:"
-	subCacheInvalidateChannel = "subscription:cache:invalidate"
-	billingCacheTTL           = 5 * time.Minute
-	billingCacheJitter        = 30 * time.Second
-	rateLimitCacheTTL         = 7 * 24 * time.Hour // 7 days matches the longest window
+	billingBalanceKeyPrefix       = "billing:balance:"
+	billingSubKeyPrefix           = "billing:sub:"
+	billingSubGenerationKeyPrefix = "billing:sub:generation:"
+	billingRateLimitKeyPrefix     = "apikey:rate:"
+	subCacheInvalidateChannel     = "subscription:cache:invalidate"
+	billingCacheTTL               = 5 * time.Minute
+	billingCacheJitter            = 30 * time.Second
+	rateLimitCacheTTL             = 7 * 24 * time.Hour // 7 days matches the longest window
 
 	// Rate limit window durations — must match service.RateLimitWindow* constants.
 	rateLimitWindow5h = 5 * time.Hour
@@ -47,6 +48,13 @@ func billingBalanceKey(userID int64) string {
 // billingSubKey generates the Redis key for subscription cache.
 func billingSubKey(userID, groupID int64) string {
 	return fmt.Sprintf("%s%d:%d", billingSubKeyPrefix, userID, groupID)
+}
+
+// billingSubGenerationKey is a version/tombstone key for one subscription.
+// A missing key represents generation zero; invalidations increment it even
+// when the subscription cache itself is already missing.
+func billingSubGenerationKey(userID, groupID int64) string {
+	return fmt.Sprintf("%s%d:%d", billingSubGenerationKeyPrefix, userID, groupID)
 }
 
 const (
@@ -95,6 +103,42 @@ var (
 		redis.call('HINCRBYFLOAT', KEYS[1], 'monthly_usage', cost)
 		redis.call('EXPIRE', KEYS[1], ARGV[2])
 		return 1
+	`)
+
+	// setSubscriptionCacheIfGenerationScript prevents a DB snapshot that was
+	// read before an invalidation from repopulating the subscription cache.
+	// The generation and cache existence checks, followed by the complete hash
+	// write, happen in one Redis script so no request can interleave them.
+	setSubscriptionCacheIfGenerationScript = redis.NewScript(`
+		local current = redis.call('GET', KEYS[2])
+		if current == false then
+			current = '0'
+		end
+		if current ~= ARGV[1] then
+			return 0
+		end
+		if redis.call('EXISTS', KEYS[1]) ~= 0 then
+			return 0
+		end
+		redis.call('HSET', KEYS[1],
+			'status', ARGV[2],
+			'expires_at', ARGV[3],
+			'daily_usage', ARGV[4],
+			'weekly_usage', ARGV[5],
+			'monthly_usage', ARGV[6],
+			'version', ARGV[7])
+		redis.call('EXPIRE', KEYS[1], ARGV[8])
+		return 1
+	`)
+
+	// invalidateSubscriptionCacheAndBumpGenerationScript leaves a tombstone in
+	// the generation key even when the subscription cache key is already absent.
+	// That tombstone rejects stale DB snapshots that are still in flight.
+	invalidateSubscriptionCacheAndBumpGenerationScript = redis.NewScript(`
+		local next = redis.call('INCR', KEYS[2])
+		redis.call('DEL', KEYS[1])
+		redis.call('EXPIRE', KEYS[2], ARGV[1])
+		return next
 	`)
 
 	// updateRateLimitUsageScript atomically increments all three rate limit usage counters
@@ -242,6 +286,64 @@ func (c *billingCache) SetSubscriptionCache(ctx context.Context, userID, groupID
 	return err
 }
 
+// GetSubscriptionCacheGeneration returns the invalidation generation for one
+// subscription. A missing generation key is generation zero.
+func (c *billingCache) GetSubscriptionCacheGeneration(ctx context.Context, userID, groupID int64) (int64, error) {
+	value, err := c.rdb.Get(ctx, billingSubGenerationKey(userID, groupID)).Result()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	generation, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse subscription cache generation: %w", err)
+	}
+	return generation, nil
+}
+
+// SetSubscriptionCacheIfGeneration fills a missing subscription cache only
+// when the invalidation generation still matches expectedGeneration. It
+// returns false when another writer already filled the key or invalidated it.
+func (c *billingCache) SetSubscriptionCacheIfGeneration(ctx context.Context, userID, groupID int64, expectedGeneration int64, data *service.SubscriptionCacheData) (bool, error) {
+	if data == nil {
+		return false, nil
+	}
+
+	result, err := setSubscriptionCacheIfGenerationScript.Run(ctx, c.rdb,
+		[]string{billingSubKey(userID, groupID), billingSubGenerationKey(userID, groupID)},
+		expectedGeneration,
+		data.Status,
+		data.ExpiresAt.Unix(),
+		data.DailyUsage,
+		data.WeeklyUsage,
+		data.MonthlyUsage,
+		data.Version,
+		int(jitteredTTL().Seconds()),
+	).Result()
+	if err != nil {
+		return false, err
+	}
+	value, ok := result.(int64)
+	if !ok {
+		return false, fmt.Errorf("unexpected subscription cache generation result: %T", result)
+	}
+	return value == 1, nil
+}
+
+// InvalidateSubscriptionCacheAndBumpGeneration atomically removes a
+// subscription cache and advances its generation tombstone. The tombstone
+// lives for a full cache TTL, well beyond the service's bounded 3-second load,
+// so an in-flight fill cannot observe a recycled generation after expiry.
+func (c *billingCache) InvalidateSubscriptionCacheAndBumpGeneration(ctx context.Context, userID, groupID int64) error {
+	_, err := invalidateSubscriptionCacheAndBumpGenerationScript.Run(ctx, c.rdb,
+		[]string{billingSubKey(userID, groupID), billingSubGenerationKey(userID, groupID)},
+		int(billingCacheTTL.Seconds()),
+	).Result()
+	return err
+}
+
 func (c *billingCache) UpdateSubscriptionUsage(ctx context.Context, userID, groupID int64, cost float64) error {
 	key := billingSubKey(userID, groupID)
 	_, err := updateSubUsageScript.Run(ctx, c.rdb, []string{key}, cost, int(jitteredTTL().Seconds())).Result()
@@ -253,8 +355,7 @@ func (c *billingCache) UpdateSubscriptionUsage(ctx context.Context, userID, grou
 }
 
 func (c *billingCache) InvalidateSubscriptionCache(ctx context.Context, userID, groupID int64) error {
-	key := billingSubKey(userID, groupID)
-	return c.rdb.Del(ctx, key).Err()
+	return c.InvalidateSubscriptionCacheAndBumpGeneration(ctx, userID, groupID)
 }
 
 func (c *billingCache) PublishSubscriptionCacheInvalidation(ctx context.Context, cacheKey string) error {

@@ -27,6 +27,29 @@ type grokImportProbeStub struct {
 	done         chan int64
 }
 
+type synchronizedLogBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedLogBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedLogBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.buf.Bytes()...)
+}
+
+func (b *synchronizedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func newGrokImportProbeStub(buffer int) *grokImportProbeStub {
 	return &grokImportProbeStub{
 		calls:    make(map[int64]int),
@@ -262,7 +285,7 @@ func TestGrokImportProbeSchedulerSkipsMissingServiceAndNonGrokAccounts(t *testin
 }
 
 func TestGrokImportProbeFailureLogDoesNotIncludeErrorMessage(t *testing.T) {
-	var logs bytes.Buffer
+	var logs synchronizedLogBuffer
 	previousLogger := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(previousLogger)

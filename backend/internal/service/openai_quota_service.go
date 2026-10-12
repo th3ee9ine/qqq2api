@@ -23,6 +23,10 @@ import (
 // errors.Is still matches it by identity since ResetCredit returns this var.
 var ErrSparkShadowResetNotSupported = infraerrors.New(http.StatusConflict, "SPARK_SHADOW_RESET_NOT_SUPPORTED", "spark shadow account does not support credit reset; reset the parent account")
 
+// ErrOpenAIQuotaResetEmptyResult protects the non-refundable consume path from
+// treating a nil service response as a successful idempotent operation.
+var ErrOpenAIQuotaResetEmptyResult = infraerrors.InternalServer("OPENAI_QUOTA_RESET_EMPTY_RESULT", "openai quota reset returned an empty result")
+
 // Endpoints used by the OpenAI/ChatGPT/Codex quota query and reset feature.
 const (
 	chatGPTUsageURL            = "https://chatgpt.com/backend-api/wham/usage"
@@ -474,6 +478,19 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 	return s.resetCredit(ctx, accountID, "", redeemRequestID, false)
 }
 
+// ResetCreditWithRedeemRequestID consumes one reset credit with a caller-owned
+// stable idempotency key. Administrative HTTP retries must reuse the same
+// upstream redeem_request_id after a timeout or a lost response; generating a
+// fresh UUID for every retry could spend a second credit after the first
+// consume already succeeded.
+func (s *OpenAIQuotaService) ResetCreditWithRedeemRequestID(ctx context.Context, accountID int64, redeemRequestID string) (*OpenAIQuotaResetResult, error) {
+	redeemRequestID = strings.TrimSpace(redeemRequestID)
+	if redeemRequestID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_QUOTA_REDEEM_ID_REQUIRED", "redeem request id is required")
+	}
+	return s.resetCredit(ctx, accountID, "", redeemRequestID, false)
+}
+
 // ResetCreditTargeted 使用固定卡 ID 与兑换 ID执行自动消费。调用方必须在重试时
 // 复用同一组参数；本方法不会回退到不带 credit_id 的旧消费方式。
 func (s *OpenAIQuotaService) ResetCreditTargeted(ctx context.Context, accountID int64, creditID, redeemRequestID string) (*OpenAIQuotaResetResult, error) {
@@ -862,7 +879,7 @@ func buildCodexQuotaWindowExtraUpdates(rateLimit *OpenAIRateLimit, now time.Time
 	if len(updates) == 0 {
 		return nil
 	}
-	updates["codex_usage_updated_at"] = now.Format(time.RFC3339)
+	updates["codex_usage_updated_at"] = now.Format(time.RFC3339Nano)
 	return updates
 }
 

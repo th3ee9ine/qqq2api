@@ -4,10 +4,8 @@ package service
 import (
 	"encoding/json"
 	"errors"
-	"hash/fnv"
 	"log/slog"
 	"net/url"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,22 +66,16 @@ type Account struct {
 	GroupIDs      []int64
 	Groups        []*Group
 
-	// model_mapping 热路径缓存（非持久化字段）
-	modelMappingCache               map[string]string
-	modelMappingCacheReady          bool
-	modelMappingCacheCredentialsPtr uintptr
-	modelMappingCacheRawPtr         uintptr
-	modelMappingCacheRawLen         int
-	modelMappingCacheRawSig         uint64
-	modelMappingCacheRuntimeVersion uint64
+	// Retained for snapshot-copy compatibility. GetModelMapping no longer
+	// reads or writes an Account-local cache: shared account reads and value
+	// copies must not mutate the source snapshot.
+	modelMappingCache      map[string]string
+	modelMappingCacheReady bool
 
-	// header_overrides 热路径缓存（非持久化字段，同 model_mapping 缓存先例）
-	headerOverrideCache               map[string]string
-	headerOverrideCacheReady          bool
-	headerOverrideCacheCredentialsPtr uintptr
-	headerOverrideCacheRawPtr         uintptr
-	headerOverrideCacheRawLen         int
-	headerOverrideCacheRawSig         uint64
+	// Retained for the same snapshot-copy compatibility; header lookups are
+	// also read-only and no longer use these legacy cache fields.
+	headerOverrideCache      map[string]string
+	headerOverrideCacheReady bool
 }
 
 type OpenAIEndpointCapability string
@@ -544,39 +536,12 @@ func stringMappingFromRaw(raw any) map[string]string {
 }
 
 func (a *Account) GetModelMapping() map[string]string {
-	runtimeVersion := xai.RuntimeModelMappingVersion()
-	credentialsPtr := mapPtr(a.Credentials)
+	// Accounts are shared by concurrent scheduler requests and copied by value.
+	// A lazy cache here races both another lookup and the struct copy. Resolve
+	// directly into a caller-owned map; this also observes credential/runtime
+	// changes without sorting and hashing the raw mapping on every cache hit.
 	rawMapping, _ := a.Credentials["model_mapping"].(map[string]any)
-	rawPtr := mapPtr(rawMapping)
-	rawLen := len(rawMapping)
-	rawSig := uint64(0)
-	rawSigReady := false
-
-	if a.modelMappingCacheReady &&
-		a.modelMappingCacheCredentialsPtr == credentialsPtr &&
-		a.modelMappingCacheRawPtr == rawPtr &&
-		a.modelMappingCacheRawLen == rawLen &&
-		a.modelMappingCacheRuntimeVersion == runtimeVersion {
-		rawSig = modelMappingSignature(rawMapping)
-		rawSigReady = true
-		if a.modelMappingCacheRawSig == rawSig {
-			return a.modelMappingCache
-		}
-	}
-
-	mapping := a.resolveModelMapping(rawMapping)
-	if !rawSigReady {
-		rawSig = modelMappingSignature(rawMapping)
-	}
-
-	a.modelMappingCache = mapping
-	a.modelMappingCacheReady = true
-	a.modelMappingCacheCredentialsPtr = credentialsPtr
-	a.modelMappingCacheRawPtr = rawPtr
-	a.modelMappingCacheRawLen = rawLen
-	a.modelMappingCacheRawSig = rawSig
-	a.modelMappingCacheRuntimeVersion = runtimeVersion
-	return mapping
+	return a.resolveModelMapping(rawMapping)
 }
 
 func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]string {
@@ -596,7 +561,7 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return nil
 	}
 
-	result := make(map[string]string)
+	result := make(map[string]string, len(rawMapping))
 	for k, v := range rawMapping {
 		if s, ok := v.(string); ok {
 			result[k] = s
@@ -611,37 +576,6 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		return xai.DefaultModelMapping()
 	}
 	return nil
-}
-
-func mapPtr(m map[string]any) uintptr {
-	if m == nil {
-		return 0
-	}
-	return reflect.ValueOf(m).Pointer()
-}
-
-func modelMappingSignature(rawMapping map[string]any) uint64 {
-	if len(rawMapping) == 0 {
-		return 0
-	}
-	keys := make([]string, 0, len(rawMapping))
-	for k := range rawMapping {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	h := fnv.New64a()
-	for _, k := range keys {
-		_, _ = h.Write([]byte(k))
-		_, _ = h.Write([]byte{0})
-		if v, ok := rawMapping[k].(string); ok {
-			_, _ = h.Write([]byte(v))
-		} else {
-			_, _ = h.Write([]byte{1})
-		}
-		_, _ = h.Write([]byte{0xff})
-	}
-	return h.Sum64()
 }
 
 func mappingHasWildcardForModel(mapping map[string]string, model string) bool {

@@ -3455,13 +3455,14 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(parent context.Context, tas
 }
 
 func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(parent context.Context, result *service.OpenAIForwardResult, task service.UsageRecordTask) {
-	// Money-critical bills never drop on pool overflow: media, search surcharge, voice.
-	if result != nil && (result.ImageCount > 0 || result.VideoCount > 0 ||
-		result.SearchCount > 0 || result.WebSearchCalls > 0 || result.AudioUsage != nil) {
-		h.submitMandatoryUsageRecordTask(parent, task)
-		return
-	}
-	h.submitUsageRecordTask(parent, task)
+	// Every OpenAI usage record is money-critical.  Token-only requests used to
+	// take the best-effort submit path, so an operator-selected drop/sample
+	// overflow policy could silently skip the unified billing transaction.  Keep
+	// the result argument for source compatibility (media/search/voice callers
+	// still pass it), but always use the mandatory submit path: enqueue when
+	// possible and execute synchronously when the bounded pool rejects it.
+	_ = result
+	h.submitMandatoryUsageRecordTask(parent, task)
 }
 
 func (h *OpenAIGatewayHandler) submitMandatoryUsageRecordTask(parent context.Context, task service.UsageRecordTask) {

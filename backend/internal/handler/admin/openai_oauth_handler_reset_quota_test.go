@@ -26,9 +26,11 @@ type openAIQuotaWorkflowStub struct {
 	creditsCacheCalls  int
 	cachedCreditsUsage *service.OpenAIQuotaUsage
 
-	resetCalls int
-	queryCalls int
-	cacheCalls int
+	resetCalls       int
+	stableResetCalls int
+	stableRedeemID   string
+	queryCalls       int
+	cacheCalls       int
 
 	queryCtxErr error
 	cacheCtxErr error
@@ -36,6 +38,12 @@ type openAIQuotaWorkflowStub struct {
 
 func (s *openAIQuotaWorkflowStub) ResetCredit(context.Context, int64) (*service.OpenAIQuotaResetResult, error) {
 	s.resetCalls++
+	return s.resetResult, s.resetErr
+}
+
+func (s *openAIQuotaWorkflowStub) ResetCreditWithRedeemRequestID(_ context.Context, _ int64, redeemRequestID string) (*service.OpenAIQuotaResetResult, error) {
+	s.stableResetCalls++
+	s.stableRedeemID = redeemRequestID
 	return s.resetResult, s.resetErr
 }
 
@@ -126,6 +134,20 @@ func performOpenAIQuotaResetRequestWithContext(t *testing.T, handler *OpenAIOAut
 	return recorder.Code, envelope
 }
 
+func performOpenAIQuotaResetRequestWithKey(t *testing.T, handler *OpenAIOAuthHandler, key string) (int, openAIQuotaResetEnvelope) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/api/v1/admin/openai/accounts/:id/reset-quota", handler.ResetQuota)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/openai/accounts/42/reset-quota", nil)
+	request.Header.Set("Idempotency-Key", key)
+	router.ServeHTTP(recorder, request)
+	var envelope openAIQuotaResetEnvelope
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+	return recorder.Code, envelope
+}
+
 func performOpenAIQuotaRefreshRequest(t *testing.T, handler *OpenAIOAuthHandler) (int, openAIQuotaRefreshEnvelope) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -184,6 +206,28 @@ func TestOpenAIResetQuota_ResetFailureStopsWorkflow(t *testing.T) {
 	require.Zero(t, quota.queryCalls)
 	require.Zero(t, quota.cacheCalls)
 	require.Zero(t, recoverer.calls)
+}
+
+func TestOpenAIResetQuota_IdempotencyKeyUsesStableUpstreamRedeemID(t *testing.T) {
+	quota := successfulOpenAIQuotaWorkflowStub()
+	handler := &OpenAIOAuthHandler{
+		adminService:     recoveredAccountStub(),
+		quotaService:     quota,
+		rateLimitService: &openAIAccountStateRecovererStub{},
+	}
+
+	status, _ := performOpenAIQuotaResetRequestWithKey(t, handler, "reset-key-1")
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, 1, quota.stableResetCalls)
+	require.NotEmpty(t, quota.stableRedeemID)
+	require.Zero(t, quota.resetCalls, "stable-id path must not generate a fresh redeem id")
+	firstRedeemID := quota.stableRedeemID
+
+	// The same key maps to the same UUID-shaped upstream id on every attempt.
+	status, _ = performOpenAIQuotaResetRequestWithKey(t, handler, "reset-key-1")
+	require.Equal(t, http.StatusOK, status)
+	require.Equal(t, 2, quota.stableResetCalls, "without a configured shared coordinator the test double executes both calls")
+	require.Equal(t, firstRedeemID, quota.stableRedeemID)
 }
 
 // Account-state recovery is the reason the credit was spent (#3672 / #3740), so it

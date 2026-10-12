@@ -68,6 +68,19 @@ type APIKeyConcurrencyLimiterCache interface {
 	DecrementAPIKeyWaitCount(ctx context.Context, apiKeyID int64) error
 }
 
+// concurrencySlotRefresher is an optional cache capability. It is kept
+// separate from ConcurrencyCache so existing mocks and older implementations
+// remain valid while regular request slots gain lease heartbeats.
+type concurrencySlotRefresher interface {
+	RefreshAccountSlot(ctx context.Context, accountID int64, requestID string) (bool, error)
+	RefreshUserSlot(ctx context.Context, userID int64, requestID string) (bool, error)
+	RefreshAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) (bool, error)
+}
+
+type concurrencySlotTTLProvider interface {
+	ConcurrencySlotTTL() time.Duration
+}
+
 // OpenAIWSIngressLeaseCache owns the short-lived distributed lease used to
 // bound live client WebSocket sessions. It is deliberately independent of the
 // request-slot namespace: idle ingress connections do not occupy turn slots.
@@ -232,6 +245,8 @@ const (
 	maxAccountLoadBatchCacheEntries = 256
 	apiKeyConcurrencyFetchTimeout   = 3 * time.Second
 	apiKeySlotTrackTimeout          = 2 * time.Second
+	concurrencySlotRefreshTimeout   = 2 * time.Second
+	defaultConcurrencySlotTTL       = 15 * time.Minute
 )
 
 // ConcurrencyService 管理账号、用户和 API Key 的并发限制。
@@ -319,6 +334,208 @@ type AcquireResult struct {
 	ReleaseFunc func() // Must be called when done (typically via defer)
 }
 
+// startConcurrencySlotHeartbeat renews an acquired regular slot until release
+// or until the cache reports that the lease no longer exists. Refreshes use a
+// background context because a client cancellation must not stop the Redis
+// lease before the upstream request has actually drained.
+func startConcurrencySlotHeartbeat(
+	refresh func(context.Context) (bool, error),
+	release func(context.Context) error,
+	interval time.Duration,
+	entity string,
+) func() {
+	if release == nil {
+		return func() {}
+	}
+	if refresh == nil {
+		var releaseOnce sync.Once
+		return func() {
+			releaseOnce.Do(func() {
+				releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := release(releaseCtx); err != nil {
+					logger.L().Warn("concurrency_slot_release_failed", zap.String("entity", entity), zap.Error(err))
+				}
+			})
+		}
+	}
+	if interval <= 0 {
+		interval = defaultConcurrencySlotTTL / 3
+	}
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	var stopOnce sync.Once
+	var releaseOnce sync.Once
+	stop := func() { stopOnce.Do(func() { close(stopCh) }) }
+
+	go func() {
+		defer close(doneCh)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				refreshCtx, cancel := context.WithTimeout(context.Background(), concurrencySlotRefreshTimeout)
+				owned, err := refresh(refreshCtx)
+				cancel()
+				if err != nil {
+					logger.L().Warn("concurrency_slot_refresh_failed",
+						zap.String("entity", entity),
+						zap.Error(err),
+					)
+					continue
+				}
+				if !owned {
+					logger.L().Error("concurrency_slot_lease_lost",
+						zap.String("entity", entity),
+					)
+					stop()
+					return
+				}
+			}
+		}
+	}()
+
+	return func() {
+		releaseOnce.Do(func() {
+			stop()
+			<-doneCh
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := release(releaseCtx); err != nil {
+				logger.L().Warn("concurrency_slot_release_failed",
+					zap.String("entity", entity),
+					zap.Error(err),
+				)
+			}
+		})
+	}
+}
+
+func concurrencySlotHeartbeatInterval(cache any) time.Duration {
+	ttl := defaultConcurrencySlotTTL
+	if provider, ok := cache.(concurrencySlotTTLProvider); ok {
+		if configured := provider.ConcurrencySlotTTL(); configured > 0 {
+			ttl = configured
+		}
+	}
+	interval := ttl / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if interval > 5*time.Minute {
+		interval = 5 * time.Minute
+	}
+	return interval
+}
+
+func (s *ConcurrencyService) startAccountSlotHeartbeat(accountID int64, requestID string) func() {
+	refresher, ok := any(s.cache).(concurrencySlotRefresher)
+	if !ok {
+		return startConcurrencySlotHeartbeat(nil,
+			func(ctx context.Context) error { return s.cache.ReleaseAccountSlot(ctx, accountID, requestID) },
+			0,
+			"account:"+strconv.FormatInt(accountID, 10),
+		)
+	}
+	return startConcurrencySlotHeartbeat(
+		func(ctx context.Context) (bool, error) {
+			return refresher.RefreshAccountSlot(ctx, accountID, requestID)
+		},
+		func(ctx context.Context) error { return s.cache.ReleaseAccountSlot(ctx, accountID, requestID) },
+		concurrencySlotHeartbeatInterval(s.cache),
+		"account:"+strconv.FormatInt(accountID, 10),
+	)
+}
+
+func (s *ConcurrencyService) startUserSlotHeartbeat(userID int64, requestID string) func() {
+	refresher, ok := any(s.cache).(concurrencySlotRefresher)
+	if !ok {
+		return startConcurrencySlotHeartbeat(nil,
+			func(ctx context.Context) error { return s.cache.ReleaseUserSlot(ctx, userID, requestID) },
+			0,
+			"user:"+strconv.FormatInt(userID, 10),
+		)
+	}
+	return startConcurrencySlotHeartbeat(
+		func(ctx context.Context) (bool, error) { return refresher.RefreshUserSlot(ctx, userID, requestID) },
+		func(ctx context.Context) error { return s.cache.ReleaseUserSlot(ctx, userID, requestID) },
+		concurrencySlotHeartbeatInterval(s.cache),
+		"user:"+strconv.FormatInt(userID, 10),
+	)
+}
+
+// apiKeyConcurrencyReleaseCache is the small common capability needed by the
+// heartbeat. Both the limiter and tracking cache interfaces expose release,
+// while neither necessarily implements the other's read/acquire methods.
+type apiKeyConcurrencyReleaseCache interface {
+	ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
+}
+
+// OpenAIOAuthAdmissionCache provides a distributed account-level start-rate
+// reservation. It is optional so deployments without Redis keep the existing
+// process-local admission behavior.
+type OpenAIOAuthAdmissionCache interface {
+	ReserveOpenAIOAuthAdmission(ctx context.Context, accountID int64, interval time.Duration, notBefore time.Time, maxWait, stateTTL time.Duration) (scheduledAt time.Time, accepted bool, err error)
+	DeferOpenAIOAuthAdmission(ctx context.Context, accountID int64, until time.Time, stateTTL time.Duration) error
+}
+
+type openAIOAuthAdmissionCancellationCache interface {
+	CancelOpenAIOAuthAdmission(ctx context.Context, accountID int64, scheduledAt time.Time, interval, stateTTL time.Duration) error
+}
+
+func (s *ConcurrencyService) ReserveOpenAIOAuthAdmission(ctx context.Context, accountID int64, interval time.Duration, notBefore time.Time, maxWait, stateTTL time.Duration) (time.Time, bool, error) {
+	if s == nil || s.cache == nil {
+		return time.Time{}, false, nil
+	}
+	cache, ok := s.cache.(OpenAIOAuthAdmissionCache)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	return cache.ReserveOpenAIOAuthAdmission(ctx, accountID, interval, notBefore, maxWait, stateTTL)
+}
+
+func (s *ConcurrencyService) DeferOpenAIOAuthAdmission(ctx context.Context, accountID int64, until time.Time, stateTTL time.Duration) error {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	cache, ok := s.cache.(OpenAIOAuthAdmissionCache)
+	if !ok {
+		return nil
+	}
+	return cache.DeferOpenAIOAuthAdmission(ctx, accountID, until, stateTTL)
+}
+
+func (s *ConcurrencyService) CancelOpenAIOAuthAdmission(ctx context.Context, accountID int64, scheduledAt time.Time, interval, stateTTL time.Duration) error {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	cache, ok := s.cache.(openAIOAuthAdmissionCancellationCache)
+	if !ok {
+		return nil
+	}
+	return cache.CancelOpenAIOAuthAdmission(ctx, accountID, scheduledAt, interval, stateTTL)
+}
+
+func (s *ConcurrencyService) startAPIKeySlotHeartbeat(cache apiKeyConcurrencyReleaseCache, apiKeyID int64, requestID string) func() {
+	refresher, ok := any(s.cache).(concurrencySlotRefresher)
+	if !ok {
+		return startConcurrencySlotHeartbeat(nil,
+			func(ctx context.Context) error { return cache.ReleaseAPIKeySlot(ctx, apiKeyID, requestID) },
+			0,
+			"api_key:"+strconv.FormatInt(apiKeyID, 10),
+		)
+	}
+	return startConcurrencySlotHeartbeat(
+		func(ctx context.Context) (bool, error) { return refresher.RefreshAPIKeySlot(ctx, apiKeyID, requestID) },
+		func(ctx context.Context) error { return cache.ReleaseAPIKeySlot(ctx, apiKeyID, requestID) },
+		concurrencySlotHeartbeatInterval(s.cache),
+		"api_key:"+strconv.FormatInt(apiKeyID, 10),
+	)
+}
+
 type AccountWithConcurrency struct {
 	ID             int64
 	MaxConcurrency int
@@ -365,14 +582,8 @@ func (s *ConcurrencyService) AcquireAccountSlot(ctx context.Context, accountID i
 
 	if acquired {
 		return &AcquireResult{
-			Acquired: true,
-			ReleaseFunc: func() {
-				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := s.cache.ReleaseAccountSlot(bgCtx, accountID, requestID); err != nil {
-					logger.LegacyPrintf("service.concurrency", "Warning: failed to release account slot for %d (req=%s): %v", accountID, requestID, err)
-				}
-			},
+			Acquired:    true,
+			ReleaseFunc: s.startAccountSlotHeartbeat(accountID, requestID),
 		}, nil
 	}
 
@@ -404,14 +615,8 @@ func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, 
 
 	if acquired {
 		return &AcquireResult{
-			Acquired: true,
-			ReleaseFunc: func() {
-				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := s.cache.ReleaseUserSlot(bgCtx, userID, requestID); err != nil {
-					logger.LegacyPrintf("service.concurrency", "Warning: failed to release user slot for %d (req=%s): %v", userID, requestID, err)
-				}
-			},
+			Acquired:    true,
+			ReleaseFunc: s.startUserSlotHeartbeat(userID, requestID),
 		}, nil
 	}
 
@@ -448,14 +653,8 @@ func (s *ConcurrencyService) AcquireAPIKeySlot(ctx context.Context, apiKeyID int
 		return &AcquireResult{Acquired: false}, nil
 	}
 	return &AcquireResult{
-		Acquired: true,
-		ReleaseFunc: func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := cache.ReleaseAPIKeySlot(bgCtx, apiKeyID, requestID); err != nil {
-				logger.LegacyPrintf("service.concurrency", "Warning: failed to release api key slot for %d (req=%s): %v", apiKeyID, requestID, err)
-			}
-		},
+		Acquired:    true,
+		ReleaseFunc: s.startAPIKeySlotHeartbeat(cache, apiKeyID, requestID),
 	}, nil
 }
 
@@ -491,13 +690,7 @@ func (s *ConcurrencyService) TrackAPIKeySlot(ctx context.Context, apiKeyID int64
 		return func() {}
 	}
 
-	return func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := cache.ReleaseAPIKeySlot(bgCtx, apiKeyID, requestID); err != nil {
-			logger.LegacyPrintf("service.concurrency", "Warning: failed to release api key slot for %d (req=%s): %v", apiKeyID, requestID, err)
-		}
-	}
+	return s.startAPIKeySlotHeartbeat(cache, apiKeyID, requestID)
 }
 
 // GetAPIKeyConcurrencyBatch gets real-time active request counts for API keys.

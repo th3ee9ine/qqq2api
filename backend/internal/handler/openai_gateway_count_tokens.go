@@ -136,6 +136,15 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
 		return
 	}
+	var releaseAccountSlot func()
+	if h.concurrencyHelper != nil {
+		releaseAccountSlot, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, account.Concurrency, 2*time.Second, false, nil)
+		if err != nil {
+			h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account concurrency limit reached, please retry later")
+			return
+		}
+		defer releaseAccountSlot()
+	}
 
 	setOpsSelectedAccount(c, account.ID, account.Platform)
 	if err := h.gatewayService.ForwardResponsesInputTokens(c.Request.Context(), c, account, forwardBody); err != nil {
@@ -321,6 +330,15 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 		}
 		h.anthropicErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
 		return
+	}
+	var releaseAccountSlot func()
+	if h.concurrencyHelper != nil {
+		releaseAccountSlot, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, account.Concurrency, 2*time.Second, false, nil)
+		if err != nil {
+			h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account concurrency limit reached, please retry later")
+			return
+		}
+		defer releaseAccountSlot()
 	}
 
 	setOpsSelectedAccount(c, account.ID, account.Platform)

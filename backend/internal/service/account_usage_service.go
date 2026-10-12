@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	httppool "github.com/th3ee9ine/qqq2api/internal/pkg/httpclient"
 	openaipkg "github.com/th3ee9ine/qqq2api/internal/pkg/openai"
 	"github.com/th3ee9ine/qqq2api/internal/pkg/pagination"
@@ -122,11 +123,12 @@ const (
 
 // UsageCache 封装账户使用量相关的缓存
 type UsageCache struct {
-	apiCache         sync.Map           // accountID -> *apiUsageCache
-	windowStatsCache sync.Map           // accountID -> *windowStatsCache
-	apiFlight        singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
-	openAIProbeCache sync.Map           // accountID -> time.Time
-	grokProbeCache   sync.Map           // accountID -> last billing probe attempt
+	apiCache          sync.Map           // accountID -> *apiUsageCache
+	windowStatsCache  sync.Map           // accountID -> *windowStatsCache
+	apiFlight         singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
+	openAIProbeCache  sync.Map           // accountID -> time.Time
+	openAIProbeFlight singleflight.Group // 防止同一账号的并发配额探测击穿上游
+	grokProbeCache    sync.Map           // accountID -> last billing probe attempt
 }
 
 // NewUsageCache 创建 UsageCache 实例
@@ -258,6 +260,15 @@ type AccountUsageService struct {
 	tlsFPProfileService *TLSFingerprintProfileService
 	agentIdentityTaskMu sync.Mutex
 	agentIdentityWS     agentIdentityWSConnectionInvalidator
+	leaderLock          LeaderLockCache
+	probeOwner          string
+}
+
+// openAICodexSnapshotCASWriter is implemented by the SQL repository. It keeps
+// a delayed response from replacing a newer quota snapshot. Older adapters can
+// still use their existing UpdateExtra implementation without this capability.
+type openAICodexSnapshotCASWriter interface {
+	UpdateExtraIfCodexSnapshotNewer(context.Context, int64, map[string]any, time.Time) (bool, error)
 }
 
 // NewAccountUsageService 创建AccountUsageService实例
@@ -271,7 +282,12 @@ func NewAccountUsageService(
 	cache *UsageCache,
 	identityCache IdentityCache,
 	tlsFPProfileService *TLSFingerprintProfileService,
+	leaderLocks ...LeaderLockCache,
 ) *AccountUsageService {
+	var leaderLock LeaderLockCache
+	if len(leaderLocks) > 0 {
+		leaderLock = leaderLocks[0]
+	}
 	return &AccountUsageService{
 		accountRepo:         accountRepo,
 		usageLogRepo:        usageLogRepo,
@@ -282,6 +298,8 @@ func NewAccountUsageService(
 		cache:               cache,
 		identityCache:       identityCache,
 		tlsFPProfileService: tlsFPProfileService,
+		leaderLock:          leaderLock,
+		probeOwner:          uuid.NewString(),
 	}
 }
 
@@ -655,39 +673,90 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 
 	applyExtraToUsage(usage, account.Extra, now)
 
-	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
-		if s.openAIQuotaService != nil {
-			// Prefer the native, read-only /wham/usage surface for both ordinary
-			// OAuth and Spark shadow accounts. This avoids a periodic synthetic
-			// inference request with a fixed prompt/model and skips reset-credit
-			// detail calls that background window refreshes do not consume.
-			if quotaUsage, err := s.openAIQuotaService.QueryUsageWindows(ctx, account.ID); err == nil {
-				updates := buildCodexPrimaryWindowExtraUpdates(quotaUsage, now)
-				if account.IsShadow() {
-					updates = buildCodexSparkWindowExtraUpdates(quotaUsage, now)
-				}
-				if len(updates) > 0 {
-					mergeAccountExtra(account, updates)
-					s.persistOpenAICodexProbeSnapshot(account.ID, updates)
-					if account.IsShadow() && account.ParentAccountID != nil {
-						notifyOpenAIAutoReset(*account.ParentAccountID)
+	if force || shouldRefreshOpenAICodexSnapshot(account, usage, now) {
+		accountID := account.ID
+		isShadow := account.IsShadow()
+		parentAccountID := account.ParentAccountID
+		// Collapse same-account probes inside one process and use the shared
+		// leader lock when Redis is available. Snapshot persistence is asynchronous
+		// for request latency; the repository CAS below prevents a slow older
+		// response from replacing a newer probe after the lock is released.
+		probe := func() (any, error) {
+			// Do not claim the local cooldown until this caller owns the
+			// distributed lease. A peer holding the lease must not suppress this
+			// instance's next retry for the full probe TTL.
+			if !force && s.cache != nil {
+				if cached, ok := s.cache.openAIProbeCache.Load(accountID); ok {
+					if timestamp, valid := cached.(time.Time); valid && time.Since(timestamp) < openAIProbeCacheTTL {
+						return nil, nil
 					}
-					if usage.UpdatedAt == nil {
-						usage.UpdatedAt = &now
-					}
-					applyExtraToUsage(usage, account.Extra, now)
 				}
 			}
-		} else if !account.IsShadow() {
-			// Compatibility fallback for minimal embeddings that do not install
-			// OpenAIQuotaService. Production wiring always uses the native path.
-			if updates, err := s.probeOpenAICodexSnapshot(ctx, account); err == nil && len(updates) > 0 {
-				mergeAccountExtra(account, updates)
-				if usage.UpdatedAt == nil {
-					usage.UpdatedAt = &now
-				}
-				applyExtraToUsage(usage, account.Extra, now)
+			release, acquired := tryAcquireSingletonLeaderLock(
+				ctx,
+				s.leaderLock,
+				nil,
+				fmt.Sprintf("openai:quota-probe:%d", accountID),
+				s.probeOwner,
+				30*time.Second,
+			)
+			if !acquired {
+				// A peer is already probing. Its result will be persisted under the
+				// lock; this request keeps the current snapshot and avoids a stampede.
+				return nil, nil
 			}
+			defer release()
+			if !s.shouldProbeOpenAICodexSnapshot(accountID, time.Now(), force) {
+				return nil, nil
+			}
+			if s.openAIQuotaService != nil {
+				// Prefer the native, read-only /wham/usage surface for both ordinary
+				// OAuth and Spark shadow accounts. This avoids a periodic synthetic
+				// inference request with a fixed prompt/model and skips reset-credit
+				// detail calls that background window refreshes do not consume.
+				if quotaUsage, err := s.openAIQuotaService.QueryUsageWindows(ctx, accountID); err == nil {
+					updates := buildCodexPrimaryWindowExtraUpdates(quotaUsage, now)
+					if isShadow {
+						updates = buildCodexSparkWindowExtraUpdates(quotaUsage, now)
+					}
+					if len(updates) > 0 {
+						s.persistOpenAICodexProbeSnapshot(accountID, updates)
+						if isShadow && parentAccountID != nil {
+							notifyOpenAIAutoReset(*parentAccountID)
+						}
+						return cloneOpenAICodexProbeUpdates(updates), nil
+					}
+				}
+			} else if !isShadow {
+				// Compatibility fallback for minimal embeddings that do not install
+				// OpenAIQuotaService. Production wiring always uses the native path.
+				if updates, err := s.probeOpenAICodexSnapshot(ctx, account); err == nil && len(updates) > 0 {
+					return cloneOpenAICodexProbeUpdates(updates), nil
+				}
+			}
+			return nil, nil
+		}
+		var probeUpdates map[string]any
+		if s.cache != nil {
+			result, _, _ := s.cache.openAIProbeFlight.Do(fmt.Sprintf("openai-quota:%d", accountID), probe)
+			if updates, ok := result.(map[string]any); ok {
+				probeUpdates = cloneOpenAICodexProbeUpdates(updates)
+			}
+		} else {
+			result, _ := probe()
+			if updates, ok := result.(map[string]any); ok {
+				probeUpdates = cloneOpenAICodexProbeUpdates(updates)
+			}
+		}
+		if len(probeUpdates) > 0 {
+			// Keep the caller's account snapshot immutable. The leader persists the
+			// update once; every caller rebuilds its own UsageInfo from a private
+			// copy of Extra and the shared immutable result.
+			probeExtra := cloneAccountExtra(account.Extra)
+			for key, value := range probeUpdates {
+				probeExtra[key] = value
+			}
+			applyExtraToUsage(usage, probeExtra, now)
 		}
 	}
 
@@ -863,13 +932,44 @@ func (s *AccountUsageService) persistOpenAICodexProbeSnapshot(accountID int64, u
 		return
 	}
 
+	persistOpenAICodexSnapshotAsync(s.accountRepo, accountID, updates)
+}
+
+func persistOpenAICodexSnapshotAsync(repo AccountRepository, accountID int64, updates map[string]any) {
+	if repo == nil || accountID <= 0 || len(updates) == 0 {
+		return
+	}
 	go func() {
 		updateCtx, updateCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer updateCancel()
-		if err := s.accountRepo.UpdateExtra(updateCtx, accountID, updates); err == nil {
+		if candidate, ok := parseCodexSnapshotUpdatedAt(updates); ok {
+			if cas, supported := repo.(openAICodexSnapshotCASWriter); supported {
+				if applied, err := cas.UpdateExtraIfCodexSnapshotNewer(updateCtx, accountID, updates, candidate); err == nil && applied {
+					notifyOpenAIAutoReset(accountID)
+				}
+				return
+			}
+			// Compatibility adapters do not expose an atomic CAS operation. Keep
+			// their historical JSON merge behavior; production's SQL repository
+			// takes the CAS branch above. A read-then-write check here would race
+			// and can mistake this request's in-memory merge for a stale snapshot.
+		}
+		if err := repo.UpdateExtra(updateCtx, accountID, updates); err == nil {
 			notifyOpenAIAutoReset(accountID)
 		}
 	}()
+}
+
+func parseCodexSnapshotUpdatedAt(values map[string]any) (time.Time, bool) {
+	if len(values) == 0 {
+		return time.Time{}, false
+	}
+	raw, ok := values["codex_usage_updated_at"]
+	if !ok {
+		return time.Time{}, false
+	}
+	parsed, err := parseTime(fmt.Sprint(raw))
+	return parsed, err == nil && !parsed.IsZero()
 }
 
 func extractOpenAICodexProbeUpdates(resp *http.Response) (map[string]any, error) {
@@ -895,6 +995,31 @@ func mergeAccountExtra(account *Account, updates map[string]any) {
 	for k, v := range updates {
 		account.Extra[k] = v
 	}
+}
+
+func cloneAccountExtra(extra map[string]any) map[string]any {
+	if len(extra) == 0 {
+		return make(map[string]any)
+	}
+	clone := make(map[string]any, len(extra))
+	for key, value := range extra {
+		clone[key] = value
+	}
+	return clone
+}
+
+// cloneOpenAICodexProbeUpdates makes the singleflight result safe to share
+// between callers. Probe update values are scalar JSON values, so a shallow
+// copy is sufficient and avoids exposing the leader's map for mutation.
+func cloneOpenAICodexProbeUpdates(updates map[string]any) map[string]any {
+	if len(updates) == 0 {
+		return nil
+	}
+	clone := make(map[string]any, len(updates))
+	for key, value := range updates {
+		clone[key] = value
+	}
+	return clone
 }
 
 // applyExtraToUsage rebuilds the codex 5h/7d windows in usage from the

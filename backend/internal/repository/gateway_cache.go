@@ -100,6 +100,80 @@ func (c *gatewayCache) SetSessionAccountID(ctx context.Context, groupID int64, s
 	return c.rdb.Set(ctx, key, accountID, ttl).Err()
 }
 
+var claimSessionAccountScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+if current == false then
+  redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+  return 1
+end
+if current == ARGV[1] then
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+  return 1
+end
+return 0
+`)
+
+var compareAndSetSessionAccountScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+if current ~= false and current ~= ARGV[1] and current ~= ARGV[2] then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[2], 'PX', ARGV[3])
+return 1
+`)
+
+var compareAndDeleteSessionAccountScript = redis.NewScript(`
+local current = redis.call('GET', KEYS[1])
+if current == false or current ~= ARGV[1] then
+  return 0
+end
+redis.call('DEL', KEYS[1])
+return 1
+`)
+
+// ClaimSessionAccountID atomically claims a missing sticky binding, while
+// allowing the current owner to refresh its TTL. A competing account never
+// overwrites the owner selected by another request.
+func (c *gatewayCache) ClaimSessionAccountID(ctx context.Context, groupID int64, sessionHash string, accountID int64, ttl time.Duration) (bool, error) {
+	if c == nil || c.rdb == nil {
+		return false, errors.New("gateway cache unavailable")
+	}
+	if accountID <= 0 || strings.TrimSpace(sessionHash) == "" || ttl <= 0 {
+		return false, errors.New("invalid sticky session claim")
+	}
+	result, err := claimSessionAccountScript.Run(ctx, c.rdb, []string{buildSessionKey(groupID, sessionHash)}, accountID, ttl.Milliseconds()).Int()
+	return result == 1, err
+}
+
+// CompareAndSetSessionAccountID replaces a binding only when it still belongs
+// to expectedAccountID, is missing, or already belongs to the new owner.
+// This lets weighted scheduling migrate a binding without allowing a
+// late request to overwrite a concurrent owner.
+func (c *gatewayCache) CompareAndSetSessionAccountID(ctx context.Context, groupID int64, sessionHash string, expectedAccountID, accountID int64, ttl time.Duration) (bool, error) {
+	if c == nil || c.rdb == nil {
+		return false, errors.New("gateway cache unavailable")
+	}
+	if expectedAccountID < 0 || accountID <= 0 || strings.TrimSpace(sessionHash) == "" || ttl <= 0 {
+		return false, errors.New("invalid sticky session compare-and-set")
+	}
+	result, err := compareAndSetSessionAccountScript.Run(ctx, c.rdb, []string{buildSessionKey(groupID, sessionHash)}, expectedAccountID, accountID, ttl.Milliseconds()).Int()
+	return result == 1, err
+}
+
+// CompareAndDeleteSessionAccountID removes a binding only when it still
+// belongs to expectedAccountID, preventing an old request from deleting a
+// newer account's binding.
+func (c *gatewayCache) CompareAndDeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string, expectedAccountID int64) (bool, error) {
+	if c == nil || c.rdb == nil {
+		return false, errors.New("gateway cache unavailable")
+	}
+	if expectedAccountID <= 0 || strings.TrimSpace(sessionHash) == "" {
+		return false, errors.New("invalid sticky session delete")
+	}
+	result, err := compareAndDeleteSessionAccountScript.Run(ctx, c.rdb, []string{buildSessionKey(groupID, sessionHash)}, expectedAccountID).Int()
+	return result == 1, err
+}
+
 func (c *gatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64, sessionHash string, ttl time.Duration) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Expire(ctx, key, ttl).Err()

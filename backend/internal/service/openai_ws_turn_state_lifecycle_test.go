@@ -755,8 +755,21 @@ func TestOpenAIGatewayService_Forward_WSv2_InvalidationDuringFlightDoesNotRepubl
 	enableOpenAIWSTurnStateLifecycleCollector(cfg)
 	state := collectorTestToken(t, time.Now().UTC().Add(-time.Minute), 2, 9)
 	gated := newOpenAIWSGatedConn(`{"type":"response.completed","response":{"id":"resp_stale_generation","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	// Invalidation may close the in-flight connection before the response is
+	// observed.  The production path then retries the request, so provide
+	// enough deterministic successful connections for that bounded retry loop
+	// instead of making this lifecycle test depend on which scheduling window
+	// the race detector creates.
+	retryEvent := []byte(`{"type":"response.completed","response":{"id":"resp_stale_generation_retry","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`)
 	dialer := &openAIWSTurnStateSequenceDialer{
-		conns:      []openAIWSClientConn{gated},
+		conns: []openAIWSClientConn{
+			gated,
+			&openAIWSCaptureConn{events: [][]byte{retryEvent}},
+			&openAIWSCaptureConn{events: [][]byte{retryEvent}},
+			&openAIWSCaptureConn{events: [][]byte{retryEvent}},
+			&openAIWSCaptureConn{events: [][]byte{retryEvent}},
+			&openAIWSCaptureConn{events: [][]byte{retryEvent}},
+		},
 		handshakes: []http.Header{openAIWSTurnStateLifecycleHandshake(state)},
 	}
 	svc, store := newOpenAIWSTurnStateLifecycleService(t, cfg, dialer)

@@ -190,7 +190,37 @@ func (s *OpenAIGatewayService) fetchPinnedOpenAIModels(ctx context.Context, grou
 		fetchGroup.Add(1)
 		go func() {
 			defer fetchGroup.Done()
-			response, err := fetch(ctx, &usable[i])
+			account := &usable[i]
+			// Pinned fan-out bypasses the ordinary scheduler path, so apply the
+			// same OAuth admission and account concurrency gates here. Without
+			// this, one /models request could open one upstream connection per
+			// pinned account and exceed the account's configured allowance.
+			if usable[i].IsOpenAIOAuthLike() && s != nil {
+				if err := s.WaitForOpenAIOAuthAccountAdmission(ctx, account); err != nil {
+					results[i] = pinnedOpenAIModelsResult{account: account}
+					fetchErrs[i] = err
+					return
+				}
+			}
+			var release func()
+			if s != nil && s.concurrencyService != nil {
+				acquired, acquireErr := s.concurrencyService.AcquireAccountSlot(ctx, account.ID, account.Concurrency)
+				if acquireErr != nil {
+					results[i] = pinnedOpenAIModelsResult{account: account}
+					fetchErrs[i] = acquireErr
+					return
+				}
+				if !acquired.Acquired {
+					results[i] = pinnedOpenAIModelsResult{account: account}
+					fetchErrs[i] = infraerrors.New(http.StatusTooManyRequests, "OPENAI_ACCOUNT_CONCURRENCY_LIMIT", "pinned models manifest account concurrency limit reached")
+					return
+				}
+				release = acquired.ReleaseFunc
+			}
+			response, err := fetch(ctx, account)
+			if release != nil {
+				release()
+			}
 			results[i] = pinnedOpenAIModelsResult{account: &usable[i], response: response}
 			fetchErrs[i] = err
 		}()

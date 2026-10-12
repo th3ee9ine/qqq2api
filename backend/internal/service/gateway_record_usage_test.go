@@ -729,6 +729,63 @@ func TestFinalizePostUsageBilling_GlobalKeyDoesNotQueueUserBilling(t *testing.T)
 	}
 }
 
+func TestFinalizePostUsageBilling_LegacySubscriptionQueuesUsageCacheUpdate(t *testing.T) {
+	cache := &billingCacheWorkerStub{}
+	cacheService := &BillingCacheService{
+		cache:          cache,
+		cacheWriteChan: make(chan cacheWriteTask, 1),
+	}
+	deps := &billingDeps{
+		billingCacheService: cacheService,
+		deferredService:     &DeferredService{},
+	}
+	params := &postUsageBillingParams{
+		Cost:               &CostBreakdown{ActualCost: 1.25, TotalCost: 1.25},
+		User:               &User{ID: 10},
+		Subscription:       &UserSubscription{ID: 20, GroupID: 30},
+		IsSubscriptionBill: true,
+		Account:            &Account{ID: 40},
+	}
+
+	finalizePostUsageBilling(context.Background(), params, deps, &UsageBillingApplyResult{Applied: true})
+
+	require.Len(t, cacheService.cacheWriteChan, 1)
+	task := <-cacheService.cacheWriteChan
+	require.Equal(t, cacheWriteUpdateSubscriptionUsage, task.kind)
+	require.Equal(t, int64(10), task.userID)
+	require.Equal(t, int64(30), task.groupID)
+	require.Equal(t, 1.25, task.amount)
+}
+
+func TestPostUsageBilling_LegacySubscriptionQueuesUsageCacheAfterDBIncrement(t *testing.T) {
+	cache := &billingCacheWorkerStub{}
+	cacheService := &BillingCacheService{
+		cache:          cache,
+		cacheWriteChan: make(chan cacheWriteTask, 1),
+	}
+	subRepo := &openAIRecordUsageSubRepoStub{}
+	deps := &billingDeps{
+		userSubRepo:         subRepo,
+		billingCacheService: cacheService,
+	}
+	params := &postUsageBillingParams{
+		Cost:               &CostBreakdown{ActualCost: 0.75, TotalCost: 0.75},
+		User:               &User{ID: 10},
+		Subscription:       &UserSubscription{ID: 20, GroupID: 30},
+		IsSubscriptionBill: true,
+	}
+
+	postUsageBilling(context.Background(), params, deps)
+
+	require.Equal(t, 1, subRepo.incrementCalls)
+	require.Len(t, cacheService.cacheWriteChan, 1)
+	task := <-cacheService.cacheWriteChan
+	require.Equal(t, cacheWriteUpdateSubscriptionUsage, task.kind)
+	require.Equal(t, int64(10), task.userID)
+	require.Equal(t, int64(30), task.groupID)
+	require.Equal(t, 0.75, task.amount)
+}
+
 // newGatewayRecordUsageServiceWithResolverForTest mirrors production wiring for
 // token billing: a pricing resolver plus a grouped API key select the unified
 // billing path, which is the only one that honours the service tier.
