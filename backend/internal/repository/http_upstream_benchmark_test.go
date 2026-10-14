@@ -1,12 +1,73 @@
 package repository
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"testing"
 
 	"github.com/th3ee9ine/qqq2api/internal/config"
 )
+
+// BenchmarkHTTPUpstreamClientCache exercises the actual cache lookup instead
+// of only assigning a previously returned client. ColdMiss keeps the resident
+// account count stable so it measures TTL maintenance below the capacity limit.
+func BenchmarkHTTPUpstreamClientCache(b *testing.B) {
+	for _, cardinality := range []int{128, 5000} {
+		b.Run(fmt.Sprintf("ColdMiss/accounts=%d", cardinality), func(b *testing.B) {
+			svc := newBenchmarkHTTPUpstreamCache(b, cardinality)
+			accountID := int64(cardinality + 1)
+			cacheKey := buildCacheKey(config.ConnectionPoolIsolationAccountProxy, directProxyKey, accountID, upstreamProtocolModeDefault)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				entry, err := svc.acquireClient("", accountID, 8)
+				if err != nil {
+					b.Fatal(err)
+				}
+				atomic.AddInt64(&entry.inFlight, -1)
+				// Discard only the new entry to reproduce another cold miss without
+				// introducing a full-cache capacity eviction into this benchmark.
+				svc.mu.Lock()
+				svc.removeClientLocked(cacheKey, entry)
+				svc.mu.Unlock()
+				entry.client.CloseIdleConnections()
+			}
+		})
+	}
+	b.Run("ParallelHit/accounts=5000", func(b *testing.B) {
+		svc := newBenchmarkHTTPUpstreamCache(b, 5000)
+		b.ReportAllocs()
+		b.ResetTimer()
+		b.RunParallel(func(pb *testing.PB) {
+			accountID := int64(0)
+			for pb.Next() {
+				accountID = accountID%5000 + 1
+				entry, err := svc.acquireClient("", accountID, 8)
+				if err != nil {
+					b.Error(err)
+					return
+				}
+				atomic.AddInt64(&entry.inFlight, -1)
+			}
+		})
+	})
+}
+
+func newBenchmarkHTTPUpstreamCache(b *testing.B, cardinality int) *httpUpstreamService {
+	b.Helper()
+	svc := NewHTTPUpstream(&config.Config{Gateway: config.GatewayConfig{
+		ConnectionPoolIsolation: config.ConnectionPoolIsolationAccountProxy,
+		MaxUpstreamClients:      cardinality + 1,
+	}}).(*httpUpstreamService)
+	for id := 1; id <= cardinality; id++ {
+		if _, err := svc.getOrCreateClient("", int64(id), 8); err != nil {
+			b.Fatal(err)
+		}
+	}
+	return svc
+}
 
 // httpClientSink 用于防止编译器优化掉基准测试中的赋值操作
 // 这是 Go 基准测试的常见模式，确保测试结果准确

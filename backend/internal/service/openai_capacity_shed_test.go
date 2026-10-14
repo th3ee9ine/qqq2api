@@ -89,6 +89,8 @@ func TestOpenAIHTTPCapacityShedIsRequestScopedForOAuthAccounts(t *testing.T) {
 
 	require.True(t, failoverErr.RetryableOnSameAccount)
 	require.True(t, failoverErr.RequestScopedTransient)
+	require.Equal(t, 1, failoverErr.SameAccountRetryMax)
+	require.False(t, failoverErr.ShouldReportAccountScheduleFailure())
 
 	repo := &capacityShedAccountRepoStub{}
 	(&GatewayService{accountRepo: repo}).TempUnscheduleRetryableError(context.Background(), 1, failoverErr)
@@ -106,6 +108,44 @@ func TestOpenAIHTTPCapacityShedIsRequestScopedForOAuthAccounts(t *testing.T) {
 		"gpt-5",
 	))
 	require.Zero(t, repo.tempUnschedCalls)
+}
+
+func TestOpenAICapacityShedClassificationSurvivesMessageOnlyError(t *testing.T) {
+	failoverErr := newOpenAIUpstreamFailoverError(
+		http.StatusServiceUnavailable, nil, nil,
+		"Our servers are currently overloaded. Please try again later.", false,
+	)
+	require.True(t, failoverErr.IsOpenAICapacityShed())
+	require.False(t, failoverErr.ShouldReportAccountScheduleFailure())
+	// Early classification must also protect callers that report through the
+	// central scheduling method rather than checking the error themselves.
+	svc := &OpenAIGatewayService{
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("true"),
+	}
+	t.Cleanup(resetOpenAIAdvancedSchedulerSettingCacheForTest)
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	firstTokenMs := 120
+	svc.ReportOpenAIAccountScheduleResult(account, "gpt-5", true, &firstTokenMs)
+	require.NotNil(t, svc.openaiAccountStats, "the test must exercise an enabled scheduler")
+	initialErrorRate, initialTTFT, hasTTFT := svc.openaiAccountStats.snapshot(account.ID)
+	require.Zero(t, initialErrorRate)
+	require.True(t, hasTTFT)
+
+	svc.ReportOpenAIAccountScheduleResult(account, "gpt-5", false, nil, failoverErr)
+	capacityErrorRate, capacityTTFT, hasTTFT := svc.openaiAccountStats.snapshot(account.ID)
+	require.Equal(t, initialErrorRate, capacityErrorRate, "model capacity must not penalize account health")
+	require.Equal(t, initialTTFT, capacityTTFT)
+	require.True(t, hasTTFT)
+
+	ordinary := &UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+	require.True(t, ordinary.ShouldReportAccountScheduleFailure())
+	svc.ReportOpenAIAccountScheduleResult(account, "gpt-5", false, nil, ordinary)
+	ordinaryErrorRate, _, _ := svc.openaiAccountStats.snapshot(account.ID)
+	require.Greater(t, ordinaryErrorRate, initialErrorRate, "ordinary failures must still update the enabled scheduler")
+
+	svc.ReportOpenAIAccountScheduleResult(account, "gpt-5", false, nil, failoverErr)
+	finalErrorRate, _, _ := svc.openaiAccountStats.snapshot(account.ID)
+	require.Equal(t, ordinaryErrorRate, finalErrorRate, "capacity errors must also preserve existing nonzero health history")
 }
 
 // 上游降载的真实序列是「event: error → event: response.failed」。error 帧不算

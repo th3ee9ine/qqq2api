@@ -196,9 +196,10 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		ops.GET("/email-notification/config", h.Admin.Ops.GetEmailNotificationConfig)
 		ops.PUT("/email-notification/config", h.Admin.Ops.UpdateEmailNotificationConfig)
 
-		// Runtime settings (DB-backed)
+		// Runtime diagnostics and settings
 		runtime := ops.Group("/runtime")
 		{
+			runtime.GET("/connection-pools", h.Admin.Ops.GetConnectionPoolStats)
 			runtime.GET("/alert", h.Admin.Ops.GetAlertRuntimeSettings)
 			runtime.PUT("/alert", h.Admin.Ops.UpdateAlertRuntimeSettings)
 			runtime.GET("/logging", h.Admin.Ops.GetRuntimeLogConfig)

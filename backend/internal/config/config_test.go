@@ -30,6 +30,26 @@ func TestLoadDefaultModelsListReadMaxBytes(t *testing.T) {
 	require.Equal(t, DefaultModelsListReadMaxBytes, cfg.Gateway.ModelsListReadMaxBytes)
 }
 
+func TestLoadOpenAICapacityRetryMaxAttempts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  string
+		want int
+	}{
+		{name: "default", want: 3},
+		{name: "single attempt from environment", env: "1", want: 1},
+		{name: "explicit zero uses handler default", env: "0", want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			t.Setenv("GATEWAY_OPENAI_CAPACITY_RETRY_MAX_ATTEMPTS", tc.env)
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cfg.Gateway.OpenAICapacityRetryMaxAttempts)
+		})
+	}
+}
+
 func TestLoadTimezonePrecedence(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -1623,6 +1643,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway openai first output timeout below minimum",
 			mutate:  func(c *Config) { c.Gateway.OpenAIFirstOutputTimeoutSeconds = 29 },
 			wantErr: "gateway.openai_first_output_timeout_seconds",
+		},
+		{
+			name:    "gateway openai capacity retry attempts negative",
+			mutate:  func(c *Config) { c.Gateway.OpenAICapacityRetryMaxAttempts = -1 },
+			wantErr: "gateway.openai_capacity_retry_max_attempts",
+		},
+		{
+			name:    "gateway openai capacity retry attempts too large",
+			mutate:  func(c *Config) { c.Gateway.OpenAICapacityRetryMaxAttempts = 11 },
+			wantErr: "gateway.openai_capacity_retry_max_attempts",
 		},
 		{
 			name:    "gateway openai high effort first output timeout too large",

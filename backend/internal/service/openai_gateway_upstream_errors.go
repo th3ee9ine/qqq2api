@@ -350,6 +350,10 @@ func newOpenAIUpstreamFailoverError(
 		failoverErr.ClientStatusCode = http.StatusBadGateway
 		failoverErr.ClientMessage = openAIUpstreamAccessUnavailableClientMessage
 	} else if requestScopedCapacity {
+		failoverErr.Reason = openAIUpstreamCapacityReason
+		// Leave room for an alternate account within the request-wide budget,
+		// rather than spending the entire budget retrying one overloaded route.
+		failoverErr.SameAccountRetryMax = 1
 		// Preserve the provider's actionable overload message after gateway
 		// retries are exhausted, but expose it as a retryable server_error.
 		failoverErr.ClientStatusCode = http.StatusServiceUnavailable
@@ -395,6 +399,7 @@ func (s *OpenAIGatewayService) newOpenAIAccountFailoverErrorWithClassificationHe
 }
 
 const (
+	openAIUpstreamCapacityReason                 = GatewayFailureReason("openai_upstream_capacity")
 	openAIUpstreamAccessUnavailableClientMessage = "Upstream access is temporarily unavailable, please retry later"
 	// OpenAIUpstreamAccessStateReason marks a provider credential whose
 	// account, workspace, or organization is unavailable.
@@ -462,7 +467,8 @@ func (e *UpstreamFailoverError) IsOpenAIRequestBodyTooLarge() bool {
 // IsOpenAICapacityShed reports whether typed client fields were derived from a
 // recognized provider overload rather than supplied by an unrelated failure.
 func (e *UpstreamFailoverError) IsOpenAICapacityShed() bool {
-	return e != nil && e.RequestScopedTransient && isOpenAIRequestScopedCapacityShed("", e.ResponseBody)
+	return e != nil && e.RequestScopedTransient &&
+		(e.Reason == openAIUpstreamCapacityReason || isOpenAIRequestScopedCapacityShed("", e.ResponseBody))
 }
 
 func marshalOpenAIUpstreamJSON(v any) ([]byte, error) {

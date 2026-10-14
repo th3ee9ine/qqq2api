@@ -211,6 +211,10 @@ gateway:
   openai_first_output_timeout_seconds: 0
   # Optional high/xhigh/max override (seconds, 0=use the standard timeout)
   openai_high_effort_first_output_timeout_seconds: 0
+  # Maximum attempts from the first OpenAI capacity error, across account switches
+  # and same-account retries. 0=default 3; 1=no overload retries; maximum 10.
+  # 每请求（WebSocket 每回合）共享容量错误预算；不限制正常流的时长或输出大小。
+  openai_capacity_retry_max_attempts: 3
   # Max request body size in bytes (default: 256MB)
   # 请求体最大字节数（默认 256MB）
   max_body_size: 268435456

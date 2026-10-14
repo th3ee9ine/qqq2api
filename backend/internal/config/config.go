@@ -729,6 +729,10 @@ type GatewayConfig struct {
 
 	// 账户切换最大次数（遇到上游错误时切换到其他账户的次数上限）
 	MaxAccountSwitches int `mapstructure:"max_account_switches"`
+	// OpenAICapacityRetryMaxAttempts bounds attempts from the first provider
+	// capacity error, shared by same-account retries and account switches.
+	// 0 uses 3; 1 disables retries after an overload. It does not limit streams.
+	OpenAICapacityRetryMaxAttempts int `mapstructure:"openai_capacity_retry_max_attempts"`
 
 	// Scheduling: 账号调度相关配置
 	Scheduling GatewaySchedulingConfig `mapstructure:"scheduling"`
@@ -1924,6 +1928,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
+	viper.SetDefault("gateway.openai_capacity_retry_max_attempts", 3)
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.disable_codex_identity_enforcement", false)
 	viper.SetDefault("gateway.disable_codex_originator_normalization", false)
@@ -2591,6 +2596,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIResponseHeaderTimeout < 0 {
 		return fmt.Errorf("gateway.openai_response_header_timeout must be non-negative")
+	}
+	if c.Gateway.OpenAICapacityRetryMaxAttempts < 0 || c.Gateway.OpenAICapacityRetryMaxAttempts > 10 {
+		return fmt.Errorf("gateway.openai_capacity_retry_max_attempts must be between 0-10 (0 uses 3)")
 	}
 	if c.Gateway.GrokResponseHeaderTimeout < 0 || c.Gateway.GrokResponseHeaderTimeout > 1800 {
 		return fmt.Errorf("gateway.grok_response_header_timeout must be between 0-1800 seconds")

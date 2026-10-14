@@ -273,6 +273,22 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			return nil, &agentIdentityTaskRecoveredError{}
 		}
+		var capacityDialErr *openAIWSDialError
+		if errors.As(err, &capacityDialErr) && capacityDialErr != nil &&
+			isOpenAIRequestScopedCapacityShed(extractUpstreamErrorMessage(capacityDialErr.ResponseBody), capacityDialErr.ResponseBody) {
+			// A provider overload belongs to the handler's request-wide retry
+			// budget, not the transport's independent reconnect loop.
+			message := openAICapacityShedClientMessage("", capacityDialErr.ResponseBody)
+			setOpsUpstreamError(c, capacityDialErr.StatusCode, message, "")
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
+				Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+				UpstreamStatusCode: capacityDialErr.StatusCode,
+				UpstreamRequestID:  capacityDialErr.ResponseHeaders.Get("x-request-id"),
+				Kind:               "failover", Message: message,
+			})
+			return nil, newOpenAIUpstreamFailoverError(capacityDialErr.StatusCode, capacityDialErr.ResponseHeaders, capacityDialErr.ResponseBody, message, false)
+		}
 		s.handleOpenAIWSDialTransientFailure(ctx, account, mappedModel, err)
 		dialStatus, dialClass, dialCloseStatus, dialCloseReason, dialRespServer, dialRespVia, dialRespCFRay, dialRespReqID := summarizeOpenAIWSDialError(err)
 		logOpenAIWSModeInfo(
@@ -779,6 +795,15 @@ readLoop:
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
 			lease.SentIdentity().applyToCyberPolicyMark(GetOpsCyberPolicy(c))
+		}
+		if (eventType == "error" || isTerminalEvent) && !wroteDownstream && !clientDisconnected && isOpenAIUpstreamCapacityShedEvent(message) {
+			// Preserve the typed capacity signal and the untouched response.
+			// Wrapping it as an ordinary WS fallback would multiply the
+			// handler budget by this service's reconnect retry limit.
+			lease.MarkBroken()
+			headers := lease.HandshakeHeaders()
+			return nil, s.newOpenAIStreamFailoverErrorWithModel(c, account, false,
+				headers.Get("x-request-id"), message, openAICapacityShedClientMessage("", message), mappedModel, headers)
 		}
 
 		if eventType == "error" {

@@ -810,7 +810,7 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 	}
 	cacheKey := s.authCacheKey(key)
 
-	if entry, ok := s.getAuthCacheEntry(ctx, cacheKey); ok {
+	if entry, ok := s.getAuthCacheL1Entry(cacheKey); ok {
 		if apiKey, used, err := s.applyAuthCacheEntry(key, entry); used {
 			if err != nil {
 				return nil, fmt.Errorf("get api key: %w", err)
@@ -819,31 +819,40 @@ func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, erro
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var entry *APIKeyAuthCacheEntry
 	if s.authCfg.singleflight {
-		value, err, _ := s.authGroup.Do(cacheKey, func() (any, error) {
-			return s.loadAuthCacheEntry(ctx, key, cacheKey)
+		resultCh := s.authGroup.DoChan(cacheKey, func() (any, error) {
+			// A canceled leader must not cancel healthy followers. Every caller
+			// waits on its own context; Redis and DB have independent budgets.
+			return s.resolveSharedAuthCacheEntry(context.WithoutCancel(ctx), key, cacheKey)
 		})
-		if err != nil {
-			return nil, err
-		}
-		entry, _ := value.(*APIKeyAuthCacheEntry)
-		if apiKey, used, err := s.applyAuthCacheEntry(key, entry); used {
-			if err != nil {
-				return nil, fmt.Errorf("get api key: %w", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case result := <-resultCh:
+			if err := ctx.Err(); err != nil {
+				return nil, err
 			}
-			return apiKey, nil
+			if result.Err != nil {
+				return nil, result.Err
+			}
+			entry, _ = result.Val.(*APIKeyAuthCacheEntry)
 		}
 	} else {
-		entry, err := s.loadAuthCacheEntry(ctx, key, cacheKey)
+		var err error
+		entry, err = s.resolveAuthCacheEntry(ctx, key, cacheKey)
 		if err != nil {
 			return nil, err
 		}
-		if apiKey, used, err := s.applyAuthCacheEntry(key, entry); used {
-			if err != nil {
-				return nil, fmt.Errorf("get api key: %w", err)
-			}
-			return apiKey, nil
+	}
+	if apiKey, used, err := s.applyAuthCacheEntry(key, entry); used {
+		if err != nil {
+			return nil, fmt.Errorf("get api key: %w", err)
 		}
+		return apiKey, nil
 	}
 
 	apiKey, err := s.lookupAPIKeyForAuth(ctx, key)

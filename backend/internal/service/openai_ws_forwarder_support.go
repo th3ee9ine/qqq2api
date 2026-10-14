@@ -132,6 +132,11 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 				len(message),
 			)
 		}
+		if (eventType == "error" || isOpenAIWSTerminalEvent(eventType)) && isOpenAIUpstreamCapacityShedEvent(message) {
+			lease.MarkBroken()
+			return newOpenAIUpstreamFailoverError(http.StatusServiceUnavailable, lease.HandshakeHeaders(),
+				message, openAICapacityShedClientMessage("", message), false)
+		}
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)

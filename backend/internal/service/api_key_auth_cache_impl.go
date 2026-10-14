@@ -17,6 +17,11 @@ import (
 
 const apiKeyAuthSnapshotVersion = 24 // v24: group model_allowlist field (renamed from models_list_config, enforcing semantics)
 
+const (
+	apiKeyAuthCacheReadTimeout = 3 * time.Second
+	apiKeyAuthDBLoadTimeout    = 3 * time.Second
+)
+
 type apiKeyAuthCacheConfig struct {
 	l1Size        int
 	l1TTL         time.Duration
@@ -24,21 +29,28 @@ type apiKeyAuthCacheConfig struct {
 	negativeTTL   time.Duration
 	jitterPercent int
 	singleflight  bool
+	// Separate stage budgets prevent a slow Redis lookup from consuming the
+	// database fallback's deadline. Kept internal so tests can shorten them.
+	cacheReadTimeout time.Duration
+	dbLoadTimeout    time.Duration
 }
 
 func newAPIKeyAuthCacheConfig(cfg *config.Config) apiKeyAuthCacheConfig {
+	cacheCfg := apiKeyAuthCacheConfig{
+		cacheReadTimeout: apiKeyAuthCacheReadTimeout,
+		dbLoadTimeout:    apiKeyAuthDBLoadTimeout,
+	}
 	if cfg == nil {
-		return apiKeyAuthCacheConfig{}
+		return cacheCfg
 	}
 	auth := cfg.APIKeyAuth
-	return apiKeyAuthCacheConfig{
-		l1Size:        auth.L1Size,
-		l1TTL:         time.Duration(auth.L1TTLSeconds) * time.Second,
-		l2TTL:         time.Duration(auth.L2TTLSeconds) * time.Second,
-		negativeTTL:   time.Duration(auth.NegativeTTLSeconds) * time.Second,
-		jitterPercent: auth.JitterPercent,
-		singleflight:  auth.Singleflight,
-	}
+	cacheCfg.l1Size = auth.L1Size
+	cacheCfg.l1TTL = time.Duration(auth.L1TTLSeconds) * time.Second
+	cacheCfg.l2TTL = time.Duration(auth.L2TTLSeconds) * time.Second
+	cacheCfg.negativeTTL = time.Duration(auth.NegativeTTLSeconds) * time.Second
+	cacheCfg.jitterPercent = auth.JitterPercent
+	cacheCfg.singleflight = auth.Singleflight
+	return cacheCfg
 }
 
 func (c apiKeyAuthCacheConfig) l1Enabled() bool {
@@ -157,6 +169,9 @@ func (s *APIKeyService) invalidateLocalAuthCache(cacheKey string) {
 	if s == nil {
 		return
 	}
+	// Requests arriving after invalidation must not join a read that started
+	// before the key or its permissions changed.
+	s.authGroup.Forget(cacheKey)
 	if s.authCacheL1 != nil {
 		s.authCacheL1.Del(cacheKey)
 	}
@@ -197,7 +212,7 @@ func (s *APIKeyService) authCacheKey(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) (*APIKeyAuthCacheEntry, bool) {
+func (s *APIKeyService) getAuthCacheL1Entry(cacheKey string) (*APIKeyAuthCacheEntry, bool) {
 	if s.authCacheL1 != nil {
 		if val, ok := s.authCacheL1.Get(cacheKey); ok {
 			if entry, ok := val.(*APIKeyAuthCacheEntry); ok {
@@ -211,6 +226,13 @@ func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) 
 				return entry, true
 			}
 		}
+	}
+	return nil, false
+}
+
+func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) (*APIKeyAuthCacheEntry, bool) {
+	if entry, ok := s.getAuthCacheL1Entry(cacheKey); ok {
+		return entry, true
 	}
 	if s.cache == nil || !s.authCfg.l2Enabled() {
 		return nil, false
@@ -237,6 +259,44 @@ func (s *APIKeyService) getAuthCacheEntry(ctx context.Context, cacheKey string) 
 	}
 	s.setAuthCacheL1(cacheKey, entry)
 	return entry, true
+}
+
+// resolveAuthCacheEntry keeps the caller's context on the non-shared path.
+func (s *APIKeyService) resolveAuthCacheEntry(ctx context.Context, key, cacheKey string) (*APIKeyAuthCacheEntry, error) {
+	if entry, ok := s.getAuthCacheEntry(ctx, cacheKey); ok && entry != nil {
+		if entry.NotFound || (entry.Snapshot != nil && entry.Snapshot.Version == apiKeyAuthSnapshotVersion) {
+			return entry, nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.loadAuthCacheEntry(ctx, key, cacheKey)
+}
+
+// resolveSharedAuthCacheEntry rechecks L1 inside the flight and shares both
+// Redis and DB work. Redis may enforce socket timeouts instead of context
+// deadlines, so its actual I/O duration remains governed by the Redis client.
+// Start the DB budget only AFTER that lookup returns: using an expired Redis
+// context here would turn a recoverable cache outage into an auth outage.
+func (s *APIKeyService) resolveSharedAuthCacheEntry(ctx context.Context, key, cacheKey string) (*APIKeyAuthCacheEntry, error) {
+	cacheTimeout := s.authCfg.cacheReadTimeout
+	if cacheTimeout <= 0 {
+		cacheTimeout = apiKeyAuthCacheReadTimeout
+	}
+	cacheCtx, cancelCache := context.WithTimeout(ctx, cacheTimeout)
+	entry, ok := s.getAuthCacheEntry(cacheCtx, cacheKey)
+	cancelCache()
+	if ok && entry != nil && (entry.NotFound || (entry.Snapshot != nil && entry.Snapshot.Version == apiKeyAuthSnapshotVersion)) {
+		return entry, nil
+	}
+	dbTimeout := s.authCfg.dbLoadTimeout
+	if dbTimeout <= 0 {
+		dbTimeout = apiKeyAuthDBLoadTimeout
+	}
+	dbCtx, cancelDB := context.WithTimeout(ctx, dbTimeout)
+	defer cancelDB()
+	return s.loadAuthCacheEntry(dbCtx, key, cacheKey)
 }
 
 func (s *APIKeyService) setAuthCacheL1(cacheKey string, entry *APIKeyAuthCacheEntry) {
@@ -269,12 +329,7 @@ func (s *APIKeyService) setAuthCacheEntry(ctx context.Context, cacheKey string, 
 }
 
 func (s *APIKeyService) deleteAuthCache(ctx context.Context, cacheKey string) {
-	if s.authCacheL1 != nil {
-		s.authCacheL1.Del(cacheKey)
-	}
-	if s.authNegativeCacheL1 != nil {
-		s.authNegativeCacheL1.Del(cacheKey)
-	}
+	s.invalidateLocalAuthCache(cacheKey)
 	if s.cache == nil {
 		return
 	}
