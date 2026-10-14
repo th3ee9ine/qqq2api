@@ -77,7 +77,11 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 		account := candidate.Account
 		var streamStarted bool
 		var slotStatus openAISlotAcquireResult
-		release, slotStatus = h.acquireResponsesAccountSlot(c, apiKey.GroupID, "", candidate, false, &streamStarted, reqLog)
+		release, slotStatus = h.acquireResponsesAccountSlotWithAdmissionFailover(c, apiKey.GroupID, "", candidate, false, &streamStarted, reqLog)
+		if slotStatus == openAISlotAcquireAdmissionLimited {
+			failed[account.ID] = struct{}{}
+			continue
+		}
 		if slotStatus != openAISlotAcquireOK {
 			if slotStatus == openAISlotAcquireFailed {
 				return
@@ -113,6 +117,11 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 		break
 	}
 	if selection == nil || selection.Account == nil || release == nil || upstream == nil {
+		if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+			c.Header("Retry-After", strconv.Itoa(retryAfter))
+			h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+			return
+		}
 		if !candidateSeen {
 			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "No available Grok accounts")
 		} else {
@@ -239,6 +248,11 @@ func (h *OpenAIGatewayHandler) GrokVoice(c *gin.Context, endpoint string) {
 			service.PlatformGrok,
 		)
 		if selectErr != nil || selection == nil || selection.Account == nil {
+			if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
 			if last != nil {
 				h.handleFailoverExhausted(c, last, false)
 			} else {
@@ -248,15 +262,20 @@ func (h *OpenAIGatewayHandler) GrokVoice(c *gin.Context, endpoint string) {
 		}
 		account := selection.Account
 		var started bool
-		release, status := h.acquireResponsesAccountSlot(c, apiKey.GroupID, "", selection, false, &started, reqLog)
+		release, status := h.acquireResponsesAccountSlotWithAdmissionFailover(c, apiKey.GroupID, "", selection, false, &started, reqLog)
+		if status == openAISlotAcquireAdmissionLimited {
+			failed[account.ID] = struct{}{}
+			continue
+		}
 		if status == openAISlotAcquireProfitVetoed {
 			failed[account.ID] = struct{}{}
 			continue
 		}
 		if status != openAISlotAcquireOK {
-			// Failed already wrote error response (or transient reject).
-			if status == openAISlotAcquireFailed && len(failed) == 0 {
-				// Slot path wrote the response; stop.
+			// Failed already wrote the terminal error response. This must return
+			// even after an earlier account was excluded for local pacing; otherwise
+			// the loop can attempt another account after the response is committed.
+			if status == openAISlotAcquireFailed {
 				return
 			}
 			failed[account.ID] = struct{}{}
@@ -277,6 +296,11 @@ func (h *OpenAIGatewayHandler) GrokVoice(c *gin.Context, endpoint string) {
 			continue
 		}
 		// Non-failover errors: handleGrokMediaErrorResponse / transport already wrote response.
+		return
+	}
+	if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+		c.Header("Retry-After", strconv.Itoa(retryAfter))
+		h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
 		return
 	}
 	if last != nil {

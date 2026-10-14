@@ -117,6 +117,12 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	capacityRetryBudget := newOpenAICapacityRetryBudget(h.cfg)
 	var lastFailoverErr *service.UpstreamFailoverError
 	switchCount := 0
+	maxAccountSwitches := h.maxAccountSwitches
+	if maxAccountSwitches <= 0 {
+		maxAccountSwitches = 3
+	}
+	admissionMaxSwitches := maxAccountSwitches
+	admissionSwitchCount := 0
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	routingStart := time.Now()
 
@@ -145,6 +151,11 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 				reqLog.Info("openai_alpha_search.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
+			if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
 			if len(failedAccountIDs) == 0 {
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, requestedModel, requestedModel, service.PlatformOpenAI)
 				if !cls.ModelNotFound {
@@ -164,7 +175,21 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		account := selection.Account
 		c.Request = c.Request.WithContext(service.WithOpenAISameAccountRetryTarget(c.Request.Context(), 0))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
-		accountRelease, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, false, &streamStarted, reqLog)
+		accountRelease, slotResult := h.acquireResponsesAccountSlotWithAdmissionFailover(c, apiKey.GroupID, sessionHash, selection, false, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireAdmissionLimited {
+			failedAccountIDs[account.ID] = struct{}{}
+			admissionSwitchCount++
+			if admissionSwitchCount > admissionMaxSwitches {
+				retryAfter, _ := openAIAdmissionRetryAfter(c)
+				if retryAfter <= 0 {
+					retryAfter = 1
+				}
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号；否决次数达上限则按无可用账号终止。
 			if !recordOpenAIProfitVeto(failedAccountIDs, account.ID, &profitVetoCount) {

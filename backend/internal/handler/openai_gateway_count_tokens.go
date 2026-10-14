@@ -96,59 +96,93 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 	c.Request = c.Request.WithContext(service.WithOpenAIProfitControlSuppressed(c.Request.Context()))
 	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
-	requestStart := time.Now()
-	account, err := h.gatewayService.SelectAccountForTokenCount(
-		c.Request.Context(),
-		apiKey.GroupID,
-		sessionHash,
-		routingModel,
-		service.OpenAIEndpointCapabilityChatCompletions,
-		requestPlatform,
-	)
-	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
-	if err != nil {
-		reqLog.Warn("openai_input_tokens.account_select_failed", zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)))
-		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, routingModel, reqModel)
-		if !cls.ModelNotFound {
-			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-		}
-		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
-		return
+	maxAccountSwitches := h.maxAccountSwitches
+	if maxAccountSwitches <= 0 {
+		maxAccountSwitches = 3
 	}
-	if account == nil {
-		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, routingModel, reqModel)
-		if !cls.ModelNotFound {
-			markOpsRoutingCapacityLimited(c)
-		}
-		h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
-		return
-	}
-	if err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(c.Request.Context(), account); err != nil {
-		if c.Request.Context().Err() != nil {
-			return
-		}
-		var admissionErr *service.OpenAIOAuthAdmissionError
-		if errors.As(err, &admissionErr) {
-			c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
-			h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
-			return
-		}
-		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
-		return
-	}
-	var releaseAccountSlot func()
-	if h.concurrencyHelper != nil {
-		releaseAccountSlot, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, account.Concurrency, 2*time.Second, false, nil)
+	failedAccountIDs := make(map[int64]struct{})
+	var lastAdmissionErr *service.OpenAIOAuthAdmissionError
+	for attempt := 0; attempt <= maxAccountSwitches; attempt++ {
+		requestStart := time.Now()
+		account, err := h.gatewayService.SelectAccountForTokenCountWithExclusions(
+			c.Request.Context(),
+			apiKey.GroupID,
+			sessionHash,
+			routingModel,
+			service.OpenAIEndpointCapabilityChatCompletions,
+			requestPlatform,
+			failedAccountIDs,
+		)
+		service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 		if err != nil {
-			h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account concurrency limit reached, please retry later")
+			if c.Request.Context().Err() != nil {
+				return
+			}
+			if lastAdmissionErr != nil {
+				c.Header("Retry-After", strconv.Itoa(lastAdmissionErr.RetryAfterSeconds()))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
+			reqLog.Warn("openai_input_tokens.account_select_failed", zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)))
+			cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, routingModel, reqModel)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+			}
+			h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
 			return
 		}
-		defer releaseAccountSlot()
-	}
+		if account == nil {
+			if lastAdmissionErr != nil {
+				c.Header("Retry-After", strconv.Itoa(lastAdmissionErr.RetryAfterSeconds()))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
+			cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, routingModel, reqModel)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimited(c)
+			}
+			h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
+			return
+		}
+		if err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(c.Request.Context(), account); err != nil {
+			if c.Request.Context().Err() != nil {
+				return
+			}
+			var admissionErr *service.OpenAIOAuthAdmissionError
+			if errors.As(err, &admissionErr) {
+				if !admissionErr.CanRetryWithAnotherAccount() {
+					c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+					h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+					return
+				}
+				failedAccountIDs[account.ID] = struct{}{}
+				if lastAdmissionErr == nil || admissionErr.RetryAfter > lastAdmissionErr.RetryAfter {
+					lastAdmissionErr = admissionErr
+				}
+				continue
+			}
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
+			return
+		}
+		var releaseAccountSlot func()
+		if h.concurrencyHelper != nil {
+			releaseAccountSlot, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, account.Concurrency, 2*time.Second, false, nil)
+			if err != nil {
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account concurrency limit reached, please retry later")
+				return
+			}
+			defer releaseAccountSlot()
+		}
 
-	setOpsSelectedAccount(c, account.ID, account.Platform)
-	if err := h.gatewayService.ForwardResponsesInputTokens(c.Request.Context(), c, account, forwardBody); err != nil {
-		reqLog.Error("openai_input_tokens.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		setOpsSelectedAccount(c, account.ID, account.Platform)
+		if err := h.gatewayService.ForwardResponsesInputTokens(c.Request.Context(), c, account, forwardBody); err != nil {
+			reqLog.Error("openai_input_tokens.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		}
+		return
+	}
+	if lastAdmissionErr != nil {
+		c.Header("Retry-After", strconv.Itoa(lastAdmissionErr.RetryAfterSeconds()))
+		h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
 	}
 }
 
@@ -282,70 +316,103 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 		return
 	}
 
-	requestStart := time.Now()
 	// count_tokens 不计费：显式豁免利润门，避免高倍率账号池被门排除后连
 	// token 计数都返回 no available accounts。
 	c.Request = c.Request.WithContext(service.WithOpenAIProfitControlSuppressed(c.Request.Context()))
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
+	requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
 	currentRoutingModel := routingModel
 	if preferredMappedModel != "" {
 		currentRoutingModel = preferredMappedModel
 	}
-	account, err := h.gatewayService.SelectAccountForTokenCount(
-		c.Request.Context(),
-		apiKey.GroupID,
-		sessionHash,
-		currentRoutingModel,
-		service.OpenAIEndpointCapabilityChatCompletions,
-		openAICompatibleRequestPlatform(c.Request.Context(), apiKey),
-	)
-	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
-	if err != nil {
-		requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
-		reqLog.Warn("openai_count_tokens.account_select_failed", zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)))
-		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
-		if !cls.ModelNotFound {
-			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-		}
-		h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
-		return
+	maxAccountSwitches := h.maxAccountSwitches
+	if maxAccountSwitches <= 0 {
+		maxAccountSwitches = 3
 	}
-	if account == nil {
-		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
-		if !cls.ModelNotFound {
-			markOpsRoutingCapacityLimited(c)
-		}
-		h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
-		return
-	}
-	if err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(c.Request.Context(), account); err != nil {
-		if c.Request.Context().Err() != nil {
-			return
-		}
-		var admissionErr *service.OpenAIOAuthAdmissionError
-		if errors.As(err, &admissionErr) {
-			c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
-			h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
-			return
-		}
-		h.anthropicErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
-		return
-	}
-	var releaseAccountSlot func()
-	if h.concurrencyHelper != nil {
-		releaseAccountSlot, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, account.Concurrency, 2*time.Second, false, nil)
+	failedAccountIDs := make(map[int64]struct{})
+	var lastAdmissionErr *service.OpenAIOAuthAdmissionError
+	for attempt := 0; attempt <= maxAccountSwitches; attempt++ {
+		requestStart := time.Now()
+		account, err := h.gatewayService.SelectAccountForTokenCountWithExclusions(
+			c.Request.Context(),
+			apiKey.GroupID,
+			sessionHash,
+			currentRoutingModel,
+			service.OpenAIEndpointCapabilityChatCompletions,
+			requestPlatform,
+			failedAccountIDs,
+		)
+		service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 		if err != nil {
-			h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account concurrency limit reached, please retry later")
+			if c.Request.Context().Err() != nil {
+				return
+			}
+			if lastAdmissionErr != nil {
+				c.Header("Retry-After", strconv.Itoa(lastAdmissionErr.RetryAfterSeconds()))
+				h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
+			reqLog.Warn("openai_count_tokens.account_select_failed", zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)))
+			cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
+			}
+			h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
 			return
 		}
-		defer releaseAccountSlot()
+		if account == nil {
+			if lastAdmissionErr != nil {
+				c.Header("Retry-After", strconv.Itoa(lastAdmissionErr.RetryAfterSeconds()))
+				h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
+			cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
+			if !cls.ModelNotFound {
+				markOpsRoutingCapacityLimited(c)
+			}
+			h.anthropicErrorResponse(c, cls.Status, cls.ErrType, cls.Message)
+			return
+		}
+		if err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(c.Request.Context(), account); err != nil {
+			if c.Request.Context().Err() != nil {
+				return
+			}
+			var admissionErr *service.OpenAIOAuthAdmissionError
+			if errors.As(err, &admissionErr) {
+				if !admissionErr.CanRetryWithAnotherAccount() {
+					c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+					h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+					return
+				}
+				failedAccountIDs[account.ID] = struct{}{}
+				if lastAdmissionErr == nil || admissionErr.RetryAfter > lastAdmissionErr.RetryAfter {
+					lastAdmissionErr = admissionErr
+				}
+				continue
+			}
+			h.anthropicErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account request admission unavailable")
+			return
+		}
+		var releaseAccountSlot func()
+		if h.concurrencyHelper != nil {
+			releaseAccountSlot, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, account.Concurrency, 2*time.Second, false, nil)
+			if err != nil {
+				h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account concurrency limit reached, please retry later")
+				return
+			}
+			defer releaseAccountSlot()
+		}
+
+		setOpsSelectedAccount(c, account.ID, account.Platform)
+		forwardBody := mappedBodyForMessages(channelMapping.Mapped, channelMapping.MappedModel)
+		defaultMappedModel := preferredMappedModel
+		if err := h.gatewayService.ForwardCountTokensAsAnthropic(c.Request.Context(), c, account, forwardBody, defaultMappedModel); err != nil {
+			reqLog.Error("openai_count_tokens.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+		}
+		return
 	}
-
-	setOpsSelectedAccount(c, account.ID, account.Platform)
-	forwardBody := mappedBodyForMessages(channelMapping.Mapped, channelMapping.MappedModel)
-	defaultMappedModel := preferredMappedModel
-
-	if err := h.gatewayService.ForwardCountTokensAsAnthropic(c.Request.Context(), c, account, forwardBody, defaultMappedModel); err != nil {
-		reqLog.Error("openai_count_tokens.forward_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+	if lastAdmissionErr != nil {
+		c.Header("Retry-After", strconv.Itoa(lastAdmissionErr.RetryAfterSeconds()))
+		h.anthropicErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
 	}
 }

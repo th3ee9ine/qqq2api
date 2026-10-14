@@ -24,9 +24,9 @@ const (
 )
 
 // OpenAIOAuthAdmissionError reports a local, provider-protective rejection.
-// No upstream request was made, so callers should return 429 without trying a
-// different identity. RetryAfter is a lower bound derived from the local queue
-// or the provider's known quota/cooldown reset.
+// No upstream request was made. Pool-capable callers may exclude the selected
+// account and try another identity; RetryAfter is a lower bound derived from
+// the local queue or the provider's known quota/cooldown reset.
 type OpenAIOAuthAdmissionError struct {
 	Reason     string
 	RetryAfter time.Duration
@@ -52,6 +52,14 @@ func (e *OpenAIOAuthAdmissionError) RetryAfterSeconds() int {
 		return 1
 	}
 	return seconds
+}
+
+// CanRetryWithAnotherAccount reports whether this admission rejection is
+// scoped to the selected credential. Process-wide state capacity exhaustion
+// cannot be repaired by walking the account pool and remains terminal for the
+// current request.
+func (e *OpenAIOAuthAdmissionError) CanRetryWithAnotherAccount() bool {
+	return e != nil && e.Reason != "local_state_capacity"
 }
 
 type openAIOAuthAdmissionPolicy struct {

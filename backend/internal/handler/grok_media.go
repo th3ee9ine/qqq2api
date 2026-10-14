@@ -201,6 +201,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	mediaEligibilityRejected := false
 	switchCount := 0
+	admissionSwitchCount := 0
 	videoCreateStartedAt := ""
 	if isGrokVideoCreateEndpoint(endpoint) {
 		videoCreateStartedAt = service.GrokVideoPendingCreatedAtNow()
@@ -209,6 +210,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	if maxAccountSwitches <= 0 {
 		maxAccountSwitches = 3
 	}
+	admissionMaxSwitches := maxAccountSwitches
 	routingStart := time.Now()
 	requiredCapability := grokMediaRequiredCapability(endpoint)
 	var accountReleaseFunc func()
@@ -262,6 +264,11 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 				h.errorResponse(c, http.StatusNotFound, "not_found_error", "Video request not found")
 				return
 			}
+			if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
 			reqLog.Warn("grok_media.account_select_failed",
 				zap.Error(err),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
@@ -288,6 +295,11 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			return
 		}
 		if selection == nil || selection.Account == nil {
+			if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
 			if endpoint.IsGenerationRequest() {
 				markOpsRoutingCapacityLimited(c)
 				h.errorResponse(c, http.StatusServiceUnavailable, noAccountCode, noAccountMessage)
@@ -354,7 +366,21 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			admissionSessionHash = ""
 		}
 		var slotResult openAISlotAcquireResult
-		accountReleaseFunc, slotResult = h.acquireResponsesAccountSlot(c, apiKey.GroupID, admissionSessionHash, selection, false, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult = h.acquireResponsesAccountSlotWithAdmissionFailover(c, apiKey.GroupID, admissionSessionHash, selection, false, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireAdmissionLimited {
+			failedAccountIDs[account.ID] = struct{}{}
+			admissionSwitchCount++
+			if admissionSwitchCount > admissionMaxSwitches {
+				retryAfter, _ := openAIAdmissionRetryAfter(c)
+				if retryAfter <= 0 {
+					retryAfter = 1
+				}
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 媒体路径已显式豁免利润门（suppress 标记），此分支仅防御性兜底，
 			// 同样受否决上限约束。

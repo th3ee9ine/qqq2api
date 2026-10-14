@@ -148,6 +148,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	// 防御性装门按文本 D 过滤 Live 账号池且门与计费时刻不同源。
 	ctx = WithOpenAIProfitControlSuppressed(ctx)
 	var lastErr error
+	var lastAdmissionErr *OpenAIOAuthAdmissionError
 	oauthFollowupPending := false
 	for attempt := 0; attempt <= 3; attempt++ {
 		selection, _, selectErr := s.SelectAccountWithSchedulerForCapability(
@@ -164,6 +165,9 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			false,
 		)
 		if selectErr != nil {
+			if lastAdmissionErr != nil {
+				return nil, lastAdmissionErr
+			}
 			if lastErr != nil {
 				return nil, lastErr
 			}
@@ -179,8 +183,23 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		account := selection.Account
 		if admissionErr := s.WaitForOpenAIOAuthAccountAdmission(ctx, account); admissionErr != nil {
 			selection.ReleaseFunc()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			var pacingErr *OpenAIOAuthAdmissionError
+			if errors.As(admissionErr, &pacingErr) {
+				if !pacingErr.CanRetryWithAnotherAccount() {
+					return nil, pacingErr
+				}
+				excluded[account.ID] = struct{}{}
+				if lastAdmissionErr == nil || pacingErr.RetryAfter > lastAdmissionErr.RetryAfter {
+					lastAdmissionErr = pacingErr
+				}
+				continue
+			}
 			return nil, admissionErr
 		}
+		lastAdmissionErr = nil
 		leaseID := generateRequestID()
 		acquired, acquireErr := liveCache.AcquireLiveLease(
 			ctx,
@@ -257,6 +276,9 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		created.Account = account
 		go s.observeLiveCall(record)
 		return created, nil
+	}
+	if lastAdmissionErr != nil {
+		return nil, lastAdmissionErr
 	}
 	if lastErr != nil {
 		return nil, lastErr

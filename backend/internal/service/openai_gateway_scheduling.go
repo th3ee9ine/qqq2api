@@ -278,6 +278,23 @@ func (s *OpenAIGatewayService) SelectAccountForTokenCount(
 	requiredCapability OpenAIEndpointCapability,
 	platform string,
 ) (*Account, error) {
+	return s.SelectAccountForTokenCountWithExclusions(ctx, groupID, sessionHash, requestedModel, requiredCapability, platform, nil)
+}
+
+// SelectAccountForTokenCountWithExclusions selects a non-billable token-count
+// account while excluding accounts that have already rejected this request's
+// local admission. Token-count callers do not acquire a generation slot here,
+// but they still need to be able to move past one OAuth credential whose
+// per-account pacing queue is full when the pool has other credentials.
+func (s *OpenAIGatewayService) SelectAccountForTokenCountWithExclusions(
+	ctx context.Context,
+	groupID *int64,
+	sessionHash string,
+	requestedModel string,
+	requiredCapability OpenAIEndpointCapability,
+	platform string,
+	excludedIDs map[int64]struct{},
+) (*Account, error) {
 	ctx = WithOpenAIProfitControlSuppressed(ctx)
 	// Token counting may reuse an existing sticky binding for protocol/model
 	// consistency, but it must not create, refresh, or delete durable session
@@ -290,7 +307,7 @@ func (s *OpenAIGatewayService) SelectAccountForTokenCount(
 		platform,
 		sessionHash,
 		requestedModel,
-		nil,
+		excludedIDs,
 		false,
 		0,
 		requiredCapability,

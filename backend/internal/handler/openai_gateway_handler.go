@@ -633,6 +633,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
+	admissionMaxSwitches := maxAccountSwitches
+	if admissionMaxSwitches <= 0 {
+		admissionMaxSwitches = 3
+	}
+	admissionSwitchCount := 0
 	firstOutputTimeoutSwitchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
@@ -713,6 +718,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				h.openAIPreviousResponseNotFound(c)
 				return
 			}
+			if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later", streamStarted)
+				return
+			}
 			if len(failedAccountIDs) == 0 {
 				if legacyCompact && errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -735,6 +745,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		if selection == nil || selection.Account == nil {
+			if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later", streamStarted)
+				return
+			}
 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, requestPlatform)
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
@@ -768,7 +783,28 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		acquireSlot := h.acquireResponsesAccountSlotWithAdmissionFailover
+		if strictHTTPResponseContinuation {
+			// A response continuation is hard-pinned to the account that owns the
+			// response ID. It cannot switch identities when that account's local
+			// pacing queue is full; keep the terminal 429 behavior for this case.
+			acquireSlot = h.acquireResponsesAccountSlot
+		}
+		accountReleaseFunc, slotResult := acquireSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireAdmissionLimited {
+			failedAccountIDs[account.ID] = struct{}{}
+			admissionSwitchCount++
+			if admissionSwitchCount > admissionMaxSwitches {
+				retryAfter, _ := openAIAdmissionRetryAfter(c)
+				if retryAfter <= 0 {
+					retryAfter = 1
+				}
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later", streamStarted)
+				return
+			}
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -1297,6 +1333,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
+	admissionMaxSwitches := maxAccountSwitches
+	if admissionMaxSwitches <= 0 {
+		admissionMaxSwitches = 3
+	}
+	admissionSwitchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
@@ -1341,6 +1382,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.anthropicStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later", streamStarted)
+				return
+			}
 			if len(failedAccountIDs) == 0 {
 				if err != nil {
 					cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
@@ -1360,6 +1406,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			}
 		}
 		if selection == nil || selection.Account == nil {
+			if retryAfter, limited := openAIAdmissionRetryAfter(c); limited {
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.anthropicStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later", streamStarted)
+				return
+			}
 			cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
@@ -1375,7 +1426,21 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlotWithAdmissionFailover(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		if slotResult == openAISlotAcquireAdmissionLimited {
+			failedAccountIDs[account.ID] = struct{}{}
+			admissionSwitchCount++
+			if admissionSwitchCount > admissionMaxSwitches {
+				retryAfter, _ := openAIAdmissionRetryAfter(c)
+				if retryAfter <= 0 {
+					retryAfter = 1
+				}
+				c.Header("Retry-After", strconv.Itoa(retryAfter))
+				h.anthropicStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later", streamStarted)
+				return
+			}
+			continue
+		}
 		if slotResult == openAISlotAcquireProfitVetoed {
 			// 利润终检否决：排除该账号重新选号，全池耗尽由下一轮选号报错；
 			// 否决次数达上限则直接终止，避免排队抢槽后才终检的延迟放大。
@@ -2128,6 +2193,10 @@ const (
 	openAISlotAcquireOK openAISlotAcquireResult = iota
 	// openAISlotAcquireFailed：错误响应已写出，调用方直接 return。
 	openAISlotAcquireFailed
+	// openAISlotAcquireAdmissionLimited：当前账号的本地 OAuth 请求启动节奏
+	// 已满，但尚未写出响应。调用方可以把该账号加入本次请求的排除集，
+	// 继续尝试池中的其他账号。
+	openAISlotAcquireAdmissionLimited
 	// openAISlotAcquireProfitVetoed：槽位获取成功后利润终检否决。槽位已释放、
 	// 未写任何响应；调用方应经 recordOpenAIProfitVeto 把该账号加入本请求排除集
 	// 后重新选号，全池耗尽由下一轮选号返回标准 no available accounts。
@@ -2199,10 +2268,60 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 	streamStarted *bool,
 	reqLog *zap.Logger,
 ) (func(), openAISlotAcquireResult) {
-	return h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil)
+	return h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil, false)
+}
+
+// acquireResponsesAccountSlotWithAdmissionFailover keeps a request-local
+// pacing rejection retryable. The selected account has already released its
+// concurrency slot, so callers may exclude it and ask the scheduler for the
+// next account in the same pool.
+func (h *OpenAIGatewayHandler) acquireResponsesAccountSlotWithAdmissionFailover(
+	c *gin.Context,
+	groupID *int64,
+	sessionHash string,
+	selection *service.AccountSelectionResult,
+	reqStream bool,
+	streamStarted *bool,
+	reqLog *zap.Logger,
+) (func(), openAISlotAcquireResult) {
+	return h.acquireOpenAIAccountSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil, true)
 }
 
 type openAISlotErrorWriter func(status int, errType, code, message string)
+
+const openAIAdmissionRetryAfterContextKey = "openai.admission_retry_after_seconds"
+
+// markOpenAIAdmissionLimited carries a local pacing result across the
+// request-local account failover loop. It is deliberately kept on Gin's
+// context: no upstream request was made, so this state must never become an
+// account-health/failover error.
+func markOpenAIAdmissionLimited(c *gin.Context, admissionErr *service.OpenAIOAuthAdmissionError) {
+	if c == nil || admissionErr == nil {
+		return
+	}
+	seconds := admissionErr.RetryAfterSeconds()
+	if current, ok := c.Get(openAIAdmissionRetryAfterContextKey); ok {
+		if currentSeconds, ok := current.(int); ok && currentSeconds >= seconds {
+			return
+		}
+	}
+	c.Set(openAIAdmissionRetryAfterContextKey, seconds)
+}
+
+func clearOpenAIAdmissionLimited(c *gin.Context) {
+	if c != nil {
+		c.Set(openAIAdmissionRetryAfterContextKey, 0)
+	}
+}
+
+func openAIAdmissionRetryAfter(c *gin.Context) (int, bool) {
+	if c == nil {
+		return 0, false
+	}
+	value, ok := c.Get(openAIAdmissionRetryAfterContextKey)
+	seconds, valid := value.(int)
+	return seconds, ok && valid && seconds > 0
+}
 
 // acquireOpenAIAccountSlot centralizes scheduler selection admission. The
 // optional error writer lets non-Responses endpoints retain their wire format
@@ -2216,6 +2335,7 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	streamStarted *bool,
 	reqLog *zap.Logger,
 	writeError openAISlotErrorWriter,
+	allowAdmissionFailover bool,
 ) (func(), openAISlotAcquireResult) {
 	if writeError == nil {
 		writeError = func(status int, errType, code, message string) {
@@ -2232,31 +2352,38 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	// 门只存在于调度栈的局部 ctx，必须经选号结果重放到本函数的 ctx 上。
 	ctx := service.ContextWithSelectionProfitGate(c.Request.Context(), selection)
 	account := selection.Account
-	admitAccountStart := func(admitted *service.Account, release func()) bool {
+	admitAccountStart := func(admitted *service.Account, release func()) (bool, openAISlotAcquireResult) {
 		err := h.gatewayService.WaitForOpenAIOAuthAccountAdmission(ctx, admitted)
 		if err == nil {
-			return true
+			// A different account admitted the request, so a prior account-local
+			// pacing result must not leak a stale Retry-After header downstream.
+			clearOpenAIAdmissionLimited(c)
+			return true, openAISlotAcquireOK
 		}
 		if release != nil {
 			release()
 		}
 		if ctx.Err() != nil {
-			return false
+			return false, openAISlotAcquireFailed
 		}
 		var admissionErr *service.OpenAIOAuthAdmissionError
 		if errors.As(err, &admissionErr) {
-			c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
 			reqLog.Info("openai.oauth_account_admission_limited",
 				zap.Int64("account_id", admitted.ID),
 				zap.String("reason", admissionErr.Reason),
 				zap.Duration("retry_after", admissionErr.RetryAfter),
 			)
+			if allowAdmissionFailover && admissionErr.CanRetryWithAnotherAccount() {
+				markOpenAIAdmissionLimited(c, admissionErr)
+				return false, openAISlotAcquireAdmissionLimited
+			}
+			c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
 			writeError(http.StatusTooManyRequests, "rate_limit_error", "", "Account request pacing limit reached, please retry later")
-			return false
+			return false, openAISlotAcquireFailed
 		}
 		reqLog.Warn("openai.oauth_account_admission_failed", zap.Int64("account_id", admitted.ID), zap.Error(err))
 		writeError(http.StatusServiceUnavailable, "api_error", "", "Account request admission unavailable")
-		return false
+		return false, openAISlotAcquireFailed
 	}
 	if selection.Acquired {
 		latest, vetoed, reason := h.gatewayService.ProfitControlVetoLatest(ctx, account)
@@ -2269,8 +2396,8 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		}
 		account = latest
 		selection.Account = latest
-		if !admitAccountStart(account, selection.ReleaseFunc) {
-			return nil, openAISlotAcquireFailed
+		if admitted, result := admitAccountStart(account, selection.ReleaseFunc); !admitted {
+			return nil, result
 		}
 		// 调度器已抢槽路径无门时由选号内部完成 eager 绑定；门下选号内部
 		// 推迟绑定，这里在终检通过后补准入后绑定。
@@ -2311,8 +2438,8 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 		}
 		account = latest
 		selection.Account = latest
-		if !admitAccountStart(account, fastReleaseFunc) {
-			return nil, openAISlotAcquireFailed
+		if admitted, result := admitAccountStart(account, fastReleaseFunc); !admitted {
+			return nil, result
 		}
 		if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
 			reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))
@@ -2370,8 +2497,8 @@ func (h *OpenAIGatewayHandler) acquireOpenAIAccountSlot(
 	}
 	account = latest
 	selection.Account = latest
-	if !admitAccountStart(account, accountReleaseFunc) {
-		return nil, openAISlotAcquireFailed
+	if admitted, result := admitAccountStart(account, accountReleaseFunc); !admitted {
+		return nil, result
 	}
 	if err := h.gatewayService.BindStickySessionAfterProfitAdmission(ctx, groupID, sessionHash, account.ID); err != nil {
 		reqLog.Warn("openai.bind_sticky_session_after_profit_admission_failed", zap.Int64("account_id", account.ID), zap.Error(err))

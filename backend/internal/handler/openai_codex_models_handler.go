@@ -50,6 +50,12 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			if c.Request.Context().Err() != nil {
 				return
 			}
+			var admissionErr *service.OpenAIOAuthAdmissionError
+			if errors.As(pinnedErr, &admissionErr) && !apiKey.Group.CodexModelsManifestConfig.FallbackToScheduler {
+				c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+				return
+			}
 			if !apiKey.Group.CodexModelsManifestConfig.FallbackToScheduler {
 				if errors.Is(pinnedErr, service.ErrNoPinnedCodexModelsAccounts) {
 					h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "No available pinned OpenAI accounts")
@@ -99,13 +105,20 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	}
 	failedAccountIDs := make(map[int64]struct{})
 	switchCount := 0
+	admissionSwitchCount := 0
 	var lastUpstreamErr error
+	var lastAdmissionErr *service.OpenAIOAuthAdmissionError
 	oauthFollowupPending := false
 
 	for {
 		account, err := h.gatewayService.SelectAccountForModelWithExclusions(c.Request.Context(), apiKey.GroupID, "", "", failedAccountIDs)
 		if err != nil {
 			if c.Request.Context().Err() != nil {
+				return
+			}
+			if lastAdmissionErr != nil {
+				c.Header("Retry-After", strconv.Itoa(lastAdmissionErr.RetryAfterSeconds()))
+				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
 				return
 			}
 			if lastUpstreamErr != nil {
@@ -123,13 +136,27 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			}
 			var admissionErr *service.OpenAIOAuthAdmissionError
 			if errors.As(err, &admissionErr) {
-				c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
-				h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
-				return
+				if !admissionErr.CanRetryWithAnotherAccount() {
+					c.Header("Retry-After", strconv.Itoa(admissionErr.RetryAfterSeconds()))
+					h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+					return
+				}
+				if lastAdmissionErr == nil || admissionErr.RetryAfter > lastAdmissionErr.RetryAfter {
+					lastAdmissionErr = admissionErr
+				}
+				if admissionSwitchCount >= maxAccountSwitches {
+					c.Header("Retry-After", strconv.Itoa(lastAdmissionErr.RetryAfterSeconds()))
+					h.errorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "Account request pacing limit reached, please retry later")
+					return
+				}
+				failedAccountIDs[account.ID] = struct{}{}
+				admissionSwitchCount++
+				continue
 			}
 			h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Account request admission unavailable")
 			return
 		}
+		lastAdmissionErr = nil
 		var releaseAccountSlot func()
 		if h.concurrencyHelper != nil {
 			releaseAccountSlot, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(c, account.ID, account.Concurrency, 2*time.Second, false, nil)

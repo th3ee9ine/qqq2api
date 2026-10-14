@@ -230,6 +230,13 @@ func TestOpenAIOAuthAdmissionStateIsBounded(t *testing.T) {
 	require.Len(t, controller.accounts, 2)
 }
 
+func TestOpenAIOAuthAdmissionErrorCanRetryWithAnotherAccount(t *testing.T) {
+	require.True(t, (&OpenAIOAuthAdmissionError{Reason: "account_cooldown"}).CanRetryWithAnotherAccount())
+	require.True(t, (&OpenAIOAuthAdmissionError{Reason: "bounded_queue_full"}).CanRetryWithAnotherAccount())
+	require.False(t, (&OpenAIOAuthAdmissionError{Reason: "local_state_capacity"}).CanRetryWithAnotherAccount())
+	require.False(t, (*OpenAIOAuthAdmissionError)(nil).CanRetryWithAnotherAccount())
+}
+
 type tokenCountStickyWriteProbe struct {
 	*schedulerTestGatewayCache
 	setCalls     int
@@ -297,6 +304,35 @@ func TestSelectAccountForTokenCountReadsButNeverWritesStickyState(t *testing.T) 
 	require.Zero(t, cache.setCalls)
 	require.Zero(t, cache.refreshCalls, "token counting must not extend sticky TTL")
 	require.Zero(t, cache.deleteCalls)
+}
+
+func TestSelectAccountForTokenCountWithExclusionsSkipsPacingLimitedAccount(t *testing.T) {
+	groupID := int64(302)
+	accounts := []Account{
+		{
+			ID: 30201, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+			Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0,
+			GroupIDs: []int64{groupID}, Credentials: map[string]any{"openai_capabilities": []any{"chat_completions"}},
+		},
+		{
+			ID: 30202, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+			Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1,
+			GroupIDs: []int64{groupID}, Credentials: map[string]any{"openai_capabilities": []any{"chat_completions"}},
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:       &schedulerTestGatewayCache{},
+		cfg:         &config.Config{},
+	}
+	selected, err := svc.SelectAccountForTokenCountWithExclusions(
+		context.Background(), &groupID, "count-exclusions", "gpt-5.1",
+		OpenAIEndpointCapabilityChatCompletions, PlatformOpenAI,
+		map[int64]struct{}{30201: {}},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	require.Equal(t, int64(30202), selected.ID)
 }
 
 func TestOpenAISameAccountRetryTargetRejectsSilentCredentialSwitch(t *testing.T) {
