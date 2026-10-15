@@ -61,6 +61,17 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
+	// Cursor and similar clients occasionally send a Responses-shaped payload
+	// to the Chat URL. A Chat-only retry must lower that payload first; sending
+	// `input` unchanged would reproduce the same structured-input rejection.
+	if isResponsesShapedRequest(body) {
+		converted, convertErr := responsesBodyToChatCompletionsBody(body)
+		if convertErr != nil {
+			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", convertErr.Error())
+			return nil, convertErr
+		}
+		body = converted
+	}
 
 	// 1. Parse minimal fields needed for routing/billing
 	originalModel := gjson.GetBytes(body, "model").String()

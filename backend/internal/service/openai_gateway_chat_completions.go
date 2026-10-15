@@ -119,7 +119,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// Cursor compatibility: some clients send a Responses-shaped body to the
 	// /v1/chat/completions URL. Detect it before adaptive routing so adaptive
 	// accounts never forward the body unchanged to a Chat Completions endpoint.
-	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
+	isResponsesShape := isResponsesShapedRequest(body)
 
 	// OpenCode Go：按模型原生协议分流（与 inbound 协议正交）。
 	// 规则未命中一律兜底 Chat Completions，只有显式 Responses 才走下方转换链。
@@ -380,8 +380,8 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 		if account.Type == AccountTypeAPIKey &&
 			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
-			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {
-			logger.L().Info("openai chat_completions: /responses unsupported, falling back to raw chat completions",
+			shouldRetryResponsesAsChatCompletions(ctx, c, resp.StatusCode, respBody) {
+			logger.L().Info("openai chat_completions: Responses endpoint/input shape is incompatible, falling back to raw chat completions",
 				zap.Int64("account_id", account.ID),
 				zap.Int("upstream_status", resp.StatusCode),
 				zap.String("upstream_message", upstreamMsg),
