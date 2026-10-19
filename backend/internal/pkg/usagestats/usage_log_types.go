@@ -120,7 +120,7 @@ type GroupUsageSummary struct {
 	GroupID       int64   `json:"group_id"`
 	TodayCost     float64 `json:"today_cost"`
 	YesterdayCost float64 `json:"yesterday_cost"`
-	TotalCost     float64 `json:"total_cost"`
+	TotalCost     float64 `json:"total_cost"` // 累计实际扣费，清理用量日志不会扣减
 }
 
 // GroupStat represents usage statistics for a single group

@@ -682,9 +682,9 @@ func (r *dashboardAggregationRepository) createUsageLogsPartition(ctx context.Co
 	// parent are used for normal INSERT INTO usage_logs writes, but PostgreSQL
 	// does not clone them to partitions created later.  A maintenance/import
 	// job may address a child table directly, so install the same trigger on
-	// the newly-created child when the durable account rollup migration is
-	// present.  The guarded DO block keeps this partition housekeeping
-	// compatible with installations that have not applied migration 235 yet.
+	// the newly-created child when each durable rollup migration is present.
+	// Guarded DO blocks keep partition housekeeping compatible with
+	// installations that have not applied those migrations yet.
 	quotedTable := pq.QuoteIdentifier(name)
 	regclass := pq.QuoteLiteral(name) + "::regclass"
 	createTrigger := pq.QuoteLiteral(fmt.Sprintf(`CREATE TRIGGER usage_logs_account_daily_rollup_insert
@@ -716,10 +716,54 @@ BEGIN
     END IF;
 END;
 $$;`, regclass, createTrigger)
+	groupTriggerQueries := make([]string, 0, 2)
+	for _, trigger := range []struct {
+		name, event, transition, function string
+	}{
+		{
+			name:       "usage_logs_group_usage_lifetime_insert",
+			event:      "INSERT",
+			transition: "NEW TABLE AS inserted_usage_logs",
+			function:   "usage_group_lifetime_after_insert",
+		},
+		{
+			name:       "usage_logs_group_usage_lifetime_update",
+			event:      "UPDATE",
+			transition: "OLD TABLE AS old_updated_usage_logs NEW TABLE AS new_updated_usage_logs",
+			function:   "usage_group_lifetime_after_update",
+		},
+	} {
+		createGroupTrigger := pq.QuoteLiteral(fmt.Sprintf(`CREATE TRIGGER %s
+                 AFTER %s ON %s
+                 REFERENCING %s
+                 FOR EACH STATEMENT
+                 EXECUTE FUNCTION %s()`, pq.QuoteIdentifier(trigger.name), trigger.event, quotedTable,
+			trigger.transition, pq.QuoteIdentifier(trigger.function)))
+		groupTriggerQueries = append(groupTriggerQueries, fmt.Sprintf(`
+DO $$
+BEGIN
+    IF to_regclass('usage_group_lifetime_totals') IS NOT NULL
+       AND to_regprocedure(%s) IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM pg_trigger
+           WHERE tgrelid = %s
+             AND tgname = %s
+       )
+    THEN
+        BEGIN
+            EXECUTE %s;
+        EXCEPTION
+            WHEN duplicate_object THEN NULL;
+        END;
+    END IF;
+END;
+$$;`, pq.QuoteLiteral(trigger.function+"()"), regclass, pq.QuoteLiteral(trigger.name), createGroupTrigger))
+	}
 	// Keep table creation and trigger installation in one statement/transaction.
 	// This prevents a direct child INSERT from becoming visible in the small
 	// interval between two autocommit Exec calls and bypassing the rollup.
-	_, err := r.sql.ExecContext(ctx, query+";\n"+triggerQuery)
+	_, err := r.sql.ExecContext(ctx, query+";\n"+triggerQuery+"\n"+strings.Join(groupTriggerQueries, "\n"))
 	return err
 }
 

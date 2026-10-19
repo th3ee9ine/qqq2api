@@ -404,7 +404,7 @@ func TestGroupUsageSummaryUsesConfiguredDSTBoundaries(t *testing.T) {
 	require.InDelta(t, 7, result[0].YesterdayCost, 0.0000001)
 }
 
-func createGroupUsageRollupTriggerTestSchema(t *testing.T, ctx context.Context, partitioned bool) string {
+func createGroupUsageRollupTriggerTestSchema(t *testing.T, ctx context.Context, partitioned bool, skipLifetimeMigration ...bool) string {
 	t.Helper()
 
 	schema := fmt.Sprintf("group_usage_rollup_trigger_%d", time.Now().UnixNano())
@@ -458,6 +458,12 @@ func createGroupUsageRollupTriggerTestSchema(t *testing.T, ctx context.Context, 
 			_, err = tx.ExecContext(ctx, string(migrationSQL))
 			require.NoError(t, err)
 		}
+	}
+	if len(skipLifetimeMigration) == 0 || !skipLifetimeMigration[0] {
+		migrationSQL, readErr := migrations.FS.ReadFile("246_usage_group_lifetime_totals.sql")
+		require.NoError(t, readErr)
+		_, err = tx.ExecContext(ctx, string(migrationSQL))
+		require.NoError(t, err)
 	}
 	require.NoError(t, tx.Commit())
 

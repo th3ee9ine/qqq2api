@@ -446,7 +446,8 @@ export async function clearGroupRPMOverrides(id: number): Promise<{ message: str
 }
 
 /**
- * Get usage summary (today + yesterday + cumulative cost) for all groups
+ * Get usage summary (today + yesterday + lifetime actual cost) for all groups.
+ * The cumulative amount survives usage-log retention and cleanup.
  * @returns Array of group usage summaries
  */
 export async function getUsageSummary(): Promise<
