@@ -138,10 +138,51 @@ When using Docker Compose with `AUTO_SETUP=true`:
 
 2. No manual Setup Wizard needed - just configure `.env` and start
 
-3. If `ADMIN_PASSWORD` is not set, check logs for the generated password:
+3. On first installation, if `ADMIN_PASSWORD` is empty or not set, check logs for the generated password:
    ```bash
    docker compose logs sub2api | grep "admin password"
    ```
+
+### Changing Super Administrator Credentials
+
+First deploy a version containing the startup credential synchronization fix;
+an already published `latest` image may not include it. Older versions create
+the account during initial setup but do not synchronize later environment
+credential changes to the database. Changing `ADMIN_EMAIL` can still affect
+administrator access checks, leaving the configured identity and database out
+of sync.
+
+With the fix, normal startup synchronizes explicitly supplied credentials with
+the existing super administrator, even when `config.yaml` or `.installed`
+exists. The account ID and related data are preserved.
+
+- Non-empty `ADMIN_EMAIL` sets the login email. Empty or unset keeps the
+  account's current identity, including after an earlier email change.
+- Non-empty `ADMIN_PASSWORD` is authoritative on every startup; a matching
+  password keeps its hash. A later Web UI password change is overwritten at
+  the next startup while this variable remains set.
+- Empty or unset `ADMIN_PASSWORD` preserves the installed password; only first
+  installation generates one. To change only the email, leave the password empty.
+- Use identical credentials on every replica to prevent successive startups
+  from overwriting each other's changes.
+
+After editing `.env`, recreate the app with your deployment's Compose file.
+`docker compose restart` does not reload environment variables.
+
+```bash
+# Local-directory deployment
+docker compose -f docker-compose.local.yml up -d --force-recreate sub2api
+docker compose -f docker-compose.local.yml logs --tail=100 sub2api
+
+# Named-volume deployment (use this pair instead)
+docker compose -f docker-compose.yml up -d --force-recreate sub2api
+docker compose -f docker-compose.yml logs --tail=100 sub2api
+```
+
+An email belonging to another account, or multiple super administrators that
+cannot be uniquely identified, produces an explicit startup error instead of
+changing an arbitrary account. Resolve the reported conflict and start again;
+keep the database and installation files in place.
 
 ### Startup and Database Recovery
 
@@ -246,8 +287,8 @@ docker compose down -v
 | `JWT_SECRET` | **Recommended** | *(auto-generated)* | JWT secret (fixed for persistent sessions) |
 | `TOTP_ENCRYPTION_KEY` | **Recommended** | *(auto-generated)* | TOTP encryption key (fixed for persistent 2FA) |
 | `SERVER_PORT` | No | `8080` | Server port |
-| `ADMIN_EMAIL` | No | `admin@sub2api.local` | Admin email |
-| `ADMIN_PASSWORD` | No | *(auto-generated)* | Admin password |
+| `ADMIN_EMAIL` | No | `admin@sub2api.local` | Super administrator login email; a supplied non-empty value is synchronized on startup with the fix described above |
+| `ADMIN_PASSWORD` | No | *(empty)* | Non-empty: authoritative password on startup; empty: preserve installed password, or auto-generate during first installation |
 | `TZ` | No | `Asia/Shanghai` | Timezone |
 | `UPDATE_GITHUB_TOKEN` | No | *(empty)* | Token for `api.github.com` release checks only; asset downloads remain anonymous. |
 
@@ -389,6 +430,17 @@ The main config file is at `/etc/sub2api/config.yaml` (created by Setup Wizard).
 ---
 
 ## Troubleshooting
+
+### Cannot Log In After Changing Administrator Environment Variables
+
+Verify that the deployed version contains the startup credential synchronization
+fix, then recreate the `sub2api` container using the exact Compose file used to
+deploy it, as shown in [Changing Super Administrator Credentials](#changing-super-administrator-credentials).
+A plain restart does not apply edited `.env` values. Check application startup
+logs for email conflicts or an ambiguous administrator selection. If
+`ADMIN_PASSWORD` is empty, use the existing account password; an installed
+instance does not generate a replacement password. Keep credentials consistent
+across all application replicas.
 
 ### Docker
 
